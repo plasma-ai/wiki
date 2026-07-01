@@ -1,0 +1,14 @@
+{
+  "name": "wiki",
+  "displayName": "Wiki",
+  "version": "0.0.0",
+  "description": "Indexed knowledge bases with command-line tools for agents.",
+  "author": {
+    "name": "Andrew Turner",
+    "email": "aturner@plasma.ai",
+    "url": "https://plasma.ai"
+  },
+  "skills": ["./wiki/skills"],
+  "repository": "https://github.com/plasma-ai/wiki",
+  "keywords": ["wiki"]
+}

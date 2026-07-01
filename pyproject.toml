@@ -1,0 +1,233 @@
+[project]
+name = "plasma-wiki"
+version = "0.0.0"
+description = "Indexed knowledge bases with command-line tools for agents."
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+authors = [
+    { name = "Andrew Turner", email = "aturner@plasma.ai" },
+    { name = "Nicholas Diao", email = "ndiao@plasma.ai" },
+]
+maintainers = [
+    { name = "Andrew Turner", email = "aturner@plasma.ai" },
+    { name = "Nicholas Diao", email = "ndiao@plasma.ai" },
+]
+dependencies = [
+    "typer>=0.24,<1",
+]
+
+[project.urls]
+Homepage = "https://github.com/plasma-ai/wiki"
+Repository = "https://github.com/plasma-ai/wiki"
+Issues = "https://github.com/plasma-ai/wiki/issues"
+Documentation = "https://docs.plasma.ai/wiki"
+
+[project.scripts]
+wiki = "wiki.cli.main:cli"
+
+[tool.poetry]
+packages = [{include = "wiki"}]
+include = [
+    { path = "wiki/skills/**/*", format = ["sdist", "wheel"] },
+]
+
+[dependency-groups]
+docs = [
+    "sphinx>=9,<10",
+    "sphinx-autodoc-typehints",
+    "pydata-sphinx-theme",
+]
+lint = [
+    "cruft",
+    "ruff",
+    "pre-commit",
+]
+security = [
+    "safety",
+]
+test = [
+    "pytest-cov",
+    "pytest-xdist",
+]
+type = [
+    "pyright",
+]
+
+[tool.uv]
+required-version = ">=0.8"
+default-groups = []
+
+[tool.cruft]
+# https://cruft.github.io/cruft
+skip = ["wiki", "tests"]
+
+[tool.ruff]
+# https://docs.astral.sh/ruff
+line-length = 88
+extend-exclude = ["*.pyi"]
+
+[tool.ruff.format]
+# single quotes for code; ruff keeps docstrings and multiline strings double (PEP 257)
+quote-style = "single"
+
+[tool.ruff.lint]
+# lint rule selection
+select = [
+    "E",    # style errors
+    "W",    # style warnings
+    "F",    # logic errors
+    "I",    # import order
+    "D",    # docstrings
+    "ANN",  # type annotations
+    "S",    # security
+    "B",    # likely bugs
+    "C4",   # comprehensions
+    "PYI",  # stub files
+    "PT",   # pytest style
+    "UP",   # syntax modernization
+    "SIM",  # simplifications
+    "RUF",  # ruff-specific
+]
+ignore = [
+    # ANN401: dynamically typed expressions are disallowed
+    # (choice to allow use of typing.Any)
+    "ANN401",
+    # B028: no explicit stacklevel argument passed to warnings.warn
+    # (choice to allow default stacklevel of 1)
+    "B028",
+    # B905: zip() without an explicit strict=
+    # (strict is a per-call author choice, not enforced)
+    "B905",
+    # D202: blank lines allowed after function docstring
+    # (conflicts with the formatter)
+    "D202",
+    # D402: first line should not be the function's "signature"
+    # (this warning is often raised erroneously)
+    "D402",
+    # D417: missing argument descriptions in the docstring
+    # (documenting every parameter is a separate, opt-in effort)
+    "D417",
+    # E203: whitespace before ':'
+    # (formatter owns spacing)
+    "E203",
+    # E231: missing whitespace after ',', ';', or ':'
+    # (formatter owns spacing)
+    "E231",
+    # E501: line too long
+    # (formatter owns line width)
+    "E501",
+    # E731: do not assign a lambda expression, use a def
+    # (choice to allow lambda assignments)
+    "E731",
+    # F402: import shadowed by loop variable
+    # (choice to allow loop variables to overwrite imports in a scope)
+    "F402",
+    # F403: 'from module import *' used; unable to detect undefined names
+    # (choice to allow wildcard imports when __all__ is defined)
+    "F403",
+    # PT011: set the match parameter in pytest.raises({exception})
+    # (choice to not require error message in case it changes)
+    "PT011",
+    # PYI034: __enter__/__new__/etc. should return Self
+    # (conflicts with the explicit 'self: ClassName' / return-ClassName convention)
+    "PYI034",
+    # PYI061: Literal[None] can be replaced with None
+    # (unsafe here: the codebase manipulates type hints as runtime values, where
+    # Literal[None] is not equivalent to None)
+    "PYI061",
+    # RUF012: mutable default in a class attribute without ClassVar
+    # (this codebase declares mutable defaults on framework-managed Conf
+    # descriptor fields, which RUF012 cannot distinguish from class vars)
+    "RUF012",
+    # RUF022: __all__ is not sorted
+    # (choice to keep __all__ in definition order, mirroring the module)
+    "RUF022",
+    # S311: standard pseudo-random generators are not suitable for security/cryptographic purposes
+    # (random is not used for security/cryptographic purposes)
+    "S311",
+    # SIM102: use a single if statement instead of nested if statements
+    # (choice to prefer explicit nested ifs and commented steps)
+    "SIM102",
+    # SIM103: return the condition directly instead of if/else True/False
+    # (choice to allow explicit if/else returns)
+    "SIM103",
+    # SIM105: use contextlib.suppress(...) instead of try/except/pass
+    # (choice to prefer explicit try/except)
+    "SIM105",
+    # SIM108: use ternary operator instead of if-else block
+    # (choice to prefer explicit if/else blocks over ternaries)
+    "SIM108",
+    # SIM110: use any(...) and all(...) instead of a for-loop that returns a bool
+    # (choice to allow explicit loops)
+    "SIM110",
+    # SIM114: combine if branches that share a body using 'or'
+    # (choice to keep explicit, separately-commentable branches)
+    "SIM114",
+    # SIM117: use a single with statement instead of nested with statements
+    # (choice to prefer explicit nested context managers)
+    "SIM117",
+    # SIM118: use 'key in dict' instead of 'key in dict.keys()'
+    # (choice to allow explicit .keys() for readability)
+    "SIM118",
+    # SIM401: use dict.get(key, default) instead of an if/else
+    # (choice to allow explicit if/else)
+    "SIM401",
+    # UP007: use X | Y for type annotations
+    # (choice to use typing.Union; see the Type Hints convention)
+    "UP007",
+    # UP015: redundant open mode argument
+    # (choice to allow the explicit mode for readability)
+    "UP015",
+    # UP028: replace yield-loop with yield from
+    # (keep explicit for/yield so sync generators mirror their async
+    # counterparts, which cannot use yield from; see Sync/Async Symmetry)
+    "UP028",
+    # UP045: use X | None for type annotations
+    # (choice to use typing.Optional; see the Type Hints convention)
+    "UP045",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# NOTE: ruff globs need "**" to match nested dirs
+"**/__init__.py" = [
+    "ANN001",
+    "ANN003",
+    "ANN201",
+    "ANN202",
+    "ANN204",
+    "F401",
+]
+"tests/**" = [
+    "F811",
+    "S101",
+]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.flake8-annotations]
+suppress-none-returning = true
+suppress-dummy-args = true
+
+[tool.pyright]
+include = ["wiki"]
+
+[tool.pytest.ini_options]
+# https://docs.pytest.org/en/stable/customize.html
+addopts = "--doctest-modules -n auto"
+
+[tool.coverage.run]
+# https://coverage.readthedocs.io/en/latest/config.html#run
+source = ["wiki"]
+parallel = true
+
+[tool.coverage.report]
+# https://coverage.readthedocs.io/en/latest/config.html#report
+show_missing = true
+
+[build-system]
+requires = ["poetry-core>=2.0.0"]
+build-backend = "poetry.core.masonry.api"

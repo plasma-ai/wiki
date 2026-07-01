@@ -1,0 +1,72 @@
+name: build
+
+on:
+  push:
+    branches:
+      - main
+    tags: ["v*"]
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
+      - name: Check tag matches package and plugin versions
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, tomllib
+
+          tag = os.environ['GITHUB_REF_NAME'].removeprefix('v')
+          init = pathlib.Path('wiki/__init__.py').read_text()
+          version_line = next(
+              line for line in init.splitlines() if line.startswith('__version__')
+          )
+          version = version_line.split('=', 1)[1].strip().strip('\'"')
+          project_version = tomllib.load(open('pyproject.toml', 'rb'))['project']['version']
+          claude_version = json.load(open('.claude-plugin/plugin.json'))['version']
+          codex_version = json.load(open('.codex-plugin/plugin.json'))['version']
+          versions = {
+              '__version__': version,
+              'pyproject.toml': project_version,
+              '.claude-plugin/plugin.json': claude_version,
+              '.codex-plugin/plugin.json': codex_version,
+          }
+          bad = {name: v for name, v in versions.items() if v != tag}
+          if bad:
+              detail = ', '.join(f'{name}={v}' for name, v in bad.items())
+              raise SystemExit(f'::error::tag v{tag} != {detail}')
+          print(f'All versions aligned at v{tag}')
+          PY
+      - name: Build wheel
+        run: uv build
+      - name: Check distribution metadata
+        run: uvx twine check dist/*
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+  publish:
+    name: publish
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/plasma-wiki/
+    permissions:
+      id-token: write
+    steps:
+    - uses: actions/download-artifact@v8
+      with:
+        name: dist
+        path: dist/
+    - uses: pypa/gh-action-pypi-publish@release/v1

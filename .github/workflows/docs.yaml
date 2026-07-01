@@ -1,0 +1,26 @@
+name: docs
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
+      - name: Install package with docs dependencies
+        run: ./install.sh --all-extras --groups=docs
+      - name: Generate API docs
+        run: uv run --no-sync sphinx-apidoc -f -o docs wiki
+      - name: Build docs
+        run: uv run --no-sync sphinx-build -W docs docs/_build
