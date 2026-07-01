@@ -25,7 +25,7 @@ author = 'Plasma AI'
 copyright = f'{year}: ' + author
 
 # The full version, including alpha/beta/rc tags
-release = '0.0.0'
+release = '0.1.0'
 
 # -- Configure extensions ----------------------------------------------------
 
