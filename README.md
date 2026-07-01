@@ -1,5 +1,6 @@
 # wiki
 
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![build](https://github.com/plasma-ai/wiki/actions/workflows/build.yaml/badge.svg)](https://github.com/plasma-ai/wiki/actions/workflows/build.yaml)
 [![docs](https://github.com/plasma-ai/wiki/actions/workflows/docs.yaml/badge.svg)](https://github.com/plasma-ai/wiki/actions/workflows/docs.yaml)
 [![lint](https://github.com/plasma-ai/wiki/actions/workflows/lint.yaml/badge.svg)](https://github.com/plasma-ai/wiki/actions/workflows/lint.yaml)
@@ -9,15 +10,30 @@
 
 Indexed knowledge bases with command-line tools for agents.
 
----
+A wiki keeps project knowledge as plain markdown, indexed at every level
+by `_index.md` files, read by consulting the index and opening only the
+pages that a task needs. Andrej Karpathy named this shape the
+[LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
+pattern, and Google's
+[Open Knowledge Format](https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing)
+describes a standardized format for such markdown knowledge bases. Most
+approaches leave a great deal of structuring for agents to maintain by
+hand; here a deterministic CLI generates the indexes and cross-links and
+reconciles `_index.md` merges when parallel edits collide, so content is
+the only judgment call.
 
-**Source**: [https://github.com/plasma-ai/wiki](https://github.com/plasma-ai/wiki)
+______________________________________________________________________
 
-**Package**: [https://pypi.org/project/plasma-wiki/](https://pypi.org/project/plasma-wiki/)
+**Source**:
+[https://github.com/plasma-ai/wiki](https://github.com/plasma-ai/wiki)
 
-**Documentation**: [https://docs.plasma.ai/wiki](https://docs.plasma.ai/wiki)
+**Package**:
+[https://pypi.org/project/plasma-wiki/](https://pypi.org/project/plasma-wiki/)
 
----
+**Documentation**:
+[https://docs.plasma.ai/wiki](https://docs.plasma.ai/wiki)
+
+______________________________________________________________________
 
 ## Installation
 
@@ -31,8 +47,8 @@ pipx install plasma-wiki
 
 ### Skill
 
-Install the `/wiki` skill for your agent via the
-plugin marketplace (Claude Code and Codex):
+Install the `/wiki` skill for your agent via the plugin marketplace
+(Claude Code and Codex):
 
 ```bash
 # Claude Code
@@ -53,11 +69,27 @@ wiki install
 
 ## Usage
 
-Basic usage:
+A wiki is a tree of markdown files linked together by `_index.md` files.
+Each folder becomes a section, and each markdown file becomes an entry.
+Wikis are designed to be read and written by both humans and agents:
+humans author content in Obsidian (or any editor), and agents query the
+wiki through the CLI to ground their work in project-specific knowledge.
 
-```python
-import wiki
-```
+Page, folder, and wiki names are lenient by default: spaces, dashes,
+mixed case, and unicode are all fine. Only characters that would break
+the wiki's structure — its path, link, and index syntax — are rejected,
+along with leading dots (hidden files) and the reserved `_index` /
+`_config` names. A wiki can opt into stricter rules, such as ASCII-only
+or identifier-style names, through the `naming` block in
+`_config/settings.json`; `wiki lint` flags any name that violates the
+policy.
+
+Frontmatter timestamps default to UTC in ISO-8601. To change them, set a
+timezone (any IANA name) and format (a strftime string) under
+`timestamp` in `_config/settings.json`.
+
+Use the `/wiki` skill to manage wikis. The `wiki` CLI is also available
+directly — run `wiki --help` and `wiki <command> --help` to explore.
 
 ## Development
 
@@ -97,3 +129,18 @@ Run linters and formatters:
 ```bash
 pre-commit run --all-files
 ```
+
+## Acknowledgements
+
+`wiki` sets up the
+[Front Matter Title](https://github.com/snezhig/obsidian-front-matter-title)
+Obsidian plugin by Snezhig, which displays each note's `name`
+frontmatter as its title. The plugin is licensed GPL-3.0;
+`wiki init`/`wiki config` download version 4.1.0 from the upstream
+GitHub release at setup time rather than redistributing it.
+
+## License
+
+Licensed under the Apache License 2.0 — see [LICENSE](LICENSE).
+
+Copyright © 2026 Plasma AI

@@ -4,6 +4,8 @@ version = "0.0.0"
 description = "Indexed knowledge bases with command-line tools for agents."
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [
     { name = "Andrew Turner", email = "aturner@plasma.ai" },
     { name = "Nicholas Diao", email = "ndiao@plasma.ai" },
@@ -28,6 +30,7 @@ wiki = "wiki.cli.main:cli"
 [tool.poetry]
 packages = [{include = "wiki"}]
 include = [
+    { path = "wiki/_config/**/*", format = ["sdist", "wheel"] },
     { path = "wiki/skills/**/*", format = ["sdist", "wheel"] },
 ]
 
@@ -197,9 +200,17 @@ ignore = [
     "ANN204",
     "F401",
 ]
+"wiki/**" = [
+    "S404",
+    "S603",
+    "S607",
+]
 "tests/**" = [
     "F811",
     "S101",
+    "S404",
+    "S603",
+    "S607",
 ]
 
 [tool.ruff.lint.isort]
@@ -217,12 +228,16 @@ include = ["wiki"]
 
 [tool.pytest.ini_options]
 # https://docs.pytest.org/en/stable/customize.html
-addopts = "--doctest-modules -n auto"
+addopts = "--doctest-modules -n auto -m 'not online'"
+markers = [
+    "online: test makes real network calls (run with -m online)",
+]
 
 [tool.coverage.run]
 # https://coverage.readthedocs.io/en/latest/config.html#run
 source = ["wiki"]
 parallel = true
+disable_warnings = ["no-data-collected"]
 
 [tool.coverage.report]
 # https://coverage.readthedocs.io/en/latest/config.html#report

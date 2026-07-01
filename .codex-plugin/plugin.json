@@ -11,6 +11,6 @@
   "interface": {
     "displayName": "Wiki",
     "shortDescription": "Indexed knowledge bases with command-line tools for agents.",
-    "category": "Development"
+    "category": "Productivity"
   }
 }

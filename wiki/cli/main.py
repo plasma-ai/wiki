@@ -20,6 +20,13 @@ def cli(**kwargs: Any) -> None:
     cmd.version(app)
     # wiki commands
     cmd.install(app)
+    cmd.init(app)
+    cmd.config(app)
+    cmd.read(app)
+    cmd.search(app)
+    cmd.update(app)
+    cmd.lint(app)
+    cmd.map(app)
     # run app
     app()
 
