@@ -8,19 +8,14 @@ already reads parent directories), also check the parent directory for
 ## Overview
 
 `plasma-wiki` is a standalone plugin for Claude Code and Codex providing
-the **wiki** skill (structured knowledge base management).
+the **wiki** skill.
 
 ### Architecture
 
-```
-wiki/                    # Python package
-  _config/               #   wiki config templates (obsidian) + git merge driver
-  cli/                   #   CLI layer (typer app)
-  core/                  #   business logic (Wiki)
-  skills/wiki/           #   plugin skill (SKILL.md)
-  util/                  #   shared utilities
-tests/                   # pytest suite
-```
+The `wiki/` Python package is organized into `cli/` (typer app), `core/`
+(business logic), `skills/` (the plugin skill), `util/` (shared
+utilities), and `_config/` (wiki config templates and the git merge
+driver), with the pytest suite in `tests/`.
 
 **Wiki** manages folder-based wikis with `_index.md` files, automatic
 link generation, frontmatter management, and Obsidian integration.
@@ -39,7 +34,7 @@ uv run pre-commit install
 uv run --no-sync pytest
 
 # run pre-commit
-uv run --no-sync pre-commit run [--all]
+uv run --no-sync pre-commit run [--all-files]
 ```
 
 The test suite uses `pytest` with `--doctest-modules` enabled.
@@ -70,15 +65,17 @@ When writing or modifying code:
    not preservation of the status quo. Consistently good beats
    consistently bad, so make the case for why a change is worth the
    churn and the user will adopt it.
-3. **Do not rename variables** that shadow outer scopes, reformat
-   existing comments, reorder methods, or restructure working code
-   unless specifically asked.
-4. **Do not remove comments.** Line-by-line comments are intentional —
-   they help the user maintain order and scan code quickly. Emulate them
-   in new code.
-5. **When in doubt, emulate.** Find the nearest analogous code in the
+3. **Do not rename variables** that shadow outer scopes if it is
+   sensible to reuse that variable name (and is unlikely to become a
+   bug).
+4. **Do not reformat** existing comments, reorder methods, or
+   restructure working code unless specifically asked.
+5. **Do not remove comments.** Line-by-line comments are intentional —
+   they help the user maintain order and scan code quickly. Emulate
+   existing comment patterns in new code.
+6. **When in doubt, emulate.** Find the nearest analogous code in the
    codebase and mirror its structure.
-6. **Preserve trailing newline patterns.** If a file ends with a
+7. **Preserve trailing newline patterns.** If a file ends with a
    trailing newline, keep it. If a file ends without one, don't add one.
    Match whatever the file already does.
 
@@ -103,10 +100,14 @@ just accelerate your ramp-up.
   find a few analogous examples in the codebase and mirror their
   structure. This applies to everything: error handling shape, docstring
   phrasing, test organization, import style, comment density.
-- **Keep this file up to date.** When you discover conventions or
+- **Keep these docs up to date.** When you discover conventions or
   patterns through the user's feedback or codebase observation that
-  aren't yet documented here, add them to the appropriate section of
-  this file.
+  aren't yet documented, add them to the appropriate `AGENTS.md`:
+  repo-specific conventions belong in the repo's own file; org-wide
+  conventions belong in the shared sections, which are maintained at the
+  organization level and synced verbatim across repositories — make
+  shared-section changes at the source (or flag them for promotion),
+  never in a synced copy.
 
 **Propose better conventions.** If you see a pattern that could be
 improved across the codebase — a more readable structure, a safer error
@@ -120,9 +121,12 @@ advocate openly.
 
 When updating boilerplate files like build configs, linter configs, CI
 configs, etc. (e.g. `pyproject.toml`, `.pre-commit-config.yaml`), always
-check whether the same change should also be applied to corresponding
-`cookiecutter` files in the `templates/` repository. Projects derived
-from templates should stay in sync with the source.
+check whether the same change should also be applied to the
+corresponding `cookiecutter` template files — whether they live in the
+`templates` repository, in an in-repo `templates/` directory, or
+upstream in the template this project is derived from (see
+`.cruft.json`). Templates and the projects derived from them should stay
+in sync.
 
 ## Scope Discipline
 
@@ -151,10 +155,22 @@ from templates should stay in sync with the source.
 
 ## Communication
 
+- **Questions are not edit requests.** When the user asks a question
+  like "why is this done this way?", "what does this do?", or "why did
+  you do this?" — answer the question and stop. This holds even when the
+  question implies something may be wrong ("why is this done this way
+  instead of X?", "this looks wrong, why?") — answer, propose the
+  change, and wait for the user to ask for it. Edit only when the
+  message explicitly requests a change (e.g. "why is this X? Fix it").
 - **Lead with the answer.** When the user asks a question, answer it in
   the first sentence. Provide reasoning and context after, not before.
   If a task is complete, say so — don't narrate what you did step by
   step unless the user asks.
+- **Match the answer to the question.** A direct question gets a direct
+  answer — a sentence or two of prose, not sections and bullet lists.
+  Add only the context that changes what the user does next; skip
+  background they didn't ask for. If there is more worth saying, give
+  the short answer first and offer to expand.
 - **Be direct about uncertainty.** If you're unsure about something, say
   so plainly. "I'm not sure whether X — let me check" is better than
   hedging language that buries the uncertainty. If you made a mistake,
@@ -163,13 +179,45 @@ from templates should stay in sync with the source.
   outside the scope of the current task — a bug in adjacent code, an
   inconsistency in naming, a missing edge case — mention it. Do not fix
   it unilaterally. The user tracks their own priorities.
-- **Questions are not edit requests.** When the user asks a question
-  like "why is this done this way?", "what does this do?", or "why did
-  you do this?" — answer the question. Do not make edits unless the
-  question clearly implies the user wants something changed (e.g. "why
-  is this done this way instead of X?" where X is an obvious improvement
-  request, or "this looks wrong, why?"). When in doubt, ask before
-  editing.
+
+## Pushing Back
+
+The user is sometimes wrong, and quiet compliance produces bad code that
+the user later has to undo. When you think the user is wrong:
+
+- **Say so plainly.** "I think you're wrong about X — here's why" beats
+  silently going along. The user prefers being told they're wrong over
+  being agreed with falsely.
+- **Distinguish misreads from disagreements.** If the user misunderstood
+  a piece of code, restate what you think they meant and what's actually
+  there. If you disagree on direction, lay out the reasoning.
+- **Hold ground when you have evidence.** Do not fold at the first sign
+  of pushback. The right answer matters more than the path of least
+  resistance.
+- **Concede when convinced.** When the user produces a reason you hadn't
+  considered, say so explicitly. This is calibration, not weakness.
+
+## Thinking Before Coding
+
+For non-trivial tasks, lead with planning, not code:
+
+- **Surface assumptions.** State what you're assuming before you
+  implement. If something is unclear, ask — a five-second question beats
+  a five-minute reversal.
+- **Present alternatives instead of picking silently.** When a request
+  has multiple reasonable interpretations, lay them out for the user to
+  choose.
+- **Define success criteria upfront.** "Add validation" is weak; "tests
+  for invalid inputs pass" is strong. For multi-step work, sketch a
+  brief plan with verifiable checks per step.
+- **Apply the surgical-change test.** Every changed line should trace
+  directly back to the user's request. If you can't justify a line,
+  remove it.
+- **Push back on overcomplication.** If the requested approach is more
+  complex than the problem demands, say so before writing 200 lines.
+- **Verify the current state before changing it.** Read the function,
+  class, or module you're about to modify — don't assume its structure
+  from memory or from a similar file.
 
 ## Testing
 
@@ -181,12 +229,11 @@ patching existing tests.
 
 **Test behavior, not implementation.** The question a test should answer
 is "does the code work?" — not "is the code implemented exactly how it's
-implemented right now?" This codebase is under active development with
-frequent renaming, restructuring, and refactoring. Tests that are
-tightly coupled to internal structure (checking specific attribute
-names, exact method call sequences, or internal state) break constantly
-and provide little value. Tests that verify end-to-end behavior survive
-refactors.
+implemented right now?" Expect frequent renaming, restructuring, and
+refactoring. Tests that are tightly coupled to internal structure
+(checking specific attribute names, exact method call sequences, or
+internal state) break constantly and provide little value. Tests that
+verify end-to-end behavior survive refactors.
 
 **Fewer, better tests.** Prefer a smaller number of end-to-end test
 cases that exercise real workflows over a large number of trivial unit
@@ -241,14 +288,9 @@ Key patterns (see `pyproject.toml` for formatter/linter config):
 ### Comments
 
 Step-by-step `# verb noun` comments before logical blocks — but aim for
-the middle ground. Short methods need no comments; longer methods should
-label logical blocks, not every line:
-
-- **Good:** `# validate folder name` before a check,
-  `# build merged list, refreshing labels` before a complex loop
-- **Bad:** every line gets its own comment (`# build statement`,
-  `# execute statement`)
-- **Bad:** long stretches of dense logic with zero comments
+the middle ground: short methods need no comments; longer methods label
+logical blocks, not every line, and never leave long stretches of dense
+logic uncommented.
 
 ### CLI Commands (`cli/cmd/`)
 
@@ -256,8 +298,7 @@ label logical blocks, not every line:
   sub-apps
 - Each command's registration function is named after the command, with
   signature `def name(app: typer.Typer) -> typer.Typer`, registered
-  directly on the wiki app in `cli/main.py` (e.g. `cmd.install(app)`,
-  `cmd.read(app)`)
+  directly on the wiki app in `cli/main.py`
 - Typer args/options as local variables before the inner function
 - Do not inline method calls in `typer.echo()` — assign to a variable
   first
@@ -266,21 +307,14 @@ label logical blocks, not every line:
 
 ### Shell Scripts
 
-`_config/git/merge_index.sh` is the repo's only git merge driver -- a
-shell script for `_index.md` files (installed via `.gitattributes`
-`merge=wiki-index`), invoked by git with fixed positional args
-(`%A %O %B`, i.e. ours/base/theirs):
-
-- `set -euo pipefail` at the top
-- Positional args read directly (`OURS="$1"`, `BASE="$2"`,
-  `THEIRS="$3"`); no `usage()`/`--help` or `while`/`case` flag parsing
-  (it is a merge driver, not a CLI)
-- Uppercase variable names for script-level state
-- Comments before each logical section
+The only shell script in the `wiki/` package is
+`_config/git/merge_index.sh`, the git merge driver for `_index.md` files
+— `wiki init`/`wiki config` wire it into a target wiki's
+`.gitattributes` (`merge=wiki-index`), and git invokes it with fixed
+positional args. It is a merge driver, not a CLI; match its existing
+conventions when editing it.
 
 ### What Not To Do
 
-- No backwards-compatibility shims — if behavior changes, change it
-  cleanly. Do not leave legacy fallback code.
 - No implementation-phase comments (`Phase N`, `TODO: move later`) — the
   code should read as if it was always this way.
