@@ -89,8 +89,31 @@ Frontmatter timestamps default to UTC in ISO-8601. To change them, set a
 timezone (any IANA name) and format (a strftime string) under
 `timestamp` in `_config/settings.json`.
 
-Use the `/wiki` skill to manage wikis. The `wiki` CLI is also available
-directly — run `wiki --help` and `wiki <command> --help` to explore.
+### CLI
+
+Use the `/wiki` skill to manage wikis, or drive the `wiki` CLI directly.
+
+Initialize a wiki in the current project and configure integrations:
+
+- `wiki init` — scaffold a new wiki with a root index
+- `wiki config` — install Obsidian plugins and the git merge driver
+
+Maintain indexes as files are added and removed:
+
+- `wiki lint` — validate structure and flag issues
+- `wiki update` — sync index links with the filesystem
+
+Browse structure, search across content, and read entries:
+
+- `wiki map` — print an indented tree overview
+- `wiki search` — search content with regex
+- `wiki read` — read a named entry
+
+Commands operate on the `wiki/` folder under the current directory by
+default; pass `--path` to target another wiki. `map`, `search`,
+`update`, and `lint` accept an optional name argument to restrict scope
+to a subtree. Run `wiki --help` and `wiki <command> --help` for full
+option descriptions.
 
 ## Development
 
@@ -130,7 +153,7 @@ Run linters and formatters:
 pre-commit run --all-files
 ```
 
-## Acknowledgements
+## Third-Party Software
 
 `wiki` sets up the
 [Front Matter Title](https://github.com/snezhig/obsidian-front-matter-title)
