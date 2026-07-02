@@ -7,8 +7,7 @@ already reads parent directories), also check the parent directory for
 
 ## Overview
 
-`plasma-wiki` is a standalone plugin for Claude Code and Codex providing
-the **wiki** skill.
+`plasma-wiki` is a standalone plugin providing the **wiki** skill.
 
 ### Architecture
 
