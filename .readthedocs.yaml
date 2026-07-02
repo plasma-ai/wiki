@@ -7,7 +7,7 @@ build:
     post_create_environment:
       - pip install uv
     install:
-      - uv sync --active --all-extras --group docs
+      - UV_PROJECT_ENVIRONMENT=$READTHEDOCS_VIRTUALENV_PATH uv sync --all-extras --group docs
     pre_build:
       - sphinx-apidoc -f -o docs wiki
 sphinx:

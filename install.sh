@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# A thin `uv sync` wrapper: installs the project (editable, the uv sync default)
-# plus any requested extras and dependency groups. With no environment active,
-# uv creates and uses a local `.venv`; with one active (e.g. pyenv) it syncs into it.
+# A thin `uv sync` wrapper: installs the project (editable) plus requested
+# extras and dependency groups. With no environment active, uv creates and
+# manages a local `.venv`; with one active (e.g. pyenv), it syncs into that
+# env pinned to the env's own interpreter (--python) so it never recreates it.
 
 ALL_EXTRAS=false
 INSTALL_EXTRAS=()
@@ -84,13 +85,17 @@ if [[ "$ALL_EXTRAS" == true ]] && [[ ${#INSTALL_EXTRAS[@]} -gt 0 ]]; then
     exit 1
 fi
 
-# sync into the active environment (e.g. pyenv) if one is set; otherwise
-# uv creates and manages a local .venv
+# detect an active environment (e.g. pyenv) and its interpreter;
+# the extras/groups flags below are shared by both install paths
 ARGS=()
 VENV_ACTIVE=false
-if [[ -n "${VIRTUAL_ENV:-}" ]] || [[ -n "${PYENV_VIRTUAL_ENV:-}" ]]; then
+VENV_PYTHON=""
+if [[ -n "${VIRTUAL_ENV:-}" ]]; then
     VENV_ACTIVE=true
-    ARGS+=(--active)
+    VENV_PYTHON="$VIRTUAL_ENV/bin/python"
+elif [[ -n "${PYENV_VIRTUAL_ENV:-}" ]]; then
+    VENV_ACTIVE=true
+    VENV_PYTHON="$PYENV_VIRTUAL_ENV/bin/python"
 fi
 if [[ "$ALL_EXTRAS" == true ]]; then
     ARGS+=(--all-extras)
@@ -106,15 +111,23 @@ if [[ ${#INSTALL_GROUPS[@]} -gt 0 ]]; then
     done
 fi
 
-# sync the environment (the project is installed editable)
-if [[ ${#ARGS[@]} -gt 0 ]]; then
-    uv sync "${ARGS[@]}"
+# with an env active, sync into it pinned to the env's own interpreter
+# so uv installs in place instead of recreating it on a version mismatch
+# (a genuinely incompatible interpreter errors instead); otherwise let uv
+# create and manage a local .venv
+if [[ "$VENV_ACTIVE" == true ]]; then
+    if [[ ${#ARGS[@]} -gt 0 ]]; then
+        uv sync --active --python "$VENV_PYTHON" "${ARGS[@]}"
+    else
+        uv sync --active --python "$VENV_PYTHON"
+    fi
 else
-    uv sync
-fi
-
-# activate the freshly-created .venv so the pre-commit step can find it
-if [[ "$VENV_ACTIVE" == false ]]; then
+    if [[ ${#ARGS[@]} -gt 0 ]]; then
+        uv sync "${ARGS[@]}"
+    else
+        uv sync
+    fi
+    # activate the freshly-created .venv so the pre-commit step can find it
     # shellcheck disable=SC1091
     source .venv/bin/activate
 fi
