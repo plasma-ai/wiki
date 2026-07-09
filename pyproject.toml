@@ -176,17 +176,18 @@ ignore = [
     # (choice to allow explicit if/else)
     "SIM401",
     # UP007: use X | Y for type annotations
-    # (choice to use typing.Union; see the Type Hints convention)
+    # (typing.Union/Optional by default; PEP 604 pipes are reserved for
+    # one-or-some shapes like str | list[str])
     "UP007",
     # UP015: redundant open mode argument
     # (choice to allow the explicit mode for readability)
     "UP015",
     # UP028: replace yield-loop with yield from
     # (keep explicit for/yield so sync generators mirror their async
-    # counterparts, which cannot use yield from; see Sync/Async Symmetry)
+    # counterparts, which cannot use yield from)
     "UP028",
     # UP045: use X | None for type annotations
-    # (choice to use typing.Optional; see the Type Hints convention)
+    # (choice to use typing.Optional)
     "UP045",
 ]
 
