@@ -334,6 +334,7 @@ logic uncommented.
 The only shell script in the `wiki/` package is
 `_config/git/merge_index.sh`, the git merge driver for `_index.md` files
 — `wiki init`/`wiki config` wire it into a target wiki's
-`.gitattributes` (`merge=wiki-index`), and git invokes it with fixed
-positional args. It is a merge driver, not a CLI; match its existing
-conventions when editing it.
+`.gitattributes` (`merge=wiki`), git invokes the hidden `wiki _merge`
+command, and the command dispatches `_index.md` pathnames to the script
+with fixed positional args. It is a merge driver, not a CLI; match its
+existing conventions when editing it.

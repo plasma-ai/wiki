@@ -23,8 +23,15 @@ from wiki.util.dict import merge
 __all__ = ['Wiki']
 
 DEFAULT_WIKI_NAME = 'wiki'
-WIKI_CONFIG = '_config'
+WIKI_DIR = '.wiki'
+WIKI_SETTINGS = f'{WIKI_DIR}/settings.json'
 WIKI_INDEX = '_index.md'
+
+# region-directive marker grammar; pairing semantics live in _parse_regions
+_REGION_DIRECTIVE = re.compile(
+    r'<!--\s+(start|end):\s+([a-z0-9]+(?:-[a-z0-9]+)*)'
+    r'((?:\s+[a-z0-9]+(?:-[a-z0-9]+)*)*)\s+-->'
+)
 
 # NOTE: plugin versions should be periodically updated
 _OBSIDIAN_PLUGINS = {
@@ -97,23 +104,21 @@ class Wiki:
 
     @functools.cached_property
     def _settings(self: Wiki) -> dict:
-        """Per-wiki settings overlay from ``_config/settings.json``.
+        """Per-wiki settings overlay from ``.wiki/settings.json``.
 
         Returns an empty dict when the file is absent. Raises ``ValueError``
         on malformed JSON or a non-object top level, since the file is
         user-editable input that should fail loudly rather than be ignored.
         """
-        path = self._root / WIKI_CONFIG / 'settings.json'
+        path = self._root / WIKI_SETTINGS
         if not path.exists():
             return {}
         try:
             result = json.loads(path.read_text(encoding='utf-8'))
         except json.JSONDecodeError as e:
-            raise ValueError(
-                f'Malformed JSON in {WIKI_CONFIG}/settings.json: {e}'
-            ) from e
+            raise ValueError(f'Malformed JSON in {WIKI_SETTINGS}: {e}') from e
         if not isinstance(result, dict):
-            raise ValueError(f'{WIKI_CONFIG}/settings.json must be a JSON object')
+            raise ValueError(f'{WIKI_SETTINGS} must be a JSON object')
         return result
 
     @functools.cached_property
@@ -128,37 +133,49 @@ class Wiki:
         # overlay the settings.json naming block onto the field defaults
         override = self._settings.get('naming', {})
         if not isinstance(override, dict):
-            raise ValueError('naming must be a JSON object')
+            raise ValueError(f'naming must be a JSON object in {WIKI_SETTINGS}')
         policy = {**_NAMING_DEFAULTS, **override}
         # validate predicate names (settings.json is user input -> fail loudly)
         if not isinstance(policy['validate'], list):
-            raise ValueError('naming.validate must be a list of predicate names')
+            raise ValueError(
+                f'naming.validate must be a list of predicate names in {WIKI_SETTINGS}'
+            )
         for predicate in policy['validate']:
             if predicate not in _NAMING_PREDICATES:
-                raise ValueError(f'Unknown naming predicate: {predicate!r}')
+                raise ValueError(
+                    f'Unknown naming predicate {predicate!r} in {WIKI_SETTINGS}'
+                )
         # min_length defaults to 1; an explicit value must be a positive int
         min_length = policy['min_length']
         if min_length is None:
             min_length = 1
         elif not (isinstance(min_length, int) and min_length >= 1):
             raise ValueError(
-                f'naming.min_length must be an int >= 1 or null, got {min_length!r}'
+                f'naming.min_length must be an int >= 1 or null, got'
+                f' {min_length!r} in {WIKI_SETTINGS}'
             )
         # max_length is null (no cap) or a positive int
         max_length = policy['max_length']
         if max_length is not None:
             if not (isinstance(max_length, int) and max_length >= 1):
                 raise ValueError(
-                    f'naming.max_length must be an int >= 1 or null, got {max_length!r}'
+                    f'naming.max_length must be an int >= 1 or null, got'
+                    f' {max_length!r} in {WIKI_SETTINGS}'
                 )
         # deny/allow are strings of characters; reserved is a list of names
         for leaf in ('deny', 'allow'):
             if not isinstance(policy[leaf], str):
-                raise ValueError(f'naming.{leaf} must be a string of characters')
+                raise ValueError(
+                    f'naming.{leaf} must be a string of characters in {WIKI_SETTINGS}'
+                )
         if not isinstance(policy['reserved'], list):
-            raise ValueError('naming.reserved must be a list of strings')
+            raise ValueError(
+                f'naming.reserved must be a list of strings in {WIKI_SETTINGS}'
+            )
         if not isinstance(policy['leading_digits'], bool):
-            raise ValueError('naming.leading_digits must be a boolean')
+            raise ValueError(
+                f'naming.leading_digits must be a boolean in {WIKI_SETTINGS}'
+            )
         # always deny the path separator, index delimiter, and link/markdown grammar
         deny = set(policy['deny'])
         deny.add(self.path_sep)  # would split a name into folders
@@ -166,8 +183,8 @@ class Wiki:
         deny.add('\\')  # escape character + Windows path separator
         deny.update('[]|')  # wikilink [[target|label]] + category [cat] name
         deny.add('#')  # markdown heading marker / link anchor
-        # always reserve the per-folder index stem; the config directory's stem is
-        # reserved only at the root (in validate_name) -- the one place it exists
+        # always reserve the per-folder index stem; the .wiki tool directory
+        # needs no entry -- leading-dot names are rejected wholesale
         reserved = set(policy['reserved'])
         reserved.add(pathlib.Path(WIKI_INDEX).stem)  # the per-folder index stem
         # compile the optional full-match pattern
@@ -175,12 +192,15 @@ class Wiki:
         if pattern is not None:
             if not isinstance(pattern, str):
                 raise ValueError(
-                    f'naming.pattern must be a string or null, got {pattern!r}'
+                    f'naming.pattern must be a string or null, got'
+                    f' {pattern!r} in {WIKI_SETTINGS}'
                 )
             try:
                 pattern = re.compile(pattern)
             except re.error as e:
-                raise ValueError(f'naming.pattern is not a valid regex: {e}') from e
+                raise ValueError(
+                    f'naming.pattern in {WIKI_SETTINGS} is not a valid regex: {e}'
+                ) from e
         return {
             'validate': policy['validate'],
             'allow': set(policy['allow']),
@@ -203,51 +223,52 @@ class Wiki:
         # overlay the settings.json timestamp block onto the defaults
         override = self._settings.get('timestamp', {})
         if not isinstance(override, dict):
-            raise ValueError('timestamp must be a JSON object')
+            raise ValueError(f'timestamp must be a JSON object in {WIKI_SETTINGS}')
         # format is a strftime string; timezone is an IANA name or null (UTC)
         format = override.get('format', '%Y-%m-%dT%H:%M:%SZ')
         if not isinstance(format, str):
-            raise ValueError(f'timestamp.format must be a string, got {format!r}')
+            raise ValueError(
+                f'timestamp.format must be a string, got {format!r} in {WIKI_SETTINGS}'
+            )
         # a blank or multi-line value would corrupt the YAML frontmatter -- reject
         # an empty/whitespace format, strftime's %n/%t newline/tab directives, and
         # literal line breaks, the only ways the rendered value splits or empties
         breakers = ('%n', '%t', '\n', '\r')
         if not format.strip() or any(token in format for token in breakers):
             raise ValueError(
-                f'timestamp.format must render a single non-empty line; got {format!r}'
+                f'timestamp.format must render a single non-empty line; got'
+                f' {format!r} in {WIKI_SETTINGS}'
             )
         timezone = override.get('timezone')
         if timezone is not None and not isinstance(timezone, str):
             raise ValueError(
-                f'timestamp.timezone must be a string or null, got {timezone!r}'
+                f'timestamp.timezone must be a string or null, got'
+                f' {timezone!r} in {WIKI_SETTINGS}'
             )
         if timezone:
             try:
                 timezone = zoneinfo.ZoneInfo(timezone)
             except (zoneinfo.ZoneInfoNotFoundError, ValueError) as e:
                 raise ValueError(
-                    f'Unknown timestamp.timezone {timezone!r} in'
-                    f' {WIKI_CONFIG}/settings.json'
+                    f'Unknown timestamp.timezone {timezone!r} in {WIKI_SETTINGS}'
                 ) from e
         else:
             timezone = dt.UTC
         return {'format': format, 'zone': timezone}
 
-    def validate_name(self: Wiki, name: str, *, root: bool = False) -> bool:
+    def validate_name(self: Wiki, name: str) -> bool:
         """Return ``True`` if ``name`` satisfies the wiki's naming policy.
 
         The policy is the field defaults overlaid by the per-wiki ``naming`` block
-        in ``_config/settings.json``; see :attr:`_naming`. The path separator,
+        in ``.wiki/settings.json``; see :attr:`_naming`. The path separator,
         index delimiter, link/markdown grammar characters, and the reserved
-        ``_index`` name are always rejected; ``_config`` -- the config directory's
-        stem -- collides only at the root, so it is rejected there alone.
+        ``_index`` name are always rejected; the ``.wiki`` tool directory needs
+        no reservation, since leading-dot names are rejected wholesale.
 
         Override in subclasses for naming rules a data policy cannot express.
 
         Args:
             name: Name to validate (page stem or folder name).
-            root: Whether ``name`` sits at the wiki root, where ``_config``
-                additionally collides with the ``_config/`` config directory.
 
         Returns:
             ``True`` if the name is valid.
@@ -262,11 +283,8 @@ class Wiki:
             return False
         if not name.isprintable() or name.startswith('.'):
             return False
-        # reject reserved structural names and any denied character; the config
-        # directory's stem collides only at the root, so reject it there alone
+        # reject reserved structural names and any denied character
         if name in policy['reserved']:
-            return False
-        if root and name == WIKI_CONFIG:
             return False
         if any(char in policy['deny'] for char in name):
             return False
@@ -298,7 +316,7 @@ class Wiki:
         Args:
             name: Display name for the root ``_index.md``.
                 Defaults to the wiki root folder name.
-            settings: Initial ``_config/settings.json`` contents.
+            settings: Initial ``.wiki/settings.json`` contents.
                 When omitted, the default naming policy is seeded
                 so the configurable knobs are discoverable.
 
@@ -306,27 +324,35 @@ class Wiki:
         # validate OFFLINE_MODE before any filesystem mutation; a bad value must
         # fail fast rather than strand a half-built wiki the re-init guard skips
         _is_offline()
-        # initialize wiki root
-        self._root.mkdir(parents=True, exist_ok=True)
-        # seed _config/settings.json FIRST -- the caller's settings, or the
-        # default naming policy so the configurable knobs are discoverable. It
-        # must precede every _settings access below (validate_name, _utc_now)
-        # so the cached property reads this wiki's real policy rather than
-        # caching {} from the not-yet-written file
-        settings_path = self._root / WIKI_CONFIG / 'settings.json'
-        if not settings_path.exists():
-            settings_path.parent.mkdir(parents=True, exist_ok=True)
+        # ------ TODO: remove back-compat in future versions ------
+        self._refuse_legacy_layout()
+        # ---------------------------------------------------------
+        # resolve the settings seed and prime the _settings cache with it, so
+        # the accesses below (validate_name, _utc_now) read this wiki's real
+        # policy rather than caching {} from the not-yet-written file
+        settings_path = self._root / WIKI_SETTINGS
+        if settings_path.exists():
+            seed = None
+        else:
             seed = settings if settings is not None else {'naming': _NAMING_DEFAULTS}
-            content = json.dumps(seed, indent=2)
-            settings_path.write_text(content + '\n', encoding='utf-8')
-        # resolve wiki name against the now-seeded policy
+            self._settings = seed
+        # validate the seeded policies BEFORE any filesystem write: a rejected
+        # seed must fail cleanly rather than strand a wiki whose settings.json
+        # every later command (and re-init, which never overwrites it) rejects
         name = name or self._root.name
-        if not self.validate_name(name, root=True):
+        if not self.validate_name(name):
             raise ValueError(f'Invalid wiki name: {name!r}')
         # alias current timestamp
         now = self._utc_now()
-        # seed _config/obsidian from stock template
-        config_dir = self._root / WIKI_CONFIG / 'obsidian'
+        # initialize wiki root
+        self._root.mkdir(parents=True, exist_ok=True)
+        # seed .wiki/settings.json -- the declared-root marker
+        if seed is not None:
+            settings_path.parent.mkdir(parents=True, exist_ok=True)
+            content = json.dumps(seed, indent=2)
+            _write_atomic(settings_path, content + '\n')
+        # seed .wiki/obsidian from stock template
+        config_dir = self._root / WIKI_DIR / 'obsidian'
         if not config_dir.exists():
             path = pathlib.Path(__file__).parent
             template_dir = path.parent / '_config' / 'obsidian'
@@ -340,26 +366,31 @@ class Wiki:
                 name=name,
                 created=now,
                 updated=now,
-                index=True,
             )
-            root_index.write_text(
+            _write_atomic(
+                root_index,
                 self._render_index(name, frontmatter, [], ''),
-                encoding='utf-8',
             )
         # update all indexes (reuse this run's timestamp)
-        overlay, _ = self._plan(self._root, now=now)
-        self._apply_plan(overlay, now)
+        overlay, baseline, _ = self._plan(self._root, now=now)
+        self._apply_plan(overlay, baseline, now)
+        # materialize the self-ignoring counts cache
+        self._load_counts()
 
     def update_config(self: Wiki) -> list[str]:
-        """Install ``_config/obsidian/`` into ``.obsidian/``.
+        """Install ``.wiki/obsidian/`` into ``.obsidian/``.
 
         Copies each bundled plugin's settings under
-        ``_config/obsidian/plugins/`` into ``.obsidian/plugins/`` and
+        ``.wiki/obsidian/plugins/`` into ``.obsidian/plugins/`` and
         downloads pinned plugin code from its upstream release. Each
         top-level ``.json`` file (like ``community-plugins.json``) is
         created from source when absent, else merged: arrays are
         union-merged and dicts deep-merged with source winning. Other
-        installed plugins are left untouched.
+        installed plugins are left untouched. A missing
+        ``.wiki/obsidian/`` is seeded from the stock template first, so
+        an adopted tree gets the full setup. Also guarantees the
+        declared-root marker: a missing ``.wiki/settings.json`` is
+        restored as ``{}`` with a notice.
 
         Returns:
             List of warning messages (e.g. when a plugin download
@@ -368,16 +399,26 @@ class Wiki:
         """
         # validate OFFLINE_MODE before any filesystem mutation
         offline = _is_offline()
-        # prepare _config/obsidian/ and .obsidian/ directories
-        config_dir = self._root / WIKI_CONFIG / 'obsidian'
-        if config_dir.exists():
-            obsidian_dir = self._root / '.obsidian'
-            obsidian_dir.mkdir(exist_ok=True)
-        else:
-            relpath = config_dir.relative_to(self._root)
-            raise FileNotFoundError(f'Directory not found: {relpath}')
-        # install plugin settings, then download pinned plugin code
+        # initialize warnings
         warnings = []
+        # restore the declared-root marker before touching anything else;
+        # a restoration is informational, so it rides the notice channel
+        # rather than the returned warnings (which mean setup is unfinished)
+        for notice in self._ensure_settings():
+            self._warn(notice)
+        # seed a missing .wiki/obsidian from the stock template, so an
+        # adopted tree (or one whose .wiki/ was lost) gets the full setup
+        config_dir = self._root / WIKI_DIR / 'obsidian'
+        if not config_dir.exists():
+            path = pathlib.Path(__file__).parent
+            template_dir = path.parent / '_config' / 'obsidian'
+            if template_dir.exists():
+                config_dir.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(template_dir, config_dir)
+        # prepare the .obsidian/ vault directory
+        obsidian_dir = self._root / '.obsidian'
+        obsidian_dir.mkdir(exist_ok=True)
+        # install plugin settings, then download pinned plugin code
         plugins_dir = config_dir / 'plugins'
         if plugins_dir.is_dir():
             for source in sorted(plugins_dir.iterdir()):
@@ -449,7 +490,7 @@ class Wiki:
                     f' {type(target_data).__name__}: .obsidian/{source.name}'
                 )
             result = json.dumps(merged, indent=2)
-            target.write_text(result + '\n', encoding='utf-8')
+            _write_atomic(target, result + '\n')
         return warnings
 
     def update(
@@ -463,15 +504,29 @@ class Wiki:
 
         Walks the filesystem, refreshing category labels from child
         frontmatter and preserving existing descriptions. Adds
-        frontmatter to pages that lack it.
+        frontmatter to pages that lack it; a page whose frontmatter
+        never closes (no closing ``---``) is left untouched and warned
+        about rather than rewritten, and an existing index with no
+        (closed) frontmatter -- an emptied or truncated file -- is
+        likewise skipped with a notice rather than rebuilt from scratch.
 
         When broken links are found (targets in the existing index
         that no longer exist on the filesystem), they are preserved
-        and a warning is logged. Set ``prune=True`` to remove them
-        instead.
+        and a warning is logged per link. Set ``prune=True`` to
+        remove them instead. A file whose only drift is CRLF line
+        endings is rewritten, normalizing it to LF. Every notice is
+        emitted individually -- output modes (the CLI's condensed
+        default) are the caller's concern.
 
         Logs a warning for each new link added with a placeholder
-        ``...`` description.
+        ``...`` description, for each index-side link description
+        overwritten because it diverged from its page's frontmatter
+        ``desc`` (the source of truth -- the page is the place to
+        edit), and when a deleted ``.wiki/cache/`` is recreated. A
+        missing ``.wiki/settings.json`` -- the declared-root marker --
+        is restored as ``{}`` (all defaults; policy is never invented)
+        with a notice; a dry run leaves it untouched, neither restoring
+        nor reporting it (the CLI's resolver names it instead).
 
         Args:
             name: Restrict scope to named subtree (relative
@@ -490,24 +545,46 @@ class Wiki:
             the parent folder is outside the scope.
 
         """
+        # resolve the scope first, so a bad entry fails before the write
+        # sweeps below mutate anything
         if name:
             folder = self._resolve_folder(name)
         else:
             folder = self._root
+        # ------ TODO: remove back-compat in future versions ------
+        self._refuse_legacy_layout()
+        # ---------------------------------------------------------
+        # a dry run reports without mutating, so the marker guarantee
+        # applies only to a writing run
+        if not check:
+            # restore the declared-root marker before reading policy from it
+            for notice in self._ensure_settings():
+                self._warn(notice)
         # compute corrected content for the scope (single timestamp)
         now = self._utc_now()
-        overlay, notices = self._plan(folder, prune=prune, now=now)
-        # report broken/new links (preserved or added during the run)
+        overlay, baseline, notices = self._plan(folder, prune=prune, now=now)
+        # report every broken/new link (preserved or added during the run)
+        # individually and statelessly; the CLI condenses by default
         for notice in notices:
             self._warn(notice)
-        # dry run: report which files would change without writing
+        # dry run: report which files would change without writing (a CRLF
+        # file reads equal but would be rewritten, so probe its bytes too)
         if check:
             return [
                 str(path.relative_to(self._root))
                 for path, content in overlay.items()
-                if not path.exists() or content != path.read_text(encoding='utf-8')
+                if not path.exists()
+                or content != path.read_text(encoding='utf-8')
+                or self._has_crlf(path)
             ]
-        return self._apply_plan(overlay, now)
+        result = self._apply_plan(overlay, baseline, now)
+        # refresh the counts cache, announcing a recreated .wiki/cache/ rather
+        # than restoring a deleted directory silently
+        recreated = not (self._root / WIKI_DIR / 'cache').exists()
+        self._load_counts()
+        if recreated:
+            self._warn(f'Recreated {WIKI_DIR}/cache/ (derived counts cache)')
+        return result
 
     def lint(
         self: Wiki,
@@ -524,16 +601,25 @@ class Wiki:
           markers is the one exception: it is reported only as such,
           with its diff suppressed.)
         - **Needs attention:** problems ``update`` cannot fix --
-          invalid names, merge conflict markers, missing trailing
-          periods, stale links in user content, and broken links
-          (targets that no longer exist; ``update`` keeps these
-          without ``--prune``).
+          invalid names, merge conflict markers, unclosed page
+          frontmatter, emptied or truncated indexes, likely formatter
+          damage (escaped wikilinks, or a thematic break standing
+          where ``***`` belongs), missing trailing periods, stale
+          links in user content, and broken links (targets that no
+          longer exist; ``update`` keeps these without ``--prune``).
 
         Every line begins with the relevant path; an out-of-date file's
         diff follows its ``Requires update`` header, indented.
 
-        Placeholder descriptions and empty content sections are soft
-        notes (stderr) and do not count as issues.
+        A ``<!-- start: no-lint -->`` ... ``<!-- end: no-lint -->`` region
+        suppresses the positional rules (conflict markers, escaped
+        wikilinks, stale links) for the lines it wraps; file-level checks
+        ignore regions, and a nested or dangling region marker is itself
+        a hard issue.
+
+        Placeholder descriptions, empty content sections, and CRLF line
+        endings (which the next ``update`` normalizes) are soft notes
+        (stderr) and do not count as issues.
 
         Args:
             name: Restrict scope to named subtree (relative
@@ -548,9 +634,12 @@ class Wiki:
             folder = self._resolve_folder(name)
         else:
             folder = self._root
+        # ------ TODO: remove back-compat in future versions ------
+        self._refuse_legacy_layout()
+        # ---------------------------------------------------------
         # compute what update would write (the source of truth for drift)
         now = self._utc_now()
-        overlay, _ = self._plan(folder, now=now)
+        overlay, _, _ = self._plan(folder, now=now)
         # walk all directories
         result = []
         folders = self._find_dirs(folder)
@@ -576,9 +665,20 @@ class Wiki:
                 result.append(f'{folder_relpath}/: Missing index')
             else:
                 index_relpath = index_path.relative_to(self._root)
-                text = index_path.read_text(encoding='utf-8')
+                text = self._read_text(index_path)
+                # CRLF endings read clean through universal newlines; note
+                # the pending normalization rather than failing the file
+                if self._has_crlf(index_path):
+                    self._warn(
+                        f'{index_relpath}: CRLF line endings; update will normalize'
+                    )
+                # region directives: no-lint suppresses the positional rules
+                # below, and a malformed pairing is itself a hard issue
+                suppressed, region_issues = self._lint_regions(index_path, text)
+                result.extend(region_issues)
                 # conflict markers take precedence over the generated diff
-                if _has_conflict_markers(text):
+                markers = _conflict_marker_lines(text)
+                if any(n not in suppressed for n in markers):
                     result.append(f'{index_relpath}: Merge conflict markers')
                 else:
                     # out of date: show what update would change
@@ -586,17 +686,44 @@ class Wiki:
                     if diff:
                         result.append(diff)
                     # a missing *** delimiter collapses the link block into user
-                    # content (the diff already flags the rewrite; name the marker
-                    # specifically so the cause is obvious)
+                    # content; the diff already flags the rewrite -- name the marker
+                    # (and, for a thematic break in its place, the likely formatter)
                     if self._index_missing_marker(folder):
-                        result.append(f'{index_relpath}: Index missing *** delimiter')
+                        if self._index_mangled_marker(folder):
+                            result.append(
+                                f'{index_relpath}: Index missing *** delimiter'
+                                ' with a thematic break in its place: likely'
+                                ' formatter damage (exclude the wiki from'
+                                ' markdown formatters; see README)'
+                            )
+                        else:
+                            result.append(
+                                f'{index_relpath}: Index missing *** delimiter'
+                            )
+                    # an escaped wikilink is the other formatter signature
+                    escaped = _escaped_wikilink_lines(text)
+                    if any(n not in suppressed for n in escaped):
+                        result.append(
+                            f'{index_relpath}: Escaped wikilinks: likely formatter'
+                            ' damage (exclude the wiki from markdown formatters;'
+                            ' see README)'
+                        )
                     # human-only checks on current content
                     frontmatter, links, user_content = self._parse_index(text)
+                    # an index with no closed frontmatter is emptied or
+                    # truncated; update keeps it as-is (see _plan_index), so
+                    # surface the recovery paths as a hard issue
+                    if not frontmatter:
+                        result.append(
+                            f'{index_relpath}: Empty or truncated index (no'
+                            ' frontmatter); restore it from git or delete it'
+                            ' to rebuild'
+                        )
                     result.extend(self._lint_desc(index_path, frontmatter))
                     # the root display name has no enclosing dir to validate it
                     if folder == self._root:
                         root_name = self._read_frontmatter_name(frontmatter)
-                        if root_name and not self.validate_name(root_name, root=True):
+                        if root_name and not self.validate_name(root_name):
                             result.append(
                                 f'{index_relpath}: Invalid wiki name {root_name!r}'
                             )
@@ -641,22 +768,49 @@ class Wiki:
             for page in self._find_pages(folder):
                 page_relpath = page.relative_to(self._root)
                 # report an invalid name for every file, including non-markdown
-                if not self.validate_name(page.stem, root=(folder == self._root)):
+                if not self.validate_name(page.stem):
                     result.append(f'{page_relpath}: Invalid page name')
                 # only markdown pages carry frontmatter/content to lint further
                 if page.suffix != '.md':
                     continue
-                text = page.read_text(encoding='utf-8')
+                text = self._read_text(page)
+                # CRLF endings read clean through universal newlines; note
+                # the pending normalization rather than failing the file
+                if self._has_crlf(page):
+                    self._warn(
+                        f'{page_relpath}: CRLF line endings; update will normalize'
+                    )
+                # region directives: no-lint suppresses the positional rules
+                # below, and a malformed pairing is itself a hard issue
+                suppressed, region_issues = self._lint_regions(page, text)
+                result.extend(region_issues)
                 # conflict markers take precedence over the generated diff
-                if _has_conflict_markers(text):
+                markers = _conflict_marker_lines(text)
+                if any(n not in suppressed for n in markers):
                     result.append(f'{page_relpath}: Merge conflict markers')
                     continue
                 # out of date: show what update would change
                 diff = self._diff(page, overlay)
                 if diff:
                     result.append(diff)
+                # an escaped wikilink is the signature of formatter damage
+                # (update never repairs page prose, so this is a human fix)
+                escaped = _escaped_wikilink_lines(text)
+                if any(n not in suppressed for n in escaped):
+                    result.append(
+                        f'{page_relpath}: Escaped wikilinks: likely formatter'
+                        ' damage (exclude the wiki from markdown formatters;'
+                        ' see README)'
+                    )
                 # human-only checks on current content
                 frontmatter, content = self._parse_page(text)
+                # unclosed frontmatter is left untouched by update (see
+                # _plan_page), so surface it as a hard issue
+                first_line = text.split('\n', 1)[0].lstrip('\ufeff')
+                if not frontmatter and first_line.strip() == '---':
+                    result.append(
+                        f'{page_relpath}: Malformed frontmatter (no closing ---)'
+                    )
                 if frontmatter:
                     result.extend(self._lint_desc(page, frontmatter))
                 result.extend(self._lint_stale_links(page, content))
@@ -693,7 +847,7 @@ class Wiki:
         # resolve path
         path = self._resolve_path(name)
         # read file content
-        content = path.read_text(encoding='utf-8')
+        content = self._read_text(path)
         # slice content on lines/words/chars
         if start is not None or stop is not None:
             content = self._slice(content, path, start, stop, on)
@@ -721,7 +875,9 @@ class Wiki:
                 path). ``None`` means the entire wiki.
             field: Comma-separated frontmatter field names to
                 search (e.g. ``'tags'``, ``'desc,name'``). When
-                ``None``, searches body content only.
+                ``None``, searches body content only. Patterns match
+                each field's value (block-scalar continuation lines
+                included), never the ``key:`` prefix.
             ignore_case: Use case-insensitive matching.
             all_files: Include non-markdown files in the
                 search.
@@ -764,7 +920,19 @@ class Wiki:
                     continue
                 field_lines = self._field_line_ranges(frontmatter, lines, fields)
                 for lineno, line in enumerate(lines, 1):
-                    if lineno in field_lines and regex.search(line):
+                    if lineno not in field_lines:
+                        continue
+                    # match against the value only -- the 'key: ' prefix (or
+                    # continuation indentation) would defeat value anchors and
+                    # match key names; surrounding YAML quotes are stripped so
+                    # anchors see the value the wiki writes via _quote, and the
+                    # reported line text stays raw
+                    match = re.match(r'^(\w+):[^\S\n]*', line)
+                    if match:
+                        value = _unquote(line[match.end() :])
+                    else:
+                        value = line.strip()
+                    if regex.search(value):
                         result.append((relpath, lineno, line))
             else:
                 # search body content: skip only the frontmatter (the region the
@@ -817,7 +985,8 @@ class Wiki:
             markdown: Filter by file type. ``None`` means show all.
                 ``True`` means only folders and ``.md`` pages.
                 ``False`` means only folders and non-``.md`` files.
-            words: Show word counts from frontmatter.
+            words: Show word counts (from the ``.wiki/cache/word_counts.json``
+                cache, lazily recomputed on stale entries).
 
         Returns:
             Indented tree string.
@@ -829,6 +998,10 @@ class Wiki:
             folder = self._resolve_folder(name)
         else:
             folder = self._root
+        # counts come from the cache (lazily recomputed on stale entries);
+        # skip the walk entirely when words are off
+        counts = self._load_counts() if words else {}
+        folder_words = self._folder_words(counts)
         result = self._map_folder(
             folder=folder,
             indent='',
@@ -839,12 +1012,12 @@ class Wiki:
             category=category,
             markdown=markdown,
             words=words,
+            counts=counts,
+            folder_words=folder_words,
         )
-        # an empty map with an index that parses to 0 links yet has on-disk
-        # children means the index lost its *** marker (its links became user
-        # content); warn rather than letting the CLI read it as an empty wiki
-        if not result:
-            self._warn_markerless_index(folder)
+        # a markerless index still maps via the reclaimed parse; warn rather
+        # than let the CLI read it silently
+        self._warn_markerless_index(folder)
         return '\n'.join(result)
 
     def _utc_now(self: Wiki) -> str:
@@ -873,14 +1046,66 @@ class Wiki:
         """
         print(message, file=sys.stderr)
 
+    def _ensure_settings(self: Wiki) -> list[str]:
+        """Materialize a missing ``.wiki/settings.json`` as ``{}``.
+
+        The settings file is the declared-root marker: ``init`` writes it
+        and every mutating command restores a lost one, so the declaration
+        guarantee is enforced rather than assumed. The materialized file
+        is an empty object -- all defaults; policy is never invented.
+
+        Returns:
+            Notices describing the restoration (empty when present).
+
+        Raises:
+            ValueError: If a root ``_config/settings.json`` exists -- the
+                legacy config namespace is never read, so its policy must
+                migrate before any policy-reading write proceeds.
+
+        """
+        # ------ TODO: remove back-compat in future versions ------
+        self._refuse_legacy_layout()
+        # ---------------------------------------------------------
+        path = self._root / WIKI_SETTINGS
+        if path.exists():
+            return []
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write_atomic(path, '{}\n')
+        return [f'Restored missing {WIKI_SETTINGS} ({{}} -- all defaults)']
+
+    def _refuse_legacy_layout(self: Wiki) -> None:
+        """Refuse to plan a sweep on a legacy-layout wiki.
+
+        A root ``_config/settings.json`` marks the legacy config
+        namespace, which is never read: until its policy migrates to
+        ``.wiki/``, a write sweep would run on defaults and index
+        ``_config/`` as content -- and a dry run (``update --check``,
+        ``lint``) would preview that same sweep, so every sweep-planning
+        path refuses alike. Read paths (``read``, ``search``, ``map``)
+        stay tolerant.
+
+        Raises:
+            ValueError: If a root ``_config/settings.json`` exists.
+
+        """
+        # ------ TODO: remove back-compat in future versions ------
+        if (self._root / '_config' / 'settings.json').is_file():
+            raise ValueError(
+                'Legacy wiki layout. Please perform the following migration:'
+                '\n  (1) move `_config/` -> `.wiki/` (delete `.wiki/` first if present)'
+                '\n  (2) run `wiki config`'
+                '\n  (3) run `wiki update`'
+            )
+        # ---------------------------------------------------------
+
     def _index_missing_marker(self: Wiki, folder: pathlib.Path) -> bool:
         """Return ``True`` if ``folder``'s index lost its ``***`` delimiter.
 
         The delimiter separates generated links from user content; without it
-        :meth:`_parse_index` folds the link block into user content and yields
-        zero links. Reports the gap only when the index exists and the folder
-        has on-disk children that should be linked, so a genuinely empty wiki
-        is not mistaken for a broken one.
+        :meth:`_parse_index` must heuristically reclaim the demoted link block
+        (see :meth:`_reclaim_links`). Reports the gap only when the index
+        exists and the folder has on-disk children that should be linked, so a
+        genuinely empty wiki is not mistaken for a broken one.
         """
         # the index must exist to be missing its marker
         index_path = folder / WIKI_INDEX
@@ -897,15 +1122,59 @@ class Wiki:
         if not (has_pages or has_dirs):
             return False
         # the marker is a line equal to the delimiter
-        text = index_path.read_text(encoding='utf-8')
+        text = self._read_text(index_path)
         lines = [line.rstrip() for line in text.split('\n')]
         return self.index_delimiter not in lines
+
+    def _index_mangled_marker(self: Wiki, folder: pathlib.Path) -> bool:
+        """Return ``True`` if a thematic break stands where ``***`` belongs.
+
+        Only meaningful when the index is missing its delimiter (see
+        :meth:`_index_missing_marker`): a markdown formatter rewrites the
+        ``***`` delimiter to a ``---``/``___`` thematic break, so a break
+        standing directly after the leading link run (or the H1, when the
+        link block is empty) is the signature of formatter damage rather
+        than a hand-deleted marker. A break deeper in body prose is
+        ordinary content and never matches.
+        """
+        text = self._read_text(folder / WIKI_INDEX)
+        lines = text.split('\n')
+        _, line_number = self._extract_frontmatter(lines)
+        # unclosed frontmatter extracts as none, leaving its own opening
+        # '---' first in the walk (past any leading blanks): a truncated
+        # index, not a rewritten marker
+        opener = next((line for line in lines if line.strip()), '')
+        if line_number == 0 and opener.lstrip('\ufeff').strip() == '---':
+            return False
+        # walk past the H1 and the leading link run (formatter escapes and
+        # desc continuations directly under a link tolerated, mirroring
+        # _reclaim_links) to the line standing where the delimiter belongs
+        in_run = False
+        gap = True
+        for line in lines[line_number:]:
+            stripped = line.strip()
+            if not stripped or re.match(r'^#\s', stripped):
+                gap = True
+                continue
+            candidate = re.sub(r'\\([\[\]_])', r'\1', stripped)
+            if re.match(r'^\[\[.+?\|.+?\]\](?::\s*.*)?$', candidate):
+                in_run = True
+                gap = False
+                continue
+            if re.fullmatch(r'\*{3,}|-{3,}|_{3,}', stripped):
+                return True
+            # a line directly under a link is a desc continuation
+            if in_run and not gap:
+                continue
+            return False
+        return False
 
     def _warn_markerless_index(self: Wiki, folder: pathlib.Path) -> None:
         """Warn when ``folder``'s index is missing its ``***`` delimiter.
 
-        Used by :meth:`map` so an index whose links collapsed into user content
-        is reported as broken rather than read as an empty wiki.
+        Used by :meth:`map` so a damaged index is reported (with its fix:
+        run ``wiki update``) rather than mapped silently from the reclaimed
+        parse.
         """
         if self._index_missing_marker(folder):
             relpath = (folder / WIKI_INDEX).relative_to(self._root)
@@ -1079,14 +1348,12 @@ class Wiki:
     def _is_excluded_dir(self: Wiki, path: pathlib.Path) -> bool:
         """Return ``True`` if directory should be excluded from index links.
 
-        Excludes directories with ``.`` prefix, the ``_config``
-        infrastructure directory, and symlinked directories
-        (following a symlink re-walks the same inode, producing
+        Excludes directories with ``.`` prefix (which keeps the ``.wiki``
+        tool directory out of the walk by construction) and symlinked
+        directories (following a symlink re-walks the same inode, producing
         duplicate/conflicting index writes and risking loops).
         """
-        return (
-            path.name.startswith('.') or path.name == WIKI_CONFIG or path.is_symlink()
-        )
+        return path.name.startswith('.') or path.is_symlink()
 
     def _find_dirs(self: Wiki, root: pathlib.Path) -> list[pathlib.Path]:
         """Return all non-excluded directories under ``root``, depth-first."""
@@ -1130,6 +1397,35 @@ class Wiki:
                     result.append(page)
         return result
 
+    def _read_text(self: Wiki, path: pathlib.Path) -> str:
+        """Read ``path`` as UTF-8, naming the file on undecodable bytes.
+
+        A bare ``UnicodeDecodeError`` carries only a byte offset --
+        unactionable on a tree of thousands of files -- so the re-raise
+        appends the offending file's relative path to the reason.
+        """
+        try:
+            return path.read_text(encoding='utf-8')
+        except UnicodeDecodeError as e:
+            relpath = path.relative_to(self._root)
+            raise UnicodeDecodeError(
+                e.encoding,
+                e.object,
+                e.start,
+                e.end,
+                f'{e.reason} (in {relpath})',
+            ) from e
+
+    def _has_crlf(self: Wiki, path: pathlib.Path) -> bool:
+        r"""Return ``True`` if ``path``'s bytes carry CR line endings.
+
+        Universal-newline reads translate ``\r\n`` (and a lone ``\r``) to
+        ``\n``, so a CRLF file reads -- and plans -- as identical to its
+        normalized form; this byte probe is what makes the drift visible
+        to update and lint.
+        """
+        return b'\r' in path.read_bytes()
+
     def _current_text(
         self: Wiki,
         path: pathlib.Path,
@@ -1140,8 +1436,7 @@ class Wiki:
         During a plan (:meth:`_plan`), earlier passes stage corrected
         content in ``overlay`` without writing to disk. Routing every
         cross-file content read through this resolver makes a cascade
-        (a child's refreshed ``page_words`` flowing into a parent's
-        ``tree_words``, or a child's category into a parent link label)
+        (a child's category or desc flowing into a parent link label)
         visible without touching disk. When ``overlay`` is ``None``
         (the default, used outside a plan), reads come from disk.
 
@@ -1157,7 +1452,7 @@ class Wiki:
         if overlay is not None and path in overlay:
             return overlay[path]
         if path.exists():
-            return path.read_text(encoding='utf-8')
+            return self._read_text(path)
         return None
 
     def _extract_frontmatter(
@@ -1170,8 +1465,9 @@ class Wiki:
         is the first line after the closing ``---``. Returns
         ``('', 0)`` if no frontmatter is found.
         """
-        # require an opening '---'
-        if lines and lines[0].strip() == '---':
+        # require an opening '---' (tolerating a UTF-8 BOM, which common
+        # Windows editors prepend and str.strip does not remove)
+        if lines and lines[0].lstrip('\ufeff').strip() == '---':
             line_number = 1
             # only an unindented '---' closes the frontmatter (an indented one is
             # content in a block scalar), so match on rstrip rather than strip
@@ -1190,7 +1486,7 @@ class Wiki:
         self: Wiki,
         text: str,
     ) -> tuple[str, list[tuple[str, str, str]], str]:
-        """Parse an ``_index.md`` file into components.
+        r"""Parse an ``_index.md`` file into components.
 
         Returns ``(frontmatter, links, user_content)``:
 
@@ -1202,6 +1498,15 @@ class Wiki:
         Supports multi-line descriptions: continuation lines (not a link,
         not a delimiter, not blank) are appended to the previous link's
         description.
+
+        A link row carrying the leading-escape formatter damage (``\[\[``
+        or ``\[[``) parses as a link, so an escaped block above an intact
+        delimiter repairs in place rather than demoting to user content.
+
+        When the delimiter is missing, a leading link run is reclaimed
+        (see :meth:`_reclaim_links`) and the rest of the body is the user
+        content, so a formatter-mangled index repairs instead of
+        duplicating its link block.
 
         Args:
             text: Raw file content.
@@ -1218,7 +1523,8 @@ class Wiki:
             if lines[i].rstrip() == delimiter:
                 marker = i
                 break
-        # no delimiter: do not risk parsing prose as links and dropping it
+        # no delimiter: reclaim a demoted link run (a mangled marker), then
+        # fold the rest into user content rather than risk dropping prose
         if marker is None:
             body = lines[line_number:]
             while body and not body[0].strip():
@@ -1227,7 +1533,8 @@ class Wiki:
                 body.pop(0)
             while body and not body[0].strip():
                 body.pop(0)
-            return frontmatter, [], '\n'.join(body)
+            links, body = self._reclaim_links(body)
+            return frontmatter, links, '\n'.join(body)
         # extract user content (everything after the marker)
         user_content = '\n'.join(lines[marker + 1 :])
         # extract links (everything between frontmatter and the marker)
@@ -1251,8 +1558,17 @@ class Wiki:
                     current_link = None
                 pending_blanks = 0
                 continue
-            # try to match a new link
-            match = re.match(r'^\[\[(.+?)\|(.+?)\]\](?::\s*(.*))?$', line.strip())
+            # try to match a new link: the raw line first (a name may hold a
+            # real backslash), then -- only for the leading-escape damage
+            # shape (\[\[ or \[[) -- with formatter escapes (\[ \] \_)
+            # undone, so an escaped link block above an intact delimiter
+            # repairs in place; a healthy desc continuation escapes inside
+            # its leading brackets ([\[) and is never promoted to a link
+            stripped = line.strip()
+            match = re.match(r'^\[\[(.+?)\|(.+?)\]\](?::\s*(.*))?$', stripped)
+            if match is None and stripped.startswith('\\['):
+                candidate = re.sub(r'\\([\[\]_])', r'\1', stripped)
+                match = re.match(r'^\[\[(.+?)\|(.+?)\]\](?::\s*(.*))?$', candidate)
             if match:
                 # flush previous link
                 if current_link is not None:
@@ -1299,6 +1615,85 @@ class Wiki:
             user_content = f'{kept}\n\n{user_content}' if user_content else kept
         # return index sections
         return frontmatter, links, user_content
+
+    def _reclaim_links(
+        self: Wiki,
+        body: list[str],
+    ) -> tuple[list[tuple[str, str, str]], list[str]]:
+        """Reclaim the leading link run from a markerless index body.
+
+        A formatter that mangles the ``***`` delimiter (rewriting it to a
+        ``---`` thematic break, or backslash-escaping the wikilinks) demotes
+        the generated link block to user content; re-rendering would then
+        emit a fresh block above the stale one, duplicating every link on
+        each update. When ``body`` opens with lines that parse as links
+        (formatter escapes tolerated), take that run -- plus the thematic
+        break standing where the delimiter was -- as the link block and
+        return the remainder as user content. A body that opens with prose
+        reclaims nothing, so prose is never parsed into invented links.
+
+        Args:
+            body: Index body lines (frontmatter, H1, and surrounding
+                blanks already stripped).
+
+        Returns:
+            Tuple of ``(links, remainder)`` where ``links`` are
+            ``(target, label, description)`` tuples and ``remainder`` is
+            the surviving user content lines.
+
+        """
+        # walk the head of the body, consuming link lines, their directly
+        # attached continuations, and the blanks between entries
+        links = []
+        current_link = None
+        consumed = 0
+        pending_blanks = 0
+        for i, line in enumerate(body):
+            stripped = line.strip()
+            # hold blanks until the next line decides whether the run goes on
+            if not stripped:
+                pending_blanks += 1
+                continue
+            # try the raw line first (a name may hold a real backslash), then
+            # -- only for the leading-escape damage shape (\[\[ or \[[) -- with
+            # formatter escapes (\[ \] \_) undone; a healthy desc continuation
+            # escapes inside its leading brackets ([\[) and is never promoted
+            match = re.match(r'^\[\[(.+?)\|(.+?)\]\](?::\s*(.*))?$', stripped)
+            if match is None and stripped.startswith('\\['):
+                candidate = re.sub(r'\\([\[\]_])', r'\1', stripped)
+                match = re.match(r'^\[\[(.+?)\|(.+?)\]\](?::\s*(.*))?$', candidate)
+            if match:
+                # flush previous link
+                if current_link is not None:
+                    links.append(current_link)
+                target = match.group(1)
+                label = match.group(2)
+                desc = match.group(3) or ''
+                current_link = (target, label, desc)
+                pending_blanks = 0
+                consumed = i + 1
+                continue
+            # a thematic break after the run is the mangled delimiter: drop it
+            if current_link is not None:
+                if re.fullmatch(r'\*{3,}|-{3,}|_{3,}', stripped):
+                    consumed = i + 1
+                    break
+            # a line directly under a link continues its description
+            if current_link is not None and not pending_blanks:
+                target, label, desc = current_link
+                current_link = (target, label, f'{desc}\n{line.rstrip()}')
+                consumed = i + 1
+                continue
+            # prose: the run (and the reclaim) ends here
+            break
+        # flush last link
+        if current_link is not None:
+            links.append(current_link)
+        # drop the blanks held between the run and the surviving remainder
+        remainder = body[consumed:]
+        while remainder and not remainder[0].strip():
+            remainder.pop(0)
+        return links, remainder
 
     def _parse_page(self: Wiki, text: str) -> tuple[str, str]:
         """Parse a page file into ``(frontmatter, content)``.
@@ -1350,7 +1745,6 @@ class Wiki:
         name: str,
         created: str,
         updated: str,
-        index: bool = False,
     ) -> str:
         """Build YAML frontmatter string.
 
@@ -1358,7 +1752,6 @@ class Wiki:
             name: Display name for the index.
             created: ISO 8601 timestamp.
             updated: ISO 8601 timestamp.
-            index: Whether this is an index file (includes ``tree_words``).
 
         Returns:
             Complete frontmatter block including ``---`` delimiters.
@@ -1366,18 +1759,15 @@ class Wiki:
         """
         lines = [
             '---',
-            f'name: {name}',
+            f'name: {_quote(name)}',
             'desc: ...',
             'category: null',
             'tags: []',
             'sources: []',
             f'created: {created}',
             f'updated: {updated}',
-            'page_words:',
+            '---',
         ]
-        if index:
-            lines.append('tree_words:')
-        lines.append('---')
         return '\n'.join(lines)
 
     def _read_frontmatter_field(
@@ -1387,23 +1777,23 @@ class Wiki:
     ) -> Optional[str]:
         """Read a scalar frontmatter ``key``, resolving block scalars.
 
-        A plain ``key: value`` returns the stripped value. A block scalar
-        (``|``/``>`` with optional chomping/indentation indicators, e.g.
-        ``|-``, ``>+``, ``|2``) resolves to its body: a literal ``|`` keeps
-        line breaks, a folded ``>`` joins consecutive non-empty lines with a
-        single space (a blank line is a paragraph break). Inline text on the
-        indicator line (``key: > one liner.``) is taken as the value when no
-        indented body follows. Returns ``None`` if the field is absent; an
-        empty block body resolves to an empty string.
-
-        Shared by the typed readers below (name, desc, category, word counts).
+        A plain ``key: value`` returns the stripped value, with one pair of
+        matching surrounding YAML quotes stripped (a desc containing ``: ``
+        must be quoted to stay valid YAML). A block scalar (``|``/``>`` with
+        optional chomping/indentation indicators, e.g. ``|-``, ``>+``, ``|2``)
+        resolves to its body: a literal ``|`` keeps line breaks, a folded
+        ``>`` joins consecutive non-empty lines with a single space (a blank
+        line is a paragraph break). Inline text on the indicator line
+        (``key: > one liner.``) is taken as the value when no indented body
+        follows. Returns ``None`` if the field is absent; an empty block body
+        resolves to an empty string.
         """
         # single-line value
         match = re.search(rf'^{key}:[^\S\n]*(.+)$', frontmatter, re.MULTILINE)
         if match:
             value = match.group(1).strip()
             if not value.startswith(('|', '>')):
-                return value
+                return _unquote(value)
         else:
             return None
         # block scalar: tolerate any header (chomping/indentation indicators
@@ -1455,66 +1845,109 @@ class Wiki:
             return ''
         return value
 
-    def _read_frontmatter_page_words(
-        self: Wiki,
-        path: pathlib.Path,
-        overlay: Optional[dict[pathlib.Path, str]] = None,
-    ) -> Optional[int]:
-        """Read the ``page_words`` field from a file's frontmatter.
-
-        Reads staged plan content when ``overlay`` is given (see
-        :meth:`_current_text`), else disk. Returns ``None`` if the file is
-        absent or has no integer ``page_words`` field.
-        """
-        text = self._current_text(path, overlay)
-        if text is None:
-            return None
-        value = self._read_frontmatter_field(text, 'page_words')
-        return int(value) if value and value.isdigit() else None
-
-    def _read_frontmatter_tree_words(
-        self: Wiki,
-        path: pathlib.Path,
-        overlay: Optional[dict[pathlib.Path, str]] = None,
-    ) -> Optional[int]:
-        """Read the ``tree_words`` field from a file's frontmatter.
-
-        Reads staged plan content when ``overlay`` is given (see
-        :meth:`_current_text`), else disk. Returns ``None`` if the file is
-        absent or has no integer ``tree_words`` field.
-        """
-        text = self._current_text(path, overlay)
-        if text is None:
-            return None
-        value = self._read_frontmatter_field(text, 'tree_words')
-        return int(value) if value and value.isdigit() else None
-
-    def _set_page_words(self: Wiki, text: str) -> str:
-        """Compute and write ``page_words`` into rendered text.
+    def _body_words(self: Wiki, text: str) -> int:
+        """Count the body words of a page or index text.
 
         Counts the body -- everything below the frontmatter, which is the only
         special region -- so the count matches the searchable/sliceable region
         exactly. The H1 heading and an index's auto-generated link block are body
         content, so they are counted (they are part of what ``read`` returns).
-        Single-pass (the ``page_words`` field lives in the frontmatter, so it
-        never enters the counted body).
-
-        Args:
-            text: Rendered page or index text.
-
-        Returns:
-            Text with ``page_words`` set to the body word count.
-
         """
         _, body = self._parse_page(text)
-        words = len(body.split())
-        return re.sub(
-            r'^page_words:.*$',
-            f'page_words: {words}',
-            text,
-            count=1,
-            flags=re.MULTILINE,
-        )
+        return len(body.split())
+
+    def _load_counts(self: Wiki) -> dict[str, int]:
+        """Return body word counts for every markdown file, via the cache.
+
+        Reads ``.wiki/cache/word_counts.json`` under the wiki root, recomputes
+        entries whose cached mtime no longer matches the file's, drops entries
+        for files that are gone, and rewrites the cache when anything changed.
+        A corrupt or unreadable cache is discarded and fully recomputed -- the
+        cache can never break a command, the worst case is a full recompute.
+        ``update`` calls this after writing, so the cache tracks the tree.
+
+        Returns:
+            Dict mapping root-relative paths to body word counts.
+
+        """
+        # load the existing cache, tolerating absence or corruption
+        cache_path = self._root / WIKI_DIR / 'cache' / 'word_counts.json'
+        try:
+            cached = json.loads(cache_path.read_text(encoding='utf-8'))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            cached = {}
+        if not isinstance(cached, dict):
+            cached = {}
+        # walk the wiki, reusing fresh entries and recomputing stale ones
+        result = {}
+        entries = {}
+        dirty = False
+        for folder in self._find_dirs(self._root):
+            paths = [folder / WIKI_INDEX, *self._find_pages(folder)]
+            for path in paths:
+                if path.suffix != '.md' or not path.is_file():
+                    continue
+                relpath = str(path.relative_to(self._root))
+                mtime = path.stat().st_mtime
+                entry = cached.get(relpath)
+                fresh = (
+                    isinstance(entry, dict)
+                    and entry.get('mtime') == mtime
+                    and isinstance(entry.get('words'), int)
+                )
+                if not fresh:
+                    # an undecodable page has no countable body
+                    try:
+                        words = self._body_words(self._read_text(path))
+                    except UnicodeDecodeError:
+                        words = 0
+                    entry = {'mtime': mtime, 'words': words}
+                    dirty = True
+                entries[relpath] = entry
+                result[relpath] = entry['words']
+        # rewrite the cache when entries changed (recomputes, adds, or drops)
+        if dirty or set(entries) != set(cached):
+            self._write_counts(entries)
+        return result
+
+    def _write_counts(self: Wiki, entries: dict) -> None:
+        """Write the counts cache, materializing a self-ignoring ``.wiki/cache/``.
+
+        The cache directory carries its own ``.gitignore`` (``*``) so the
+        derived state never needs host-repo ignore configuration (the
+        settings file beside it stays tracked), and the ``.wiki`` dot
+        prefix keeps it out of the wiki walk.
+        """
+        cache_dir = self._root / WIKI_DIR / 'cache'
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        gitignore = cache_dir / '.gitignore'
+        if not gitignore.exists():
+            _write_atomic(gitignore, '*\n')
+        content = json.dumps(entries, indent=2, sort_keys=True)
+        _write_atomic(cache_dir / 'word_counts.json', content + '\n')
+
+    def _folder_words(self: Wiki, counts: dict[str, int]) -> dict[str, int]:
+        """Sum per-file counts into per-folder tree totals.
+
+        Every file's count contributes to each of its ancestor folders, so
+        a folder's total covers its whole subtree (its own index included).
+        The root folder is keyed by the empty string.
+
+        Args:
+            counts: Root-relative path -> body word count (from
+                :meth:`_load_counts`).
+
+        """
+        result = {}
+        for relpath, words in counts.items():
+            parent = pathlib.PurePath(relpath).parent
+            while True:
+                key = '' if str(parent) == '.' else str(parent)
+                result[key] = result.get(key, 0) + words
+                if not key:
+                    break
+                parent = parent.parent
+        return result
 
     def _field_line_ranges(
         self: Wiki,
@@ -1607,6 +2040,33 @@ class Wiki:
             return f'[[{target}|{label}]]'
         desc = description or '...'
         return f'[[{target}|{label}]]: {desc}'
+
+    def _escape_desc(self: Wiki, desc: str) -> str:
+        r"""Escape desc lines that would parse as index structure.
+
+        A propagated multi-line desc renders its continuation lines at
+        column 0 inside the link block, where a line equal to the ``***``
+        delimiter would end the block early (every later link re-added as
+        new on the next update, growing the index without bound) and a
+        link-shaped line would parse as a phantom entry. A delimiter line
+        gets a leading backslash; a link-shaped line gets the backslash
+        inside its leading brackets (``[\[``) so the healthy escape never
+        carries the ``\[[`` formatter-damage signature lint scans for.
+        Markdown renders the text unchanged either way, and the parser
+        reads both as ordinary continuations. The escape is stable, so
+        re-propagation converges. The first line never needs it -- it sits
+        on the link line itself.
+        """
+        first, *rest = desc.split('\n')
+        lines = [first]
+        for line in rest:
+            stripped = line.strip()
+            if stripped == self.index_delimiter:
+                line = line.replace(stripped, f'\\{stripped}', 1)
+            elif re.match(r'^\[\[.+?\|.+?\]\](?::\s*.*)?$', stripped):
+                line = line.replace(stripped, f'[\\{stripped[1:]}', 1)
+            lines.append(line)
+        return '\n'.join(lines)
 
     def _slice(
         self: Wiki,
@@ -1726,7 +2186,7 @@ class Wiki:
                     result.append((target, str(path.relative_to(self._root))))
         # page entries (validated on the stem)
         for page in self._find_pages(folder):
-            if not self.validate_name(page.stem, root=(folder == self._root)):
+            if not self.validate_name(page.stem):
                 if page.suffix == '.md':
                     target = str(page.relative_to(self._root).with_suffix(''))
                 else:
@@ -1844,8 +2304,10 @@ class Wiki:
 
         If the label has a category prefix (e.g. ``[store] db/``),
         returns ``('store', 'db/')``. Otherwise returns ``('', label)``.
+        A category is user data, not a name, so it may hold any
+        characters except ``]`` (``to-do``, ``v1.2``, ``my cat``).
         """
-        match = re.match(r'^\[(\w+)\] (.+)$', label)
+        match = re.match(r'^\[([^\]]+)\] (.+)$', label)
         if match:
             return match.group(1), match.group(2)
         return '', label
@@ -1894,8 +2356,11 @@ class Wiki:
             if page.suffix != '.md':
                 continue
             text = self._current_text(page, overlay)
-            frontmatter, _ = self._parse_page(text)
-            category = self._read_frontmatter_category(frontmatter)
+            if text is not None:
+                frontmatter, _ = self._parse_page(text)
+                category = self._read_frontmatter_category(frontmatter)
+            else:
+                category = ''
             if category:
                 target = self._link_target(page)
                 result[target] = f'[{category}] {page.stem}'
@@ -1907,12 +2372,16 @@ class Wiki:
         *,
         prune: bool = False,
         now: str,
-    ) -> tuple[dict[pathlib.Path, str], list[str]]:
+    ) -> tuple[
+        dict[pathlib.Path, str],
+        dict[pathlib.Path, Optional[str]],
+        list[str],
+    ]:
         """Compute corrected content for every file under ``folder``.
 
-        Runs the three update passes (indexes bottom-up, pages, then
-        ``tree_words``) into an in-memory overlay without writing to
-        disk. The overlay maps each file path to its corrected content
+        Runs the two update passes (indexes bottom-up, then pages) into
+        an in-memory overlay without writing to disk. The overlay maps
+        each file path to its corrected content
         carrying the file's *original* ``updated:`` value, so a caller
         can compare against disk to decide whether to write
         (:meth:`_apply_plan`) or to report drift (:meth:`lint`).
@@ -1925,38 +2394,50 @@ class Wiki:
                 re-stamp ``updated:``).
 
         Returns:
-            Tuple of ``(overlay, notices)`` where ``notices`` are the
-            broken/new-link warnings collected across all indexes.
+            Tuple of ``(overlay, baseline, notices)`` where ``baseline``
+            maps each planned file to the on-disk text it was planned
+            from (``None`` when it did not exist) -- the writer compares
+            against it to detect a concurrent edit -- and ``notices``
+            are the broken/new-link, desc-overwrite, and
+            malformed-frontmatter warnings collected across all indexes
+            and pages.
 
         """
         # alias directories
         folders = self._find_dirs(folder)
         overlay: dict[pathlib.Path, str] = {}
+        baseline: dict[pathlib.Path, Optional[str]] = {}
         notices = []
         # plan indexes (bottom-up so child categories
         # exist before parents read them)
         for folder in reversed(folders):
+            # snapshot the on-disk text before planning from it, so the
+            # writer can detect (and skip) a concurrent edit to the file
+            index_path = folder / WIKI_INDEX
+            baseline[index_path] = self._current_text(index_path)
             content, index_notices = self._plan_index(
                 folder=folder,
                 now=now,
                 prune=prune,
                 overlay=overlay,
             )
-            overlay[folder / WIKI_INDEX] = content
+            overlay[index_path] = content
             notices.extend(index_notices)
         # plan pages
         for folder in folders:
             for page in self._find_pages(folder):
                 if page.suffix == '.md':
-                    overlay[page] = self._plan_page(page, now)
-        # compute tree_words bottom-up
-        self._plan_tree_words(folders, overlay)
-        # return overlay and notices
-        return overlay, notices
+                    baseline[page] = self._current_text(page)
+                    content, page_notices = self._plan_page(page, now)
+                    overlay[page] = content
+                    notices.extend(page_notices)
+        # return overlay, baseline, and notices
+        return overlay, baseline, notices
 
     def _apply_plan(
         self: Wiki,
         overlay: dict[pathlib.Path, str],
+        baseline: dict[pathlib.Path, Optional[str]],
         now: str,
     ) -> list[str]:
         """Write corrected content to disk where it differs.
@@ -1965,10 +2446,14 @@ class Wiki:
         corrected content differs from disk, re-stamps ``updated: now``
         and writes. Files already correct are skipped, so a
         timestamp-only difference never triggers a write (the overlay
-        carries the original ``updated:``).
+        carries the original ``updated:``). A file whose disk text no
+        longer matches its plan-time ``baseline`` snapshot is skipped
+        with a warning: writing the staged content would silently revert
+        the concurrent edit, whereas the next run converges.
 
         Args:
             overlay: Corrected ``{path: content}`` from :meth:`_plan`.
+            baseline: Plan-time ``{path: text}`` from :meth:`_plan`.
             now: Timestamp for the ``updated:`` re-stamp (the same
                 value threaded through the plan).
 
@@ -1978,8 +2463,18 @@ class Wiki:
         """
         result = []
         for path, content in overlay.items():
-            # skip files already correct (ignores updated:-only churn)
-            if path.exists() and content == path.read_text(encoding='utf-8'):
+            # skip files already correct (ignores updated:-only churn); the
+            # byte probe forces the rewrite that normalizes a CRLF file to LF
+            current = self._current_text(path)
+            if current is not None and content == current and not self._has_crlf(path):
+                continue
+            # skip a file that changed since the plan read it: writing would
+            # revert the concurrent edit; the next run converges
+            if current != baseline[path]:
+                relpath = path.relative_to(self._root)
+                self._warn(
+                    f'Skipping {relpath}: changed during update; re-run `wiki update`'
+                )
                 continue
             # stamp updated: now that a write is happening
             content = re.sub(
@@ -1989,7 +2484,7 @@ class Wiki:
                 count=1,
                 flags=re.MULTILINE,
             )
-            path.write_text(content, encoding='utf-8')
+            _write_atomic(path, content)
             result.append(str(path.relative_to(self._root)))
         return result
 
@@ -2013,15 +2508,16 @@ class Wiki:
 
         Args:
             folder: Folder whose index to compute.
-            now: Timestamp for seeding *missing* ``created:``/
+            now: Timestamp for seeding *missing or blank* ``created:``/
                 ``updated:`` fields and fresh frontmatter (never to
-                re-stamp an existing ``updated:``).
+                re-stamp an existing ``updated:`` value).
             prune: Remove broken links instead of preserving them.
             overlay: Staged ``{path: content}`` from earlier passes.
 
         Returns:
             Tuple of ``(content, notices)`` where ``notices`` are the
-            broken/new-link warnings (emitted by the writer, not here).
+            broken/new-link and desc-overwrite warnings (emitted by the
+            writer, not here).
 
         """
         # alias index path
@@ -2033,17 +2529,32 @@ class Wiki:
         if text is not None:
             frontmatter, existing, user_content = self._parse_index(text)
             if frontmatter:
-                # update name from folder path (callable repl so a backslash-digit
-                # in the name is not read as a group reference)
-                frontmatter = re.sub(
-                    r'^name:.*$',
-                    lambda _: f'name: {name}',
-                    frontmatter,
-                    count=1,
-                    flags=re.MULTILINE,
-                )
-                # add desc field if missing (after name line)
-                if not re.search(r'^desc:', frontmatter, re.MULTILINE):
+                # update name from folder path (add it if the field is missing, so
+                # an index with frontmatter but no name: does not stay un-named)
+                if re.search(r'^name:', frontmatter, re.MULTILINE):
+                    # callable repl so a backslash-digit in the
+                    # name is not read as a group reference
+                    frontmatter = re.sub(
+                        r'^name:.*$',
+                        lambda _: f'name: {_quote(name)}',
+                        frontmatter,
+                        count=1,
+                        flags=re.MULTILINE,
+                    )
+                else:
+                    pos = frontmatter.rfind('---')
+                    frontmatter = frontmatter[:pos] + f'name: {_quote(name)}\n---'
+                # add desc field if missing (after name line); restore the
+                # placeholder on a present-but-blank key
+                if re.search(r'^desc:[^\S\n]*$', frontmatter, re.MULTILINE):
+                    frontmatter = re.sub(
+                        r'^desc:[^\S\n]*$',
+                        'desc: ...',
+                        frontmatter,
+                        count=1,
+                        flags=re.MULTILINE,
+                    )
+                elif not re.search(r'^desc:', frontmatter, re.MULTILINE):
                     frontmatter = re.sub(
                         r'^(name:.*\n)',
                         r'\1desc: ...\n',
@@ -2051,30 +2562,49 @@ class Wiki:
                         count=1,
                         flags=re.MULTILINE,
                     )
-                # add page_words field if missing (updated after render)
-                if not re.search(r'^page_words:', frontmatter, re.MULTILINE):
+                # add created/updated if missing; stamp a present-but-blank key
+                # in place so a duplicate is never appended
+                if re.search(r'^created:[^\S\n]*$', frontmatter, re.MULTILINE):
+                    frontmatter = re.sub(
+                        r'^created:[^\S\n]*$',
+                        f'created: {now}',
+                        frontmatter,
+                        count=1,
+                        flags=re.MULTILINE,
+                    )
+                elif not re.search(r'^created:', frontmatter, re.MULTILINE):
+                    match = re.search(r'^updated:', frontmatter, re.MULTILINE)
+                    pos = match.start() if match else frontmatter.rfind('---')
+                    frontmatter = (
+                        frontmatter[:pos] + f'created: {now}\n' + frontmatter[pos:]
+                    )
+                if re.search(r'^updated:[^\S\n]*$', frontmatter, re.MULTILINE):
+                    frontmatter = re.sub(
+                        r'^updated:[^\S\n]*$',
+                        f'updated: {now}',
+                        frontmatter,
+                        count=1,
+                        flags=re.MULTILINE,
+                    )
+                elif not re.search(r'^updated:', frontmatter, re.MULTILINE):
                     pos = frontmatter.rfind('---')
-                    frontmatter = frontmatter[:pos] + 'page_words:\n---'
-                # add created/updated timestamps if missing
-                if not re.search(r'^created:', frontmatter, re.MULTILINE):
-                    pos = frontmatter.rfind('---')
-                    frontmatter = frontmatter[:pos] + f'created: {now}\n---'
-                if not re.search(r'^updated:', frontmatter, re.MULTILINE):
-                    pos = frontmatter.rfind('---')
-                    frontmatter = frontmatter[:pos] + f'updated: {now}\n---'
+                    frontmatter = (
+                        frontmatter[:pos] + f'updated: {now}\n' + frontmatter[pos:]
+                    )
             else:
-                frontmatter = self._build_frontmatter(
-                    name=name,
-                    created=now,
-                    updated=now,
-                    index=True,
-                )
+                # an existing index with no (closed) frontmatter is an emptied or
+                # truncated file: rebuilding it fresh would permanently discard its
+                # authored content, so keep it as-is and name the recovery paths
+                relpath = path.relative_to(self._root)
+                return text, [
+                    f'Empty or truncated index (no frontmatter) in {relpath};'
+                    ' restore it from git or delete it to rebuild'
+                ]
         else:
             frontmatter = self._build_frontmatter(
                 name=name,
                 created=now,
                 updated=now,
-                index=True,
             )
             existing = []
             user_content = ''
@@ -2088,6 +2618,9 @@ class Wiki:
         # an undecodable file rather than aborting the whole run
         relpath = path.relative_to(self._root)
         notices = []
+        # announce an auto-created index so its placeholder desc gets filled
+        if text is None:
+            notices.append(f'New index: {relpath} (fill in its desc)')
         invalid = self._invalid_links(folder)
         for _target, skipped in invalid:
             notices.append(f'Skipping {skipped}: invalid name')
@@ -2126,43 +2659,67 @@ class Wiki:
             child_frontmatter, _ = self._parse_page(child_text)
             child_desc = self._read_frontmatter_desc(child_frontmatter)
             if child_desc and child_desc != '...':
-                # child desc is source of truth
-                propagated.append((target, label, child_desc.strip()))
+                # child desc is source of truth; rstrip each line first
+                # (_parse_index never preserves trailing spaces, so an
+                # unnormalized desc re-triggers the overwrite notice on every
+                # converged run), then escape lines that would parse as index
+                # structure once rendered in the link block
+                child_desc = '\n'.join(
+                    line.rstrip() for line in child_desc.strip().split('\n')
+                )
+                child_desc = self._escape_desc(child_desc)
+                # announce a genuine overwrite (a hand-edit would otherwise vanish
+                # silently); first-time propagation onto the placeholder stays quiet
+                if link_desc not in ('', '...') and link_desc != child_desc:
+                    notices.append(
+                        f'Overwrote desc: [[{target}|{label}]] in {relpath}'
+                        f' (the page frontmatter desc wins; edit it in {target}.md)'
+                    )
+                propagated.append((target, label, child_desc))
             else:
                 propagated.append((target, label, link_desc))
         links = propagated
-        # render and compute word count
+        # render the corrected index
         content = self._render_index(name, frontmatter, links, user_content)
-        content = self._set_page_words(content)
         return content, notices
 
     def _plan_page(
         self: Wiki,
         path: pathlib.Path,
         now: str,
-    ) -> str:
+    ) -> tuple[str, list[str]]:
         """Compute the corrected content for a page file.
 
         Pure with respect to the filesystem (see :meth:`_plan_index`).
         The page's ``name`` and H1 heading are set to the path-joined
         name (e.g. ``core/design``); an authored title is intentionally
         overwritten so names stay consistent with the tree structure.
-        Missing frontmatter fields (``desc``/``page_words``/``created``/
-        ``updated``) are filled in. The returned content carries the
-        file's *original* ``updated:`` value (a page has no cross-file
-        reads, so it is computed once from its own content).
+        Missing or blank frontmatter fields (``desc``/``created``/
+        ``updated``) are filled in. A page whose frontmatter
+        never closes is left untouched and reported instead: prepending
+        a fresh block would demote the authored fields to body text. The
+        returned content carries the file's *original* ``updated:``
+        value (a page has no cross-file reads, so it is computed once
+        from its own content).
 
         Args:
             path: Page file to compute.
             now: Timestamp for seeding missing fields / fresh frontmatter.
 
         Returns:
-            Corrected page content.
+            Tuple of ``(content, notices)`` where ``notices`` name a
+            malformed frontmatter (emitted by the writer, not here).
 
         """
         # read page
-        text = path.read_text(encoding='utf-8')
+        text = self._read_text(path)
         frontmatter, content = self._parse_page(text)
+        # unclosed frontmatter parses as none at all: keep the file as-is and
+        # report it rather than demote the authored fields to body text
+        first_line = text.split('\n', 1)[0].lstrip('\ufeff')
+        if not frontmatter and first_line.strip() == '---':
+            relpath = path.relative_to(self._root)
+            return text, [f'Malformed frontmatter (no closing ---) in {relpath}']
         # update or create frontmatter
         if frontmatter:
             # update name from file path (add it if the field is missing, so
@@ -2173,14 +2730,14 @@ class Wiki:
                 # name is not read as a group reference
                 frontmatter = re.sub(
                     r'^name:.*$',
-                    lambda _: f'name: {page_name}',
+                    lambda _: f'name: {_quote(page_name)}',
                     frontmatter,
                     count=1,
                     flags=re.MULTILINE,
                 )
             else:
                 pos = frontmatter.rfind('---')
-                frontmatter = frontmatter[:pos] + f'name: {page_name}\n---'
+                frontmatter = frontmatter[:pos] + f'name: {_quote(page_name)}\n---'
             # update H1 heading to match name (rewrite the exact heading line,
             # not a '# ...' that may appear inside a fenced code block)
             heading = self._find_heading(content)
@@ -2189,21 +2746,48 @@ class Wiki:
                 content_lines = content.split('\n')
                 content_lines[heading_index] = f'# {page_name}'
                 content = '\n'.join(content_lines)
-            # add desc field if missing (preserve existing)
-            if not re.search(r'^desc:', frontmatter, re.MULTILINE):
+            # add desc field if missing (preserve existing); restore the
+            # placeholder on a present-but-blank key
+            if re.search(r'^desc:[^\S\n]*$', frontmatter, re.MULTILINE):
+                frontmatter = re.sub(
+                    r'^desc:[^\S\n]*$',
+                    'desc: ...',
+                    frontmatter,
+                    count=1,
+                    flags=re.MULTILINE,
+                )
+            elif not re.search(r'^desc:', frontmatter, re.MULTILINE):
                 pos = frontmatter.rfind('---')
                 frontmatter = frontmatter[:pos] + 'desc: ...\n---'
-            # add page_words field if missing (updated after render)
-            if not re.search(r'^page_words:', frontmatter, re.MULTILINE):
+            # add created/updated if missing; stamp a present-but-blank key in
+            # place so a duplicate is never appended
+            if re.search(r'^created:[^\S\n]*$', frontmatter, re.MULTILINE):
+                frontmatter = re.sub(
+                    r'^created:[^\S\n]*$',
+                    f'created: {now}',
+                    frontmatter,
+                    count=1,
+                    flags=re.MULTILINE,
+                )
+            elif not re.search(r'^created:', frontmatter, re.MULTILINE):
+                match = re.search(r'^updated:', frontmatter, re.MULTILINE)
+                pos = match.start() if match else frontmatter.rfind('---')
+                frontmatter = (
+                    frontmatter[:pos] + f'created: {now}\n' + frontmatter[pos:]
+                )
+            if re.search(r'^updated:[^\S\n]*$', frontmatter, re.MULTILINE):
+                frontmatter = re.sub(
+                    r'^updated:[^\S\n]*$',
+                    f'updated: {now}',
+                    frontmatter,
+                    count=1,
+                    flags=re.MULTILINE,
+                )
+            elif not re.search(r'^updated:', frontmatter, re.MULTILINE):
                 pos = frontmatter.rfind('---')
-                frontmatter = frontmatter[:pos] + 'page_words:\n---'
-            # add created/updated timestamps if missing
-            if not re.search(r'^created:', frontmatter, re.MULTILINE):
-                pos = frontmatter.rfind('---')
-                frontmatter = frontmatter[:pos] + f'created: {now}\n---'
-            if not re.search(r'^updated:', frontmatter, re.MULTILINE):
-                pos = frontmatter.rfind('---')
-                frontmatter = frontmatter[:pos] + f'updated: {now}\n---'
+                frontmatter = (
+                    frontmatter[:pos] + f'updated: {now}\n' + frontmatter[pos:]
+                )
         else:
             # use the path-joined name (not the bare stem) and rewrite the H1 to
             # match, so a fresh page converges in one pass instead of two
@@ -2220,72 +2804,9 @@ class Wiki:
                 content_lines = content.split('\n')
                 content_lines[heading_index] = f'# {page_name}'
                 content = '\n'.join(content_lines)
-        # render and compute word count
+        # render the corrected page
         result = self._render_page(frontmatter, content)
-        result = self._set_page_words(result)
-        return result
-
-    def _plan_tree_words(
-        self: Wiki,
-        folders: list[pathlib.Path],
-        overlay: dict[pathlib.Path, str],
-    ) -> None:
-        """Set ``tree_words`` on the staged index content, bottom-up.
-
-        Mutates ``overlay`` in place. Processes ``folders`` in reverse
-        order so children are finalized before parents. For each folder
-        sums the index's own ``page_words``, ``page_words`` from direct
-        pages, and ``tree_words`` from direct child folder indexes --
-        all sourced from ``overlay`` via :meth:`_current_text` so the
-        cascade is exact without writing to disk. Uses
-        ``_parse_page``/``_render_page`` (never the index renderer) so
-        the staged link block is preserved verbatim.
-
-        Args:
-            folders: Folder list from ``_find_dirs`` (depth-first,
-                root first).
-            overlay: Staged ``{path: content}`` to update in place.
-
-        """
-        # process folders bottom-up
-        for folder in reversed(folders):
-            # include the folder's own index page_words
-            index_path = folder / WIKI_INDEX
-            total = self._read_frontmatter_page_words(index_path, overlay) or 0
-            # sum page words (markdown only; non-markdown has no frontmatter)
-            for page in self._find_pages(folder):
-                if page.suffix == '.md':
-                    page_words = self._read_frontmatter_page_words(page, overlay)
-                    if page_words:
-                        total += page_words
-            # sum child folder tree_words (already includes their own page_words)
-            for child in sorted(folder.iterdir()):
-                if child.is_dir() and not self._is_excluded_dir(child):
-                    child_index = child / WIKI_INDEX
-                    child_tree = (
-                        self._read_frontmatter_tree_words(child_index, overlay) or 0
-                    )
-                    total += child_tree
-            # write tree_words into the staged index frontmatter
-            text = self._current_text(index_path, overlay)
-            if text is not None:
-                frontmatter, content = self._parse_page(text)
-                if re.search(r'^tree_words:', frontmatter, re.MULTILINE):
-                    frontmatter = re.sub(
-                        r'^tree_words:.*$',
-                        f'tree_words: {total}',
-                        frontmatter,
-                        count=1,
-                        flags=re.MULTILINE,
-                    )
-                else:
-                    # insert before closing --- (last occurrence)
-                    pos = frontmatter.rfind('---')
-                    frontmatter = frontmatter[:pos] + f'tree_words: {total}\n---'
-                # recompute word count and stage the result
-                result = self._render_page(frontmatter, content)
-                result = self._set_page_words(result)
-                overlay[index_path] = result
+        return result, []
 
     def _map_folder(
         self: Wiki,
@@ -2299,6 +2820,8 @@ class Wiki:
         category: Optional[list[str]] = None,
         markdown: Optional[bool] = None,
         words: bool = True,
+        counts: Optional[dict[str, int]] = None,
+        folder_words: Optional[dict[str, int]] = None,
         _lines: Optional[list[str]] = None,
     ) -> list[str]:
         """Recursively build map lines for a wiki folder.
@@ -2327,7 +2850,7 @@ class Wiki:
             # unindexed child reached during recursion: nothing to add
             return result
         # iterate non-parent links
-        for _target, label, description in links:
+        for target, label, description in links:
             # skip parent link
             if label == '..':
                 continue
@@ -2345,33 +2868,38 @@ class Wiki:
                     matches_category = not entry_category
             if not is_folder and not matches_category:
                 continue
-            # resolve child path for frontmatter reads; a page is markdown when
-            # its <name>.md exists; a name test ('.' in base_name) misfires on a
-            # dotted stem like my.notes(.md) -- resolving its path to a missing
-            # file (word count 0) and inverting the --markdown filter -- so probe
-            # the actual file instead
+            # resolve the child path from the link target, never the display
+            # label (a preserved broken link keeps a live sibling's label);
+            # markdown-ness probes the actual <name>.md file, since a
+            # '.'-in-target test misfires on a dotted stem like my.notes
+            child_folder = (self._root / target).parent
             if is_folder:
-                child_folder = folder / base_name.rstrip('/')
                 child_path = child_folder / WIKI_INDEX
                 is_markdown = False
-            elif (folder / (base_name + '.md')).is_file():
-                child_path = folder / (base_name + '.md')
+            elif (self._root / (target + '.md')).is_file():
+                child_path = self._root / (target + '.md')
                 is_markdown = True
             else:
-                child_path = folder / base_name
+                child_path = self._root / target
                 is_markdown = False
+            # a link resolving outside this folder (or to a missing file) is a
+            # preserved broken link: annotate it, never recurse into another subtree
+            if is_folder:
+                broken = child_folder.parent != folder or not child_folder.is_dir()
+            else:
+                broken = child_path.parent != folder or not child_path.exists()
             # apply markdown filter (pages only)
             if not is_folder and markdown is not None and markdown != is_markdown:
                 continue
             # detect unindexed folder (folder present, no _index.md)
-            unindexed = is_folder and not child_path.is_file()
+            unindexed = is_folder and not broken and not child_path.is_file()
             # recurse into a child folder first so a category filter can prune
             # folders whose subtree contributes nothing
             child_lines = []
-            if is_folder and not unindexed:
+            if is_folder and not unindexed and not broken:
                 if depth is None or current_depth < depth:
                     self._map_folder(
-                        folder=folder / base_name.rstrip('/'),
+                        folder=child_folder,
                         indent=indent + indent_unit,
                         current_depth=current_depth + 1,
                         depth=depth,
@@ -2380,18 +2908,35 @@ class Wiki:
                         category=category,
                         markdown=markdown,
                         words=words,
+                        counts=counts,
+                        folder_words=folder_words,
                         _lines=child_lines,
                     )
-            # skip a non-matching folder with no matching descendants
+            # skip a non-matching folder with no matching descendants; a
+            # depth cutoff leaves child_lines empty for depth reasons, not
+            # content, so probe the subtree before pruning -- a match beyond
+            # the cutoff still shows this folder (children stay hidden)
             if is_folder and not matches_category and not child_lines:
-                continue
-            # read word counts from child frontmatter; always render a count (0 if
-            # not yet computed); unindexed folders show "(unindexed)" instead
+                probe = []
+                if not unindexed and not broken:
+                    if depth is not None and current_depth >= depth:
+                        probe = self._map_folder(
+                            folder=child_folder,
+                            desc=False,
+                            category=category,
+                            markdown=markdown,
+                            words=False,
+                        )
+                if not probe:
+                    continue
+            # read word counts from the cache; always render a count (0 for a
+            # non-markdown file); unindexed/broken entries show their marker
             word_label = None
-            if words and not unindexed:
-                count = self._read_frontmatter_page_words(child_path) or 0
+            if words and not unindexed and not broken:
+                count = counts.get(str(child_path.relative_to(self._root)), 0)
                 if is_folder:
-                    tree = self._read_frontmatter_tree_words(child_path) or 0
+                    tree_key = str(child_folder.relative_to(self._root))
+                    tree = folder_words.get(tree_key, 0)
                     word_label = f'{_format_words(count)}/{_format_words(tree)}'
                 else:
                     word_label = _format_words(count)
@@ -2418,6 +2963,8 @@ class Wiki:
                 prefix = base_name
             if unindexed:
                 prefix += ' (unindexed)'
+            elif broken:
+                prefix += ' (broken)'
             elif word_label is not None:
                 prefix += f' ({word_label})'
             # append detail
@@ -2478,6 +3025,26 @@ class Wiki:
         # indent the body; render blank context lines as truly empty (no trailing ws)
         indented = '\n'.join('    ' + line if line.strip() else '' for line in body)
         return f'{relpath}: Requires update\n{indented}'
+
+    def _lint_regions(
+        self: Wiki,
+        path: pathlib.Path,
+        text: str,
+    ) -> tuple[set[int], list[str]]:
+        """Resolve ``text``'s ``no-lint`` suppression set and region issues.
+
+        Returns the 1-based line numbers inside well-formed ``no-lint``
+        regions -- the lines the positional rules skip -- plus a
+        formatted hard issue per nesting/dangling violation. A malformed
+        region suppresses nothing.
+        """
+        regions, errors = _parse_regions(text)
+        suppressed = set()
+        for start, end in regions.get('no-lint', []):
+            suppressed.update(range(start, end + 1))
+        relpath = path.relative_to(self._root)
+        result = [f'{relpath}: {error}' for error in errors]
+        return suppressed, result
 
     def _lint_desc(
         self: Wiki,
@@ -2546,36 +3113,44 @@ class Wiki:
         path: pathlib.Path,
         content: str,
     ) -> list[str]:
-        """Check wikilinks in content resolve to existing files."""
+        """Check wikilinks in content resolve to existing files.
+
+        Lines inside a well-formed ``no-lint`` region are exempt; the
+        region is parsed from the scanned content itself, so the region
+        must wrap the link lines.
+        """
         # alias relative path
         result = []
         relpath = path.relative_to(self._root)
-        # strip fenced code blocks and inline backticks before scanning
-        lines = []
-        fence = None
-        for line in content.split('\n'):
-            if fence is not None:
-                if line.strip() == fence:
-                    fence = None
-                continue
-            match = re.match(r'^ {0,3}(`{3,}|~{3,})', line)
-            if match:
-                fence = match.group(1)
-                continue
-            lines.append(re.sub(r'`[^`]+`', '', line))
-        stripped = '\n'.join(lines)
+        # strip fenced code blocks and inline code spans before scanning
+        stripped = _mask_code(content)
+        # no-lint regions suppress the stale-link check line by line
+        suppressed = _no_lint_lines(content)
         for match in re.finditer(r'\[\[([^\]|]+)', stripped):
+            # the masked scan preserves line structure, so the match
+            # offset maps straight to its source line
+            lineno = stripped.count('\n', 0, match.start()) + 1
+            if lineno in suppressed:
+                continue
             # strip trailing backslash (escaped pipe in markdown tables)
             target = match.group(1).rstrip('\\')
-            if not (self._root / (target + '.md')).exists():
-                if not (self._root / target).exists():
+            # drop an anchor suffix (#heading / #^block) for the existence check:
+            # '#' is a denied name character, so the suffix always addresses
+            # within the page (a bare [[#anchor]] is same-page, never stale)
+            page_target = target.partition('#')[0]
+            anchor = target[len(page_target) :]
+            if not page_target:
+                continue
+            if not (self._root / (page_target + '.md')).exists():
+                if not (self._root / page_target).exists():
                     # a folder-relative link (e.g. [[../overview]]) is stale because
                     # wiki targets are root-relative; when it resolves to a real page
                     # from this file's folder, name the canonical form as the fix
-                    canonical = self._canonical_link_target(path, target)
-                    if canonical is not None and canonical != target:
+                    canonical = self._canonical_link_target(path, page_target)
+                    if canonical is not None and canonical != page_target:
                         result.append(
-                            f'{relpath}: Stale link [[{target}]] (use [[{canonical}]])'
+                            f'{relpath}: Stale link [[{target}]] '
+                            f'(use [[{canonical}{anchor}]])'
                         )
                     else:
                         result.append(f'{relpath}: Stale link [[{target}]]')
@@ -2611,6 +3186,36 @@ def _fold_lines(text: str) -> str:
     return '\n'.join(paragraphs)
 
 
+def _quote(value: str) -> str:
+    """YAML-quote a scalar when writing it plain would break the mapping.
+
+    A value containing ``': '`` (or ending with ``:``) reads as a nested
+    mapping in YAML, so it is written single-quoted with embedded single
+    quotes doubled; any other value passes through unquoted. Inverse of
+    :func:`_unquote` for the values the wiki writes.
+    """
+    if ': ' in value or value.endswith(':'):
+        escaped = value.replace("'", "''")
+        return f"'{escaped}'"
+    return value
+
+
+def _unquote(value: str) -> str:
+    """Strip one pair of matching surrounding YAML quotes from a scalar.
+
+    A quoted scalar (``"..."`` / ``'...'``) resolves to its body, with the
+    YAML escapes undone -- doubled single quotes in a single-quoted value,
+    backslash-escaped quotes/backslashes in a double-quoted one. An
+    unquoted value is returned unchanged.
+    """
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+        body = value[1:-1]
+        if value[0] == '"':
+            return body.replace('\\"', '"').replace('\\\\', '\\')
+        return body.replace("''", "'")
+    return value
+
+
 def _format_words(n: int) -> str:
     """Format a word count with ``k``/``m``/``b``/``t`` suffix."""
     tiers = {
@@ -2635,9 +3240,172 @@ def _format_words(n: int) -> str:
     return str(n)
 
 
-def _has_conflict_markers(text: str) -> bool:
-    """Return ``True`` if text contains git merge conflict markers."""
-    return ('<<<<<<<' in text) or ('>>>>>>>' in text)
+def _mask_code(text: str) -> str:
+    """Blank fenced code blocks and inline code spans in text.
+
+    Fenced blocks (backtick or tilde fences) blank whole lines via a fence
+    state machine; inline spans are removed per CommonMark's backtick-run
+    rule -- a span opens with a run of backticks and closes at the next
+    run of the same length, and may wrap across a newline but never a
+    blank line. The line structure is preserved (masked regions become
+    empty lines), so positional checks can attribute their findings to
+    source lines. Lint checks scan the masked text so code samples never
+    trip them.
+    """
+    # blank fenced code blocks (line count preserved)
+    lines = []
+    fence = None
+    for line in text.split('\n'):
+        if fence is not None:
+            lines.append('')
+            if line.strip() == fence:
+                fence = None
+            continue
+        match = re.match(r'^ {0,3}(`{3,}|~{3,})', line)
+        if match:
+            fence = match.group(1)
+            lines.append('')
+            continue
+        lines.append(line)
+    # blank inline code spans (equal-length backtick runs, newline-tolerant;
+    # a span's interior newlines survive so line numbers stay aligned)
+    return re.sub(
+        r'(?<!`)(`+)(?!`)(?:[^`\n]|\n(?![ \t]*\n))+?\1(?!`)',
+        lambda match: '\n' * match.group(0).count('\n'),
+        '\n'.join(lines),
+    )
+
+
+def _parse_regions(text: str) -> tuple[dict[str, list[tuple[int, int]]], list[str]]:
+    """Parse region-directive comments into per-directive line ranges.
+
+    One grammar covers all comment-bracketed regions:
+    ``<!-- start: <directive> [args] -->`` ... ``<!-- end: <directive> -->``,
+    each marker alone on its line, with bare kebab-word directives and
+    args. Every directive pairs as an independent bracket stream, so
+    regions of different directives interleave freely while
+    same-directive nesting and dangling markers are structural errors.
+    Code is masked first, so a fenced marker is a sample, not a
+    directive. ``no-lint`` is the sole directive with shipped semantics;
+    unknown well-formed pairs are inert.
+
+    Returns:
+        Tuple of ``(regions, errors)`` where ``regions`` maps each
+        directive to its well-formed ``(start, end)`` line ranges
+        (1-based, inclusive; a pair poisoned by a nested start is
+        malformed and never recorded) and ``errors`` describe
+        nesting/dangling violations, each naming its marker and line.
+
+    """
+    # collect marker events per directive from the masked text
+    regions: dict[str, list[tuple[int, int]]] = {}
+    errors = []
+    open_starts: dict[str, Optional[int]] = {}
+    poisoned: set[str] = set()
+    for lineno, line in enumerate(_mask_code(text).split('\n'), 1):
+        match = _REGION_DIRECTIVE.fullmatch(line.strip())
+        if not match:
+            continue
+        kind, directive = match.group(1), match.group(2)
+        # a nested start poisons the open region (a malformed pair must
+        # suppress nothing); an end without an open start dangles
+        if kind == 'start':
+            if open_starts.get(directive) is not None:
+                errors.append(f"Nested '<!-- start: {directive} -->' (line {lineno})")
+                poisoned.add(directive)
+            else:
+                open_starts[directive] = lineno
+        elif open_starts.get(directive) is None:
+            errors.append(f"Dangling '<!-- end: {directive} -->' (line {lineno})")
+        else:
+            if directive in poisoned:
+                poisoned.discard(directive)
+            else:
+                regions.setdefault(directive, []).append(
+                    (open_starts[directive], lineno)
+                )
+            open_starts[directive] = None
+    # a start still open at EOF dangles
+    for directive, start in open_starts.items():
+        if start is not None:
+            errors.append(f"Dangling '<!-- start: {directive} -->' (line {start})")
+    return regions, errors
+
+
+def _no_lint_lines(text: str) -> set[int]:
+    """Return 1-based line numbers inside well-formed ``no-lint`` regions."""
+    regions, _ = _parse_regions(text)
+    result = set()
+    for start, end in regions.get('no-lint', []):
+        result.update(range(start, end + 1))
+    return result
+
+
+def _escaped_wikilink_lines(text: str) -> list[int]:
+    r"""Return 1-based line numbers carrying formatter-escaped wikilinks.
+
+    Markdown formatters backslash-escape ``[[...]]`` link brackets
+    (``\[\[`` or ``\[[``); the sequence never appears in healthy
+    generated content, so it is the signature lint uses to name likely
+    formatter damage. Code is masked first, so a sample documenting the
+    escape never trips it.
+    """
+    result = []
+    for lineno, line in enumerate(_mask_code(text).split('\n'), 1):
+        if re.search(r'\\\[\\?\[', line):
+            result.append(lineno)
+    return result
+
+
+def _conflict_marker_lines(text: str) -> list[int]:
+    """Return 1-based line numbers of git merge conflict markers.
+
+    Scans the RAW text, deliberately bypassing the code masking every
+    other rule uses: a real merge conflict can land entirely inside a
+    fenced block, where a masked scan goes blind, and git's marker shape
+    -- a line starting with exactly seven ``<``/``>`` then a space or end
+    of line -- is never legitimate rendered content. The rare page that
+    must show marker lines (e.g. a git tutorial) wraps them in a
+    ``no-lint`` region instead.
+    """
+    result = []
+    for lineno, line in enumerate(text.split('\n'), 1):
+        if re.match(r'^(<{7}|>{7})( |$)', line):
+            result.append(lineno)
+    return result
+
+
+def _write_atomic(path: pathlib.Path, content: str) -> None:
+    """Write ``content`` to ``path`` atomically (temp file + rename).
+
+    A plain ``write_text`` truncates before writing, exposing an empty or
+    partial file to concurrent readers and leaving a torn file if the
+    process dies mid-write. Staging to a temp file in the same directory
+    and ``os.replace``-ing it into place makes every read all-or-nothing.
+    The dot-prefixed temp name keeps a leftover from a crash out of the
+    wiki walk.
+    """
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f'.{path.name}.')
+    tmp = pathlib.Path(tmp)
+    try:
+        # newline='\n' writes LF verbatim on every platform, so a rewrite
+        # normalizes CRLF and never reintroduces it
+        with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as handle:
+            handle.write(content)
+        # mkstemp creates the temp 0600 and os.replace carries that mode
+        # onto the target: preserve the existing mode, or honor the umask
+        # for a fresh file
+        if path.exists():
+            os.chmod(tmp, path.stat().st_mode & 0o777)
+        else:
+            umask = os.umask(0)
+            os.umask(umask)
+            os.chmod(tmp, 0o666 & ~umask)
+        os.replace(tmp, path)
+    except OSError:
+        # discard the partial temp file, leaving the target untouched
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _is_offline() -> bool:

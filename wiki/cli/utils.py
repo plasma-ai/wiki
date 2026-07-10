@@ -8,12 +8,12 @@ import os
 import pathlib
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any, Optional
 
 import typer
 
-from wiki.core.wiki import DEFAULT_WIKI_NAME, WIKI_CONFIG, WIKI_INDEX, Wiki
+from wiki.core.wiki import DEFAULT_WIKI_NAME, WIKI_DIR, WIKI_INDEX, WIKI_SETTINGS, Wiki
 
 __all__ = [
     'command',
@@ -21,6 +21,7 @@ __all__ = [
     'load_wiki_class',
     'resolve_wiki',
     'resolve_wiki_root',
+    'enclosing_wiki_root',
     'configure_git_merge_driver',
 ]
 
@@ -79,11 +80,11 @@ def load_wiki_class(
     root: pathlib.Path,
     default: type[Wiki] = Wiki,
 ) -> type[Wiki]:
-    """Load the Wiki subclass named by ``_config/wiki.py``'s sole ``__all__`` entry."""
-    config_path = root / WIKI_CONFIG / 'wiki.py'
+    """Load the Wiki subclass named by ``.wiki/wiki.py``'s sole ``__all__`` entry."""
+    config_path = root / WIKI_DIR / 'wiki.py'
     if not config_path.exists():
         return default
-    # NOTE: this executes arbitrary code from the wiki's _config/wiki.py,
+    # NOTE: this executes arbitrary code from the wiki's .wiki/wiki.py,
     #   so it is safe only for first-party wikis -- opening an untrusted
     #   wiki would need an opt-in or an allowlist of trusted roots
     spec = importlib.util.spec_from_file_location('_wiki', config_path)
@@ -101,44 +102,144 @@ def load_wiki_class(
 
 
 def resolve_wiki(path: Optional[str]) -> Wiki:
-    """Resolve a ``Wiki`` instance from a path or cwd."""
+    """Resolve a ``Wiki`` instance from a path or cwd.
+
+    A resolved root is valid when it is declared (``.wiki/settings.json``)
+    or at least indexed (``_index.md``), not inside an enclosing wiki
+    (declared, or implied by a parent ``_index.md`` chain), and -- when
+    undeclared -- not enclosing a declared root of its own; corroboration
+    diagnostics ride the resolution -- an undeclared tree (at its topmost
+    index), a declared root missing its index, and an index chain
+    extending above the declared root are each named on stderr rather
+    than failing.
+    """
     wiki_root = resolve_wiki_root(path)
-    if wiki_root.is_dir() and (wiki_root / WIKI_INDEX).is_file():
-        cls = load_wiki_class(wiki_root)
-        return cls(wiki_root)
-    raise NotADirectoryError(f'No wiki at: {wiki_root} (missing {WIKI_INDEX})')
+    # never treat a path inside an existing wiki as a wiki root: the command
+    # would grow a second root index and rewrite name: paths relative to the
+    # wrong root -- scoped work goes through the entry argument instead
+    enclosing = enclosing_wiki_root(wiki_root)
+    if enclosing is not None:
+        raise ValueError(
+            f'Path is inside the wiki at: {enclosing};'
+            f' use the <entry> argument for scoped work'
+        )
+    # the root is declared by its settings marker; a bare index tree is
+    # tolerated with a notice, and anything less is not a wiki
+    declared = (wiki_root / WIKI_SETTINGS).is_file()
+    has_index = (wiki_root / WIKI_INDEX).is_file()
+    if not (declared or has_index):
+        raise NotADirectoryError(
+            f'No wiki at: {wiki_root} (missing {WIKI_SETTINGS} and {WIKI_INDEX})'
+        )
+    # an undeclared enclosing wiki leaves no marker for the guard above: a
+    # parent index means the path sits inside an index chain, so refuse it
+    # the same way, naming the chain's topmost index as the enclosing root
+    if not declared and (wiki_root.parent / WIKI_INDEX).is_file():
+        enclosing = wiki_root.parent
+        while (enclosing.parent / WIKI_INDEX).is_file():
+            enclosing = enclosing.parent
+        raise ValueError(
+            f'Path is inside the wiki at: {enclosing};'
+            f' use the <entry> argument for scoped work'
+        )
+    # never treat a path enclosing a declared wiki as an undeclared root:
+    # the command would absorb the nested wiki, rewriting its name: paths
+    # relative to the wrong root and planting a second settings marker
+    if not declared:
+        nested = _nested_wiki_root(wiki_root)
+        if nested is not None:
+            raise ValueError(
+                f'Path encloses the wiki at: {nested};'
+                f' run the command from that declared root'
+            )
+    # corroboration diagnostics: name what resolution tolerated
+    if not declared:
+        typer.echo(
+            f'{wiki_root}: {WIKI_SETTINGS} missing; `wiki update` will restore it',
+            err=True,
+        )
+    elif not has_index:
+        typer.echo(
+            f'{wiki_root}: wiki root is missing its {WIKI_INDEX};'
+            f' restore it from git or run `wiki update` to rebuild it',
+            err=True,
+        )
+    if declared and (wiki_root.parent / WIKI_INDEX).is_file():
+        typer.echo(
+            f'{wiki_root.parent / WIKI_INDEX} extends above the wiki root at'
+            f' {wiki_root} (a foreign or damaged outer index; the root is'
+            f' declared by {WIKI_SETTINGS})',
+            err=True,
+        )
+    cls = load_wiki_class(wiki_root)
+    return cls(wiki_root)
 
 
 def resolve_wiki_root(path: Optional[str] = None) -> pathlib.Path:
-    """Resolve wiki root directory."""
+    """Resolve wiki root directory.
+
+    An explicit ``path`` resolves as given. Otherwise the root is the
+    ancestor (cwd included) declaring itself with ``.wiki/settings.json``;
+    an undeclared index tree falls back to the topmost ``_index.md``
+    chain, and a bare project falls back to ``{cwd}/wiki/``.
+
+    Raises:
+        ValueError: If the cwd's ancestor chain declares two wiki roots.
+        FileNotFoundError: If no wiki can be located from the cwd.
+
+    """
     # explicit path
     if path:
         result = pathlib.Path(path)
         if not result.is_absolute():
             result = pathlib.Path.cwd() / result
         return result.resolve()
-    # walk up from cwd to find wiki root
+    # the declared root wins: walk the ancestor chain for the settings
+    # marker (past the first hit, so a nested shadow refuses loudly)
     cwd = pathlib.Path.cwd().resolve()
+    roots = _wiki_roots((cwd, *cwd.parents))
+    if roots:
+        return roots[0]
+    # undeclared tree: walk up from cwd to the topmost _index.md
     if (cwd / WIKI_INDEX).is_file():
         result = cwd
         while (result.parent / WIKI_INDEX).is_file():
             result = result.parent
         return result
-    # check for wiki/ in cwd
+    # check for wiki/ in cwd (declared or at least indexed, matching the
+    # validity rule in resolve_wiki, so a damaged declared wiki stays
+    # reachable from the project root)
     wiki_dir = cwd / DEFAULT_WIKI_NAME
-    if (wiki_dir / WIKI_INDEX).is_file():
+    if _is_wiki_root(wiki_dir) or (wiki_dir / WIKI_INDEX).is_file():
         return wiki_dir
     raise FileNotFoundError(
-        f'Could not locate {WIKI_INDEX} or'
+        f'Could not locate {WIKI_SETTINGS}, {WIKI_INDEX}, or'
         f' {DEFAULT_WIKI_NAME}/{WIKI_INDEX} from the'
         f' current directory.'
     )
 
 
-def configure_git_merge_driver(path: pathlib.Path) -> None:
-    """Wire git's ``_index.md`` merge driver for the repo holding the wiki.
+def enclosing_wiki_root(path: pathlib.Path) -> Optional[pathlib.Path]:
+    """Return the wiki root strictly above ``path``, if any.
 
-    Sets the ``merge.wiki-index`` config and writes the ``**/_index.md`` glob to
+    A directory is a wiki root when it holds ``.wiki/settings.json``;
+    ``path`` itself is not checked -- being a wiki root is fine, being
+    inside one is not.
+
+    Raises:
+        ValueError: If the ancestor chain declares two wiki roots.
+
+    """
+    roots = _wiki_roots(path.parents)
+    if roots:
+        return roots[0]
+    return None
+
+
+def configure_git_merge_driver(path: pathlib.Path) -> None:
+    """Wire git's wiki merge driver for the repo holding the wiki.
+
+    Sets the ``merge.wiki`` config and writes the ``**/_index.md`` glob to
     ``.gitattributes`` (working tree only -- the user commits it). A no-op
     outside a git repo. The ``.gitattributes`` write is skipped while it has
     uncommitted changes (the config still applies; it writes on the next clean
@@ -154,21 +255,19 @@ def configure_git_merge_driver(path: pathlib.Path) -> None:
     if toplevel is None:
         return
     repo = pathlib.Path(toplevel)
-    # resolve bundled merge driver script
-    package = pathlib.Path(__file__).parent.parent
-    script = package / '_config' / 'git' / 'merge_index.sh'
     # name the merge driver
     cmd = [
         'config',
-        'merge.wiki-index.name',
-        'wiki index merge (auto-resolve generated sections)',
+        'merge.wiki.name',
+        'wiki merge (auto-resolve generated sections)',
     ]
     _git(cmd, cwd=repo)
-    # point the merge driver to wiki script
+    # point the merge driver at the stable CLI entry point -- an absolute
+    # path into the installing venv silently breaks on a rebuild/move
     cmd = [
         'config',
-        'merge.wiki-index.driver',
-        f"bash '{script}' %A %O %B",
+        'merge.wiki.driver',
+        'wiki _merge %O %A %B %L %P',
     ]
     _git(cmd, cwd=repo)
     # map _index.md files to the driver
@@ -176,10 +275,11 @@ def configure_git_merge_driver(path: pathlib.Path) -> None:
     current = ''
     if gitattributes.exists():
         current = gitattributes.read_text(encoding='utf-8')
-    if 'merge=wiki-index' in current:
+    lines = current.split('\n')
+    if '**/_index.md merge=wiki' in lines:
         return
     # don't entangle with the user's pending work: if .gitattributes already has
-    # uncommitted changes, leave it untouched (the merge.wiki-index config above
+    # uncommitted changes, leave it untouched (the merge.wiki config above
     # still applies; the attribute map is written on the next clean run)
     cmd = ['status', '--porcelain', '--', '.gitattributes']
     if _git(cmd, cwd=repo, check=False):
@@ -193,12 +293,49 @@ def configure_git_merge_driver(path: pathlib.Path) -> None:
     # write the attribute map into the working tree only; the user stages and
     # commits .gitattributes themselves (this command never touches the index)
     gitattributes.write_text(
-        f'{current}{prefix}# Wiki index merge driver\n**/_index.md merge=wiki-index\n',
+        f'{current}{prefix}# Wiki index merge driver\n**/_index.md merge=wiki\n',
         encoding='utf-8',
     )
 
 
 # ------ helper functions
+
+
+def _wiki_roots(chain: Iterable[pathlib.Path]) -> list[pathlib.Path]:
+    """Collect the declared wiki roots along ``chain``, nearest first.
+
+    The walk continues past the first marker so a nested root shadowing a
+    real one is detected: two markers on one chain make every command ambiguous.
+
+    Raises:
+        ValueError: If ``chain`` declares more than one wiki root.
+
+    """
+    result = [ancestor for ancestor in chain if _is_wiki_root(ancestor)]
+    if len(result) > 1:
+        raise ValueError(
+            f'Ambiguous wiki root: {result[0]} is nested inside the wiki at'
+            f' {result[-1]} (two {WIKI_SETTINGS} markers on one path)'
+        )
+    return result
+
+
+def _is_wiki_root(path: pathlib.Path) -> bool:
+    """Return ``True`` if ``path`` holds the declared-root settings marker."""
+    return (path / WIKI_SETTINGS).is_file()
+
+
+def _nested_wiki_root(path: pathlib.Path) -> Optional[pathlib.Path]:
+    """Return the first declared wiki root strictly below ``path``, if any."""
+    for dirpath, dirnames, _ in os.walk(path):
+        # prune dot-dirs; each surviving child is probed for its own
+        # settings marker directly, so .wiki itself needs no descent
+        dirnames[:] = [d for d in dirnames if not d.startswith('.')]
+        for dirname in dirnames:
+            result = pathlib.Path(dirpath) / dirname
+            if _is_wiki_root(result):
+                return result
+    return None
 
 
 def _git(

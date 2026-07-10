@@ -27,6 +27,7 @@ def cli(**kwargs: Any) -> None:
     cmd.update(app)
     cmd.lint(app)
     cmd.map(app)
+    cmd.merge(app)
     # run app
     app()
 

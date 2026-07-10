@@ -9,13 +9,19 @@ import pytest
 
 from wiki.cli.utils import (
     configure_git_merge_driver,
+    enclosing_wiki_root,
     load_wiki_class,
+    resolve_wiki,
     resolve_wiki_root,
 )
 from wiki.core.wiki import Wiki
 
 __all__ = [
     'test_resolve_wiki_root',
+    'test_resolve_wiki_root_prefers_declared_marker',
+    'test_resolve_wiki_root_falls_back_to_declared_subdir',
+    'test_resolver_refuses_ambiguous_root',
+    'test_resolve_wiki_corroboration_notices',
     'test_load_wiki_class',
     'test_configure_git_merge_driver',
     'test_merge_driver_skips_dirty_gitattributes',
@@ -55,6 +61,109 @@ def test_resolve_wiki_root(
     assert result == wiki_dir
 
 
+def test_resolve_wiki_root_prefers_declared_marker(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The declared ``.wiki/settings.json`` marker wins over the index chain.
+
+    A foreign ``_index.md`` above the declared root (a Hugo site, a
+    damaged outer tree) must not re-root the wiki: the marker wins, and
+    the index chain is only a fallback for undeclared trees.
+    """
+    # a declared root nested under a foreign index chain
+    (tmp_path / '_index.md').write_text('foreign\n', encoding='utf-8')
+    root = tmp_path / 'docs'
+    nested = root / 'a'
+    nested.mkdir(parents=True)
+    _declare_root(root)
+    (nested / '_index.md').write_text('leaf\n', encoding='utf-8')
+    monkeypatch.chdir(nested)
+    assert resolve_wiki_root(None) == root
+
+
+def test_resolve_wiki_root_falls_back_to_declared_subdir(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The ``{cwd}/wiki`` fallback honors the declared marker, not just the index.
+
+    A declared wiki that lost its ``_index.md`` must stay reachable from
+    the project root, so ``wiki update`` there can name the damage and
+    rebuild the index instead of failing to locate the wiki at all.
+    """
+    project = tmp_path / 'project'
+    wiki_dir = project / 'wiki'
+    wiki_dir.mkdir(parents=True)
+    _declare_root(wiki_dir, index=False)
+    monkeypatch.chdir(project)
+    assert resolve_wiki_root(None) == wiki_dir
+    # full resolution rides along, naming the missing-index damage
+    resolve_wiki(None)
+    assert 'missing its _index.md' in capsys.readouterr().err
+
+
+def test_resolver_refuses_ambiguous_root(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two markers on one ancestor chain refuse loudly, naming both.
+
+    A nested ``.wiki/settings.json`` below a real root (a copied wiki, a
+    stray marker) makes every command ambiguous.
+    """
+    outer = tmp_path / 'outer'
+    inner = outer / 'inner'
+    deep = inner / 'deep'
+    deep.mkdir(parents=True)
+    _declare_root(outer)
+    _declare_root(inner)
+    # the bare-cwd walk refuses
+    monkeypatch.chdir(deep)
+    with pytest.raises(ValueError, match='Ambiguous wiki root') as excinfo:
+        resolve_wiki_root(None)
+    assert str(outer) in str(excinfo.value)
+    assert str(inner) in str(excinfo.value)
+    # the enclosing-root probe (init nesting, --path guards) refuses too
+    with pytest.raises(ValueError, match='Ambiguous wiki root'):
+        enclosing_wiki_root(deep)
+
+
+def test_resolve_wiki_corroboration_notices(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Resolution names missing markers, missing indexes, and outer indexes."""
+    # an undeclared index tree is tolerated with the restore notice
+    undeclared = tmp_path / 'undeclared'
+    undeclared.mkdir()
+    (undeclared / '_index.md').write_text('x\n', encoding='utf-8')
+    resolve_wiki(str(undeclared))
+    err = capsys.readouterr().err
+    assert '.wiki/settings.json missing' in err
+    assert 'wiki update' in err
+    # a declared root missing its index is named at resolution time
+    damaged = tmp_path / 'damaged'
+    damaged.mkdir()
+    _declare_root(damaged, index=False)
+    resolve_wiki(str(damaged))
+    assert 'missing its _index.md' in capsys.readouterr().err
+    # an index chain extending above the declared root is a named warning
+    outer = tmp_path / 'site'
+    root = outer / 'docs'
+    root.mkdir(parents=True)
+    _declare_root(root)
+    (outer / '_index.md').write_text('foreign\n', encoding='utf-8')
+    resolve_wiki(str(root))
+    assert 'above the wiki root' in capsys.readouterr().err
+    # a directory with neither marker nor index is not a wiki at all
+    empty = tmp_path / 'empty'
+    empty.mkdir()
+    with pytest.raises(NotADirectoryError):
+        resolve_wiki(str(empty))
+
+
 # ------ load_wiki_class
 
 
@@ -65,7 +174,7 @@ def test_load_wiki_class(tmp_path: pathlib.Path) -> None:
     assert cls is Wiki
 
     # custom subclass named by the sole __all__ entry
-    config_dir = tmp_path / '_config'
+    config_dir = tmp_path / '.wiki'
     config_dir.mkdir()
     (config_dir / 'wiki.py').write_text(
         'from wiki.core.wiki import Wiki\n\n'
@@ -108,17 +217,17 @@ def test_configure_git_merge_driver(tmp_path: pathlib.Path) -> None:
 
     A no-op outside a git repo; idempotent; and -- per the org's
     never-auto-commit rule -- it writes ``.gitattributes`` to the working tree
-    only, never staging or committing it (Issue #1).
+    only, never staging or committing it. The driver is registered as the
+    stable ``wiki _merge`` command -- an absolute path into the installing
+    venv silently breaks on a rebuild/move.
     """
 
-    def git(*args: str) -> str:
-        result = subprocess.run(
+    def git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
             ['git', '-C', f'{tmp_path}', *args],
             capture_output=True,
             text=True,
-            check=True,
         )
-        return result.stdout
 
     # no-op outside a git repo
     configure_git_merge_driver(tmp_path)
@@ -133,30 +242,32 @@ def test_configure_git_merge_driver(tmp_path: pathlib.Path) -> None:
     git('commit', '-m', 'init')
     wiki_dir = tmp_path / 'wiki'
     wiki_dir.mkdir()
-    head_before = git('rev-parse', 'HEAD')
+    head_before = git('rev-parse', 'HEAD').stdout
 
     configure_git_merge_driver(wiki_dir)
 
-    # driver points at the bundled script and the glob is written to the worktree
-    assert 'merge_index.sh' in git('config', 'merge.wiki-index.driver')
+    # driver is the stable CLI command and the glob is written to the worktree
+    assert git('config', 'merge.wiki.driver').stdout.strip() == (
+        'wiki _merge %O %A %B %L %P'
+    )
     attributes = (tmp_path / '.gitattributes').read_text(encoding='utf-8')
-    assert '**/_index.md merge=wiki-index' in attributes
+    assert '**/_index.md merge=wiki' in attributes.splitlines()
     # nothing is committed (no new HEAD) and nothing is staged (the rule)
-    assert git('rev-parse', 'HEAD') == head_before
-    assert '.gitattributes' not in git('diff', '--cached', '--name-only')
-    assert '.gitattributes' in git('status', '--porcelain')
+    assert git('rev-parse', 'HEAD').stdout == head_before
+    assert '.gitattributes' not in git('diff', '--cached', '--name-only').stdout
+    assert '.gitattributes' in git('status', '--porcelain').stdout
 
     # idempotent -- a second call does not duplicate the mapping
     configure_git_merge_driver(wiki_dir)
     final = (tmp_path / '.gitattributes').read_text(encoding='utf-8')
-    assert final.count('**/_index.md merge=wiki-index') == 1
+    assert final.splitlines().count('**/_index.md merge=wiki') == 1
 
 
 def test_merge_driver_skips_dirty_gitattributes(tmp_path: pathlib.Path) -> None:
     """The wiring leaves ``.gitattributes`` untouched while it has pending edits.
 
     It defers the attribute-map write until ``.gitattributes`` is clean (the
-    ``merge.wiki-index`` config still applies), so it never entangles with the
+    ``merge.wiki`` config still applies), so it never entangles with the
     user's uncommitted work; once clean, a re-run writes the map (it converges).
     """
 
@@ -183,11 +294,22 @@ def test_merge_driver_skips_dirty_gitattributes(tmp_path: pathlib.Path) -> None:
 
     # dirty .gitattributes: the map is not written, but the config is still set
     configure_git_merge_driver(wiki_dir)
-    assert 'merge=wiki-index' not in attributes.read_text(encoding='utf-8')
-    assert 'merge_index.sh' in git('config', 'merge.wiki-index.driver')
+    assert 'merge=wiki' not in attributes.read_text(encoding='utf-8')
+    assert '_merge' in git('config', 'merge.wiki.driver')
 
     # once .gitattributes is clean, a re-run writes the map (it converges)
     git('add', '.gitattributes')
     git('commit', '-m', 'edit')
     configure_git_merge_driver(wiki_dir)
-    assert '**/_index.md merge=wiki-index' in attributes.read_text(encoding='utf-8')
+    assert '**/_index.md merge=wiki' in attributes.read_text(encoding='utf-8')
+
+
+# ------ helpers
+
+
+def _declare_root(root: pathlib.Path, *, index: bool = True) -> None:
+    """Declare ``root`` as a wiki root (settings marker plus an index)."""
+    (root / '.wiki').mkdir(parents=True, exist_ok=True)
+    (root / '.wiki' / 'settings.json').write_text('{}\n', encoding='utf-8')
+    if index:
+        (root / '_index.md').write_text('root\n', encoding='utf-8')

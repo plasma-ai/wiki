@@ -7,6 +7,7 @@ import importlib.resources
 import json
 import pathlib
 import shutil
+import subprocess
 from typing import Optional
 
 import typer
@@ -14,11 +15,12 @@ import typer
 from wiki.cli.utils import (
     command,
     configure_git_merge_driver,
+    enclosing_wiki_root,
     parse_slice,
     resolve_wiki,
     resolve_wiki_root,
 )
-from wiki.core.wiki import DEFAULT_WIKI_NAME, WIKI_INDEX, Wiki
+from wiki.core.wiki import DEFAULT_WIKI_NAME, WIKI_INDEX, WIKI_SETTINGS, Wiki
 
 __all__ = [
     'version',
@@ -30,6 +32,7 @@ __all__ = [
     'update',
     'lint',
     'map',
+    'merge',
 ]
 
 # manual step: Obsidian gates community plugins behind "Restricted Mode"
@@ -37,6 +40,84 @@ OBSIDIAN_SETUP_HINT = (
     'In Obsidian: Settings -> Community plugins -> turn off Restricted'
     ' Mode, then enable Front Matter Title if needed.'
 )
+
+# condensed-mode narration categories, as (prefix, marker, one, many,
+# check_one, check_many): a notice matching prefix+marker collapses into the
+# category's count line, worded for apply and --check runs
+_UPDATE_CATEGORIES = [
+    (
+        'New index: ',
+        '',
+        'Created 1 new index (fill in its desc)',
+        'Created {n} new indexes (fill in their descs)',
+        'Would create 1 new index',
+        'Would create {n} new indexes',
+    ),
+    (
+        'New link: ',
+        '',
+        'Added 1 new link',
+        'Added {n} new links',
+        'Would add 1 new link',
+        'Would add {n} new links',
+    ),
+    (
+        'Broken link: ',
+        '',
+        '1 broken link (run `wiki lint` to list it)',
+        '{n} broken links (run `wiki lint` to list them)',
+        '1 broken link (run `wiki lint` to list it)',
+        '{n} broken links (run `wiki lint` to list them)',
+    ),
+    (
+        'Pruned link: ',
+        '',
+        'Pruned 1 broken link',
+        'Pruned {n} broken links',
+        'Would prune 1 broken link',
+        'Would prune {n} broken links',
+    ),
+    (
+        'Overwrote desc: ',
+        '',
+        'Overwrote 1 link desc (page frontmatter descs win)',
+        'Overwrote {n} link descs (page frontmatter descs win)',
+        'Would overwrite 1 link desc (page frontmatter descs win)',
+        'Would overwrite {n} link descs (page frontmatter descs win)',
+    ),
+    (
+        'Skipping ',
+        ': invalid name',
+        'Skipped 1 invalid name',
+        'Skipped {n} invalid names',
+        'Skipped 1 invalid name',
+        'Skipped {n} invalid names',
+    ),
+    (
+        'Skipping ',
+        'changed during update',
+        'Skipped 1 concurrently-edited file (re-run `wiki update`)',
+        'Skipped {n} concurrently-edited files (re-run `wiki update`)',
+        'Skipped 1 concurrently-edited file (re-run `wiki update`)',
+        'Skipped {n} concurrently-edited files (re-run `wiki update`)',
+    ),
+    (
+        'Malformed frontmatter',
+        '',
+        '1 page with malformed frontmatter (no closing ---)',
+        '{n} pages with malformed frontmatter (no closing ---)',
+        '1 page with malformed frontmatter (no closing ---)',
+        '{n} pages with malformed frontmatter (no closing ---)',
+    ),
+    (
+        'Empty or truncated index',
+        '',
+        '1 empty or truncated index (restore from git or delete to rebuild)',
+        '{n} empty or truncated indexes (restore from git or delete to rebuild)',
+        '1 empty or truncated index (restore from git or delete to rebuild)',
+        '{n} empty or truncated indexes (restore from git or delete to rebuild)',
+    ),
+]
 
 
 def version(app: typer.Typer) -> typer.Typer:
@@ -113,7 +194,8 @@ def init(app: typer.Typer) -> typer.Typer:
     # wiki name argument
     name_help = (
         'Wiki name (must satisfy the configured naming policy,'
-        ' lenient by default). Defaults to the wiki folder name.'
+        ' lenient by default). Defaults to the project (cwd) name,'
+        ' or the --path folder name.'
     )
     name = typer.Argument(None, help=name_help)
     # wiki root option
@@ -121,25 +203,29 @@ def init(app: typer.Typer) -> typer.Typer:
     path = typer.Option(None, '--path', help=path_help)
     # initial settings.json option
     settings_help = (
-        'Initial _config/settings.json contents, as a JSON object'
+        'Initial .wiki/settings.json contents, as a JSON object'
         ' (e.g. {"naming": {"validate": ["ascii", "identifier"]}}).'
     )
     settings = typer.Option(None, '--settings', help=settings_help)
+    # quiet flag
+    quiet_help = 'Suppress the Obsidian hint and other non-error output.'
+    quiet = typer.Option(False, '--quiet', help=quiet_help)
 
     @command(app, 'init')
     def _init(
         name: Optional[str] = name,
         path: Optional[str] = path,
         settings: Optional[str] = settings,
+        quiet: bool = quiet,
     ) -> None:
         """Initialize a wiki with a root _index.md file.
 
-        The wiki name defaults to the wiki folder name. By default the naming
-        policy is lenient (only structural characters, a leading dot, and the
-        reserved _index/_config stems are rejected); stricter rules are opt-in
-        per wiki via naming.validate in _config/settings.json, which --settings
-        seeds at creation. The wiki is created at {cwd}/wiki/ when no --path is
-        given.
+        The wiki name defaults to the project (cwd) name, or the --path folder
+        name. By default the naming policy is lenient (only structural
+        characters, a leading dot, and the reserved _index stem are rejected);
+        stricter rules are opt-in per wiki via naming.validate in
+        .wiki/settings.json, which --settings seeds at creation. The wiki is
+        created at {cwd}/wiki/ when no --path is given.
         """
         # resolve wiki root and display name
         if path:
@@ -156,9 +242,29 @@ def init(app: typer.Typer) -> typer.Typer:
                 raise typer.BadParameter(f'--settings must be valid JSON: {e}') from e
             if not isinstance(settings, dict):
                 raise typer.BadParameter('--settings must be a JSON object')
+        # nested wikis have no boundary -- the outer update would rewrite the
+        # inner index and absorb its pages -- so refuse to scaffold one
+        enclosing = enclosing_wiki_root(path)
+        # an undeclared index tree is a wiki too (resolve_wiki_root's
+        # fallback), so a bare ancestor _index.md chain encloses just the same
+        # -- unless path is itself a declared root (a foreign or damaged
+        # outer index is tolerated, matching resolve_wiki)
+        if enclosing is None and not (path / WIKI_SETTINGS).is_file():
+            for ancestor in path.parents:
+                if (ancestor / WIKI_INDEX).is_file():
+                    enclosing = ancestor
+                    while (enclosing.parent / WIKI_INDEX).is_file():
+                        enclosing = enclosing.parent
+                    break
+        if enclosing is not None:
+            raise ValueError(
+                f'Cannot initialize inside the wiki at: {enclosing}'
+                f' (nested wikis are not supported)'
+            )
         # don't silently re-run a full update on an existing wiki
         if (path / WIKI_INDEX).is_file():
-            typer.echo(f'Wiki already initialized at: {path}')
+            if not quiet:
+                typer.echo(f'Wiki already initialized at: {path}')
             return
         # initialize wiki
         wiki = Wiki(path)
@@ -167,12 +273,13 @@ def init(app: typer.Typer) -> typer.Typer:
         warnings = wiki.update_config()
         # configure git merge driver
         configure_git_merge_driver(path)
-        typer.echo(f'Initialized wiki at: {path}')
+        if not quiet:
+            typer.echo(f'Initialized wiki at: {path}')
         # surface soft warnings, else point at the one manual step
         if warnings:
             for warning in warnings:
                 typer.echo(warning, err=True)
-        else:
+        elif not quiet:
             typer.echo('')
             typer.echo(OBSIDIAN_SETUP_HINT)
 
@@ -182,14 +289,27 @@ def init(app: typer.Typer) -> typer.Typer:
 def config(app: typer.Typer) -> typer.Typer:
     """Register the ``config`` command."""
     # wiki root option
-    path_help = 'Wiki root directory. Defaults to {cwd}/wiki/.'
+    path_help = (
+        'Wiki root directory. Defaults to the enclosing wiki root (the'
+        ' ancestor declaring .wiki/settings.json, else the outermost'
+        ' _index.md chain), else {cwd}/wiki/.'
+    )
     path = typer.Option(None, '--path', help=path_help)
 
     @command(app, 'config')
     def _config(
         path: Optional[str] = path,
     ) -> None:
-        """Install or refresh the Obsidian integration config."""
+        """Install or refresh the Obsidian integration config.
+
+        Copies .wiki/obsidian/ into .obsidian/ (downloading pinned plugin
+        code), restores a missing .wiki/settings.json ({}), registers the
+        git merge driver in the repo's local config, and writes the
+        **/_index.md glob to .gitattributes when that file has no pending
+        edits (you commit it yourself). Run once per clone. Exits 0 even
+        when a plugin download fails -- download failures are stderr
+        warnings (re-run online to finish setup), never the exit code.
+        """
         # merge Obsidian config
         wiki = resolve_wiki(path)
         warnings = wiki.update_config()
@@ -212,7 +332,11 @@ def read(app: typer.Typer) -> typer.Typer:
     name_help = 'File or directory path to read (relative to wiki root).'
     name = typer.Argument(..., help=name_help)
     # wiki root option
-    path_help = 'Wiki root directory. Defaults to {cwd}/wiki/.'
+    path_help = (
+        'Wiki root directory. Defaults to the enclosing wiki root (the'
+        ' ancestor declaring .wiki/settings.json, else the outermost'
+        ' _index.md chain), else {cwd}/wiki/.'
+    )
     path = typer.Option(None, '--path', help=path_help)
     # line slice option
     lines_help = 'Slice the body by line range (0-indexed half-open; e.g. n:m, n:, :m).'
@@ -234,7 +358,13 @@ def read(app: typer.Typer) -> typer.Typer:
         words: Optional[str] = words,
         chars: Optional[str] = chars,
     ) -> None:
-        """Return content for a named wiki entry."""
+        """Return content for a named wiki entry.
+
+        Prints the content verbatim with no appended newline, so
+        redirected output round-trips byte-for-byte for LF files (reads
+        normalize CRLF); a slice keeps the frontmatter and appends a
+        trailing newline.
+        """
         # only one of --lines/--words/--chars may be given
         ranges = {'lines': lines, 'words': words, 'chars': chars}
         given = {on: spec for on, spec in ranges.items() if spec}
@@ -247,7 +377,9 @@ def read(app: typer.Typer) -> typer.Typer:
             content = wiki.read(name, start=start, stop=stop, on=on)
         else:
             content = wiki.read(name)
-        typer.echo(content)
+        # emit the content verbatim -- an appended newline would break the
+        # byte-for-byte round-trip of redirected output
+        typer.echo(content, nl=False)
 
     return app
 
@@ -261,7 +393,11 @@ def search(app: typer.Typer) -> typer.Typer:
     name_help = 'Restrict scope to named subtree (relative path).'
     name = typer.Argument(None, help=name_help)
     # wiki root option
-    path_help = 'Wiki root directory. Defaults to {cwd}/wiki/.'
+    path_help = (
+        'Wiki root directory. Defaults to the enclosing wiki root (the'
+        ' ancestor declaring .wiki/settings.json, else the outermost'
+        ' _index.md chain), else {cwd}/wiki/.'
+    )
     path = typer.Option(None, '--path', help=path_help)
     # search field option
     field_help = 'Comma-separated frontmatter fields to search.'
@@ -274,10 +410,10 @@ def search(app: typer.Typer) -> typer.Typer:
     all_files = typer.Option(False, '--all', '-a', help=all_files_help)
     # lines flag
     lines_help = 'Show matching lines with line numbers.'
-    lines = typer.Option(False, '--lines', '-l', help=lines_help)
+    lines = typer.Option(False, '--lines', help=lines_help)
     # lineno flag
     lineno_help = 'Show file paths with line numbers (no content).'
-    lineno = typer.Option(False, '--lineno', '-n', help=lineno_help)
+    lineno = typer.Option(False, '--lineno', help=lineno_help)
 
     @command(app, 'search')
     def _search(
@@ -301,8 +437,11 @@ def search(app: typer.Typer) -> typer.Typer:
             ignore_case=ignore_case,
             all_files=all_files,
         )
+        # grep convention: no-match exits 1 with the notice on stderr, so
+        # scripts can distinguish no-match from match by exit code alone
         if not matches:
-            typer.echo('No matches found.')
+            typer.echo('No matches found.', err=True)
+            raise SystemExit(1)
         elif lines:
             for relpath, line_number, line_text in matches:
                 typer.echo(f'{relpath}:{line_number}: {line_text}')
@@ -325,7 +464,11 @@ def update(app: typer.Typer) -> typer.Typer:
     name_help = 'Restrict scope to named subtree (relative path).'
     name = typer.Argument(None, help=name_help)
     # wiki root option
-    path_help = 'Wiki root directory. Defaults to {cwd}/wiki/.'
+    path_help = (
+        'Wiki root directory. Defaults to the enclosing wiki root (the'
+        ' ancestor declaring .wiki/settings.json, else the outermost'
+        ' _index.md chain), else {cwd}/wiki/.'
+    )
     path = typer.Option(None, '--path', help=path_help)
     # prune flag
     prune_help = 'Remove broken links instead of preserving them.'
@@ -333,6 +476,12 @@ def update(app: typer.Typer) -> typer.Typer:
     # check flag
     check_help = 'Report files that would change without writing them.'
     check = typer.Option(False, '--check', help=check_help)
+    # full flag
+    full_help = 'Print every narration line instead of per-category counts.'
+    full = typer.Option(False, '--full', help=full_help)
+    # count flag
+    count_help = 'Print one count line per narration category (the default).'
+    count = typer.Option(False, '--count', help=count_help)
 
     @command(app, 'update')
     def _update(
@@ -340,25 +489,53 @@ def update(app: typer.Typer) -> typer.Typer:
         path: Optional[str] = path,
         prune: bool = prune,
         check: bool = check,
+        full: bool = full,
+        count: bool = count,
     ) -> None:
-        """Update wiki files."""
+        """Update wiki files.
+
+        Rewrites whatever drifted from the generated form: index links,
+        frontmatter fields, and CRLF line endings. Restores a missing
+        .wiki/settings.json ({}) and preserves broken links (--prune
+        removes them). Narrations condense to one count line per category
+        by default; --full prints every line. Exits 0 after a successful
+        run; with --check, writes nothing and exits 1 when changes are
+        pending.
+        """
+        if full and count:
+            raise typer.BadParameter('--full and --count are mutually exclusive.')
         wiki = resolve_wiki(path)
-        updated = wiki.update(name=name, prune=prune, check=check)
-        count = len(updated)
-        s = 's' if count != 1 else ''
+        # update narrations are a side report (the diff is the record), so
+        # they default to condensed; --full restores the per-line narration
+        notices: list[str] = []
+        emit = wiki._warn
+        if not full:
+            wiki._warn = notices.append
+        # flush the captured notices even when update raises: one-time lines
+        # (a restored marker) describe mutations that already happened and
+        # must never be swallowed by the error path
+        try:
+            updated = wiki.update(name=name, prune=prune, check=check)
+        finally:
+            if not full:
+                for line in _condense(notices, check):
+                    emit(line)
+        file_count = len(updated)
+        s = 's' if file_count != 1 else ''
         # dry run: report would-change files and exit nonzero if any
         if check:
             if updated:
                 for relpath in updated:
                     typer.echo(f'Would update: {relpath}')
                 typer.echo(
-                    f'\n{count} file{s} would change (run without --check to apply).'
+                    f'\n{file_count} file{s} would change'
+                    f' (run without --check to apply).'
                 )
                 raise SystemExit(1)
             typer.echo('Nothing to update.')
             return
         if updated:
-            typer.echo(f'Updated {count} file{s}.')
+            typer.echo(f'Updated {file_count} file{s}.')
         else:
             typer.echo('Nothing to update.')
 
@@ -371,24 +548,69 @@ def lint(app: typer.Typer) -> typer.Typer:
     name_help = 'Restrict scope to named subtree (relative path).'
     name = typer.Argument(None, help=name_help)
     # wiki root option
-    path_help = 'Wiki root directory. Defaults to {cwd}/wiki/.'
+    path_help = (
+        'Wiki root directory. Defaults to the enclosing wiki root (the'
+        ' ancestor declaring .wiki/settings.json, else the outermost'
+        ' _index.md chain), else {cwd}/wiki/.'
+    )
     path = typer.Option(None, '--path', help=path_help)
+    # full flag
+    full_help = 'Print every issue and note line (the default).'
+    full = typer.Option(False, '--full', help=full_help)
+    # count flag
+    count_help = 'Print only the closing issue/note summary.'
+    count = typer.Option(False, '--count', help=count_help)
 
     @command(app, 'lint')
     def _lint(
         name: Optional[str] = name,
         path: Optional[str] = path,
+        full: bool = full,
+        count: bool = count,
     ) -> None:
-        """Check wiki health."""
+        """Check wiki health.
+
+        Exits 1 when issues are found and 0 when the wiki is clean; notes
+        (stderr) never affect the exit code. Issues are lint's product, so
+        every line prints by default; --count condenses the run to the
+        closing summary. The prose output is for humans -- scripts should
+        branch on the exit code rather than parse it.
+        """
+        if full and count:
+            raise typer.BadParameter('--full and --count are mutually exclusive.')
         wiki = resolve_wiki(path)
+        # count the soft notes lint sends to stderr, so the closing summary
+        # reflects them instead of contradicting the notes still on screen
+        notes = []
+        emit = wiki._warn
+
+        def _warn(message: str) -> None:
+            notes.append(message)
+            if not count:
+                emit(message)
+
+        wiki._warn = _warn
         issues = wiki.lint(name=name)
+        note_count = len(notes)
+        note_s = 's' if note_count != 1 else ''
         if issues:
-            for issue in issues:
-                typer.echo(issue)
-            count = len(issues)
-            s = 's' if count != 1 else ''
-            typer.echo(f'\n{count} issue{s} found.')
+            # issues are the product: every line prints unless condensed
+            if not count:
+                for issue in issues:
+                    typer.echo(issue)
+            issue_count = len(issues)
+            s = 's' if issue_count != 1 else ''
+            if note_count:
+                summary = f'{issue_count} issue{s}, {note_count} note{note_s}.'
+            else:
+                summary = f'{issue_count} issue{s} found.'
+            if count:
+                typer.echo(summary)
+            else:
+                typer.echo(f'\n{summary}')
             raise SystemExit(1)
+        elif note_count:
+            typer.echo(f'No issues found ({note_count} note{note_s}).')
         else:
             typer.echo('No issues found.')
 
@@ -401,7 +623,11 @@ def map(app: typer.Typer) -> typer.Typer:
     name_help = 'Restrict scope to named subtree (relative path).'
     name = typer.Argument(None, help=name_help)
     # wiki root option
-    path_help = 'Wiki root directory. Defaults to {cwd}/wiki/.'
+    path_help = (
+        'Wiki root directory. Defaults to the enclosing wiki root (the'
+        ' ancestor declaring .wiki/settings.json, else the outermost'
+        ' _index.md chain), else {cwd}/wiki/.'
+    )
     path = typer.Option(None, '--path', help=path_help)
     # maximum depth option
     depth_help = 'Maximum tree depth (0 means top-level only).'
@@ -414,12 +640,16 @@ def map(app: typer.Typer) -> typer.Typer:
     desc_limit = typer.Option(None, '--desc-limit', help=desc_limit_help)
     # category filter option
     category_help = 'Comma-separated categories (empty string for uncategorized only).'
-    category = typer.Option(None, '--category', '-c', help=category_help)
+    category = typer.Option(None, '--category', help=category_help)
     # markdown flag
     markdown_help = 'Show only markdown or non-markdown entries (folders always shown).'
     markdown = typer.Option(None, '--markdown/--no-markdown', help=markdown_help)
     # words flag
-    words_help = 'Show word counts from frontmatter.'
+    words_help = (
+        'Show word counts -- "(page)" for a page, "(page/tree)" for a folder'
+        ' (its index and its whole subtree), k/m-abbreviated past a thousand;'
+        ' cached under .wiki/cache/.'
+    )
     words = typer.Option(True, '--words/--no-words', help=words_help)
 
     @command(app, 'map')
@@ -463,3 +693,88 @@ def map(app: typer.Typer) -> typer.Typer:
             typer.echo('Wiki is empty.')
 
     return app
+
+
+def merge(app: typer.Typer) -> typer.Typer:
+    """Register the hidden ``_merge`` command (the git merge driver)."""
+    # base argument
+    base_help = 'Common ancestor version (%O).'
+    base = typer.Argument(..., help=base_help)
+    # ours argument
+    ours_help = 'Current branch version (%A); receives the merged result.'
+    ours = typer.Argument(..., help=ours_help)
+    # theirs argument
+    theirs_help = 'Other branch version (%B).'
+    theirs = typer.Argument(..., help=theirs_help)
+    # marker size argument
+    marker_size_help = 'Conflict-marker size (%L).'
+    marker_size = typer.Argument(..., help=marker_size_help)
+    # pathname argument
+    pathname_help = 'Repo-relative pathname of the merging file (%P).'
+    pathname = typer.Argument(..., help=pathname_help)
+
+    # a %P pathname may lead with a dash; never parse it as an option
+    @command(app, '_merge', context_settings={'ignore_unknown_options': True})
+    def _merge(
+        base: str = base,
+        ours: str = ours,
+        theirs: str = theirs,
+        marker_size: str = marker_size,
+        pathname: str = pathname,
+    ) -> None:
+        """Run the wiki merge driver (invoked by git).
+
+        init/config register `wiki _merge %O %A %B %L %P` as the merge.wiki
+        driver -- a stable entry point that survives the venv rebuilds and
+        moves an absolute script path silently breaks on. The real pathname
+        (%P) dispatches internally, so .gitattributes stays the single
+        routing table and the registration string never changes.
+        """
+        # dispatch on the real pathname: _index.md -> field-aware index merge
+        if pathlib.PurePosixPath(pathname).name == WIKI_INDEX:
+            package = pathlib.Path(__file__).parent.parent.parent
+            script = package / '_config' / 'git' / 'merge_index.sh'
+            cmd = ['bash', str(script), ours, base, theirs, marker_size]
+        # any other file class: git's default three-way text merge
+        else:
+            size = f'--marker-size={marker_size}'
+            cmd = ['git', 'merge-file', size, ours, base, theirs]
+        # pass the exit code through (nonzero tells git the merge left conflicts)
+        result = subprocess.run(cmd)
+        raise SystemExit(result.returncode)
+
+    return app
+
+
+# ------ helper functions
+
+
+def _condense(notices: list[str], check: bool) -> list[str]:
+    """Collapse update narrations to one count line per category.
+
+    Each known category (see ``_UPDATE_CATEGORIES``) aggregates into a
+    single count line standing at its first occurrence, worded for an
+    apply or ``--check`` run; unmatched notices (one-time lines) pass
+    through verbatim in place.
+    """
+    # tally each category, remembering where it first appeared
+    counts: dict[int, int] = {}
+    first_seen: dict[int, int] = {}
+    lines: list[tuple[int, str]] = []
+    for position, notice in enumerate(notices):
+        for index, (prefix, marker, *_rest) in enumerate(_UPDATE_CATEGORIES):
+            if notice.startswith(prefix) and marker in notice:
+                counts[index] = counts.get(index, 0) + 1
+                first_seen.setdefault(index, position)
+                break
+        else:
+            lines.append((position, notice))
+    # render one count line per category at its first-seen position
+    for index, position in first_seen.items():
+        _prefix, _marker, one, many, check_one, check_many = _UPDATE_CATEGORIES[index]
+        if check:
+            one, many = check_one, check_many
+        n = counts[index]
+        line = one if n == 1 else many.format(n=n)
+        lines.append((position, line))
+    return [line for _position, line in sorted(lines)]

@@ -7,16 +7,12 @@ a word slice, and ``search`` a frontmatter field -- exercising the core
 operations together rather than in isolation.
 
 The ``Wiki`` class is exercised directly (not via subprocess) since the
-authoring path lives in core; the module is still guarded on the ``wiki``
-console script so the suite skips cleanly where the package is absent.
+authoring path lives in core.
 """
 
 from __future__ import annotations
 
 import pathlib
-import shutil
-
-import pytest
 
 from wiki.core.wiki import Wiki
 
@@ -25,12 +21,6 @@ __all__ = [
     'test_fresh_wiki_lints_clean',
     'test_update_path_joins_title',
 ]
-
-WIKI = shutil.which('wiki')
-pytestmark = pytest.mark.skipif(
-    WIKI is None,
-    reason='wiki console script not on PATH',
-)
 
 
 # ------ flagship authoring workflow
