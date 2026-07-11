@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import pathlib
 import subprocess
+from typing import Optional
 
 import pytest
+import typer
+from typer.testing import CliRunner
 
+from wiki.cli import cmd
 from wiki.cli.utils import (
     configure_git_merge_driver,
     enclosing_wiki_root,
@@ -20,9 +24,12 @@ __all__ = [
     'test_resolve_wiki_root',
     'test_resolve_wiki_root_prefers_declared_marker',
     'test_resolve_wiki_root_falls_back_to_declared_subdir',
+    'test_resolve_wiki_root_fallback_nominations',
     'test_resolver_refuses_ambiguous_root',
     'test_resolve_wiki_corroboration_notices',
     'test_load_wiki_class',
+    'test_reused_command_honors_resolve_override',
+    'test_resolve_wiki_default_class',
     'test_configure_git_merge_driver',
     'test_merge_driver_skips_dirty_gitattributes',
 ]
@@ -102,6 +109,49 @@ def test_resolve_wiki_root_falls_back_to_declared_subdir(
     # full resolution rides along, naming the missing-index damage
     resolve_wiki(None)
     assert 'missing its _index.md' in capsys.readouterr().err
+
+
+def test_resolve_wiki_root_fallback_nominations(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Fallback nominations win only when valid, and ride the guard pipeline.
+
+    An embedder fallback (e.g. plasma's project-anchored wiki dir) only
+    nominates a candidate: a declared-or-indexed nomination resolves, an
+    invalid one declines to the ``{cwd}/wiki`` fallback rather than
+    masking it, and a winning nomination still flows through
+    ``resolve_wiki``'s diagnostics.
+    """
+    # a declared wiki away from cwd, nominated by a fallback
+    project = tmp_path / 'project'
+    project.mkdir()
+    elsewhere = tmp_path / 'elsewhere' / 'wiki'
+    elsewhere.mkdir(parents=True)
+    _declare_root(elsewhere)
+    monkeypatch.chdir(project)
+    assert resolve_wiki_root(None, fallbacks=(lambda: elsewhere,)) == elsewhere
+
+    # an invalid nomination declines to the {cwd}/wiki fallback
+    wiki_dir = project / 'wiki'
+    wiki_dir.mkdir()
+    (wiki_dir / '_index.md').write_text('wiki root\n', encoding='utf-8')
+    # a valid nomination outranks the {cwd}/wiki fallback
+    assert resolve_wiki_root(None, fallbacks=(lambda: elsewhere,)) == elsewhere
+    missing = tmp_path / 'missing' / 'wiki'
+    assert resolve_wiki_root(None, fallbacks=(lambda: missing,)) == wiki_dir
+    # a declining fallback may also nominate nothing at all
+    assert resolve_wiki_root(None, fallbacks=(lambda: None,)) == wiki_dir
+
+    # a winning undeclared nomination still rides the guard pipeline
+    indexed = tmp_path / 'indexed'
+    indexed.mkdir()
+    (indexed / '_index.md').write_text('undeclared\n', encoding='utf-8')
+    (wiki_dir / '_index.md').unlink()
+    wiki_dir.rmdir()
+    resolve_wiki(None, fallbacks=(lambda: indexed,))
+    assert 'settings.json missing' in capsys.readouterr().err
 
 
 def test_resolver_refuses_ambiguous_root(
@@ -207,6 +257,78 @@ def test_load_wiki_class(tmp_path: pathlib.Path) -> None:
     )
     with pytest.raises(TypeError):
         load_wiki_class(tmp_path)
+
+    # a hook this environment cannot load fails naming the hook file, so
+    # a wiki declaring an uninstalled subclass is diagnosable, not cryptic
+    (config_dir / 'wiki.py').write_text(
+        'import _no_such_embedder_module\n',
+        encoding='utf-8',
+    )
+    with pytest.raises(RuntimeError, match=r'\.wiki/wiki\.py'):
+        load_wiki_class(tmp_path)
+
+
+# ------ command registration seam
+
+
+def test_reused_command_honors_resolve_override(tmp_path: pathlib.Path) -> None:
+    """A reused command resolves its wiki through the injected ``resolve``.
+
+    Embedders rebuild their sub-apps from ``wiki.cli.cmd`` registration
+    functions, injecting resolution (root fallbacks, subclass defaults)
+    through the ``resolve`` keyword instead of forking command bodies.
+    """
+    # a real wiki the stub resolver pins, regardless of cwd
+    root = tmp_path / 'docs'
+    root.mkdir()
+    Wiki(root).init('demo')
+    page = root / 'notes.md'
+    page.write_text(
+        '---\nname: notes\ndesc: Notes.\n---\n\n# notes\n', encoding='utf-8'
+    )
+    calls = []
+
+    def resolve(path: Optional[str]) -> Wiki:
+        calls.append(path)
+        return Wiki(root)
+
+    # the registered command reads through the injected resolver
+    app = typer.Typer()
+    cmd.read(app, resolve=resolve)
+    result = CliRunner().invoke(app, ['notes'])
+    assert result.exit_code == 0
+    assert result.output == page.read_text(encoding='utf-8')
+    assert calls == [None]
+
+
+def test_resolve_wiki_default_class(tmp_path: pathlib.Path) -> None:
+    """``default`` picks the class when no ``.wiki/wiki.py`` hook names one.
+
+    An embedder CLI passes its own ``Wiki`` subclass, so its wikis get
+    embedder semantics without a hook file; a hook still wins when
+    present.
+    """
+
+    class EmbedderWiki(Wiki):
+        pass
+
+    root = tmp_path / 'docs'
+    root.mkdir()
+    _declare_root(root)
+    # the embedder default is instantiated for a hookless wiki
+    wiki = resolve_wiki(str(root), default=EmbedderWiki)
+    assert type(wiki) is EmbedderWiki
+    # the bare default remains the base class
+    assert type(resolve_wiki(str(root))) is Wiki
+    # a hook still overrides any default
+    (root / '.wiki' / 'wiki.py').write_text(
+        'from wiki.core.wiki import Wiki\n\n'
+        'class HookWiki(Wiki):\n'
+        '    pass\n\n'
+        "__all__ = ['HookWiki']\n",
+        encoding='utf-8',
+    )
+    assert type(resolve_wiki(str(root), default=EmbedderWiki)).__name__ == 'HookWiki'
 
 
 # ------ configure_git_merge_driver

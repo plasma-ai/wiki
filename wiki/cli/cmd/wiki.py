@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import importlib.metadata
 import importlib.resources
-import json
 import pathlib
 import shutil
 import subprocess
+from collections.abc import Callable
 from typing import Optional
 
 import typer
@@ -15,12 +15,13 @@ import typer
 from wiki.cli.utils import (
     command,
     configure_git_merge_driver,
-    enclosing_wiki_root,
+    parse_settings,
     parse_slice,
+    refuse_nested_init,
     resolve_wiki,
     resolve_wiki_root,
 )
-from wiki.core.wiki import DEFAULT_WIKI_NAME, WIKI_INDEX, WIKI_SETTINGS, Wiki
+from wiki.core.wiki import DEFAULT_WIKI_NAME, WIKI_INDEX, Wiki
 
 __all__ = [
     'version',
@@ -235,32 +236,9 @@ def init(app: typer.Typer) -> typer.Typer:
             path = pathlib.Path.cwd() / DEFAULT_WIKI_NAME
             name = name or pathlib.Path.cwd().name
         # parse the optional settings JSON
-        if settings is not None:
-            try:
-                settings = json.loads(settings)
-            except json.JSONDecodeError as e:
-                raise typer.BadParameter(f'--settings must be valid JSON: {e}') from e
-            if not isinstance(settings, dict):
-                raise typer.BadParameter('--settings must be a JSON object')
-        # nested wikis have no boundary -- the outer update would rewrite the
-        # inner index and absorb its pages -- so refuse to scaffold one
-        enclosing = enclosing_wiki_root(path)
-        # an undeclared index tree is a wiki too (resolve_wiki_root's
-        # fallback), so a bare ancestor _index.md chain encloses just the same
-        # -- unless path is itself a declared root (a foreign or damaged
-        # outer index is tolerated, matching resolve_wiki)
-        if enclosing is None and not (path / WIKI_SETTINGS).is_file():
-            for ancestor in path.parents:
-                if (ancestor / WIKI_INDEX).is_file():
-                    enclosing = ancestor
-                    while (enclosing.parent / WIKI_INDEX).is_file():
-                        enclosing = enclosing.parent
-                    break
-        if enclosing is not None:
-            raise ValueError(
-                f'Cannot initialize inside the wiki at: {enclosing}'
-                f' (nested wikis are not supported)'
-            )
+        settings = parse_settings(settings)
+        # refuse to scaffold inside an enclosing wiki
+        refuse_nested_init(path)
         # don't silently re-run a full update on an existing wiki
         if (path / WIKI_INDEX).is_file():
             if not quiet:
@@ -286,7 +264,11 @@ def init(app: typer.Typer) -> typer.Typer:
     return app
 
 
-def config(app: typer.Typer) -> typer.Typer:
+def config(
+    app: typer.Typer,
+    *,
+    resolve: Callable[[Optional[str]], Wiki] = resolve_wiki,
+) -> typer.Typer:
     """Register the ``config`` command."""
     # wiki root option
     path_help = (
@@ -311,7 +293,7 @@ def config(app: typer.Typer) -> typer.Typer:
         warnings (re-run online to finish setup), never the exit code.
         """
         # merge Obsidian config
-        wiki = resolve_wiki(path)
+        wiki = resolve(path)
         warnings = wiki.update_config()
         if warnings:
             for warning in warnings:
@@ -326,7 +308,11 @@ def config(app: typer.Typer) -> typer.Typer:
     return app
 
 
-def read(app: typer.Typer) -> typer.Typer:
+def read(
+    app: typer.Typer,
+    *,
+    resolve: Callable[[Optional[str]], Wiki] = resolve_wiki,
+) -> typer.Typer:
     """Register the ``read`` command."""
     # file name argument
     name_help = 'File or directory path to read (relative to wiki root).'
@@ -370,13 +356,13 @@ def read(app: typer.Typer) -> typer.Typer:
         given = {on: spec for on, spec in ranges.items() if spec}
         if len(given) > 1:
             raise typer.BadParameter('Use only one of --lines/--words/--chars.')
-        wiki = resolve_wiki(path)
+        wiki = resolve(path)
         if given:
             on, spec = next(iter(given.items()))
             start, stop = parse_slice(spec)
-            content = wiki.read(name, start=start, stop=stop, on=on)
+            content = wiki.read(name=name, start=start, stop=stop, on=on)
         else:
-            content = wiki.read(name)
+            content = wiki.read(name=name)
         # emit the content verbatim -- an appended newline would break the
         # byte-for-byte round-trip of redirected output
         typer.echo(content, nl=False)
@@ -384,7 +370,11 @@ def read(app: typer.Typer) -> typer.Typer:
     return app
 
 
-def search(app: typer.Typer) -> typer.Typer:
+def search(
+    app: typer.Typer,
+    *,
+    resolve: Callable[[Optional[str]], Wiki] = resolve_wiki,
+) -> typer.Typer:
     """Register the ``search`` command."""
     # search pattern argument
     pattern_help = 'Regex pattern to search for.'
@@ -429,7 +419,7 @@ def search(app: typer.Typer) -> typer.Typer:
         """Search wiki content for a regex pattern."""
         if lines and lineno:
             raise typer.BadParameter('--lines and --lineno are mutually exclusive.')
-        wiki = resolve_wiki(path)
+        wiki = resolve(path)
         matches = wiki.search(
             pattern,
             name=name,
@@ -458,7 +448,11 @@ def search(app: typer.Typer) -> typer.Typer:
     return app
 
 
-def update(app: typer.Typer) -> typer.Typer:
+def update(
+    app: typer.Typer,
+    *,
+    resolve: Callable[[Optional[str]], Wiki] = resolve_wiki,
+) -> typer.Typer:
     """Register the ``update`` command."""
     # folder name argument
     name_help = 'Restrict scope to named subtree (relative path).'
@@ -504,7 +498,7 @@ def update(app: typer.Typer) -> typer.Typer:
         """
         if full and count:
             raise typer.BadParameter('--full and --count are mutually exclusive.')
-        wiki = resolve_wiki(path)
+        wiki = resolve(path)
         # update narrations are a side report (the diff is the record), so
         # they default to condensed; --full restores the per-line narration
         notices: list[str] = []
@@ -542,7 +536,11 @@ def update(app: typer.Typer) -> typer.Typer:
     return app
 
 
-def lint(app: typer.Typer) -> typer.Typer:
+def lint(
+    app: typer.Typer,
+    *,
+    resolve: Callable[[Optional[str]], Wiki] = resolve_wiki,
+) -> typer.Typer:
     """Register the ``lint`` command."""
     # folder name argument
     name_help = 'Restrict scope to named subtree (relative path).'
@@ -578,7 +576,7 @@ def lint(app: typer.Typer) -> typer.Typer:
         """
         if full and count:
             raise typer.BadParameter('--full and --count are mutually exclusive.')
-        wiki = resolve_wiki(path)
+        wiki = resolve(path)
         # count the soft notes lint sends to stderr, so the closing summary
         # reflects them instead of contradicting the notes still on screen
         notes = []
@@ -617,7 +615,11 @@ def lint(app: typer.Typer) -> typer.Typer:
     return app
 
 
-def map(app: typer.Typer) -> typer.Typer:
+def map(
+    app: typer.Typer,
+    *,
+    resolve: Callable[[Optional[str]], Wiki] = resolve_wiki,
+) -> typer.Typer:
     """Register the ``map`` command."""
     # folder name argument
     name_help = 'Restrict scope to named subtree (relative path).'
@@ -673,7 +675,7 @@ def map(app: typer.Typer) -> typer.Typer:
         category_filter = None
         if category is not None:
             category_filter = [c for c in category.split(',') if c]
-        wiki = resolve_wiki(path)
+        wiki = resolve(path)
         result = wiki.map(
             name=name,
             depth=depth,

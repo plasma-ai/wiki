@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import functools
 import importlib.util
+import json
 import os
 import pathlib
 import subprocess
 import sys
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any, Optional
 
 import typer
@@ -18,10 +19,12 @@ from wiki.core.wiki import DEFAULT_WIKI_NAME, WIKI_DIR, WIKI_INDEX, WIKI_SETTING
 __all__ = [
     'command',
     'parse_slice',
+    'parse_settings',
     'load_wiki_class',
     'resolve_wiki',
     'resolve_wiki_root',
     'enclosing_wiki_root',
+    'refuse_nested_init',
     'configure_git_merge_driver',
 ]
 
@@ -76,6 +79,19 @@ def parse_slice(value: Optional[str]) -> tuple[Optional[int], Optional[int]]:
     return start, stop
 
 
+def parse_settings(value: Optional[str]) -> Optional[dict]:
+    """Parse a ``--settings`` JSON object string."""
+    if value is None:
+        return None
+    try:
+        result = json.loads(value)
+    except json.JSONDecodeError as e:
+        raise typer.BadParameter(f'--settings must be valid JSON: {e}') from e
+    if not isinstance(result, dict):
+        raise typer.BadParameter('--settings must be a JSON object')
+    return result
+
+
 def load_wiki_class(
     root: pathlib.Path,
     default: type[Wiki] = Wiki,
@@ -89,7 +105,12 @@ def load_wiki_class(
     #   wiki would need an opt-in or an allowlist of trusted roots
     spec = importlib.util.spec_from_file_location('_wiki', config_path)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # a wiki that declares a subclass this environment cannot load must
+    # fail naming the hook file, not with a bare import error
+    try:
+        spec.loader.exec_module(module)
+    except Exception as e:
+        raise RuntimeError(f'{config_path}: {e}') from e
     # the module's sole __all__ entry names the Wiki subclass to use
     names = getattr(module, '__all__', None)
     valid = isinstance(names, (list, tuple)) and len(names) == 1
@@ -101,7 +122,12 @@ def load_wiki_class(
     raise TypeError(f'{names[0]} is not a Wiki subclass.')
 
 
-def resolve_wiki(path: Optional[str]) -> Wiki:
+def resolve_wiki(
+    path: Optional[str],
+    *,
+    fallbacks: Sequence[Callable[[], Optional[pathlib.Path]]] = (),
+    default: type[Wiki] = Wiki,
+) -> Wiki:
     """Resolve a ``Wiki`` instance from a path or cwd.
 
     A resolved root is valid when it is declared (``.wiki/settings.json``)
@@ -111,9 +137,11 @@ def resolve_wiki(path: Optional[str]) -> Wiki:
     diagnostics ride the resolution -- an undeclared tree (at its topmost
     index), a declared root missing its index, and an index chain
     extending above the declared root are each named on stderr rather
-    than failing.
+    than failing. ``fallbacks`` nominate embedder roots (see
+    :func:`resolve_wiki_root`); ``default`` is the ``Wiki`` class when no
+    ``.wiki/wiki.py`` hook names one.
     """
-    wiki_root = resolve_wiki_root(path)
+    wiki_root = resolve_wiki_root(path, fallbacks=fallbacks)
     # never treat a path inside an existing wiki as a wiki root: the command
     # would grow a second root index and rewrite name: paths relative to the
     # wrong root -- scoped work goes through the entry argument instead
@@ -171,17 +199,23 @@ def resolve_wiki(path: Optional[str]) -> Wiki:
             f' declared by {WIKI_SETTINGS})',
             err=True,
         )
-    cls = load_wiki_class(wiki_root)
+    cls = load_wiki_class(wiki_root, default=default)
     return cls(wiki_root)
 
 
-def resolve_wiki_root(path: Optional[str] = None) -> pathlib.Path:
+def resolve_wiki_root(
+    path: Optional[str] = None,
+    *,
+    fallbacks: Sequence[Callable[[], Optional[pathlib.Path]]] = (),
+) -> pathlib.Path:
     """Resolve wiki root directory.
 
     An explicit ``path`` resolves as given. Otherwise the root is the
     ancestor (cwd included) declaring itself with ``.wiki/settings.json``;
     an undeclared index tree falls back to the topmost ``_index.md``
-    chain, and a bare project falls back to ``{cwd}/wiki/``.
+    chain, then to each ``fallbacks`` nomination in order, and a bare
+    project falls back to ``{cwd}/wiki/``. A nomination wins only when
+    declared or at least indexed -- an invalid one declines to the next.
 
     Raises:
         ValueError: If the cwd's ancestor chain declares two wiki roots.
@@ -206,6 +240,15 @@ def resolve_wiki_root(path: Optional[str] = None) -> pathlib.Path:
         while (result.parent / WIKI_INDEX).is_file():
             result = result.parent
         return result
+    # embedder-nominated roots: a nomination wins only when declared or at
+    # least indexed (the same rule as the {cwd}/wiki fallback below), so a
+    # stale nominator declines instead of masking a valid fallback
+    for fallback in fallbacks:
+        candidate = fallback()
+        if candidate is None:
+            continue
+        if _is_wiki_root(candidate) or (candidate / WIKI_INDEX).is_file():
+            return candidate
     # check for wiki/ in cwd (declared or at least indexed, matching the
     # validity rule in resolve_wiki, so a damaged declared wiki stays
     # reachable from the project root)
@@ -234,6 +277,34 @@ def enclosing_wiki_root(path: pathlib.Path) -> Optional[pathlib.Path]:
     if roots:
         return roots[0]
     return None
+
+
+def refuse_nested_init(path: pathlib.Path) -> None:
+    """Refuse to scaffold a wiki at a path enclosed by an existing wiki.
+
+    Raises:
+        ValueError: If ``path`` sits inside an enclosing wiki.
+
+    """
+    # nested wikis have no boundary -- the outer update would rewrite the
+    # inner index and absorb its pages -- so refuse to scaffold one
+    enclosing = enclosing_wiki_root(path)
+    # an undeclared index tree is a wiki too (resolve_wiki_root's
+    # fallback), so a bare ancestor _index.md chain encloses just the same
+    # -- unless path is itself a declared root (a foreign or damaged
+    # outer index is tolerated, matching resolve_wiki)
+    if enclosing is None and not (path / WIKI_SETTINGS).is_file():
+        for ancestor in path.parents:
+            if (ancestor / WIKI_INDEX).is_file():
+                enclosing = ancestor
+                while (enclosing.parent / WIKI_INDEX).is_file():
+                    enclosing = enclosing.parent
+                break
+    if enclosing is not None:
+        raise ValueError(
+            f'Cannot initialize inside the wiki at: {enclosing}'
+            f' (nested wikis are not supported)'
+        )
 
 
 def configure_git_merge_driver(path: pathlib.Path) -> None:
