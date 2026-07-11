@@ -47,6 +47,7 @@ __all__ = [
     'test_update_announces_created_index',
     'test_update_announces_desc_overwrite',
     'test_update_trailing_whitespace_desc_converges_quietly',
+    'test_update_rewrapped_desc_converges_quietly',
     'test_update_scoped',
     'test_lint_flags_what_update_fixes',
     'test_lint_flags_human_only_issues',
@@ -90,6 +91,7 @@ __all__ = [
     'test_sort_unlisted_category',
     'test_page_category',
     'test_map_output',
+    'test_map_folds_multiline_desc',
     'test_map_unindexed',
     'test_map_word_counts',
     'test_body_includes_h1_for_counts_and_search',
@@ -758,6 +760,46 @@ def test_update_trailing_whitespace_desc_converges_quietly(
     # a converged re-run stays quiet and writes nothing
     assert wiki.update() == []
     assert 'Overwrote desc:' not in capsys.readouterr().err
+
+
+def test_update_rewrapped_desc_converges_quietly(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A link desc rewrapped in the index converges without changes.
+
+    Line breaks inside a link desc are formatter-owned: a row whose
+    desc matches the page frontmatter up to newlines is already
+    converged, so update keeps the index's own wrapping and reverts
+    only content changes.
+    """
+    wiki = _make_wiki(tmp_path, folders={'notes': ['readme']})
+    index_path = tmp_path / 'notes' / '_index.md'
+    (tmp_path / 'notes' / 'wrapped.md').write_text(
+        '---\nname: wrapped\ndesc: A deliberately long description that a'
+        ' formatter would wrap onto two lines.\n---\n\n# wrapped\n\nText.\n',
+        encoding='utf-8',
+    )
+    wiki.update()
+
+    # rewrap the row in the index the way a 72-column formatter would
+    content = index_path.read_text(encoding='utf-8')
+    single = (
+        '[[notes/wrapped|wrapped]]: A deliberately long description that a'
+        ' formatter would wrap onto two lines.'
+    )
+    wrapped = (
+        '[[notes/wrapped|wrapped]]: A deliberately long description that a\n'
+        'formatter would wrap onto two lines.'
+    )
+    assert single in content
+    index_path.write_text(content.replace(single, wrapped), encoding='utf-8')
+    capsys.readouterr()
+
+    # the rewrapped row is converged: no notice, no write, breaks kept
+    assert wiki.update() == []
+    assert 'Overwrote desc:' not in capsys.readouterr().err
+    assert wrapped in index_path.read_text(encoding='utf-8')
 
 
 def test_update_scoped(tmp_path: pathlib.Path) -> None:
@@ -1981,6 +2023,22 @@ def test_map_output(tmp_path: pathlib.Path) -> None:
 
     # desc_limit truncates long descriptions
     assert 'The cache layer.' not in wiki.map(desc_limit=4)
+
+
+def test_map_folds_multiline_desc(tmp_path: pathlib.Path) -> None:
+    """Map shows the full desc with newlines folded to spaces."""
+    # author a block-scalar desc whose breaks land in the index row
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    (tmp_path / 'core' / 'layers.md').write_text(
+        '---\nname: layers\ndesc: |\n  Layered architecture with strict\n'
+        '  dependency direction.\n---\n\n# layers\n\nText.\n',
+        encoding='utf-8',
+    )
+    wiki.update()
+
+    # the whole desc renders on the map line, folded to one line
+    output = wiki.map()
+    assert 'Layered architecture with strict dependency direction.' in output
 
 
 def test_map_unindexed(tmp_path: pathlib.Path) -> None:

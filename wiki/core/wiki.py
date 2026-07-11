@@ -2668,9 +2668,16 @@ class Wiki:
                     line.rstrip() for line in child_desc.strip().split('\n')
                 )
                 child_desc = self._escape_desc(child_desc)
+                # line breaks are formatter-owned: a link desc differing only
+                # in wrapping is already converged, so the index's own breaks
+                # survive and only a content change ports the frontmatter
+                # desc (with its breaks) back onto the row
+                if link_desc.replace('\n', ' ') == child_desc.replace('\n', ' '):
+                    propagated.append((target, label, link_desc))
+                    continue
                 # announce a genuine overwrite (a hand-edit would otherwise vanish
                 # silently); first-time propagation onto the placeholder stays quiet
-                if link_desc not in ('', '...') and link_desc != child_desc:
+                if link_desc not in ('', '...'):
                     notices.append(
                         f'Overwrote desc: [[{target}|{label}]] in {relpath}'
                         f' (the page frontmatter desc wins; edit it in {target}.md)'
@@ -2940,11 +2947,10 @@ class Wiki:
                     word_label = f'{_format_words(count)}/{_format_words(tree)}'
                 else:
                     word_label = _format_words(count)
-            # format description (first line only)
+            # format description (folded to one line)
             desc_text = ''
             if desc and description:
-                desc_text, *_ = description.split('\n')
-                desc_text = desc_text.strip()
+                desc_text = description.replace('\n', ' ').strip()
                 if desc_text == '...':
                     desc_text = ''
                 if desc_text and desc_limit is not None:
