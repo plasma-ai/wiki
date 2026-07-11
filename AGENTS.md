@@ -9,15 +9,19 @@ already reads parent directories), also check the parent directory for
 
 `plasma-wiki` is a standalone plugin providing the **wiki** skill.
 
-### Architecture
-
 The `wiki/` Python package is organized into `cli/` (typer app), `core/`
 (business logic), `skills/` (the plugin skill), `util/` (shared
 utilities), and `_config/` (wiki config templates and the git merge
 driver), with the pytest suite in `tests/`.
 
-**Wiki** manages folder-based wikis with `_index.md` files, automatic
-link generation, frontmatter management, and Obsidian integration.
+A wiki is a folder tree of markdown pages indexed at every level by
+`_index.md` files, with `.wiki/settings.json` declaring the root. The
+tool owns the generated surfaces — `wiki update` regenerates index link
+blocks, frontmatter, and path-derived names from the filesystem, and
+`wiki lint` checks structure — while authored content lives below the
+`***` delimiter. The `_config/` git merge driver auto-resolves the
+generated region of `_index.md` merges, so parallel edits conflict only
+on authored prose; `wiki config` installs the Obsidian integration.
 
 ## Build & Development
 
