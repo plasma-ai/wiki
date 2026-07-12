@@ -1,4 +1,4 @@
-"""Tests for ``Wiki`` init, config, update, lint, read, map, and validation."""
+"""Test the ``wiki.core.wiki`` module."""
 
 from __future__ import annotations
 
@@ -2694,7 +2694,7 @@ def test_init_rejects_invalid_wiki_name(tmp_path: pathlib.Path) -> None:
     [
         ('{bad json', r'Malformed JSON'),
         ('[]', r'must be a JSON object'),
-        ('{"naming": "strict"}', r'naming must be a JSON object'),
+        ('{"naming": "strict"}', r'naming block must be a JSON object'),
         ('{"naming": {"validate": "identifier"}}', r'validate must be a list'),
         ('{"naming": {"validate": ["bogus"]}}', r'Unknown naming predicate'),
         ('{"naming": {"min_length": 0}}', r'min_length must be an int'),
@@ -2704,7 +2704,7 @@ def test_init_rejects_invalid_wiki_name(tmp_path: pathlib.Path) -> None:
         ('{"naming": {"leading_digits": "yes"}}', r'leading_digits must be a boolean'),
         ('{"naming": {"pattern": 5}}', r'pattern must be a string'),
         ('{"naming": {"pattern": "["}}', r'not a valid regex'),
-        ('{"timestamp": "now"}', r'timestamp must be a JSON object'),
+        ('{"timestamp": "now"}', r'timestamp block must be a JSON object'),
         ('{"timestamp": {"format": 5}}', r'format must be a string'),
         ('{"timestamp": {"timezone": 5}}', r'timezone must be a string'),
         ('{"timestamp": {"timezone": "Mars/Olympus"}}', r'Unknown timestamp.timezone'),

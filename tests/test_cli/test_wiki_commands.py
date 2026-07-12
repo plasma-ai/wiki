@@ -14,13 +14,12 @@ import os
 import pathlib
 import shutil
 import subprocess
-import sys
-from typing import Optional
 
 import pytest
 
 from wiki.cli.utils import configure_git_merge_driver
-from wiki.core.wiki import _OFFLINE_MODE
+
+from .conftest import VENV_BIN, WIKI, _wiki
 
 __all__ = [
     'test_init_creates_root_index',
@@ -74,10 +73,6 @@ __all__ = [
 ]
 
 GIT = shutil.which('git')
-# prefer the console script beside the running interpreter (this checkout's
-# venv) over PATH, which may resolve a different install or a broken shim
-VENV_BIN = pathlib.Path(sys.executable).parent
-WIKI = shutil.which('wiki', path=VENV_BIN) or shutil.which('wiki')
 pytestmark = pytest.mark.skipif(
     WIKI is None,
     reason='wiki console script not installed',
@@ -1463,31 +1458,6 @@ def test_version_reports_installed_version(tmp_path: pathlib.Path) -> None:
 
 
 # ------ helpers
-
-
-def _wiki(
-    cwd: pathlib.Path,
-    *args: str,
-    allow_download: bool = False,
-    home: Optional[pathlib.Path] = None,
-) -> subprocess.CompletedProcess:
-    """Run the ``wiki`` CLI in ``cwd`` and capture text output.
-
-    Plugin downloads are skipped by default so the suite stays offline;
-    pass ``allow_download=True`` to exercise the real network fetch, and
-    ``home`` to isolate commands that write under the home directory.
-    """
-    env = dict(os.environ)
-    env[_OFFLINE_MODE] = 'false' if allow_download else 'true'
-    if home is not None:
-        env['HOME'] = str(home)
-    return subprocess.run(
-        [WIKI, *args],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
 
 
 def _write(path: pathlib.Path, text: str) -> None:

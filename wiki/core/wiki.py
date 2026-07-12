@@ -18,14 +18,10 @@ import urllib.request
 import zoneinfo
 from typing import Optional, Union
 
+from wiki.constants import WIKI_DIR, WIKI_INDEX, WIKI_SETTINGS
 from wiki.util.dict import merge
 
 __all__ = ['Wiki']
-
-DEFAULT_WIKI_NAME = 'wiki'
-WIKI_DIR = '.wiki'
-WIKI_SETTINGS = f'{WIKI_DIR}/settings.json'
-WIKI_INDEX = '_index.md'
 
 # region-directive marker grammar; pairing semantics live in _parse_regions
 _REGION_DIRECTIVE = re.compile(
@@ -87,7 +83,7 @@ class Wiki:
 
     @property
     def _root_name(self: Wiki) -> str:
-        """Read the root display name from frontmatter.
+        """Return the root display name from frontmatter.
 
         Falls back to the root folder name if the root
         index does not exist yet (e.g. during init).
@@ -104,7 +100,7 @@ class Wiki:
 
     @functools.cached_property
     def _settings(self: Wiki) -> dict:
-        """Per-wiki settings overlay from ``.wiki/settings.json``.
+        """Return the per-wiki settings overlay from ``.wiki/settings.json``.
 
         Returns an empty dict when the file is absent. Raises ``ValueError``
         on malformed JSON or a non-object top level, since the file is
@@ -123,7 +119,7 @@ class Wiki:
 
     @functools.cached_property
     def _naming(self: Wiki) -> dict:
-        """Resolve the effective naming policy from ``settings.json``.
+        """Return the effective naming policy from ``settings.json``.
 
         Overlays the per-wiki ``naming`` block from ``settings.json`` onto the
         field defaults, validates the fields, and folds in the structural
@@ -133,7 +129,9 @@ class Wiki:
         # overlay the settings.json naming block onto the field defaults
         override = self._settings.get('naming', {})
         if not isinstance(override, dict):
-            raise ValueError(f'naming must be a JSON object in {WIKI_SETTINGS}')
+            raise ValueError(
+                f'The naming block must be a JSON object in {WIKI_SETTINGS}'
+            )
         policy = {**_NAMING_DEFAULTS, **override}
         # validate predicate names (settings.json is user input -> fail loudly)
         if not isinstance(policy['validate'], list):
@@ -214,7 +212,7 @@ class Wiki:
 
     @functools.cached_property
     def _timestamp(self: Wiki) -> dict:
-        """Resolve the effective timestamp policy from ``settings.json``.
+        """Return the effective timestamp policy from ``settings.json``.
 
         Validates the per-wiki ``timestamp`` block (``timezone`` / ``format``) so
         a bad value fails loudly with a file+key message rather than leaking a raw
@@ -223,7 +221,9 @@ class Wiki:
         # overlay the settings.json timestamp block onto the defaults
         override = self._settings.get('timestamp', {})
         if not isinstance(override, dict):
-            raise ValueError(f'timestamp must be a JSON object in {WIKI_SETTINGS}')
+            raise ValueError(
+                f'The timestamp block must be a JSON object in {WIKI_SETTINGS}'
+            )
         # format is a strftime string; timezone is an IANA name or null (UTC)
         format = override.get('format', '%Y-%m-%dT%H:%M:%SZ')
         if not isinstance(format, str):

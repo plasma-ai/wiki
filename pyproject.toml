@@ -217,6 +217,9 @@ ignore = [
     "S603",
     "S607",
 ]
+"wiki/constants.py" = [
+    "I002",
+]
 
 [tool.ruff.lint.isort]
 combine-as-imports = true

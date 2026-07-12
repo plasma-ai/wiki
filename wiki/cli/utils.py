@@ -9,12 +9,14 @@ import os
 import pathlib
 import subprocess
 import sys
+import typing
 from collections.abc import Callable, Iterable, Sequence
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import typer
 
-from wiki.core.wiki import DEFAULT_WIKI_NAME, WIKI_DIR, WIKI_INDEX, WIKI_SETTINGS, Wiki
+from wiki.constants import DEFAULT_WIKI_NAME, WIKI_DIR, WIKI_INDEX, WIKI_SETTINGS
+from wiki.core.wiki import Wiki
 
 __all__ = [
     'command',
@@ -409,13 +411,42 @@ def _nested_wiki_root(path: pathlib.Path) -> Optional[pathlib.Path]:
     return None
 
 
+@typing.overload
+def _git(
+    cmd: list[str],
+    *,
+    cwd: Optional[pathlib.Path] = None,
+    check: Literal[True] = True,
+) -> str: ...
+
+
+@typing.overload
+def _git(
+    cmd: list[str],
+    *,
+    cwd: Optional[pathlib.Path] = None,
+    check: Literal[False],
+) -> Optional[str]: ...
+
+
 def _git(
     cmd: list[str],
     *,
     cwd: Optional[pathlib.Path] = None,
     check: bool = True,
 ) -> Optional[str]:
-    """Run a git command and return stripped stdout."""
+    """Run a git command and return stripped stdout.
+
+    Args:
+        cmd: Git subcommand and arguments (without ``git`` prefix).
+        cwd: Working directory for the command.
+        check: Raise ``RuntimeError`` on non-zero exit.
+
+    Returns:
+        Stripped stdout string, or ``None`` on non-zero
+        exit when ``check`` is ``False``.
+
+    """
     full_cmd = ['git']
     if cwd:
         full_cmd.extend(['-C', f'{cwd}'])

@@ -1,4 +1,4 @@
-"""Tests for CLI path resolution and plugin loading."""
+"""Test the ``wiki.cli.utils`` module."""
 
 from __future__ import annotations
 

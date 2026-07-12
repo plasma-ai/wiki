@@ -21,7 +21,8 @@ from wiki.cli.utils import (
     resolve_wiki,
     resolve_wiki_root,
 )
-from wiki.core.wiki import DEFAULT_WIKI_NAME, WIKI_INDEX, Wiki
+from wiki.constants import DEFAULT_WIKI_NAME, WIKI_INDEX
+from wiki.core.wiki import Wiki
 
 __all__ = [
     'version',

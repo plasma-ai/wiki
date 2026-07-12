@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__all__ = ['merge']
+__all__ = []
 
 
 def merge(data: dict, other: dict) -> dict:
