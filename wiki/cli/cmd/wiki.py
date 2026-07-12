@@ -737,7 +737,7 @@ def merge(app: typer.Typer) -> typer.Typer:
         # dispatch on the real pathname: _index.md -> field-aware index merge
         if pathlib.PurePosixPath(pathname).name == WIKI_INDEX:
             package = pathlib.Path(__file__).parent.parent.parent
-            script = package / '_config' / 'git' / 'merge_index.sh'
+            script = package / '_assets' / 'git' / 'merge_index.sh'
             cmd = ['bash', str(script), ours, base, theirs, marker_size]
         # any other file class: git's default three-way text merge
         else:

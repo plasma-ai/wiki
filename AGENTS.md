@@ -11,7 +11,7 @@ already reads parent directories), also check the parent directory for
 
 The `wiki/` Python package is organized into `cli/` (typer app), `core/`
 (business logic), `skills/` (the plugin skill), `util/` (shared
-utilities), and `_config/` (wiki config templates and the git merge
+utilities), and `_assets/` (wiki config templates and the git merge
 driver), with the pytest suite in `tests/`.
 
 A wiki is a folder tree of markdown pages indexed at every level by
@@ -19,7 +19,7 @@ A wiki is a folder tree of markdown pages indexed at every level by
 tool owns the generated surfaces — `wiki update` regenerates index link
 blocks, frontmatter, and path-derived names from the filesystem, and
 `wiki lint` checks structure — while authored content lives below the
-`***` delimiter. The `_config/` git merge driver auto-resolves the
+`***` delimiter. The `_assets/` git merge driver auto-resolves the
 generated region of `_index.md` merges, so parallel edits conflict only
 on authored prose; `wiki config` installs the Obsidian integration.
 
@@ -333,7 +333,7 @@ See `pyproject.toml` for formatter/linter config.
 ### Shell Scripts
 
 The only shell script in the `wiki/` package is
-`_config/git/merge_index.sh`, the git merge driver for `_index.md` files
+`_assets/git/merge_index.sh`, the git merge driver for `_index.md` files
 — `wiki init`/`wiki config` wire it into a target wiki's
 `.gitattributes` (`merge=wiki`), git invokes the hidden `wiki _merge`
 command, and the command dispatches `_index.md` pathnames to the script

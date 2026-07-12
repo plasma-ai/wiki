@@ -30,7 +30,7 @@ wiki = "wiki.cli.main:cli"
 [tool.poetry]
 packages = [{include = "wiki"}]
 include = [
-    { path = "wiki/_config/**/*", format = ["sdist", "wheel"] },
+    { path = "wiki/_assets/**/*", format = ["sdist", "wheel"] },
     { path = "wiki/skills/**/*", format = ["sdist", "wheel"] },
 ]
 

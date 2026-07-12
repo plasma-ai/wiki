@@ -355,7 +355,7 @@ class Wiki:
         config_dir = self._root / WIKI_DIR / 'obsidian'
         if not config_dir.exists():
             path = pathlib.Path(__file__).parent
-            template_dir = path.parent / '_config' / 'obsidian'
+            template_dir = path.parent / '_assets' / 'obsidian'
             if template_dir.exists():
                 config_dir.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copytree(template_dir, config_dir)
@@ -411,7 +411,7 @@ class Wiki:
         config_dir = self._root / WIKI_DIR / 'obsidian'
         if not config_dir.exists():
             path = pathlib.Path(__file__).parent
-            template_dir = path.parent / '_config' / 'obsidian'
+            template_dir = path.parent / '_assets' / 'obsidian'
             if template_dir.exists():
                 config_dir.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copytree(template_dir, config_dir)
