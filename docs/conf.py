@@ -12,6 +12,7 @@
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 import datetime as dt
+import importlib
 import os
 import sys
 
@@ -25,7 +26,7 @@ author = 'Plasma AI'
 copyright = f'{year}: ' + author
 
 # The full version, including alpha/beta/rc tags
-release = '0.2.0'
+release = importlib.import_module('wiki').__version__
 
 # -- Configure extensions ----------------------------------------------------
 

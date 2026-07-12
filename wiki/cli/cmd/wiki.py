@@ -173,10 +173,11 @@ def install(app: typer.Typer) -> typer.Typer:
             root / '.claude' / 'skills',
             root / '.agents' / 'skills',
         ]
-        # copy each bundled skill into every target (replaces any prior copy)
-        base = importlib.resources.files('wiki')
-        skills = base.joinpath('skills')
-        for skill in sorted(path for path in skills.iterdir() if path.is_dir()):
+        # collect skills
+        skills_dir = importlib.resources.files('wiki').joinpath('skills')
+        skills = [path for path in skills_dir.iterdir() if path.is_dir()]
+        # copy each skill into every target (replaces any prior copy)
+        for skill in sorted(skills, key=lambda path: path.name):
             for target in targets:
                 dest = target / skill.name
                 dest.parent.mkdir(parents=True, exist_ok=True)

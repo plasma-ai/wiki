@@ -135,12 +135,12 @@ ignore = [
     # (conflicts with the explicit 'self: ClassName' / return-ClassName convention)
     "PYI034",
     # PYI061: Literal[None] can be replaced with None
-    # (unsafe here: the codebase manipulates type hints as runtime values, where
-    # Literal[None] is not equivalent to None)
+    # (unsafe for code that manipulates type hints as runtime values,
+    # where Literal[None] is not equivalent to None)
     "PYI061",
     # RUF012: mutable default in a class attribute without ClassVar
-    # (this codebase declares mutable defaults on framework-managed Conf
-    # descriptor fields, which RUF012 cannot distinguish from class vars)
+    # (framework-managed class attributes declare mutable defaults,
+    # which RUF012 cannot distinguish from class vars)
     "RUF012",
     # RUF022: __all__ is not sorted
     # (choice to keep __all__ in definition order, mirroring the module)
@@ -200,11 +200,10 @@ ignore = [
     "ANN202",
     "ANN204",
     "F401",
+    "I002",
 ]
-"wiki/**" = [
-    "S404",
-    "S603",
-    "S607",
+"docs/conf.py" = [
+    "I002",
 ]
 "tests/**" = [
     "F811",
@@ -213,9 +212,15 @@ ignore = [
     "S603",
     "S607",
 ]
+"wiki/**" = [
+    "S404",
+    "S603",
+    "S607",
+]
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
+required-imports = ["from __future__ import annotations"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
