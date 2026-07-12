@@ -14,7 +14,7 @@ import subprocess
 import sys
 from typing import Optional
 
-from wiki.core.wiki import _OFFLINE_MODE
+from wiki.constants import OFFLINE_MODE
 
 # prefer the console script beside the running interpreter (this checkout's
 # venv) over PATH, which may resolve a different install or a broken shim
@@ -46,7 +46,7 @@ def _wiki(
     env['PYTHONPATH'] = os.pathsep.join(
         part for part in (str(worktree), env.get('PYTHONPATH', '')) if part
     )
-    env[_OFFLINE_MODE] = 'false' if allow_download else 'true'
+    env[OFFLINE_MODE] = 'false' if allow_download else 'true'
     if home is not None:
         env['HOME'] = str(home)
     return subprocess.run(

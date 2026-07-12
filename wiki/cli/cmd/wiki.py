@@ -8,7 +8,7 @@ import pathlib
 import shutil
 import subprocess
 from collections.abc import Callable
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 
@@ -22,7 +22,19 @@ from wiki.cli.utils import (
     resolve_wiki_root,
 )
 from wiki.constants import DEFAULT_WIKI_NAME, WIKI_INDEX
-from wiki.core.wiki import Wiki
+from wiki.core.event import Event
+from wiki.core.wiki import (
+    DescOverwriteEvent,
+    FrontmatterMalformedEvent,
+    IndexCreateEvent,
+    IndexTruncatedEvent,
+    LinkAddEvent,
+    LinkBreakEvent,
+    LinkPruneEvent,
+    NameSkipEvent,
+    Wiki,
+    WriteSkipEvent,
+)
 
 __all__ = [
     'version',
@@ -38,82 +50,73 @@ __all__ = [
 ]
 
 # manual step: Obsidian gates community plugins behind "Restricted Mode"
-OBSIDIAN_SETUP_HINT = (
+_OBSIDIAN_SETUP_HINT = (
     'In Obsidian: Settings -> Community plugins -> turn off Restricted'
     ' Mode, then enable Front Matter Title if needed.'
 )
 
-# condensed-mode narration categories, as (prefix, marker, one, many,
-# check_one, check_many): a notice matching prefix+marker collapses into the
-# category's count line, worded for apply and --check runs
+# condensed-mode narration categories, as (event class, one, many, check_one,
+# check_many): a notice of the class collapses into the category's count
+# line, worded for apply and --check runs
 _UPDATE_CATEGORIES = [
     (
-        'New index: ',
-        '',
+        IndexCreateEvent,
         'Created 1 new index (fill in its desc)',
         'Created {n} new indexes (fill in their descs)',
         'Would create 1 new index',
         'Would create {n} new indexes',
     ),
     (
-        'New link: ',
-        '',
+        LinkAddEvent,
         'Added 1 new link',
         'Added {n} new links',
         'Would add 1 new link',
         'Would add {n} new links',
     ),
     (
-        'Broken link: ',
-        '',
+        LinkBreakEvent,
         '1 broken link (run `wiki lint` to list it)',
         '{n} broken links (run `wiki lint` to list them)',
         '1 broken link (run `wiki lint` to list it)',
         '{n} broken links (run `wiki lint` to list them)',
     ),
     (
-        'Pruned link: ',
-        '',
+        LinkPruneEvent,
         'Pruned 1 broken link',
         'Pruned {n} broken links',
         'Would prune 1 broken link',
         'Would prune {n} broken links',
     ),
     (
-        'Overwrote desc: ',
-        '',
+        DescOverwriteEvent,
         'Overwrote 1 link desc (page frontmatter descs win)',
         'Overwrote {n} link descs (page frontmatter descs win)',
         'Would overwrite 1 link desc (page frontmatter descs win)',
         'Would overwrite {n} link descs (page frontmatter descs win)',
     ),
     (
-        'Skipping ',
-        ': invalid name',
+        NameSkipEvent,
         'Skipped 1 invalid name',
         'Skipped {n} invalid names',
         'Skipped 1 invalid name',
         'Skipped {n} invalid names',
     ),
     (
-        'Skipping ',
-        'changed during update',
+        WriteSkipEvent,
         'Skipped 1 concurrently-edited file (re-run `wiki update`)',
         'Skipped {n} concurrently-edited files (re-run `wiki update`)',
         'Skipped 1 concurrently-edited file (re-run `wiki update`)',
         'Skipped {n} concurrently-edited files (re-run `wiki update`)',
     ),
     (
-        'Malformed frontmatter',
-        '',
+        FrontmatterMalformedEvent,
         '1 page with malformed frontmatter (no closing ---)',
         '{n} pages with malformed frontmatter (no closing ---)',
         '1 page with malformed frontmatter (no closing ---)',
         '{n} pages with malformed frontmatter (no closing ---)',
     ),
     (
-        'Empty or truncated index',
-        '',
+        IndexTruncatedEvent,
         '1 empty or truncated index (restore from git or delete to rebuild)',
         '{n} empty or truncated indexes (restore from git or delete to rebuild)',
         '1 empty or truncated index (restore from git or delete to rebuild)',
@@ -246,8 +249,9 @@ def init(app: typer.Typer) -> typer.Typer:
             if not quiet:
                 typer.echo(f'Wiki already initialized at: {path}')
             return
-        # initialize wiki
+        # initialize wiki, streaming its notices to stderr
         wiki = Wiki(path)
+        wiki.on_notice = _echo_notice
         wiki.init(name, settings=settings)
         # materialize Obsidian config (downloads community plugins)
         warnings = wiki.update_config()
@@ -261,7 +265,7 @@ def init(app: typer.Typer) -> typer.Typer:
                 typer.echo(warning, err=True)
         elif not quiet:
             typer.echo('')
-            typer.echo(OBSIDIAN_SETUP_HINT)
+            typer.echo(_OBSIDIAN_SETUP_HINT)
 
     return app
 
@@ -294,8 +298,10 @@ def config(
         when a plugin download fails -- download failures are stderr
         warnings (re-run online to finish setup), never the exit code.
         """
-        # merge Obsidian config
+        # merge Obsidian config, streaming notices (the restored-marker
+        # line the help text documents) to stderr
         wiki = resolve(path)
+        wiki.on_notice = _echo_notice
         warnings = wiki.update_config()
         if warnings:
             for warning in warnings:
@@ -303,7 +309,7 @@ def config(
         else:
             typer.echo('Updated Obsidian config.')
             typer.echo('')
-            typer.echo(OBSIDIAN_SETUP_HINT)
+            typer.echo(_OBSIDIAN_SETUP_HINT)
         # (re)configure git merge driver
         configure_git_merge_driver(wiki._root)
 
@@ -503,10 +509,16 @@ def update(
         wiki = resolve(path)
         # update narrations are a side report (the diff is the record), so
         # they default to condensed; --full restores the per-line narration
-        notices: list[str] = []
-        emit = wiki._warn
-        if not full:
-            wiki._warn = notices.append
+        notices: list[Event] = []
+
+        def _capture(event: Event, **kwargs: Any) -> Event:
+            """Capture a notice; stream it in --full mode (order preserved)."""
+            notices.append(event)
+            if full:
+                typer.echo(event.description, err=True)
+            return event
+
+        wiki.on_notice = _capture
         # flush the captured notices even when update raises: one-time lines
         # (a restored marker) describe mutations that already happened and
         # must never be swallowed by the error path
@@ -515,7 +527,7 @@ def update(
         finally:
             if not full:
                 for line in _condense(notices, check):
-                    emit(line)
+                    typer.echo(line, err=True)
         file_count = len(updated)
         s = 's' if file_count != 1 else ''
         # dry run: report would-change files and exit nonzero if any
@@ -581,17 +593,18 @@ def lint(
         wiki = resolve(path)
         # count the soft notes lint sends to stderr, so the closing summary
         # reflects them instead of contradicting the notes still on screen
-        notes = []
-        emit = wiki._warn
+        notices: list[Event] = []
 
-        def _warn(message: str) -> None:
-            notes.append(message)
+        def _capture(event: Event, **kwargs: Any) -> Event:
+            """Capture a notice; stream it unless --count condenses the run."""
+            notices.append(event)
             if not count:
-                emit(message)
+                typer.echo(event.description, err=True)
+            return event
 
-        wiki._warn = _warn
+        wiki.on_notice = _capture
         issues = wiki.lint(name=name)
-        note_count = len(notes)
+        note_count = len(notices)
         note_s = 's' if note_count != 1 else ''
         if issues:
             # issues are the product: every line prints unless condensed
@@ -677,7 +690,9 @@ def map(
         category_filter = None
         if category is not None:
             category_filter = [c for c in category.split(',') if c]
+        # stream map's notices (the markerless-index warning) to stderr
         wiki = resolve(path)
+        wiki.on_notice = _echo_notice
         result = wiki.map(
             name=name,
             depth=depth,
@@ -753,32 +768,42 @@ def merge(app: typer.Typer) -> typer.Typer:
 # ------ helper functions
 
 
-def _condense(notices: list[str], check: bool) -> list[str]:
-    """Collapse update narrations to one count line per category.
+def _condense(notices: list[Event], check: bool) -> list[str]:
+    """Collapse captured update events to one count line per category.
 
     Each known category (see ``_UPDATE_CATEGORIES``) aggregates into a
     single count line standing at its first occurrence, worded for an
-    apply or ``--check`` run; unmatched notices (one-time lines) pass
-    through verbatim in place.
+    apply or ``--check`` run; events with no category row (one-time
+    restore lines) pass through as their description verbatim in place.
     """
     # tally each category, remembering where it first appeared
     counts: dict[int, int] = {}
     first_seen: dict[int, int] = {}
     lines: list[tuple[int, str]] = []
-    for position, notice in enumerate(notices):
-        for index, (prefix, marker, *_rest) in enumerate(_UPDATE_CATEGORIES):
-            if notice.startswith(prefix) and marker in notice:
+    for position, event in enumerate(notices):
+        for index, (event_class, *_rest) in enumerate(_UPDATE_CATEGORIES):
+            if type(event) is event_class:
                 counts[index] = counts.get(index, 0) + 1
                 first_seen.setdefault(index, position)
                 break
         else:
-            lines.append((position, notice))
+            lines.append((position, event.description))
     # render one count line per category at its first-seen position
     for index, position in first_seen.items():
-        _prefix, _marker, one, many, check_one, check_many = _UPDATE_CATEGORIES[index]
+        _event_class, one, many, check_one, check_many = _UPDATE_CATEGORIES[index]
         if check:
             one, many = check_one, check_many
         n = counts[index]
         line = one if n == 1 else many.format(n=n)
         lines.append((position, line))
     return [line for _position, line in sorted(lines)]
+
+
+def _echo_notice(event: Event, **kwargs: Any) -> Event:
+    """Stream a notice event to stderr.
+
+    The ``on_notice`` sink for commands with no capture or condensed
+    mode (init, config, map), so their notices print as they fire.
+    """
+    typer.echo(event.description, err=True)
+    return event

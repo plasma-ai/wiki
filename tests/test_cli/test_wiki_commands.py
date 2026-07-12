@@ -126,7 +126,7 @@ def test_init_creates_root_index(tmp_path: pathlib.Path) -> None:
     """A fresh init writes a root ``_index.md`` with the chosen display name."""
     root = tmp_path / 'wiki'
     result = _wiki(tmp_path, 'init', 'Handbook', '--path', str(root))
-    assert result.returncode == 0
+    assert result.returncode == 0, result.stdout + result.stderr
     assert 'Initialized wiki' in result.stdout
     index_text = (root / '_index.md').read_text(encoding='utf-8')
     assert 'name: Handbook' in index_text
@@ -141,14 +141,14 @@ def test_init_guards_existing_wiki(tmp_path: pathlib.Path) -> None:
     root = tmp_path / 'wiki'
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     result = _wiki(tmp_path, 'init', '--path', str(root))
-    assert result.returncode == 0
+    assert result.returncode == 0, result.stdout + result.stderr
     assert 'already initialized' in result.stdout.lower()
 
     # a foreign outer index does not defeat idempotency: the declared
     # marker names the root, so re-init reports instead of refusing
     _write(tmp_path / '_index.md', '---\ntitle: hugo\n---\ncontent\n')
     rerun = _wiki(tmp_path, 'init', '--path', str(root))
-    assert rerun.returncode == 0
+    assert rerun.returncode == 0, rerun.stdout + rerun.stderr
     assert 'already initialized' in rerun.stdout.lower()
 
 
@@ -157,7 +157,7 @@ def test_init_seeds_settings(tmp_path: pathlib.Path) -> None:
     root = tmp_path / 'wiki'
     policy = '{"naming": {"validate": ["ascii", "identifier"]}}'
     result = _wiki(tmp_path, 'init', '--path', str(root), '--settings', policy)
-    assert result.returncode == 0
+    assert result.returncode == 0, result.stdout + result.stderr
     settings = root / '.wiki' / 'settings.json'
     data = json.loads(settings.read_text(encoding='utf-8'))
     assert data == {'naming': {'validate': ['ascii', 'identifier']}}
@@ -211,14 +211,14 @@ def test_init_quiet_suppresses_chatter(tmp_path: pathlib.Path) -> None:
     """
     root = tmp_path / 'wiki'
     result = _wiki(tmp_path, 'init', '--path', str(root), '--quiet')
-    assert result.returncode == 0
+    assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.strip() == ''
     # warnings still surface (the offline plugin-download skip; see _wiki)
     assert 'OFFLINE_MODE' in result.stderr
     assert (root / '_index.md').is_file()
     # the already-initialized notice is non-error chatter too
     rerun = _wiki(tmp_path, 'init', '--path', str(root), '--quiet')
-    assert rerun.returncode == 0
+    assert rerun.returncode == 0, rerun.stdout + rerun.stderr
     assert rerun.stdout.strip() == ''
 
 
@@ -241,7 +241,7 @@ def test_install_copies_skill_into_home(tmp_path: pathlib.Path) -> None:
         assert f'{agent}' in result.stdout
     # a re-run replaces the prior copy rather than erroring or nesting
     rerun = _wiki(tmp_path, 'install', home=home)
-    assert rerun.returncode == 0
+    assert rerun.returncode == 0, rerun.stdout + rerun.stderr
     assert (home / '.claude' / 'skills' / 'wiki' / 'SKILL.md').is_file()
 
 
@@ -314,12 +314,12 @@ def test_update_check_reports_changes_without_writing(tmp_path: pathlib.Path) ->
     assert _wiki(root, 'update', '--check', '--path', str(root)).returncode == 1
     # a real update applies the same plan, narrated as completed work
     applied = _wiki(root, 'update', '--path', str(root))
-    assert applied.returncode == 0
+    assert applied.returncode == 0, applied.stdout + applied.stderr
     assert 'Created 1 new index (fill in its desc)' in applied.stderr
     assert 'Added 4 new links' in applied.stderr
     # the applied tree makes a follow-up check clean
     clean = _wiki(root, 'update', '--check', '--path', str(root))
-    assert clean.returncode == 0
+    assert clean.returncode == 0, clean.stdout + clean.stderr
     assert 'Nothing to update.' in clean.stdout
 
 
@@ -331,11 +331,11 @@ def test_update_noop_reports_nothing_to_update(tmp_path: pathlib.Path) -> None:
     _write(root / 'core' / 'design.md', _page('Design', 'A design.', 'Body.'))
     # the first update brings the tree current and reports the files it changed
     first = _wiki(root, 'update', '--path', str(root))
-    assert first.returncode == 0
+    assert first.returncode == 0, first.stdout + first.stderr
     assert 'Updated' in first.stdout
     # a second update finds nothing to change and reports the no-op
     second = _wiki(root, 'update', '--path', str(root))
-    assert second.returncode == 0
+    assert second.returncode == 0, second.stdout + second.stderr
     assert 'Nothing to update.' in second.stdout
 
 
@@ -353,7 +353,7 @@ def test_update_failed_entry_mutates_nothing(tmp_path: pathlib.Path) -> None:
     # the bad entry is named and the missing marker stays missing
     result = _wiki(root, 'update', 'no_such_entry', '--path', str(root))
     assert result.returncode == 1
-    assert 'Wiki folder not found: no_such_entry' in result.stderr
+    assert "Wiki folder not found: 'no_such_entry'" in result.stderr
     assert not (root / '.wiki' / 'settings.json').exists()
 
 
@@ -372,7 +372,7 @@ def test_update_narrations_condense_by_default(tmp_path: pathlib.Path) -> None:
 
     # the default run condenses each category to one count line
     condensed = _wiki(root, 'update', '--path', str(root))
-    assert condensed.returncode == 0
+    assert condensed.returncode == 0, condensed.stdout + condensed.stderr
     assert 'New link:' not in condensed.stderr
     assert 'New index:' not in condensed.stderr
     assert 'Created 1 new index (fill in its desc)' in condensed.stderr
@@ -390,7 +390,7 @@ def test_update_narrations_condense_by_default(tmp_path: pathlib.Path) -> None:
         encoding='utf-8',
     )
     full = _wiki(root, 'update', '--path', str(root), '--full')
-    assert full.returncode == 0
+    assert full.returncode == 0, full.stdout + full.stderr
     assert 'New link: [[core/extra|extra]] in core/_index.md' in full.stderr
     assert 'Broken link: [[core/api|api]] in core/_index.md' in full.stderr
 
@@ -560,7 +560,7 @@ def test_lint_summary_counts_notes(tmp_path: pathlib.Path) -> None:
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     # a fresh wiki carries soft notes only (placeholder desc, empty content)
     clean = _wiki(root, 'lint', '--path', str(root))
-    assert clean.returncode == 0
+    assert clean.returncode == 0, clean.stdout + clean.stderr
     assert 'Needs desc' in clean.stderr
     assert 'No issues found (2 notes).' in clean.stdout
     # with hard issues on top, the summary counts both kinds (the bad name
@@ -643,7 +643,7 @@ def test_map_respects_view_options(
 ) -> None:
     """The map view honors --depth, --desc, --no-words, and --desc-limit."""
     result = _wiki(wiki, 'map', '--path', str(wiki), *args)
-    assert result.returncode == 0
+    assert result.returncode == 0, result.stdout + result.stderr
     for token in present:
         assert token in result.stdout
     for token in absent:
@@ -664,12 +664,12 @@ def test_map_filters_by_category(tmp_path: pathlib.Path) -> None:
     assert _wiki(root, 'update', '--path', str(root)).returncode == 0
     # filtering to the category keeps only the matching subtree
     matched = _wiki(root, 'map', '--path', str(root), '--category', 'services')
-    assert matched.returncode == 0
+    assert matched.returncode == 0, matched.stdout + matched.stderr
     assert 'backend/' in matched.stdout
     assert 'misc/' not in matched.stdout
     # an empty category string keeps only uncategorized entries
     uncategorized = _wiki(root, 'map', '--path', str(root), '--category', '')
-    assert uncategorized.returncode == 0
+    assert uncategorized.returncode == 0, uncategorized.stdout + uncategorized.stderr
     assert 'misc/' in uncategorized.stdout
     assert 'backend/' not in uncategorized.stdout
 
@@ -679,7 +679,7 @@ def test_map_empty_wiki_reports_empty(tmp_path: pathlib.Path) -> None:
     root = tmp_path / 'wiki'
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     result = _wiki(root, 'map', '--path', str(root))
-    assert result.returncode == 0
+    assert result.returncode == 0, result.stdout + result.stderr
     assert 'empty' in result.stdout.lower()
 
 
@@ -690,17 +690,17 @@ def test_search_output_modes(wiki: pathlib.Path) -> None:
     """A search prints unique paths by default, and line detail on request."""
     # default mode lists each matching file once
     paths = _wiki(wiki, 'search', 'widget', '--path', str(wiki))
-    assert paths.returncode == 0
+    assert paths.returncode == 0, paths.stdout + paths.stderr
     assert 'core/design.md' in paths.stdout
     assert ':' not in paths.stdout.replace('.md', '').replace('.txt', '')
     # --lines includes line numbers and the matching text
     lines = _wiki(wiki, 'search', 'widget', '--path', str(wiki), '--lines')
-    assert lines.returncode == 0
+    assert lines.returncode == 0, lines.stdout + lines.stderr
     assert 'core/design.md:' in lines.stdout
     assert 'subsystem' in lines.stdout
     # --lineno includes line numbers but not the line text
     lineno = _wiki(wiki, 'search', 'widget', '--path', str(wiki), '--lineno')
-    assert lineno.returncode == 0
+    assert lineno.returncode == 0, lineno.stdout + lineno.stderr
     assert 'core/design.md:' in lineno.stdout
     assert 'subsystem' not in lineno.stdout
 
@@ -718,7 +718,7 @@ def test_search_field_and_ignore_case(wiki: pathlib.Path) -> None:
         'desc',
         '--lines',
     )
-    assert field.returncode == 0
+    assert field.returncode == 0, field.stdout + field.stderr
     assert 'desc: A design document' in field.stdout
     # case-insensitive matching finds the lowercase body term from an upper query
     insensitive = _wiki(
@@ -729,7 +729,7 @@ def test_search_field_and_ignore_case(wiki: pathlib.Path) -> None:
         str(wiki),
         '--ignore-case',
     )
-    assert insensitive.returncode == 0
+    assert insensitive.returncode == 0, insensitive.stdout + insensitive.stderr
     assert 'core/design.md' in insensitive.stdout
     # without the flag the uppercase query misses the lowercase body
     sensitive = _wiki(wiki, 'search', 'WIDGET', '--path', str(wiki))
@@ -741,8 +741,8 @@ def test_search_all_includes_non_markdown(wiki: pathlib.Path) -> None:
     """--all widens the search to non-markdown files in the tree."""
     without = _wiki(wiki, 'search', 'widget', '--path', str(wiki))
     with_all = _wiki(wiki, 'search', 'widget', '--path', str(wiki), '--all')
-    assert without.returncode == 0
-    assert with_all.returncode == 0
+    assert without.returncode == 0, without.stdout + without.stderr
+    assert with_all.returncode == 0, with_all.stdout + with_all.stderr
     assert 'snippet.txt' not in without.stdout
     assert 'snippet.txt' in with_all.stdout
 
@@ -831,7 +831,7 @@ def test_read_slice_forms(
         '--words',
         slice_arg,
     )
-    assert result.returncode == 0
+    assert result.returncode == 0, result.stdout + result.stderr
     # frontmatter is always preserved as well-formed markdown
     assert 'name: core/design' in result.stdout
     assert expected in result.stdout
@@ -907,7 +907,7 @@ def test_read_slice_short_aliases(
     """
     short = _wiki(wiki, 'read', 'core/design', alias, '0:2', '--path', str(wiki))
     spelled = _wiki(wiki, 'read', 'core/design', long, '0:2', '--path', str(wiki))
-    assert short.returncode == 0
+    assert short.returncode == 0, short.stdout + short.stderr
     assert short.stdout == spelled.stdout
 
 
@@ -943,7 +943,7 @@ def test_read_outputs_bytes_verbatim(wiki: pathlib.Path) -> None:
     """
     page = wiki / 'core' / 'design.md'
     result = _wiki(wiki, 'read', 'core/design', '--path', str(wiki))
-    assert result.returncode == 0
+    assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout == page.read_text(encoding='utf-8')
 
 
@@ -959,7 +959,7 @@ def test_config_applies_obsidian(tmp_path: pathlib.Path) -> None:
     root = tmp_path / 'wiki'
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     result = _wiki(root, 'config', '--path', str(root))
-    assert result.returncode == 0
+    assert result.returncode == 0, result.stdout + result.stderr
     # the plugin is enabled and its curated settings are written
     plugin_id = 'obsidian-front-matter-title-plugin'
     cp_file = root / '.obsidian' / 'community-plugins.json'
@@ -978,7 +978,7 @@ def test_config_downloads_plugin(tmp_path: pathlib.Path) -> None:
     init = _wiki(tmp_path, 'init', '--path', str(root), allow_download=True)
     assert init.returncode == 0
     result = _wiki(root, 'config', '--path', str(root), allow_download=True)
-    assert result.returncode == 0
+    assert result.returncode == 0, result.stdout + result.stderr
     # the downloaded plugin code lands in the vault
     plugin = root / '.obsidian' / 'plugins' / 'obsidian-front-matter-title-plugin'
     assert (plugin / 'main.js').is_file()
@@ -1009,7 +1009,7 @@ def test_config_adopts_undeclared_tree(tmp_path: pathlib.Path) -> None:
     _write(root / 'topic' / '_index.md', _index('topic', 'Topic.', 'Text.'))
 
     result = _wiki(root, 'config')
-    assert result.returncode == 0
+    assert result.returncode == 0, result.stdout + result.stderr
     # the staging directory is seeded and applied into the vault
     plugin_id = 'obsidian-front-matter-title-plugin'
     assert (root / '.wiki' / 'obsidian' / 'community-plugins.json').is_file()
@@ -1028,7 +1028,7 @@ def test_config_adopts_undeclared_tree(tmp_path: pathlib.Path) -> None:
 def test_lint_clean_after_update(wiki: pathlib.Path) -> None:
     """A wiki that has just been updated passes lint with exit 0."""
     result = _wiki(wiki, 'lint', '--path', str(wiki))
-    assert result.returncode == 0
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 # ------ git merge driver
@@ -1453,7 +1453,7 @@ def test_merge_hints_add_add_body_conflicts(tmp_path: pathlib.Path) -> None:
 def test_version_reports_installed_version(tmp_path: pathlib.Path) -> None:
     """``wiki --version`` prints the installed version and exits 0."""
     result = _wiki(tmp_path, '--version')
-    assert result.returncode == 0
+    assert result.returncode == 0, result.stdout + result.stderr
     assert any(char.isdigit() for char in result.stdout)
 
 

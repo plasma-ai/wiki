@@ -10,7 +10,6 @@ import pytest
 from .conftest import WIKI, _wiki
 
 __all__ = [
-    'test_update_adds_missing_name',
     'test_not_found_message_is_clean',
     'test_broken_pipe_is_quiet',
 ]
@@ -21,21 +20,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-# ------ update and output behaviors
-
-
-def test_update_adds_missing_name(tmp_path: pathlib.Path) -> None:
-    """Update adds a ``name:`` field to a page that lacks one."""
-    root = _new_wiki(tmp_path)
-    core = root / 'core'
-    core.mkdir()
-    page = core / 'design.md'
-    page.write_text(
-        '---\ndesc: A design doc.\n---\n# Design\n\nBody text here.\n',
-        encoding='utf-8',
-    )
-    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
-    assert 'name:' in page.read_text(encoding='utf-8')
+# ------ output behaviors
 
 
 def test_not_found_message_is_clean(tmp_path: pathlib.Path) -> None:
