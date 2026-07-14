@@ -7,7 +7,7 @@ import subprocess
 
 import pytest
 
-from .conftest import WIKI, _wiki
+from .conftest import WIKI, _env, _wiki
 
 __all__ = [
     'test_not_found_message_is_clean',
@@ -51,6 +51,7 @@ def test_broken_pipe_is_quiet(tmp_path: pathlib.Path) -> None:
         ['bash', '-c', script],
         capture_output=True,
         text=True,
+        env=_env(),
     )
     assert result.returncode == 0, result.stderr
     assert 'name: big' in result.stdout

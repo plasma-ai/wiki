@@ -1,4 +1,4 @@
-"""Filesystem utilities for ``wiki``.
+"""Functions for saving and loading on the file system.
 
 Can be accessed via alias ``wiki.util.fs``.
 """

@@ -26,7 +26,7 @@ from wiki.constants import (
 )
 from wiki.core import format, obsidian
 from wiki.core.event import Event
-from wiki.typing import PathLike
+from wiki.typing import Link, PathLike
 from wiki.util.filesystem import write_atomic
 from wiki.util.markdown import mask_code
 from wiki.util.str import format_words
@@ -81,7 +81,7 @@ class Wiki:
             path: Path to the wiki root directory.
 
         """
-        self._root = pathlib.Path(path).resolve()
+        self._root = pathlib.Path(path).expanduser().resolve()
 
     @functools.cached_property
     def _root_name(self: Wiki) -> str:
@@ -121,7 +121,7 @@ class Wiki:
         except json.JSONDecodeError as e:
             raise ValueError(f'Malformed JSON in {WIKI_SETTINGS}: {e}') from e
         if not isinstance(result, dict):
-            raise ValueError(f'{WIKI_SETTINGS} must be a JSON object')
+            raise ValueError(f'{WIKI_SETTINGS} must be a JSON object.')
         return result
 
     @functools.cached_property
@@ -137,18 +137,18 @@ class Wiki:
         override = self._settings.get('naming', {})
         if not isinstance(override, dict):
             raise ValueError(
-                f'The naming block must be a JSON object in {WIKI_SETTINGS}'
+                f'The naming block must be a JSON object in {WIKI_SETTINGS}.'
             )
         policy = {**_NAMING_DEFAULTS, **override}
         # validate predicate names (settings.json is user input -> fail loudly)
         if not isinstance(policy['validate'], list):
             raise ValueError(
-                f'naming.validate must be a list of predicate names in {WIKI_SETTINGS}'
+                f'naming.validate must be a list of predicate names in {WIKI_SETTINGS}.'
             )
         for predicate in policy['validate']:
             if predicate not in _NAMING_PREDICATES:
                 raise ValueError(
-                    f'Unknown naming predicate {predicate!r} in {WIKI_SETTINGS}'
+                    f'Unknown naming predicate {predicate!r} in {WIKI_SETTINGS}.'
                 )
         # min_length defaults to 1; an explicit value must be a positive int
         min_length = policy['min_length']
@@ -157,7 +157,7 @@ class Wiki:
         elif not (isinstance(min_length, int) and min_length >= 1):
             raise ValueError(
                 f'naming.min_length must be an int >= 1 or null, got'
-                f' {min_length!r} in {WIKI_SETTINGS}'
+                f' {min_length!r} in {WIKI_SETTINGS}.'
             )
         # max_length is null (no cap) or a positive int
         max_length = policy['max_length']
@@ -165,21 +165,21 @@ class Wiki:
             if not (isinstance(max_length, int) and max_length >= 1):
                 raise ValueError(
                     f'naming.max_length must be an int >= 1 or null, got'
-                    f' {max_length!r} in {WIKI_SETTINGS}'
+                    f' {max_length!r} in {WIKI_SETTINGS}.'
                 )
         # deny/allow are strings of characters; reserved is a list of names
         for leaf in ('deny', 'allow'):
             if not isinstance(policy[leaf], str):
                 raise ValueError(
-                    f'naming.{leaf} must be a string of characters in {WIKI_SETTINGS}'
+                    f'naming.{leaf} must be a string of characters in {WIKI_SETTINGS}.'
                 )
         if not isinstance(policy['reserved'], list):
             raise ValueError(
-                f'naming.reserved must be a list of strings in {WIKI_SETTINGS}'
+                f'naming.reserved must be a list of strings in {WIKI_SETTINGS}.'
             )
         if not isinstance(policy['leading_digits'], bool):
             raise ValueError(
-                f'naming.leading_digits must be a boolean in {WIKI_SETTINGS}'
+                f'naming.leading_digits must be a boolean in {WIKI_SETTINGS}.'
             )
         # always deny the path separator, index delimiter, and link/markdown grammar
         deny = set(policy['deny'])
@@ -198,7 +198,7 @@ class Wiki:
             if not isinstance(pattern, str):
                 raise ValueError(
                     f'naming.pattern must be a string or null, got'
-                    f' {pattern!r} in {WIKI_SETTINGS}'
+                    f' {pattern!r} in {WIKI_SETTINGS}.'
                 )
             try:
                 pattern = re.compile(pattern)
@@ -229,13 +229,13 @@ class Wiki:
         override = self._settings.get('timestamp', {})
         if not isinstance(override, dict):
             raise ValueError(
-                f'The timestamp block must be a JSON object in {WIKI_SETTINGS}'
+                f'The timestamp block must be a JSON object in {WIKI_SETTINGS}.'
             )
         # format is a strftime string; timezone is an IANA name or null (UTC)
         format = override.get('format', '%Y-%m-%dT%H:%M:%SZ')
         if not isinstance(format, str):
             raise ValueError(
-                f'timestamp.format must be a string, got {format!r} in {WIKI_SETTINGS}'
+                f'timestamp.format must be a string, got {format!r} in {WIKI_SETTINGS}.'
             )
         # a blank or multi-line value would corrupt the YAML frontmatter -- reject
         # an empty/whitespace format, strftime's %n/%t newline/tab directives, and
@@ -244,20 +244,20 @@ class Wiki:
         if not format.strip() or any(token in format for token in breakers):
             raise ValueError(
                 f'timestamp.format must render a single non-empty line; got'
-                f' {format!r} in {WIKI_SETTINGS}'
+                f' {format!r} in {WIKI_SETTINGS}.'
             )
         timezone = override.get('timezone')
         if timezone is not None and not isinstance(timezone, str):
             raise ValueError(
                 f'timestamp.timezone must be a string or null, got'
-                f' {timezone!r} in {WIKI_SETTINGS}'
+                f' {timezone!r} in {WIKI_SETTINGS}.'
             )
         if timezone:
             try:
                 timezone = zoneinfo.ZoneInfo(timezone)
             except (zoneinfo.ZoneInfoNotFoundError, ValueError) as e:
                 raise ValueError(
-                    f'Unknown timestamp.timezone {timezone!r} in {WIKI_SETTINGS}'
+                    f'Unknown timestamp.timezone {timezone!r} in {WIKI_SETTINGS}.'
                 ) from e
         else:
             timezone = dt.UTC
@@ -687,8 +687,8 @@ class Wiki:
                             result.append(
                                 f'{index_relpath}: Index missing *** delimiter'
                                 ' with a thematic break in its place: likely'
-                                ' formatter damage (exclude the wiki from'
-                                ' markdown formatters; see README)'
+                                ' formatter damage (keep generic markdown'
+                                ' formatters off the wiki; see README)'
                             )
                         else:
                             result.append(
@@ -699,8 +699,8 @@ class Wiki:
                     if any(n not in suppressed for n in escaped):
                         result.append(
                             f'{index_relpath}: Escaped wikilinks: likely formatter'
-                            ' damage (exclude the wiki from markdown formatters;'
-                            ' see README)'
+                            ' damage (keep generic markdown formatters off the'
+                            ' wiki; see README)'
                         )
                     # human-only checks on current content
                     frontmatter, links, user_content = format.parse_index(
@@ -797,8 +797,8 @@ class Wiki:
                 if any(n not in suppressed for n in escaped):
                     result.append(
                         f'{page_relpath}: Escaped wikilinks: likely formatter'
-                        ' damage (exclude the wiki from markdown formatters;'
-                        ' see README)'
+                        ' damage (keep generic markdown formatters off the'
+                        ' wiki; see README)'
                     )
                 # human-only checks on current content
                 frontmatter, content = format.parse_page(text)
@@ -1587,7 +1587,7 @@ class Wiki:
             raise self._entry_not_found(name)
         path = (self._root / name).resolve()
         if not path.is_relative_to(self._root):
-            raise ValueError(f'Path is outside wiki root: {name!r}')
+            raise self._outside_root(name)
         if path.is_dir():
             index = path / WIKI_INDEX
             if index.is_file():
@@ -1638,6 +1638,10 @@ class Wiki:
             message += f' (did you mean {suggestion}?)'
         return FileNotFoundError(message)
 
+    def _outside_root(self: Wiki, name: str) -> ValueError:
+        """Build the outside-wiki-root error for a caller-supplied path."""
+        return ValueError(f'Path is outside wiki root: {name!r}')
+
     def _resolve_folder(self: Wiki, path: str) -> pathlib.Path:
         """Resolve a wiki name to a folder path.
 
@@ -1656,7 +1660,7 @@ class Wiki:
         if resolved.is_dir():
             if resolved.is_relative_to(self._root):
                 return resolved
-            raise ValueError(f'Path is outside wiki root: {path!r}')
+            raise self._outside_root(path)
         raise FileNotFoundError(f'Wiki folder not found: {path!r}')
 
     def _path_to_name(self: Wiki, path: pathlib.Path) -> str:
@@ -2021,15 +2025,12 @@ class Wiki:
 
     def _merge_links(
         self: Wiki,
-        existing: list[tuple[str, str, str]],
+        existing: list[Link],
         expected: list[tuple[str, str]],
+        *,
         labels: Optional[dict[str, str]] = None,
         prune: bool = False,
-    ) -> tuple[
-        list[tuple[str, str, str]],
-        list[tuple[str, str, str]],
-        list[tuple[str, str, str]],
-    ]:
+    ) -> tuple[list[Link], list[Link], list[Link]]:
         """Merge existing links with expected, refreshing labels and preserving descs.
 
         ``expected`` provides ``(target, base_label)`` pairs from the filesystem.
@@ -2086,8 +2087,8 @@ class Wiki:
 
     def _sort_links(
         self: Wiki,
-        links: list[tuple[str, str, str]],
-    ) -> list[tuple[str, str, str]]:
+        links: list[Link],
+    ) -> list[Link]:
         """Sort links: parent first, then categorized, then uncategorized.
 
         Within categorized entries, sorts by ``(category_order index,

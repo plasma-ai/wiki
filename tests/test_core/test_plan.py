@@ -31,6 +31,9 @@ __all__ = [
 ]
 
 
+# ------ timestamps and dry runs
+
+
 def test_noop_update_leaves_updated_alone(tmp_path: pathlib.Path) -> None:
     """A touch-nothing update re-run never moves ``updated:``.
 
@@ -76,6 +79,9 @@ def test_new_file_created_equals_updated(tmp_path: pathlib.Path) -> None:
     created = re.search(r'^created:\s*(.+)$', fresh, re.M).group(1)
     updated = re.search(r'^updated:\s*(.+)$', fresh, re.M).group(1)
     assert created == updated
+
+
+# ------ concurrency and atomicity
 
 
 def test_update_preserves_concurrent_edit(
@@ -229,6 +235,9 @@ def test_update_survives_page_deleted_mid_plan(
     err = '\n'.join(event.description for event in notices)
     assert 'Broken link' in err
     assert 'doomed' in err
+
+
+# ------ byte normalization
 
 
 @pytest.mark.parametrize('kind', ['page', 'index'])

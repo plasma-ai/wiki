@@ -10,16 +10,14 @@ and error reporting as observable output rather than internal state.
 from __future__ import annotations
 
 import json
-import os
 import pathlib
 import shutil
-import subprocess
 
 import pytest
 
 from wiki.cli.utils import configure_git_merge_driver
 
-from .conftest import VENV_BIN, WIKI, _wiki
+from .conftest import GIT, WIKI, _git, _wiki
 
 __all__ = [
     'test_init_creates_root_index',
@@ -72,7 +70,6 @@ __all__ = [
     'test_version_reports_installed_version',
 ]
 
-GIT = shutil.which('git')
 pytestmark = pytest.mark.skipif(
     WIKI is None,
     reason='wiki console script not installed',
@@ -90,6 +87,9 @@ def wiki(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
 
     Built once per module so link generation, frontmatter enrichment, and
     word counts are exercised exactly as a user would drive them.
+    READ-ONLY by convention: the few tests that must add a file to the
+    shared tree remove it in a ``finally`` block, so siblings observe
+    the arrangement unchanged.
     """
     base = tmp_path_factory.mktemp('wiki_cli')
     root = base / 'wiki'
@@ -972,7 +972,7 @@ def test_config_downloads_plugin(tmp_path: pathlib.Path) -> None:
     """With downloads allowed, config fetches the plugin code into the vault.
 
     Marked ``online`` and excluded by default (``-m 'not online'``); run
-    with ``uv run pytest -m online`` when online.
+    with ``uv run --no-sync pytest -m online`` when online.
     """
     root = tmp_path / 'wiki'
     init = _wiki(tmp_path, 'init', '--path', str(root), allow_download=True)
@@ -995,15 +995,8 @@ def test_config_adopts_undeclared_tree(tmp_path: pathlib.Path) -> None:
     register the merge driver instead of aborting on an internal path.
     """
 
-    def git(*args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            [GIT, '-C', str(tmp_path), *args],
-            capture_output=True,
-            text=True,
-        )
-
     # a hand-built index tree inside a git repo, never wiki-initialized
-    assert git('init', '-q', '-b', 'main').returncode == 0
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
     root = tmp_path / 'kb'
     _write(root / '_index.md', _index('kb', 'Root.', 'Text.'))
     _write(root / 'topic' / '_index.md', _index('topic', 'Topic.', 'Text.'))
@@ -1016,7 +1009,7 @@ def test_config_adopts_undeclared_tree(tmp_path: pathlib.Path) -> None:
     cp_file = root / '.obsidian' / 'community-plugins.json'
     assert plugin_id in json.loads(cp_file.read_text(encoding='utf-8'))
     # the merge driver setup completes: repo config plus attribute map
-    driver = git('config', 'merge.wiki.driver').stdout.strip()
+    driver = _git(tmp_path, 'config', 'merge.wiki.driver').stdout.strip()
     assert driver == 'wiki _merge %O %A %B %L %P'
     attributes = (tmp_path / '.gitattributes').read_text(encoding='utf-8')
     assert '**/_index.md merge=wiki' in attributes.splitlines()
@@ -1056,29 +1049,22 @@ def test_init_writes_gitattributes_without_committing(tmp_path: pathlib.Path) ->
     to the working tree only; it leaves HEAD and the index untouched.
     """
 
-    def git(*args: str) -> str:
-        return subprocess.run(
-            [GIT, '-C', str(tmp_path), *args],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-
     # a real repo with one commit so .gitattributes would be brand-new
-    git('init', '-q', '-b', 'main')
-    git('config', 'user.email', 't@t')
-    git('config', 'user.name', 't')
+    _git(tmp_path, 'init', '-q', '-b', 'main')
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
     (tmp_path / 'README').write_text('x', encoding='utf-8')
-    git('add', 'README')
-    git('commit', '-q', '-m', 'init')
-    head = git('rev-parse', 'HEAD')
+    _git(tmp_path, 'add', 'README')
+    _git(tmp_path, 'commit', '-q', '-m', 'init')
+    head = _git(tmp_path, 'rev-parse', 'HEAD').stdout
 
     # init wires the driver: .gitattributes is written but neither staged nor committed
     assert _wiki(tmp_path, 'init', '--path', str(tmp_path / 'wiki')).returncode == 0
     attributes = (tmp_path / '.gitattributes').read_text(encoding='utf-8')
     assert '**/_index.md merge=wiki' in attributes.splitlines()
-    assert git('rev-parse', 'HEAD') == head
-    assert '.gitattributes' not in git('diff', '--cached', '--name-only')
+    assert _git(tmp_path, 'rev-parse', 'HEAD').stdout == head
+    staged = _git(tmp_path, 'diff', '--cached', '--name-only').stdout
+    assert '.gitattributes' not in staged
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
@@ -1091,23 +1077,10 @@ def test_merge_driver_merges_authored_frontmatter(tmp_path: pathlib.Path) -> Non
     theirs' desc edit with a clean exit.
     """
     root = tmp_path / 'wiki'
-    # git runs the registered `wiki _merge` driver, so the console
-    # script's directory must be on the merge subprocess's PATH
-    env = dict(os.environ)
-    env['PATH'] = f'{VENV_BIN}{os.pathsep}{env.get("PATH", "")}'
-
-    def git(*args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            [GIT, '-C', str(tmp_path), *args],
-            capture_output=True,
-            text=True,
-            env=env,
-        )
-
     # a real repo whose wiki has the driver registered by init
-    assert git('init', '-q', '-b', 'main').returncode == 0
-    git('config', 'user.email', 't@t')
-    git('config', 'user.name', 't')
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     # a hand-authored index so each side's edit is byte-precise
     index = root / 'core' / '_index.md'
@@ -1131,11 +1104,11 @@ def test_merge_driver_merges_authored_frontmatter(tmp_path: pathlib.Path) -> Non
         'Body prose.\n'
     )
     _write(index, base)
-    git('add', '-A')
-    git('commit', '-q', '-m', 'base')
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
 
     # theirs edits the authored desc (plus regenerated churn of its own)
-    git('checkout', '-q', '-b', 'theirs')
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
     _write(
         index,
         base.replace('desc: Original section.', 'desc: Edited by theirs.').replace(
@@ -1143,9 +1116,9 @@ def test_merge_driver_merges_authored_frontmatter(tmp_path: pathlib.Path) -> Non
             'updated: 2026-01-02T09:00:00Z',
         ),
     )
-    git('commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
     # ours carries regenerated churn only (an update re-stamped updated:)
-    git('checkout', '-q', 'main')
+    _git(tmp_path, 'checkout', '-q', 'main')
     _write(
         index,
         base.replace(
@@ -1153,10 +1126,10 @@ def test_merge_driver_merges_authored_frontmatter(tmp_path: pathlib.Path) -> Non
             'updated: 2026-01-03T12:00:00Z',
         ),
     )
-    git('commit', '-q', '-am', 'ours')
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
 
     # the merge is clean: theirs' desc lands, ours' regenerated churn wins
-    merge = git('merge', 'theirs')
+    merge = _git(tmp_path, 'merge', 'theirs')
     assert merge.returncode == 0, merge.stdout + merge.stderr
     merged = index.read_text(encoding='utf-8')
     assert 'desc: Edited by theirs.' in merged
@@ -1164,13 +1137,13 @@ def test_merge_driver_merges_authored_frontmatter(tmp_path: pathlib.Path) -> Non
     assert '<<<<<<<' not in merged
 
     # a second wave where BOTH sides edit desc conflicts like prose
-    git('checkout', '-q', '-b', 'theirs2')
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs2')
     _write(index, merged.replace('desc: Edited by theirs.', 'desc: Theirs again.'))
-    git('commit', '-q', '-am', 'theirs2')
-    git('checkout', '-q', 'main')
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs2')
+    _git(tmp_path, 'checkout', '-q', 'main')
     _write(index, merged.replace('desc: Edited by theirs.', 'desc: Ours now.'))
-    git('commit', '-q', '-am', 'ours2')
-    conflicted = git('merge', 'theirs2')
+    _git(tmp_path, 'commit', '-q', '-am', 'ours2')
+    conflicted = _git(tmp_path, 'merge', 'theirs2')
     assert conflicted.returncode != 0
     text = index.read_text(encoding='utf-8')
     assert '<<<<<<<' in text
@@ -1189,23 +1162,10 @@ def test_merge_keeps_frontmatter_when_side_is_mangled(tmp_path: pathlib.Path) ->
     mangled side's residual bytes.
     """
     root = tmp_path / 'wiki'
-    # git runs the registered `wiki _merge` driver, so the console
-    # script's directory must be on the merge subprocess's PATH
-    env = dict(os.environ)
-    env['PATH'] = f'{VENV_BIN}{os.pathsep}{env.get("PATH", "")}'
-
-    def git(*args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            [GIT, '-C', str(tmp_path), *args],
-            capture_output=True,
-            text=True,
-            env=env,
-        )
-
     # a real repo whose wiki has the driver registered by init
-    assert git('init', '-q', '-b', 'main').returncode == 0
-    git('config', 'user.email', 't@t')
-    git('config', 'user.name', 't')
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     # a hand-authored index so each side's mangle is byte-precise
     index = root / 'core' / '_index.md'
@@ -1226,15 +1186,15 @@ def test_merge_keeps_frontmatter_when_side_is_mangled(tmp_path: pathlib.Path) ->
         'Body prose.\n'
     )
     _write(index, base)
-    git('add', '-A')
-    git('commit', '-q', '-m', 'base')
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
 
     # theirs loses its frontmatter closer (an unclosed block extracts as
     # none); ours carries regenerated churn only
-    git('checkout', '-q', '-b', 'theirs')
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
     _write(index, base.replace('---\n\n# core', '\n# core'))
-    git('commit', '-q', '-am', 'theirs')
-    git('checkout', '-q', 'main')
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
     _write(
         index,
         base.replace(
@@ -1242,10 +1202,10 @@ def test_merge_keeps_frontmatter_when_side_is_mangled(tmp_path: pathlib.Path) ->
             'updated: 2026-01-03T12:00:00Z',
         ),
     )
-    git('commit', '-q', '-am', 'ours')
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
 
     # the merge is clean and ours' block survives -- exactly one block
-    merge = git('merge', 'theirs')
+    merge = _git(tmp_path, 'merge', 'theirs')
     assert merge.returncode == 0, merge.stdout + merge.stderr
     merged = index.read_text(encoding='utf-8')
     assert merged.startswith('---\nname: core\n')
@@ -1255,13 +1215,13 @@ def test_merge_keeps_frontmatter_when_side_is_mangled(tmp_path: pathlib.Path) ->
     # a second wave where OURS is the mangled side (a BOM before the
     # opener) keeps theirs' authored edit without stacking a residual
     # copy of ours' block above the links
-    git('checkout', '-q', '-b', 'theirs2')
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs2')
     _write(index, merged.replace('desc: Original section.', 'desc: Edited by theirs.'))
-    git('commit', '-q', '-am', 'theirs2')
-    git('checkout', '-q', 'main')
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs2')
+    _git(tmp_path, 'checkout', '-q', 'main')
     _write(index, '\ufeff' + merged)
-    git('commit', '-q', '-am', 'ours2')
-    merge = git('merge', 'theirs2')
+    _git(tmp_path, 'commit', '-q', '-am', 'ours2')
+    merge = _git(tmp_path, 'merge', 'theirs2')
     assert merge.returncode == 0, merge.stdout + merge.stderr
     merged = index.read_text(encoding='utf-8')
     assert merged.startswith('---\nname: core\n')

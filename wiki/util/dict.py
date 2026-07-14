@@ -1,4 +1,4 @@
-"""Dict utilities for ``wiki``."""
+"""Functions for dictionaries."""
 
 from __future__ import annotations
 

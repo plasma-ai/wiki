@@ -42,6 +42,9 @@ __all__ = [
 ]
 
 
+# ------ counts cache
+
+
 def test_update_creates_self_ignoring_cache(tmp_path: pathlib.Path) -> None:
     """Update materializes ``.wiki/cache/`` with counts and a self-ignoring rule.
 
@@ -109,6 +112,9 @@ def test_map_survives_cache_damage(tmp_path: pathlib.Path, damage: str) -> None:
     assert 'core/design.md' in counts
     # serialization is key-sorted, so the cache is stable and diffable
     assert list(counts) == sorted(counts)
+
+
+# ------ rendering and labels
 
 
 def test_quoted_category_labels_and_filters(tmp_path: pathlib.Path) -> None:
@@ -349,6 +355,9 @@ def test_map_survives_binary_attachment(tmp_path: pathlib.Path) -> None:
         wiki.read('core/diagram.png')
 
 
+# ------ category filters
+
+
 @pytest.mark.parametrize(
     'category',
     ['to-do', 'v1.2', 'my cat'],
@@ -425,6 +434,9 @@ def test_map_category_shows_matches_beyond_depth(tmp_path: pathlib.Path) -> None
     assert 'inner' not in shallow
     # ... while a folder with no matching descendants stays pruned
     assert 'plain/' not in shallow
+
+
+# ------ broken links
 
 
 def test_map_marks_copied_subtree_links_broken(tmp_path: pathlib.Path) -> None:

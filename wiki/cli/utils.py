@@ -69,15 +69,15 @@ def parse_slice(value: Optional[str]) -> tuple[Optional[int], Optional[int]]:
     """Parse a slice string into ``(start, stop)``."""
     if value is None:
         return None, None
-    msg = f'Invalid slice format: {value!r} (expected n:m, n:, or :m).'
+    message = f'Invalid slice format: {value!r} (expected n:m, n:, or :m).'
     if ':' not in value:
-        raise typer.BadParameter(msg)
+        raise typer.BadParameter(message)
     left, right = value.split(':', 1)
     try:
         start = int(left) if left else None
         stop = int(right) if right else None
     except ValueError as e:
-        raise typer.BadParameter(msg) from e
+        raise typer.BadParameter(message) from e
     return start, stop
 
 
@@ -90,7 +90,7 @@ def parse_settings(value: Optional[str]) -> Optional[dict]:
     except json.JSONDecodeError as e:
         raise typer.BadParameter(f'--settings must be valid JSON: {e}') from e
     if not isinstance(result, dict):
-        raise typer.BadParameter('--settings must be a JSON object')
+        raise typer.BadParameter('--settings must be a JSON object.')
     return result
 
 
@@ -112,7 +112,7 @@ def load_wiki_class(
     try:
         spec.loader.exec_module(module)
     except Exception as e:
-        raise RuntimeError(f'{config_path}: {e}') from e
+        raise RuntimeError(f'Failed to load {config_path}: {e}') from e
     # the module's sole __all__ entry names the Wiki subclass to use
     names = getattr(module, '__all__', None)
     valid = isinstance(names, (list, tuple)) and len(names) == 1
@@ -149,17 +149,14 @@ def resolve_wiki(
     # wrong root -- scoped work goes through the entry argument instead
     enclosing = enclosing_wiki_root(wiki_root)
     if enclosing is not None:
-        raise ValueError(
-            f'Path is inside the wiki at: {enclosing};'
-            f' use the <entry> argument for scoped work'
-        )
+        raise _inside_wiki_error(enclosing)
     # the root is declared by its settings marker; a bare index tree is
     # tolerated with a notice, and anything less is not a wiki
     declared = (wiki_root / WIKI_SETTINGS).is_file()
     has_index = (wiki_root / WIKI_INDEX).is_file()
     if not (declared or has_index):
         raise NotADirectoryError(
-            f'No wiki at: {wiki_root} (missing {WIKI_SETTINGS} and {WIKI_INDEX})'
+            f'No wiki at: {wiki_root} (missing {WIKI_SETTINGS} and {WIKI_INDEX}).'
         )
     # an undeclared enclosing wiki leaves no marker for the guard above: a
     # parent index means the path sits inside an index chain, so refuse it
@@ -168,10 +165,7 @@ def resolve_wiki(
         enclosing = wiki_root.parent
         while (enclosing.parent / WIKI_INDEX).is_file():
             enclosing = enclosing.parent
-        raise ValueError(
-            f'Path is inside the wiki at: {enclosing};'
-            f' use the <entry> argument for scoped work'
-        )
+        raise _inside_wiki_error(enclosing)
     # never treat a path enclosing a declared wiki as an undeclared root:
     # the command would absorb the nested wiki, rewriting its name: paths
     # relative to the wrong root and planting a second settings marker
@@ -180,7 +174,7 @@ def resolve_wiki(
         if nested is not None:
             raise ValueError(
                 f'Path encloses the wiki at: {nested};'
-                f' run the command from that declared root'
+                f' run the command from that declared root.'
             )
     # corroboration diagnostics: name what resolution tolerated
     if not declared:
@@ -226,7 +220,7 @@ def resolve_wiki_root(
     """
     # explicit path
     if path:
-        result = pathlib.Path(path)
+        result = pathlib.Path(path).expanduser()
         if not result.is_absolute():
             result = pathlib.Path.cwd() / result
         return result.resolve()
@@ -305,7 +299,7 @@ def refuse_nested_init(path: pathlib.Path) -> None:
     if enclosing is not None:
         raise ValueError(
             f'Cannot initialize inside the wiki at: {enclosing}'
-            f' (nested wikis are not supported)'
+            f' (nested wikis are not supported).'
         )
 
 
@@ -388,7 +382,7 @@ def _wiki_roots(chain: Iterable[pathlib.Path]) -> list[pathlib.Path]:
     if len(result) > 1:
         raise ValueError(
             f'Ambiguous wiki root: {result[0]} is nested inside the wiki at'
-            f' {result[-1]} (two {WIKI_SETTINGS} markers on one path)'
+            f' {result[-1]} (two {WIKI_SETTINGS} markers on one path).'
         )
     return result
 
@@ -396,6 +390,14 @@ def _wiki_roots(chain: Iterable[pathlib.Path]) -> list[pathlib.Path]:
 def _is_wiki_root(path: pathlib.Path) -> bool:
     """Return ``True`` if ``path`` holds the declared-root settings marker."""
     return (path / WIKI_SETTINGS).is_file()
+
+
+def _inside_wiki_error(enclosing: pathlib.Path) -> ValueError:
+    """Build the inside-an-enclosing-wiki error, naming the enclosing root."""
+    return ValueError(
+        f'Path is inside the wiki at: {enclosing};'
+        f' use the <entry> argument for scoped work.'
+    )
 
 
 def _nested_wiki_root(path: pathlib.Path) -> Optional[pathlib.Path]:
@@ -464,6 +466,8 @@ def _git(
         if check:
             cmd_string = ' '.join(cmd)
             error = result.stderr.strip()
-            raise RuntimeError(f'git {cmd_string} failed: {error!r}')
+            raise RuntimeError(
+                f'git {cmd_string} failed (exit {result.returncode}): {error!r}'
+            )
         return None
     return result.stdout.strip()

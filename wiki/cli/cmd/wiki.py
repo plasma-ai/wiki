@@ -7,6 +7,7 @@ import importlib.resources
 import pathlib
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable
 from typing import Any, Optional
 
@@ -263,9 +264,11 @@ def init(app: typer.Typer) -> typer.Typer:
         if warnings:
             for warning in warnings:
                 typer.echo(warning, err=True)
-        elif not quiet:
-            typer.echo('')
-            typer.echo(_OBSIDIAN_SETUP_HINT)
+        # the manual Obsidian step is human-only guidance: TTY only, on
+        # stderr, so piped stdout stays parseable
+        elif not quiet and sys.stderr.isatty():
+            typer.echo('', err=True)
+            typer.echo(_OBSIDIAN_SETUP_HINT, err=True)
 
     return app
 
@@ -308,8 +311,11 @@ def config(
                 typer.echo(warning, err=True)
         else:
             typer.echo('Updated Obsidian config.')
-            typer.echo('')
-            typer.echo(_OBSIDIAN_SETUP_HINT)
+            # the manual Obsidian step is human-only guidance: TTY only,
+            # on stderr, so piped stdout stays parseable
+            if sys.stderr.isatty():
+                typer.echo('', err=True)
+                typer.echo(_OBSIDIAN_SETUP_HINT, err=True)
         # (re)configure git merge driver
         configure_git_merge_driver(wiki._root)
 
@@ -424,7 +430,12 @@ def search(
         lines: bool = lines,
         lineno: bool = lineno,
     ) -> None:
-        """Search wiki content for a regex pattern."""
+        """Search wiki content for a regex pattern.
+
+        Follows the grep convention: a match exits 0, no match prints a
+        notice on stderr and exits 1, so scripts should branch on the
+        exit code rather than parse the output.
+        """
         if lines and lineno:
             raise typer.BadParameter('--lines and --lineno are mutually exclusive.')
         wiki = resolve(path)
@@ -715,7 +726,7 @@ def map(
 
 
 def merge(app: typer.Typer) -> typer.Typer:
-    """Register the hidden ``_merge`` command (the git merge driver)."""
+    """Register the ``_merge`` command."""
     # base argument
     base_help = 'Common ancestor version (%O).'
     base = typer.Argument(..., help=base_help)
@@ -753,7 +764,7 @@ def merge(app: typer.Typer) -> typer.Typer:
         if pathlib.PurePosixPath(pathname).name == WIKI_INDEX:
             package = pathlib.Path(__file__).parent.parent.parent
             script = package / '_assets' / 'git' / 'merge_index.sh'
-            cmd = ['bash', str(script), ours, base, theirs, marker_size]
+            cmd = ['bash', f'{script}', ours, base, theirs, marker_size]
         # any other file class: git's default three-way text merge
         else:
             size = f'--marker-size={marker_size}'

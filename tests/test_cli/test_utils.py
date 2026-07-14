@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pathlib
-import subprocess
 from typing import Optional
 
 import pytest
@@ -19,6 +18,8 @@ from wiki.cli.utils import (
     resolve_wiki_root,
 )
 from wiki.core.wiki import Wiki
+
+from .conftest import GIT, _git
 
 __all__ = [
     'test_resolve_wiki_root',
@@ -334,6 +335,7 @@ def test_resolve_wiki_default_class(tmp_path: pathlib.Path) -> None:
 # ------ configure_git_merge_driver
 
 
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
 def test_configure_git_merge_driver(tmp_path: pathlib.Path) -> None:
     """Wiring sets the git driver and writes the glob without ever committing.
 
@@ -343,41 +345,35 @@ def test_configure_git_merge_driver(tmp_path: pathlib.Path) -> None:
     stable ``wiki _merge`` command -- an absolute path into the installing
     venv silently breaks on a rebuild/move.
     """
-
-    def git(*args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            ['git', '-C', f'{tmp_path}', *args],
-            capture_output=True,
-            text=True,
-        )
-
     # no-op outside a git repo
     configure_git_merge_driver(tmp_path)
     assert not (tmp_path / '.gitattributes').exists()
 
     # a real repo with a wiki subdir
-    git('init', '-b', 'main')
-    git('config', 'user.email', 'test@test.com')
-    git('config', 'user.name', 'Test')
+    _git(tmp_path, 'init', '-b', 'main')
+    _git(tmp_path, 'config', 'user.email', 'test@test.com')
+    _git(tmp_path, 'config', 'user.name', 'Test')
     (tmp_path / 'README.md').write_text('# r\n', encoding='utf-8')
-    git('add', 'README.md')
-    git('commit', '-m', 'init')
+    _git(tmp_path, 'add', 'README.md')
+    _git(tmp_path, 'commit', '-m', 'init')
     wiki_dir = tmp_path / 'wiki'
     wiki_dir.mkdir()
-    head_before = git('rev-parse', 'HEAD').stdout
+    head_before = _git(tmp_path, 'rev-parse', 'HEAD').stdout
 
     configure_git_merge_driver(wiki_dir)
 
     # driver is the stable CLI command and the glob is written to the worktree
-    assert git('config', 'merge.wiki.driver').stdout.strip() == (
+    assert _git(tmp_path, 'config', 'merge.wiki.driver').stdout.strip() == (
         'wiki _merge %O %A %B %L %P'
     )
     attributes = (tmp_path / '.gitattributes').read_text(encoding='utf-8')
     assert '**/_index.md merge=wiki' in attributes.splitlines()
     # nothing is committed (no new HEAD) and nothing is staged (the rule)
-    assert git('rev-parse', 'HEAD').stdout == head_before
-    assert '.gitattributes' not in git('diff', '--cached', '--name-only').stdout
-    assert '.gitattributes' in git('status', '--porcelain').stdout
+    assert _git(tmp_path, 'rev-parse', 'HEAD').stdout == head_before
+    assert (
+        '.gitattributes' not in _git(tmp_path, 'diff', '--cached', '--name-only').stdout
+    )
+    assert '.gitattributes' in _git(tmp_path, 'status', '--porcelain').stdout
 
     # idempotent -- a second call does not duplicate the mapping
     configure_git_merge_driver(wiki_dir)
@@ -385,6 +381,7 @@ def test_configure_git_merge_driver(tmp_path: pathlib.Path) -> None:
     assert final.splitlines().count('**/_index.md merge=wiki') == 1
 
 
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
 def test_merge_driver_skips_dirty_gitattributes(tmp_path: pathlib.Path) -> None:
     """The wiring leaves ``.gitattributes`` untouched while it has pending edits.
 
@@ -392,24 +389,14 @@ def test_merge_driver_skips_dirty_gitattributes(tmp_path: pathlib.Path) -> None:
     ``merge.wiki`` config still applies), so it never entangles with the
     user's uncommitted work; once clean, a re-run writes the map (it converges).
     """
-
-    def git(*args: str) -> str:
-        result = subprocess.run(
-            ['git', '-C', f'{tmp_path}', *args],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return result.stdout
-
     # a repo whose tracked .gitattributes has an uncommitted edit
-    git('init', '-b', 'main')
-    git('config', 'user.email', 'test@test.com')
-    git('config', 'user.name', 'Test')
+    _git(tmp_path, 'init', '-b', 'main')
+    _git(tmp_path, 'config', 'user.email', 'test@test.com')
+    _git(tmp_path, 'config', 'user.name', 'Test')
     attributes = tmp_path / '.gitattributes'
     attributes.write_text('*.txt text\n', encoding='utf-8')
-    git('add', '.gitattributes')
-    git('commit', '-m', 'init')
+    _git(tmp_path, 'add', '.gitattributes')
+    _git(tmp_path, 'commit', '-m', 'init')
     attributes.write_text('*.txt text\n*.md text\n', encoding='utf-8')
     wiki_dir = tmp_path / 'wiki'
     wiki_dir.mkdir()
@@ -417,11 +404,11 @@ def test_merge_driver_skips_dirty_gitattributes(tmp_path: pathlib.Path) -> None:
     # dirty .gitattributes: the map is not written, but the config is still set
     configure_git_merge_driver(wiki_dir)
     assert 'merge=wiki' not in attributes.read_text(encoding='utf-8')
-    assert '_merge' in git('config', 'merge.wiki.driver')
+    assert '_merge' in _git(tmp_path, 'config', 'merge.wiki.driver').stdout
 
     # once .gitattributes is clean, a re-run writes the map (it converges)
-    git('add', '.gitattributes')
-    git('commit', '-m', 'edit')
+    _git(tmp_path, 'add', '.gitattributes')
+    _git(tmp_path, 'commit', '-m', 'edit')
     configure_git_merge_driver(wiki_dir)
     assert '**/_index.md merge=wiki' in attributes.read_text(encoding='utf-8')
 

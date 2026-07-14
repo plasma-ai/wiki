@@ -68,6 +68,9 @@ __all__ = [
 ]
 
 
+# ------ generation and preservation
+
+
 def test_update_full_workflow(tmp_path: pathlib.Path) -> None:
     """Update adds frontmatter, links, word counts, and parent links."""
     # build a populated wiki with one folder and two pages
@@ -203,6 +206,9 @@ def test_update_no_delimiter_keeps_content(tmp_path: pathlib.Path) -> None:
     wiki.update()
     updated = index_path.read_text(encoding='utf-8')
     assert 'Orphaned prose, no delimiter.' in updated
+
+
+# ------ damage repair and refusal
 
 
 @pytest.mark.parametrize(
@@ -358,6 +364,9 @@ def test_update_survives_backslash_digit_name(
     assert wiki.update() is not None
 
 
+# ------ desc parsing and prose placement
+
+
 @pytest.mark.parametrize(
     'header',
     ['|', '|-', '|+', '>-', '>+', '|2'],
@@ -503,6 +512,9 @@ def test_update_preserves_prose_below_delimiter_above_h1(
     assert index_path.read_text(encoding='utf-8') == first
 
 
+# ------ broken links and notices
+
+
 def test_update_broken_links(tmp_path: pathlib.Path) -> None:
     """Update preserves broken links by default, prunes when asked."""
     # build a populated wiki with one folder and page
@@ -621,6 +633,9 @@ def test_update_announces_desc_overwrite(
     notices.clear()
     wiki.update()
     assert 'Overwrote desc:' not in '\n'.join(event.description for event in notices)
+
+
+# ------ convergence and scoping
 
 
 def test_update_trailing_whitespace_desc_converges_quietly(
@@ -793,6 +808,9 @@ def test_body_edits_never_dirty_the_tree(tmp_path: pathlib.Path) -> None:
     assert 'db (42)' in wiki.map()
 
 
+# ------ frontmatter repair
+
+
 @pytest.mark.parametrize('kind', ['page', 'index'])
 def test_update_fills_blank_frontmatter_values(
     tmp_path: pathlib.Path,
@@ -908,6 +926,9 @@ def test_update_inserts_desc_in_schema_order(
         re.M,
     )
     assert fields == ['name', 'desc', 'created', 'updated']
+
+
+# ------ category and desc propagation
 
 
 @pytest.mark.parametrize(
@@ -1041,6 +1062,9 @@ def test_page_category(tmp_path: pathlib.Path) -> None:
     root_index = (tmp_path / '_index.md').read_text(encoding='utf-8')
     assert '[[design|[node] design]]' in root_index
     assert '[[data.csv|data.csv]]' in root_index
+
+
+# ------ naming and escape stability
 
 
 def test_update_skips_invalid_name(
@@ -1234,6 +1258,9 @@ def test_names_with_colon_write_quoted_yaml(tmp_path: pathlib.Path) -> None:
     index_text = (section / '_index.md').read_text(encoding='utf-8')
     assert "name: 'a: b'" in index_text
     assert wiki.update() == []
+
+
+# ------ settings restoration
 
 
 def test_update_materializes_missing_settings(

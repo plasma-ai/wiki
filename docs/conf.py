@@ -23,7 +23,7 @@ year = dt.date.today().year
 
 project = 'wiki'
 author = 'Plasma AI'
-copyright = f'{year}: ' + author
+copyright = f'{year}: {author}'
 
 # The full version, including alpha/beta/rc tags
 release = importlib.import_module('wiki').__version__

@@ -2,8 +2,11 @@
 
 from .test_authoring import *
 from .test_config import *
+from .test_event import *
+from .test_format import *
 from .test_lint import *
 from .test_map import *
+from .test_obsidian import *
 from .test_plan import *
 from .test_read import *
 from .test_search import *

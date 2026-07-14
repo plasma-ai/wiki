@@ -46,6 +46,9 @@ __all__ = [
 ]
 
 
+# ------ update-repairable issues
+
+
 def test_lint_reports_missing_root_name_without_crashing(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -130,6 +133,9 @@ def test_lint_flags_what_update_fixes(tmp_path: pathlib.Path, perturb: str) -> N
     assert wiki.update(check=True) == []
 
 
+# ------ human-only issues
+
+
 @pytest.mark.parametrize(
     ('perturb', 'message'),
     [
@@ -210,6 +216,9 @@ def test_lint_flags_human_only_issues(
     assert any(message in issue for issue in wiki.lint())
     wiki.update()
     assert any(message in issue for issue in wiki.lint())
+
+
+# ------ formatter damage
 
 
 def test_lint_names_formatter_damage(tmp_path: pathlib.Path) -> None:
@@ -352,6 +361,9 @@ def test_lint_allows_thematic_break_in_body(tmp_path: pathlib.Path) -> None:
     assert not any('formatter' in issue for issue in wiki.lint())
 
 
+# ------ missing index and update diffs
+
+
 def test_lint_missing_index(tmp_path: pathlib.Path) -> None:
     """A folder without an index is reported; update creates it and lint clears."""
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
@@ -412,6 +424,9 @@ def test_lint_conflict_markers_suppress_diff(tmp_path: pathlib.Path) -> None:
         assert not any(
             issue.splitlines()[0] == f'{rel}: Requires update' for issue in issues
         )
+
+
+# ------ scoping and field rules
 
 
 def test_lint_link_desc_period(tmp_path: pathlib.Path) -> None:
@@ -485,6 +500,9 @@ def test_lint_flags_blank_created(tmp_path: pathlib.Path) -> None:
     issues = wiki.lint()
     flagged = [issue for issue in issues if 'Requires update' in issue]
     assert any('+created:' in issue for issue in flagged)
+
+
+# ------ masked regions and suppression
 
 
 def test_lint_ignores_code_blocks(tmp_path: pathlib.Path) -> None:
@@ -673,6 +691,9 @@ def test_region_directives_pair_per_directive(tmp_path: pathlib.Path) -> None:
     assert not any('Merge conflict markers' in issue for issue in issues)
 
 
+# ------ clean runs and soft notes
+
+
 def test_lint_clean(tmp_path: pathlib.Path) -> None:
     """A properly structured wiki produces no lint issues."""
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
@@ -707,6 +728,9 @@ def test_quoted_placeholder_desc_is_soft(
     assert not any('Missing period' in issue for issue in issues)
     core_index = (tmp_path / 'core' / '_index.md').read_text(encoding='utf-8')
     assert "'...'" not in core_index
+
+
+# ------ body links and structure
 
 
 @pytest.mark.parametrize('anchor', ['', '#context'], ids=['bare', 'anchored'])

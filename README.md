@@ -196,8 +196,8 @@ Run `./install.sh --help` for all options. Alternatively, run
 Installing a dependency as editable (e.g. a sibling package) is left to
 the caller: `uv pip install --editable <path>`.
 
-Once installed, run tools with `uv run <command>`, or activate the
-environment first (`source .venv/bin/activate`).
+Once installed, run tools with `uv run --no-sync <command>`, or activate
+the environment first (`source .venv/bin/activate`).
 
 ### Tests
 

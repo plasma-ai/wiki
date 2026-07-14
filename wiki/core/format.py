@@ -27,6 +27,9 @@ def extract_frontmatter(lines: list[str]) -> tuple[str, int]:
     Returns ``(frontmatter, line_number)`` where ``line_number``
     is the first line after the closing ``---``. Returns
     ``('', 0)`` if no frontmatter is found.
+
+    The ``_index.md`` merge driver (``_assets/git/merge_index.sh``)
+    mirrors this block detection in shell; keep the two in sync.
     """
     # require an opening '---' (tolerating a UTF-8 BOM, which common
     # Windows editors prepend and str.strip does not remove)
@@ -89,6 +92,10 @@ def parse_index(text: str, *, delimiter: str) -> tuple[str, list[Link], str]:
     (see :func:`reclaim_link_run`) and the rest of the body is the user
     content, so a formatter-mangled index repairs instead of
     duplicating its link block.
+
+    The ``_index.md`` merge driver (``_assets/git/merge_index.sh``)
+    mirrors the frontmatter/delimiter split in shell; keep the region
+    rules in sync.
 
     Args:
         text: Raw file content.

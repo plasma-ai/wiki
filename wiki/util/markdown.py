@@ -1,4 +1,4 @@
-"""Markdown utilities for ``wiki``."""
+"""Functions for markdown text."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Optional
 __all__ = []
 
 
-def mask_code(text: str) -> str:
+def mask_code(text: str, /) -> str:
     """Blank fenced code blocks and inline code spans in text.
 
     Fenced blocks (backtick or tilde fences) blank whole lines via a fence
@@ -49,7 +49,7 @@ def mask_code(text: str) -> str:
     )
 
 
-def find_heading(text: str) -> Optional[tuple[int, str]]:
+def find_heading(text: str, /) -> Optional[tuple[int, str]]:
     r"""Find the first ``# heading`` outside fenced code blocks.
 
     Returns ``(line_index, title)`` for the heading, or

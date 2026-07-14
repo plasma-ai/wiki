@@ -35,6 +35,9 @@ __all__ = [
 ]
 
 
+# ------ init and naming policy
+
+
 def test_init_creates_structure(tmp_path: pathlib.Path) -> None:
     """Init creates root index and config."""
     # init creates root _index.md
@@ -91,7 +94,7 @@ def test_init_creates_structure(tmp_path: pathlib.Path) -> None:
 def test_validate_name(tmp_path: pathlib.Path, name: str, valid: bool) -> None:
     """The default policy is lenient: any name except the structural characters."""
     wiki = Wiki(tmp_path)
-    assert wiki.validate_name(name) == valid
+    assert wiki.validate_name(name) is valid
 
 
 def test_validate_name_strict_via_settings(tmp_path: pathlib.Path) -> None:
@@ -102,12 +105,12 @@ def test_validate_name_strict_via_settings(tmp_path: pathlib.Path) -> None:
     (config / 'settings.json').write_text(json.dumps(policy), encoding='utf-8')
     wiki = Wiki(tmp_path)
     # strict accepts ASCII identifiers, including a leading digit ...
-    assert wiki.validate_name('MyPage')
-    assert wiki.validate_name('123start')
+    assert wiki.validate_name('MyPage') is True
+    assert wiki.validate_name('123start') is True
     # ... and rejects what the lenient default would allow
-    assert not wiki.validate_name('bad-name')
-    assert not wiki.validate_name('café')
-    assert not wiki.validate_name('Machine Learning')
+    assert wiki.validate_name('bad-name') is False
+    assert wiki.validate_name('café') is False
+    assert wiki.validate_name('Machine Learning') is False
 
 
 @pytest.mark.parametrize(
@@ -160,7 +163,10 @@ def test_naming_policy_knobs(
         encoding='utf-8',
     )
     wiki = Wiki(tmp_path)
-    assert wiki.validate_name(name) == valid
+    assert wiki.validate_name(name) is valid
+
+
+# ------ settings and init refusals
 
 
 def test_init_scaffolds_settings(tmp_path: pathlib.Path) -> None:
@@ -183,8 +189,8 @@ def test_init_seeds_custom_settings(tmp_path: pathlib.Path) -> None:
     assert data == policy
     # ... and a fresh instance reads it: the strict rule rejects a dashed name
     wiki = Wiki(tmp_path)
-    assert wiki.validate_name('my_page')
-    assert not wiki.validate_name('bad-name')
+    assert wiki.validate_name('my_page') is True
+    assert wiki.validate_name('bad-name') is False
 
 
 @pytest.mark.parametrize(
@@ -290,6 +296,9 @@ def test_settings_reject_malformed_values(
     assert 'settings.json' in str(excinfo.value)
 
 
+# ------ timestamps
+
+
 def test_timestamp_format_configurable(tmp_path: pathlib.Path) -> None:
     """``timestamp.format`` controls the timestamp string format."""
     config = tmp_path / '.wiki'
@@ -338,6 +347,9 @@ def test_timestamp_format_rejects_blank_or_multiline(
     # the bad format fails loudly when update resolves the timestamp policy
     with pytest.raises(ValueError, match='single non-empty line'):
         Wiki(tmp_path).update()
+
+
+# ------ legacy layout
 
 
 def test_init_refuses_legacy_layout_before_writing(

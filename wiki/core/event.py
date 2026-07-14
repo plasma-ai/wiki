@@ -1,4 +1,4 @@
-"""Base class for wiki events."""
+"""Implements ``Event`` class."""
 
 from __future__ import annotations
 

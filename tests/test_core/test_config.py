@@ -32,17 +32,21 @@ __all__ = [
 ]
 
 
+# ------ fixtures
+
+
 @pytest.fixture
 def stub_download(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub the plugin download with a marker write (no real network)."""
-    # ensure an ambient OFFLINE_MODE does not skip the stubbed download
-    monkeypatch.delenv(OFFLINE_MODE, raising=False)
 
     def download(self: Wiki, url: str, target: pathlib.Path) -> None:
         """Write marker bytes instead of fetching from the network."""
         target.write_bytes(b'CODE')
 
     monkeypatch.setattr(Wiki, '_download', download)
+
+
+# ------ plugin install and merge
 
 
 def test_update_config_installs_plugin(
@@ -74,7 +78,6 @@ def test_update_config_offline_warns(
     # init seeds the front matter title plugin into .wiki/obsidian
     wiki = Wiki(tmp_path)
     wiki.init()
-    monkeypatch.delenv(OFFLINE_MODE, raising=False)
 
     # stub the download boundary to simulate a failure
     def offline(self: Wiki, url: str, target: pathlib.Path) -> None:
@@ -204,6 +207,9 @@ def test_update_config_seeds_missing_config_dir(
     assert plugin_id in json.loads(cp_file.read_text(encoding='utf-8'))
 
 
+# ------ config validation
+
+
 def test_update_config_rejects_type_mismatch(
     tmp_path: pathlib.Path,
     stub_download: None,
@@ -244,6 +250,9 @@ def test_update_config_reports_malformed_target_json(
 
     with pytest.raises(ValueError, match=r'\.obsidian/app\.json'):
         wiki.update_config()
+
+
+# ------ OFFLINE_MODE
 
 
 @pytest.mark.parametrize(

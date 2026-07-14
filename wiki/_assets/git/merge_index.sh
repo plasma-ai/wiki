@@ -54,7 +54,8 @@ split_at_separator() {
         [[ -n "$FM_END" ]] && SCAN_FROM=$((FM_END + 2))
     fi
     # find the first *** line at/after the frontmatter (separator between links
-    # and content); user content below may contain additional *** thematic breaks
+    # and content; mirrors Python parse_index); user content below may contain
+    # additional *** thematic breaks
     local SEP_LINE
     SEP_LINE=$(tail -n +"$SCAN_FROM" "$FILE" | grep -n '^\*\*\*[[:space:]]*$' \
         | head -1 | cut -d: -f1 || true)
@@ -75,8 +76,9 @@ split_frontmatter() {
     local FILE="$1"
     local FM="$2"
     local LINKS="$3"
-    # the frontmatter is a leading --- ... --- block; the link block (H1 and
-    # generated links, up to and including ***) is everything after it
+    # the frontmatter is a leading --- ... --- block (mirrors Python
+    # extract_frontmatter); the link block (H1 and generated links, up to and
+    # including ***) is everything after it
     if [[ "$(head -1 "$FILE")" =~ ^[[:space:]]*---[[:space:]]*$ ]]; then
         local FM_END
         FM_END=$(tail -n +2 "$FILE" | grep -n '^---[[:space:]]*$' \
@@ -105,8 +107,8 @@ split_at_separator "$THEIRS" "$TMPDIR/theirs_above" "$TMPDIR/theirs_below"
 # conflict (merging against an empty base concedes only the lines both sides
 # share) with a repair hint planted above the first marker
 for SIDE in ours theirs; do
-    if [[ -s "$TMPDIR/base_above" && ! -s "$TMPDIR/${SIDE}_above" &&
-        -s "$TMPDIR/${SIDE}_below" ]]; then
+    if [[ -s "$TMPDIR/base_above" && ! -s "$TMPDIR/${SIDE}_above" ]] \
+        && [[ -s "$TMPDIR/${SIDE}_below" ]]; then
         git merge-file --marker-size="$MARKER_SIZE" -p -L ours -L base -L theirs \
             "$OURS" /dev/null "$THEIRS" >"$TMPDIR/result_conflict" || true
         HINT='<!-- index *** separator missing on one side: likely'
@@ -114,6 +116,8 @@ for SIDE in ours theirs; do
         HINT+=' repairs it), redo the merge, and delete this line when'
         HINT+=' resolving -->'
         MARKER=$(printf '%*s' "$MARKER_SIZE" '' | tr ' ' '<')
+        # the hint and marker travel through the environment so awk
+        # never mangles them
         HINT="$HINT" MARKER="$MARKER" awk '
             !done && index($0, ENVIRON["MARKER"]) == 1 {
                 print ENVIRON["HINT"]
@@ -188,6 +192,8 @@ if [[ "$BELOW_EXIT" -ne 0 && ! -s "$BASE" ]]; then
     HINT+=' until after the merge wave, and delete this line when'
     HINT+=' resolving -->'
     MARKER=$(printf '%*s' "$MARKER_SIZE" '' | tr ' ' '<')
+    # the hint and marker travel through the environment so awk
+    # never mangles them
     HINT="$HINT" MARKER="$MARKER" awk '
         !done && index($0, ENVIRON["MARKER"]) == 1 {
             print ENVIRON["HINT"]

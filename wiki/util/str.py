@@ -1,11 +1,11 @@
-"""String utilities for ``wiki``."""
+"""Functions for strings."""
 
 from __future__ import annotations
 
 __all__ = []
 
 
-def format_words(count: int) -> str:
+def format_words(count: int, /) -> str:
     """Format a word count with ``k``/``m``/``b``/``t`` suffix.
 
     >>> format_words(950)
