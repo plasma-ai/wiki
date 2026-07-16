@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import shutil
 
 import pytest
 
+from wiki import __version__ as WIKI_VERSION
 from wiki.cli.utils import configure_git_merge_driver
 
 from .conftest import GIT, WIKI, _git, _wiki
@@ -27,22 +29,27 @@ __all__ = [
     'test_init_quiet_suppresses_chatter',
     'test_install_copies_skill_into_home',
     'test_install_project_targets_cwd',
+    'test_install_link_swaps_copy_and_symlink',
     'test_update_generates_child_links',
     'test_update_prune_removes_broken_link',
     'test_update_check_reports_changes_without_writing',
     'test_update_noop_reports_nothing_to_update',
     'test_update_failed_entry_mutates_nothing',
     'test_update_narrations_condense_by_default',
+    'test_update_condenses_batch_adoption',
     'test_read_only_commands_are_deterministic',
     'test_path_inside_wiki_is_refused',
     'test_path_inside_undeclared_wiki_is_refused',
     'test_parent_enclosing_declared_wiki_is_refused',
+    'test_update_refuses_nested_wiki',
+    'test_update_refuses_conflict_markers',
     'test_lint_reports_issue_taxonomy_and_exits_nonzero',
     'test_lint_summary_counts_notes',
     'test_lint_details_issues_and_count_condenses',
     'test_map_respects_view_options',
     'test_map_filters_by_category',
     'test_map_empty_wiki_reports_empty',
+    'test_map_stat_and_desc_limit_bounds',
     'test_search_output_modes',
     'test_search_field_and_ignore_case',
     'test_search_all_includes_non_markdown',
@@ -67,7 +74,7 @@ __all__ = [
     'test_merge_dispatches_on_pathname',
     'test_merge_conflicts_when_side_loses_separator',
     'test_merge_hints_add_add_body_conflicts',
-    'test_version_reports_installed_version',
+    'test_version_flag_reports_a_version',
 ]
 
 pytestmark = pytest.mark.skipif(
@@ -130,6 +137,8 @@ def test_init_creates_root_index(tmp_path: pathlib.Path) -> None:
     assert 'Initialized wiki' in result.stdout
     index_text = (root / '_index.md').read_text(encoding='utf-8')
     assert 'name: Handbook' in index_text
+    # a title is authored, never seeded on a fresh index
+    assert 'title:' not in index_text
     # init also materializes the Obsidian config; offline (see _wiki)
     # the skipped plugin download surfaces as a warning rather than success
     assert (root / '.obsidian' / 'community-plugins.json').is_file()
@@ -256,6 +265,32 @@ def test_install_project_targets_cwd(tmp_path: pathlib.Path) -> None:
     assert (project / '.claude' / 'skills' / 'wiki' / 'SKILL.md').is_file()
     assert (project / '.agents' / 'skills' / 'wiki' / 'SKILL.md').is_file()
     assert not (home / '.claude').exists()
+
+
+def test_install_link_swaps_copy_and_symlink(tmp_path: pathlib.Path) -> None:
+    """``install --link`` symlinks the skill; re-installs swap either way.
+
+    The symlink is the editable-install dev setup -- source edits apply
+    without re-installing -- and a plain re-install must replace the
+    link with a real copy just as --link replaces a prior copy.
+    """
+    home = tmp_path / 'home'
+    home.mkdir()
+    # a plain install lays down real copies
+    assert _wiki(tmp_path, 'install', home=home).returncode == 0
+    # --link replaces each copy with a symlink to the package source
+    result = _wiki(tmp_path, 'install', '--link', home=home)
+    assert result.returncode == 0, result.stdout + result.stderr
+    for agent in ('.claude', '.agents'):
+        skill = home / agent / 'skills' / 'wiki'
+        assert skill.is_symlink()
+        assert (skill / 'SKILL.md').is_file()
+    # a plain re-install swaps the link back to a real copy
+    rerun = _wiki(tmp_path, 'install', home=home)
+    assert rerun.returncode == 0, rerun.stdout + rerun.stderr
+    skill = home / '.claude' / 'skills' / 'wiki'
+    assert not skill.is_symlink()
+    assert (skill / 'SKILL.md').is_file()
 
 
 # ------ update (+ --prune)
@@ -404,6 +439,31 @@ def test_update_narrations_condense_by_default(tmp_path: pathlib.Path) -> None:
     assert 'mutually exclusive' in (both.stdout + both.stderr).lower()
 
 
+def test_update_condenses_batch_adoption(tmp_path: pathlib.Path) -> None:
+    """A batch of bare-page adoptions condenses to one count line.
+
+    Adoption announcements are update narration like any other: the
+    default mode counts them per category, ``--check`` words them as
+    pending, and ``--full`` prints the per-page lines.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'core' / '_index.md', _index('Core', 'Core concepts.', 'Text.'))
+    _write(root / 'core' / 'one.md', '# One\n\nBody.\n')
+    _write(root / 'core' / 'two.md', 'Body only.\n')
+
+    # a dry run words the pending adoptions without writing them
+    check = _wiki(root, 'update', '--check', '--path', str(root))
+    assert check.returncode == 1
+    assert 'Would adopt 2 bare pages' in check.stderr
+
+    # the applied run counts the adoptions; the per-page lines need --full
+    applied = _wiki(root, 'update', '--path', str(root))
+    assert applied.returncode == 0, applied.stdout + applied.stderr
+    assert 'Adopted 2 bare pages (frontmatter added)' in applied.stderr
+    assert 'Adopted bare page:' not in applied.stderr
+
+
 def test_read_only_commands_are_deterministic(wiki: pathlib.Path) -> None:
     """Lint and map repeat byte-identically with no write-style notices.
 
@@ -516,6 +576,59 @@ def test_parent_enclosing_declared_wiki_is_refused(
     # nothing was absorbed: no marker planted, no name: rewritten
     assert not (tmp_path / '.wiki').exists()
     assert (root / 'note.md').read_text(encoding='utf-8') == before
+
+
+def test_update_refuses_nested_wiki(tmp_path: pathlib.Path) -> None:
+    """A stray declared wiki inside the tree fails update, naming it.
+
+    A wiki copy dropped inside another wiki (a backup, a vendored
+    snapshot) would be absorbed by the sweep -- every nested ``name:``
+    rewritten against the outer root -- so update exits nonzero with
+    the enclosure message instead of rewriting anything.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'note.md', _page('note', 'A page.', 'Body.'))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    # a stray declared wiki dropped inside (its marker is what matters)
+    nested = root / 'backup'
+    (nested / '.wiki').mkdir(parents=True)
+    (nested / '.wiki' / 'settings.json').write_text('{}\n', encoding='utf-8')
+    before = (root / 'note.md').read_text(encoding='utf-8')
+
+    # the sweep is refused with the enclosure message, naming the root
+    result = _wiki(root, 'update', '--path', str(root))
+    combined = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert f'encloses the wiki at: {nested};' in combined
+    assert 'declared root' in combined
+    assert (root / 'note.md').read_text(encoding='utf-8') == before
+
+
+def test_update_refuses_conflict_markers(tmp_path: pathlib.Path) -> None:
+    """A conflict-marked file fails update, naming it, and nothing lands.
+
+    A half-resolved merge would otherwise ride the sweep into the
+    regenerated files, so update exits nonzero naming the marked file
+    instead of rewriting anything.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'note.md', _page('note', 'A page.', 'Body.'))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    # plant a real conflict in the page
+    note = root / 'note.md'
+    conflicted = note.read_text(encoding='utf-8') + (
+        '\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\n'
+    )
+    note.write_text(conflicted, encoding='utf-8')
+
+    # the sweep is refused, naming the marked file, and nothing is rewritten
+    result = _wiki(root, 'update', '--path', str(root))
+    combined = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert 'Merge conflict markers in: note.md;' in combined
+    assert note.read_text(encoding='utf-8') == conflicted
 
 
 # ------ lint
@@ -633,6 +746,8 @@ def test_lint_details_issues_and_count_condenses(
         (['--no-words'], ['core/'], ['(']),
         # descriptions can be truncated to a character budget
         (['--desc-limit', '4'], ['...'], ['Core concepts.']),
+        # -1 explicitly lifts the default desc budget
+        (['--desc-limit', '-1'], ['Core concepts.'], []),
     ],
 )
 def test_map_respects_view_options(
@@ -681,6 +796,26 @@ def test_map_empty_wiki_reports_empty(tmp_path: pathlib.Path) -> None:
     result = _wiki(root, 'map', '--path', str(root))
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'empty' in result.stdout.lower()
+
+
+def test_map_stat_and_desc_limit_bounds(wiki: pathlib.Path) -> None:
+    """``--stat`` prints a one-line size summary; ``--desc-limit`` floors at -1.
+
+    The summary sizes exactly the tree the same flags would print -- the
+    cheap probe before dumping a large wiki -- and -1 (unlimited) is the
+    lowest accepted budget.
+    """
+    stat = _wiki(wiki, 'map', '--path', str(wiki), '--stat')
+    assert stat.returncode == 0, stat.stdout + stat.stderr
+    assert re.fullmatch(r'\d+ lines?, \d+ chars?, \d+ words?\n', stat.stdout)
+    # the summary counts the tree the same flags would dump
+    tree = _wiki(wiki, 'map', '--path', str(wiki))
+    line_count = len(tree.stdout.splitlines())
+    assert stat.stdout.startswith(f'{line_count} lines')
+    # anything below the -1 floor is rejected, naming the bound
+    below = _wiki(wiki, 'map', '--path', str(wiki), '--desc-limit', '-2')
+    assert below.returncode != 0
+    assert '-1' in below.stdout + below.stderr
 
 
 # ------ search
@@ -1074,7 +1209,8 @@ def test_merge_driver_merges_authored_frontmatter(tmp_path: pathlib.Path) -> Non
     The driver normalizes the regenerated keys and the link block to
     ours on all three inputs, then three-way merges the authored
     remainder -- a whole-file ours resolution would silently revert
-    theirs' desc edit with a clean exit.
+    theirs' desc edit (or discard its authored ``title:``) with a clean
+    exit.
     """
     root = tmp_path / 'wiki'
     # a real repo whose wiki has the driver registered by init
@@ -1107,11 +1243,14 @@ def test_merge_driver_merges_authored_frontmatter(tmp_path: pathlib.Path) -> Non
     _git(tmp_path, 'add', '-A')
     _git(tmp_path, 'commit', '-q', '-m', 'base')
 
-    # theirs edits the authored desc (plus regenerated churn of its own)
+    # theirs edits the authored desc and authors a title (plus
+    # regenerated churn of its own)
     _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
     _write(
         index,
-        base.replace('desc: Original section.', 'desc: Edited by theirs.').replace(
+        base.replace('desc: Original section.', 'desc: Edited by theirs.')
+        .replace('name: core\n', 'name: core\ntitle: Their Title\n')
+        .replace(
             'updated: 2026-01-01T00:00:00Z',
             'updated: 2026-01-02T09:00:00Z',
         ),
@@ -1128,20 +1267,34 @@ def test_merge_driver_merges_authored_frontmatter(tmp_path: pathlib.Path) -> Non
     )
     _git(tmp_path, 'commit', '-q', '-am', 'ours')
 
-    # the merge is clean: theirs' desc lands, ours' regenerated churn wins
+    # the merge is clean: theirs' desc and title land (the title is
+    # authored, never normalized to ours), ours' regenerated churn wins
     merge = _git(tmp_path, 'merge', 'theirs')
     assert merge.returncode == 0, merge.stdout + merge.stderr
     merged = index.read_text(encoding='utf-8')
     assert 'desc: Edited by theirs.' in merged
+    assert 'title: Their Title' in merged
     assert 'updated: 2026-01-03T12:00:00Z' in merged
     assert '<<<<<<<' not in merged
 
-    # a second wave where BOTH sides edit desc conflicts like prose
+    # a second wave where BOTH sides edit desc and title conflicts like prose
     _git(tmp_path, 'checkout', '-q', '-b', 'theirs2')
-    _write(index, merged.replace('desc: Edited by theirs.', 'desc: Theirs again.'))
+    _write(
+        index,
+        merged.replace('desc: Edited by theirs.', 'desc: Theirs again.').replace(
+            'title: Their Title',
+            'title: Theirs retitled',
+        ),
+    )
     _git(tmp_path, 'commit', '-q', '-am', 'theirs2')
     _git(tmp_path, 'checkout', '-q', 'main')
-    _write(index, merged.replace('desc: Edited by theirs.', 'desc: Ours now.'))
+    _write(
+        index,
+        merged.replace('desc: Edited by theirs.', 'desc: Ours now.').replace(
+            'title: Their Title',
+            'title: Ours retitled',
+        ),
+    )
     _git(tmp_path, 'commit', '-q', '-am', 'ours2')
     conflicted = _git(tmp_path, 'merge', 'theirs2')
     assert conflicted.returncode != 0
@@ -1149,6 +1302,8 @@ def test_merge_driver_merges_authored_frontmatter(tmp_path: pathlib.Path) -> Non
     assert '<<<<<<<' in text
     assert 'desc: Ours now.' in text
     assert 'desc: Theirs again.' in text
+    assert 'title: Ours retitled' in text
+    assert 'title: Theirs retitled' in text
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
@@ -1410,11 +1565,17 @@ def test_merge_hints_add_add_body_conflicts(tmp_path: pathlib.Path) -> None:
 # ------ version
 
 
-def test_version_reports_installed_version(tmp_path: pathlib.Path) -> None:
-    """``wiki --version`` prints the installed version and exits 0."""
+def test_version_flag_reports_a_version(tmp_path: pathlib.Path) -> None:
+    """``wiki --version`` prints the package's own version and exits 0.
+
+    The first-install smoke test for a distributed CLI: an eager root
+    option, so it resolves before any command. The subprocess imports
+    this worktree's package, so the output must equal its
+    ``__version__`` -- the code that runs, not install-time dist-info.
+    """
     result = _wiki(tmp_path, '--version')
     assert result.returncode == 0, result.stdout + result.stderr
-    assert any(char.isdigit() for char in result.stdout)
+    assert result.stdout.strip() == WIKI_VERSION
 
 
 # ------ helpers

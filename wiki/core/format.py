@@ -78,7 +78,9 @@ def parse_index(text: str, *, delimiter: str) -> tuple[str, list[Link], str]:
     - ``frontmatter``: raw frontmatter text including ``---`` delimiters
     - ``links``: list of ``(target, label, description)`` tuples
     - ``user_content``: everything after the first delimiter, with any
-      prose found above the first link folded in so it is never dropped
+      prose found above the first link folded in so it is never dropped;
+      leading and trailing blank lines drop so render owns the canonical
+      shape (one blank after the delimiter, one trailing newline)
 
     Supports multi-line descriptions: continuation lines (not a link,
     not a delimiter, not blank) are appended to the previous link's
@@ -123,9 +125,11 @@ def parse_index(text: str, *, delimiter: str) -> tuple[str, list[Link], str]:
         while body and not body[0].strip():
             body.pop(0)
         links, body = reclaim_link_run(body)
-        return frontmatter, links, '\n'.join(body)
-    # extract user content (everything after the marker)
-    user_content = '\n'.join(lines[marker + 1 :])
+        return frontmatter, links, '\n'.join(body).strip('\n')
+    # extract user content (everything after the marker); leading and
+    # trailing blank lines drop here so render owns the canonical shape
+    # (one blank after the delimiter, one trailing newline)
+    user_content = '\n'.join(lines[marker + 1 :]).strip('\n')
     # extract links (everything between frontmatter and the marker)
     end = marker
     links = []
@@ -311,20 +315,32 @@ def build_frontmatter(*, name: str, created: str, updated: str) -> str:
     return '\n'.join(lines)
 
 
-def repair_frontmatter(frontmatter: str, *, name: str, now: str) -> str:
+def repair_frontmatter(
+    frontmatter: str,
+    *,
+    name: str,
+    now: str,
+    title: bool = False,
+) -> str:
     """Refresh ``name:`` and fill missing/blank desc/created/updated keys.
 
     The shared frontmatter surgery for index and page planning: callable
     ``name:`` replacement (backslash-digit safe), placeholder restore on
-    blank keys, in-place stamps so duplicates are never appended, and
+    blank keys, in-place stamps so duplicates are never appended,
     insertions in schema order (desc after name; created before
-    updated).
+    updated), and -- when ``title`` is set -- normalization of the
+    authored ``title:`` field.
 
     Args:
         frontmatter: Closed frontmatter block including delimiters.
         name: Path-derived display name to refresh ``name:`` from.
         now: Timestamp for seeding missing or blank ``created:``/
             ``updated:`` fields (never to re-stamp a present value).
+        title: Normalize an authored ``title:`` field: keep it directly
+            under ``name:`` (verbatim bytes) and remove a blank or
+            plain lowercase ``null`` value (absence is the canonical
+            unset form; a quoted ``'null'`` is authored text). Never
+            inserts the field.
 
     """
     # update name from the path-derived name (add it if the field is
@@ -385,7 +401,73 @@ def repair_frontmatter(frontmatter: str, *, name: str, now: str) -> str:
     elif not re.search(r'^updated:', frontmatter, re.MULTILINE):
         pos = frontmatter.rfind('---')
         frontmatter = frontmatter[:pos] + f'updated: {now}\n' + frontmatter[pos:]
+    # normalize the authored title LAST: the desc insertion above anchors
+    # on the name: line and would push an under-name title down to
+    # name/desc/title order, so the reposition must have the final word
+    if title:
+        # the extent is the field's indicator line plus any indented/blank
+        # body lines (the block-scalar shape read_frontmatter_field
+        # resolves), so a block-scalar title moves or is removed as one
+        # unit; the first occurrence wins, matching every reader
+        match = re.search(
+            r'^title:.*\n(?:[ \t]+.*\n|[ \t]*\n)*',
+            frontmatter,
+            re.MULTILINE,
+        )
+        if match:
+            # removal keys on the raw extent bytes -- only a blank value,
+            # the plain lowercase null spelling, or an empty block scalar
+            # is provably valueless; a quoted or block-scalar 'null' is
+            # authored text, so no authored value is ever deleted
+            indicator, _, body = match.group(0).partition('\n')
+            value = indicator.split(':', 1)[1].strip()
+            if not body.strip() and (
+                value in ('', 'null') or re.fullmatch(r'[|>][-+0-9]*', value)
+            ):
+                # absence is the canonical unset form, so drop the extent
+                frontmatter = frontmatter[: match.start()] + frontmatter[match.end() :]
+            else:
+                # reposition the authored bytes verbatim, directly under name:
+                anchor = re.search(r'^name:.*\n', frontmatter, re.MULTILINE)
+                if match.start() != anchor.end():
+                    frontmatter = (
+                        frontmatter[: match.start()] + frontmatter[match.end() :]
+                    )
+                    anchor = re.search(r'^name:.*\n', frontmatter, re.MULTILINE)
+                    frontmatter = (
+                        frontmatter[: anchor.end()]
+                        + match.group(0)
+                        + frontmatter[anchor.end() :]
+                    )
     return frontmatter
+
+
+def seed_frontmatter_title(frontmatter: str, title: Optional[str] = None) -> str:
+    """Seed a ``title:`` line directly under ``name:`` when none exists.
+
+    ``title`` is the value to seed -- adopting a bare page preserves its
+    authored H1 this way -- and ``None`` seeds the ``title: null``
+    placeholder required-titles mode demands. Frontmatter already
+    carrying a ``title:`` line is returned unchanged: the field is
+    authored, so a present line is never overwritten.
+    """
+    if re.search(r'^title:', frontmatter, re.MULTILINE):
+        return frontmatter
+    if title is None:
+        value = 'null'
+    else:
+        # quote the reserved lowercase null spelling: an authored H1
+        # reading "null" must read back as text, not the placeholder
+        value = "'null'" if title == 'null' else quote(title)
+    # callable repl so a backslash-digit in the title is not read as a
+    # group reference
+    return re.sub(
+        r'^(name:.*\n)',
+        lambda match: f'{match.group(1)}title: {value}\n',
+        frontmatter,
+        count=1,
+        flags=re.MULTILINE,
+    )
 
 
 def replace_heading(content: str, name: str) -> str:
@@ -456,6 +538,27 @@ def read_frontmatter_name(frontmatter: str) -> Optional[str]:
     indicator. Returns ``None`` if no name field is found.
     """
     return read_frontmatter_field(frontmatter, 'name')
+
+
+def read_frontmatter_title(frontmatter: str) -> str:
+    """Read the ``title`` field from frontmatter text.
+
+    Returns an empty string if the field is absent, blank, or the plain
+    lowercase ``null`` spelling, so callers resolve a display heading as
+    ``title or name``; a quoted or block-scalar ``null`` is authored
+    text and reads back literally. A multi-line value (block scalar) is
+    joined to a single line: the H1 renders on one line, and a raw
+    newline would leak lines above the link block that every parse folds
+    into user content -- unbounded growth (authored frontmatter is user
+    input; this is boundary validation).
+    """
+    # the unset check reads the raw spelling: unquoting first would
+    # collapse an authored 'null' into the reset idiom
+    match = re.search(r'^title:[^\S\n]*(.*)$', frontmatter, re.MULTILINE)
+    if match is None or match.group(1).strip() in ('', 'null'):
+        return ''
+    value = read_frontmatter_field(frontmatter, 'title')
+    return join_lines(value or '')
 
 
 def read_frontmatter_desc(frontmatter: str) -> Optional[str]:
@@ -545,7 +648,7 @@ def field_line_ranges(
 
 
 def render_index(
-    name: str,
+    heading: str,
     frontmatter: str,
     links: list[Link],
     user_content: str,
@@ -555,20 +658,22 @@ def render_index(
     """Render a complete ``_index.md`` file.
 
     All links are in a single section. One delimiter separates
-    links from user content (always present).
+    links from user content (always present). ``heading`` becomes the
+    H1: the authored title when one is set, else the path-derived name.
     """
     # initialize index contents
-    parts = [frontmatter, '', f'# {name}', '']
+    parts = [frontmatter, '', f'# {heading}', '']
     # render links
     for target, label, desc in links:
         parts.append(format_link(target, label, desc))
         parts.append('')
-    # delimiter + user content
+    # delimiter + user content: a blank line after the delimiter when
+    # content follows, and exactly one trailing newline either way
     parts.append(delimiter)
     if user_content:
-        parts.append(user_content)
-    else:
         parts.append('')
+        parts.append(user_content)
+    parts.append('')
     # join parts and return index
     return '\n'.join(parts)
 
@@ -661,11 +766,13 @@ def quote(value: str) -> str:
     """YAML-quote a scalar when writing it plain would break the mapping.
 
     A value containing ``': '`` (or ending with ``:``) reads as a nested
-    mapping in YAML, so it is written single-quoted with embedded single
-    quotes doubled; any other value passes through unquoted. Inverse of
-    :func:`unquote` for the values the wiki writes.
+    mapping in YAML, and one wrapped in matching quote chars would lose
+    its quotes to :func:`unquote` on read, so either is written
+    single-quoted with embedded single quotes doubled; any other value
+    passes through unquoted. Inverse of :func:`unquote` for the values
+    the wiki writes.
     """
-    if ': ' in value or value.endswith(':'):
+    if ': ' in value or value.endswith(':') or unquote(value) != value:
         escaped = value.replace("'", "''")
         return f"'{escaped}'"
     return value
@@ -771,4 +878,82 @@ def escaped_wikilink_lines(masked: str) -> list[int]:
     for lineno, line in enumerate(masked.split('\n'), 1):
         if re.search(r'\\\[\\?\[', line):
             result.append(lineno)
+    return result
+
+
+def hyphen_dangle_lines(masked: str) -> list[int]:
+    r"""Return 1-based line numbers ending in a wrap-dangled hyphen.
+
+    A line break landing inside a hyphenated word leaves its line
+    ending ``<word>-`` with the compound's tail opening the next line;
+    every folded read joins the pair with a space, so ``twenty-\nclass``
+    reads back mangled as ``twenty- class``. A next line opening with
+    ``and `` or ``or `` is the suspended-hyphen idiom (``twenty- and
+    thirty-class`` wrapped at the break) and exempt. ``masked`` is
+    pre-masked text (per :func:`parse_regions`).
+    """
+    result = []
+    lines = masked.split('\n')
+    for lineno, line in enumerate(lines[:-1], 1):
+        # a dangle breaks a word at its hyphen: word char, hyphen, EOL
+        if not re.search(r'\w-$', line.rstrip()):
+            continue
+        # the next line must continue the text, minus the idiom
+        following = lines[lineno].lstrip()
+        if re.match(r'\w', following) and not re.match(r'(?:and|or) ', following):
+            result.append(lineno)
+    return result
+
+
+def wrapped_marker_lines(masked: str, text: str) -> list[int]:
+    """Return 1-based line numbers where a list marker breaks a sentence.
+
+    A line opening with a list marker (``+ ``/``- ``/``* ``) renders as
+    a bullet, so a wrapped continuation starting with one reads back as
+    a phantom list item -- and a real list opening directly under a
+    paragraph line (no blank line between) renders just as broken. A
+    marker line is healthy under a structural line (blank, another list
+    item, a heading, a blockquote or table row, a thematic break, a
+    comment, or a bare block-scalar header) or inside an open list --
+    an item opened at or under its indent since the last blank line --
+    where the line above is a wrapped continuation of the item, not a
+    paragraph. ``masked`` is pre-masked text (per :func:`parse_regions`)
+    and ``text`` the raw text it was masked from: a marker counts only
+    when it opens the raw line too, since masking a leading code span
+    leaves a marker-shaped remainder that never renders as a bullet.
+    """
+    result = []
+    lines = masked.split('\n')
+    raw = text.split('\n')
+    # indents of the list items opened since the last blank line
+    open_items: list[int] = []
+    for lineno, line in enumerate(lines, 1):
+        if not line.strip():
+            open_items = []
+            continue
+        stripped = line.lstrip()
+        indent = len(line) - len(stripped)
+        # a marker must open the raw line as well as the masked one
+        marker = bool(
+            re.match(r'(?:[-+*]|\d+[.)]) ', stripped)
+            and re.match(r'(?:[-+*]|\d+[.)]) ', raw[lineno - 1].lstrip())
+        )
+        if (
+            marker
+            and re.match(r'[-+*] ', stripped)
+            and lineno > 1
+            and not any(item <= indent for item in open_items)
+        ):
+            # only a paragraph line above makes the marker line a mangle
+            previous = lines[lineno - 2].strip()
+            if (
+                previous
+                and not re.match(r'(?:[-+*]|\d+[.)]) ', previous)
+                and not previous.startswith(('#', '>', '|', '<!--'))
+                and not re.fullmatch(r'\*{3,}|-{3,}|_{3,}', previous)
+                and not re.fullmatch(r'\w+:\s*[|>][-+0-9]*', previous)
+            ):
+                result.append(lineno)
+        if marker:
+            open_items.append(indent)
     return result

@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import pathlib
 import re
+import shutil
+from typing import Optional
 
 import pytest
 
@@ -26,6 +28,7 @@ from ._helpers import (
 
 __all__ = [
     'test_update_full_workflow',
+    'test_update_normalizes_delimiter_region_spacing',
     'test_update_preserves_content',
     'test_update_preserves_content_with_thematic_break',
     'test_update_preserves_frontmatter_with_dashes',
@@ -33,6 +36,8 @@ __all__ = [
     'test_update_repairs_formatter_mangled_index',
     'test_update_reports_page_with_unclosed_frontmatter',
     'test_update_refuses_truncated_index',
+    'test_update_refuses_nested_wiki',
+    'test_update_refuses_conflict_markers',
     'test_update_survives_backslash_digit_name',
     'test_update_accepts_block_scalar_desc',
     'test_update_accepts_block_scalar_name',
@@ -42,9 +47,11 @@ __all__ = [
     'test_update_broken_links',
     'test_update_emits_every_notice',
     'test_update_announces_created_index',
+    'test_update_announces_adoption',
     'test_update_announces_desc_overwrite',
     'test_update_trailing_whitespace_desc_converges_quietly',
     'test_update_rewrapped_desc_converges_quietly',
+    'test_update_converges_on_wrap_mangled_desc',
     'test_update_scoped',
     'test_reclaimed_index_keeps_link_shaped_continuation',
     'test_body_edits_never_dirty_the_tree',
@@ -64,6 +71,15 @@ __all__ = [
     'test_update_adds_missing_name',
     'test_update_detects_bom_prefixed_frontmatter',
     'test_names_with_colon_write_quoted_yaml',
+    'test_title_wins_heading_and_null_reverts',
+    'test_update_repositions_title_under_name',
+    'test_update_inserts_desc_under_title',
+    'test_block_scalar_title_moves_as_one_unit',
+    'test_update_removes_valueless_title',
+    'test_quoted_colon_title_renders_unquoted_heading',
+    'test_update_adopts_bare_page_seeding_title',
+    'test_required_titles_seed_lint_and_flip_off',
+    'test_required_titles_adopts_no_h1_page',
     'test_update_materializes_missing_settings',
 ]
 
@@ -104,6 +120,35 @@ def test_update_full_workflow(tmp_path: pathlib.Path) -> None:
     # update is idempotent (second pass changes nothing)
     second_pass = wiki.update()
     assert len(second_pass) == 0
+
+
+def test_update_normalizes_delimiter_region_spacing(tmp_path: pathlib.Path) -> None:
+    """User content sits one blank below '***'; files end with one newline.
+
+    The generated region already enforces a blank after the H1 and
+    before the delimiter; the user region converges to the same shape
+    however it was hand-authored -- content jammed against the
+    delimiter, blank pile-ups, or a missing trailing newline. An empty
+    user region keeps the bare delimiter tail.
+    """
+    wiki = _make_wiki(tmp_path, folders={'notes': ['readme']})
+    index_path = tmp_path / 'notes' / '_index.md'
+    # the fixture index renders canonically: one blank below the
+    # delimiter, one trailing newline
+    original = index_path.read_text(encoding='utf-8')
+    assert original.endswith('***\n\nOverview of notes.\n')
+    # each hand-authored variant converges to the same canonical bytes
+    head = original[: original.index('***')]
+    canonical = None
+    for tail in ('***\nMy notes.', '***\n\n\n\nMy notes.\n\n\n', '***\n\nMy notes.'):
+        index_path.write_text(head + tail, encoding='utf-8')
+        wiki.update()
+        result = index_path.read_text(encoding='utf-8')
+        assert result.endswith('***\n\nMy notes.\n')
+        canonical = canonical or result
+        assert result == canonical
+    # the canonical shape is stable (second pass changes nothing)
+    assert len(wiki.update()) == 0
 
 
 def test_update_preserves_content(tmp_path: pathlib.Path) -> None:
@@ -325,6 +370,78 @@ def test_update_refuses_truncated_index(
     assert '[[core/design|design]]' in rebuilt
 
 
+def test_update_refuses_nested_wiki(tmp_path: pathlib.Path) -> None:
+    """A nested declared wiki refuses the sweep before anything mutates.
+
+    A stray copy of a wiki inside itself (a backup, a vendored
+    snapshot) would otherwise be absorbed -- every nested ``name:``
+    rewritten against the outer root. Update refuses, naming the
+    nested root, and the dry run refuses alike rather than previewing
+    the absorption.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    # drop a full copy of the wiki (marker included) inside itself
+    snapshot = tmp_path.parent / f'{tmp_path.name}_snapshot'
+    shutil.copytree(tmp_path, snapshot)
+    shutil.move(str(snapshot), str(tmp_path / 'backup'))
+    before = {path: path.read_text(encoding='utf-8') for path in tmp_path.rglob('*.md')}
+
+    # the write and the dry run both refuse, naming the nested root
+    with pytest.raises(ValueError, match=r'encloses the wiki at: .*backup'):
+        wiki.update()
+    with pytest.raises(ValueError, match=r'encloses the wiki at: .*backup'):
+        wiki.update(check=True)
+
+    # nothing was rewritten
+    after = {path: path.read_text(encoding='utf-8') for path in tmp_path.rglob('*.md')}
+    assert after == before
+
+
+def test_update_refuses_conflict_markers(tmp_path: pathlib.Path) -> None:
+    """Conflict-marked files refuse the sweep before anything mutates.
+
+    A half-resolved merge would otherwise ride the rewrite -- the plan
+    reads the markers as authored content and bakes them into the
+    regenerated files. Update refuses, naming every marked file, and
+    the dry run refuses alike rather than previewing the damage; a
+    well-formed ``no-lint`` region sanctions marker-shaped lines (e.g.
+    a git tutorial).
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design', 'api']})
+    # plant a real conflict in a page and an index
+    conflict = '\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\n'
+    marked = {}
+    for rel in ('core/design.md', 'core/_index.md'):
+        path = tmp_path / rel
+        marked[path] = path.read_text(encoding='utf-8')
+        path.write_text(marked[path] + conflict, encoding='utf-8')
+    before = {path: path.read_text(encoding='utf-8') for path in tmp_path.rglob('*.md')}
+
+    # the write and the dry run both refuse, naming every marked file
+    message = r'Merge conflict markers in: core/_index\.md, core/design\.md'
+    with pytest.raises(ValueError, match=message):
+        wiki.update()
+    with pytest.raises(ValueError, match=message):
+        wiki.update(check=True)
+
+    # nothing was rewritten
+    after = {path: path.read_text(encoding='utf-8') for path in tmp_path.rglob('*.md')}
+    assert after == before
+
+    # resolving the conflicts unblocks the sweep; a no-lint region keeps
+    # deliberate marker lines writable, and update never strips them
+    for path, text in marked.items():
+        path.write_text(text, encoding='utf-8')
+    page = tmp_path / 'core' / 'api.md'
+    page.write_text(
+        page.read_text(encoding='utf-8')
+        + '\n<!-- start: no-lint -->\n<<<<<<< HEAD\n<!-- end: no-lint -->\n',
+        encoding='utf-8',
+    )
+    wiki.update()
+    assert '<<<<<<< HEAD' in page.read_text(encoding='utf-8')
+
+
 @pytest.mark.parametrize('kind', ['folder', 'page'])
 def test_update_survives_backslash_digit_name(
     tmp_path: pathlib.Path,
@@ -361,7 +478,7 @@ def test_update_survives_backslash_digit_name(
     wiki.update()
     assert name in target.read_text(encoding='utf-8')
     wiki.lint()
-    assert wiki.update() is not None
+    assert wiki.update() == []
 
 
 # ------ desc parsing and prose placement
@@ -588,6 +705,39 @@ def test_update_announces_created_index(
     assert 'New index:' not in '\n'.join(event.description for event in notices)
 
 
+def test_update_announces_adoption(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Adopting a bare page is announced, naming the page and seeded title.
+
+    Adoption rewrites the file wholesale -- frontmatter added, H1
+    rewritten -- so the act is named when it happens, saying whether an
+    authored H1 was preserved through a seeded ``title:``; a converged
+    re-run stays quiet.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    (tmp_path / 'core' / 'titled.md').write_text(
+        '# The L25 Wall\n\nBody prose.\n',
+        encoding='utf-8',
+    )
+    (tmp_path / 'core' / 'plain.md').write_text('Body prose only.\n', encoding='utf-8')
+    notices = _capture_notices(wiki)
+
+    # each adoption is announced once, saying whether a title was seeded
+    wiki.update()
+    err = '\n'.join(event.description for event in notices)
+    assert (
+        'Adopted bare page: core/titled.md'
+        ' (frontmatter added; title: seeded from its H1)'
+    ) in err
+    assert 'Adopted bare page: core/plain.md (frontmatter added)' in err
+
+    # a converged re-run stays quiet
+    notices.clear()
+    wiki.update()
+    assert 'Adopted' not in '\n'.join(event.description for event in notices)
+
+
 def test_update_announces_desc_overwrite(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -703,6 +853,37 @@ def test_update_rewrapped_desc_converges_quietly(
     assert wiki.update() == []
     assert 'Overwrote desc:' not in '\n'.join(event.description for event in notices)
     assert wrapped in index_path.read_text(encoding='utf-8')
+
+
+def test_update_converges_on_wrap_mangled_desc(tmp_path: pathlib.Path) -> None:
+    """A wrap-mangled desc propagates verbatim, converges, and stays flagged.
+
+    Update owns propagation, not mending: the dangling line break flows
+    into the index link row as-is, a second update is a byte no-op, and
+    the artifact stays lint's to flag in page and index alike.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    index = tmp_path / 'core' / '_index.md'
+    page.write_text(
+        page.read_text(encoding='utf-8').replace(
+            'desc: The design page.',
+            'desc: |\n  supports twenty-\n  class workloads.',
+        ),
+        encoding='utf-8',
+    )
+    wiki.update()
+
+    # the mangled break lands in the link row and the run converges
+    text = index.read_text(encoding='utf-8')
+    assert '[[core/design|design]]: supports twenty-\nclass workloads.' in text
+    assert wiki.update() == []
+    assert index.read_text(encoding='utf-8') == text
+
+    # lint flags the artifact in both files
+    issues = wiki.lint()
+    assert any(issue.startswith('core/design.md: Hyphen dangle') for issue in issues)
+    assert any(issue.startswith('core/_index.md: Hyphen dangle') for issue in issues)
 
 
 def test_update_scoped(tmp_path: pathlib.Path) -> None:
@@ -1258,6 +1439,344 @@ def test_names_with_colon_write_quoted_yaml(tmp_path: pathlib.Path) -> None:
     index_text = (section / '_index.md').read_text(encoding='utf-8')
     assert "name: 'a: b'" in index_text
     assert wiki.update() == []
+
+
+# ------ authored titles
+
+
+@pytest.mark.parametrize('kind', ['index', 'root', 'page'])
+def test_title_wins_heading_and_null_reverts(
+    tmp_path: pathlib.Path,
+    kind: str,
+) -> None:
+    """An authored ``title:`` wins the H1; ``title: null`` unsets it.
+
+    ``name:`` stays path-derived throughout -- in particular the root's,
+    which is read back from its own frontmatter, so a title-aware name
+    resolution would rewrite ``name:`` to the title. A hand-mangled H1
+    on a titled file is restored from the title, and ``title: null``
+    removes the line and reverts the H1 to the name.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    if kind == 'index':
+        target, name = tmp_path / 'core' / '_index.md', 'core'
+    elif kind == 'root':
+        target, name = tmp_path / '_index.md', 'root'
+    else:
+        target, name = tmp_path / 'core' / 'design.md', 'core/design'
+
+    # author a title directly under name; a fresh instance reads the
+    # titled file (the builder's caches predate the edit)
+    text = target.read_text(encoding='utf-8')
+    target.write_text(
+        text.replace(f'name: {name}\n', f'name: {name}\ntitle: Fancy\n'),
+        encoding='utf-8',
+    )
+    wiki = Wiki(tmp_path)
+
+    # one update rewrites the H1; name: keeps the path-derived value
+    wiki.update()
+    titled = target.read_text(encoding='utf-8')
+    assert f'name: {name}\ntitle: Fancy\n' in titled
+    assert '# Fancy\n' in titled
+    assert f'# {name}\n' not in titled
+    assert wiki.update() == []
+
+    # a hand-mangled H1 is restored from the title in one update
+    target.write_text(
+        titled.replace('# Fancy\n', '# Mangled\n'),
+        encoding='utf-8',
+    )
+    wiki.update()
+    assert '# Fancy\n' in target.read_text(encoding='utf-8')
+
+    # title: null unsets: the line is removed and the H1 reverts
+    text = target.read_text(encoding='utf-8')
+    target.write_text(
+        text.replace('title: Fancy\n', 'title: null\n'),
+        encoding='utf-8',
+    )
+    wiki.update()
+    reverted = target.read_text(encoding='utf-8')
+    assert 'title:' not in reverted
+    assert f'# {name}\n' in reverted
+    assert wiki.update() == []
+
+
+@pytest.mark.parametrize('position', ['tail', 'mid-block', 'under-name'])
+def test_update_repositions_title_under_name(
+    tmp_path: pathlib.Path,
+    position: str,
+) -> None:
+    """A title authored anywhere in the block lands directly under ``name:``.
+
+    The canonical slot is directly under ``name`` -- one update moves the
+    authored line there byte-verbatim, wherever it starts, and the
+    result is converged.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    index = tmp_path / 'core' / '_index.md'
+    text = index.read_text(encoding='utf-8')
+    if position == 'tail':
+        text = text.replace('\n---\n', '\ntitle: Fancy\n---\n', 1)
+    elif position == 'mid-block':
+        text = text.replace('\nupdated:', '\ntitle: Fancy\nupdated:', 1)
+    else:
+        text = text.replace('name: core\n', 'name: core\ntitle: Fancy\n')
+    index.write_text(text, encoding='utf-8')
+
+    # one update lands the verbatim line in its slot and converges
+    wiki.update()
+    updated = index.read_text(encoding='utf-8')
+    assert 'name: core\ntitle: Fancy\ndesc: ' in updated
+    assert wiki.update() == []
+
+
+def test_update_inserts_desc_under_title(tmp_path: pathlib.Path) -> None:
+    """A missing ``desc:`` slots below an under-name title.
+
+    The desc insertion anchors on the ``name:`` line, which would push
+    an under-name title down to name/desc/title order; title
+    normalization runs last, so one update ends in name/title/desc
+    schema order.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    index = tmp_path / 'core' / '_index.md'
+    text = index.read_text(encoding='utf-8')
+    text = text.replace('name: core\n', 'name: core\ntitle: Fancy\n')
+    text = text.replace('desc: The core section.\n', '')
+    index.write_text(text, encoding='utf-8')
+
+    # one update restores the placeholder in schema order and converges
+    wiki.update()
+    fields = re.findall(
+        r'^(name|title|desc|created|updated):',
+        index.read_text(encoding='utf-8'),
+        re.M,
+    )
+    assert fields == ['name', 'title', 'desc', 'created', 'updated']
+    assert wiki.update() == []
+
+
+def test_block_scalar_title_moves_as_one_unit(tmp_path: pathlib.Path) -> None:
+    """A block-scalar title moves with its body and folds to one H1 line.
+
+    The field extent is the indicator line plus its indented body, so a
+    reposition never strands continuation lines; the H1 folds the value
+    to a single line (a raw newline would leak lines above the link
+    block), and the tree is byte-converged afterwards.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    index = tmp_path / 'core' / '_index.md'
+    text = index.read_text(encoding='utf-8')
+    scalar = 'title: >-\n  A folded\n  headline\n'
+    index.write_text(text.replace('\n---\n', f'\n{scalar}---\n', 1), encoding='utf-8')
+
+    # the verbatim block lands under name and renders one folded H1 line
+    wiki.update()
+    updated = index.read_text(encoding='utf-8')
+    assert f'name: core\n{scalar}' in updated
+    assert '# A folded headline\n' in updated
+    assert wiki.update() == []
+
+
+@pytest.mark.parametrize(
+    ('value', 'heading'),
+    [
+        ('', None),
+        (' null', None),
+        (' ~', '~'),
+        (" 'null'", 'null'),
+        (' "null"', 'null'),
+    ],
+    ids=['blank', 'null', 'tilde', 'single-quoted-null', 'double-quoted-null'],
+)
+def test_update_removes_valueless_title(
+    tmp_path: pathlib.Path,
+    value: str,
+    heading: Optional[str],
+) -> None:
+    """A blank or plain lowercase ``null`` title is removed; the rest stay.
+
+    Absence is the canonical unset form, so update deletes only provably
+    valueless lines. YAML's other null spellings (``~``/``Null``/
+    ``NULL``) and a quoted ``'null'`` are not the documented reset
+    idiom -- they read as authored text and render literally as the H1.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    index = tmp_path / 'core' / '_index.md'
+    text = index.read_text(encoding='utf-8')
+    index.write_text(
+        text.replace('name: core\n', f'name: core\ntitle:{value}\n'),
+        encoding='utf-8',
+    )
+    wiki.update()
+    updated = index.read_text(encoding='utf-8')
+    if heading is None:
+        assert 'title:' not in updated
+        assert '# core\n' in updated
+    else:
+        assert f'title:{value}\n' in updated
+        assert f'# {heading}\n' in updated
+    assert wiki.update() == []
+
+
+def test_quoted_colon_title_renders_unquoted_heading(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A ``title: 'A: B'`` value renders its H1 without the YAML quotes.
+
+    A value containing ``': '`` must be quoted to stay valid YAML; the
+    reader strips one pair of matching quotes, so the heading shows the
+    authored text.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    index = tmp_path / 'core' / '_index.md'
+    text = index.read_text(encoding='utf-8')
+    index.write_text(
+        text.replace('name: core\n', "name: core\ntitle: 'Core: Internals'\n"),
+        encoding='utf-8',
+    )
+    wiki.update()
+    updated = index.read_text(encoding='utf-8')
+    assert "title: 'Core: Internals'\n" in updated
+    assert '# Core: Internals\n' in updated
+    assert wiki.update() == []
+
+
+@pytest.mark.parametrize(
+    ('body', 'seeded'),
+    [
+        ('# The L25 Wall\n\nBody prose.\n', 'title: The L25 Wall'),
+        ('# null\n\nBody prose.\n', "title: 'null'"),
+        ('# "Quoted Title"\n\nBody prose.\n', 'title: \'"Quoted Title"\''),
+        ("# 'null'\n\nBody prose.\n", "title: '''null'''"),
+        ('Body prose only.\n', None),
+    ],
+    ids=['h1', 'null-h1', 'quoted-h1', 'quoted-null-h1', 'no-h1'],
+)
+def test_update_adopts_bare_page_seeding_title(
+    tmp_path: pathlib.Path,
+    body: str,
+    seeded: Optional[str],
+) -> None:
+    """Adopting a bare page seeds ``title:`` from its authored H1.
+
+    Adding frontmatter to a frontmatterless page preserves the heading
+    the author wrote -- the seeded title wins the H1 rewrite, a heading
+    reading ``null`` is seeded quoted so it survives as text, and a
+    heading wrapped in quote chars is seeded re-quoted so the read does
+    not strip the authored quotes -- while a page with no H1 gains the
+    path-joined heading, title-less.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'notes.md'
+    page.write_text(body, encoding='utf-8')
+    wiki.update()
+
+    adopted = page.read_text(encoding='utf-8')
+    assert 'name: core/notes\n' in adopted
+    if seeded:
+        # the authored heading survives, preserved through the title
+        assert f'name: core/notes\n{seeded}\n' in adopted
+        heading = body.split('\n', 1)[0]
+        assert f'{heading}\n' in adopted
+        assert '# core/notes' not in adopted
+    else:
+        # the invented heading is not authored, so it seeds no title
+        assert '# core/notes\n' in adopted
+        assert 'title:' not in adopted
+    assert wiki.update() == []
+
+
+def test_required_titles_seed_lint_and_flip_off(tmp_path: pathlib.Path) -> None:
+    """``titles.required`` seeds placeholders, fails lint, and inverts null.
+
+    With the setting on, update seeds ``title: null`` directly under
+    ``name:`` on every index and page missing a title -- the placeholder
+    is kept, never read as an unset request -- a second update is a byte
+    no-op, and lint fails each placeholder until a value is authored.
+    Flipping the setting off restores null-removal on the next update.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    settings = tmp_path / '.wiki' / 'settings.json'
+    settings.write_text(
+        json.dumps({'titles': {'required': True}}) + '\n',
+        encoding='utf-8',
+    )
+    # a fresh instance reads the new policy (settings cache per instance)
+    wiki = Wiki(tmp_path)
+    files = [
+        tmp_path / '_index.md',
+        tmp_path / 'core' / '_index.md',
+        tmp_path / 'core' / 'design.md',
+    ]
+
+    # one update seeds every placeholder in schema position, then converges
+    wiki.update()
+    for path in files:
+        text = path.read_text(encoding='utf-8')
+        assert re.search(r'^name: .*\ntitle: null\n', text, re.M)
+    assert wiki.update() == []
+
+    # every placeholder is a hard lint issue until a value is authored
+    issues = wiki.lint()
+    assert len([issue for issue in issues if 'Missing title' in issue]) == len(files)
+    for path in files[:-1]:
+        path.write_text(
+            path.read_text(encoding='utf-8').replace('title: null', 'title: Authored'),
+            encoding='utf-8',
+        )
+    wiki.update()
+    issues = wiki.lint()
+    assert [issue for issue in issues if 'Missing title' in issue] == [
+        'core/design.md: Missing title (author a value)'
+    ]
+
+    # flipping the setting off makes the leftover placeholder removable
+    settings.write_text('{}\n', encoding='utf-8')
+    wiki = Wiki(tmp_path)
+    wiki.update()
+    assert 'title:' not in files[-1].read_text(encoding='utf-8')
+    assert wiki.lint() == []
+    assert wiki.update() == []
+
+
+def test_required_titles_adopts_no_h1_page(tmp_path: pathlib.Path) -> None:
+    """Adopting a no-H1 page under ``titles.required`` stays lint-red.
+
+    Adoption invents the path-joined H1 and the placeholder seed lands
+    ``title: null`` beside it -- the invented heading is not authored,
+    so it never satisfies the requirement -- and lint fails the page
+    until a value is authored.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    settings = tmp_path / '.wiki' / 'settings.json'
+    settings.write_text(
+        json.dumps({'titles': {'required': True}}) + '\n',
+        encoding='utf-8',
+    )
+    # a fresh instance reads the new policy (settings cache per instance)
+    wiki = Wiki(tmp_path)
+    page = tmp_path / 'core' / 'notes.md'
+    page.write_text('Body prose only.\n', encoding='utf-8')
+    wiki.update()
+
+    # the adopted page carries the invented H1 and the null placeholder
+    adopted = page.read_text(encoding='utf-8')
+    assert re.search(r'^name: core/notes\ntitle: null\n', adopted, re.M)
+    assert '# core/notes\n' in adopted
+    assert wiki.update() == []
+
+    # the placeholder is a hard lint issue until a value is authored
+    issue = 'core/notes.md: Missing title (author a value)'
+    assert issue in wiki.lint()
+    page.write_text(
+        adopted.replace('title: null', 'title: Authored'),
+        encoding='utf-8',
+    )
+    wiki.update()
+    assert issue not in wiki.lint()
 
 
 # ------ settings restoration

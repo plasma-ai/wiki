@@ -9,6 +9,7 @@ hard-issue vs soft-note split.
 from __future__ import annotations
 
 import pathlib
+import re
 
 import pytest
 
@@ -19,7 +20,10 @@ from ._helpers import _capture_notices, _make_wiki
 __all__ = [
     'test_lint_reports_missing_root_name_without_crashing',
     'test_lint_flags_invalid_name',
+    'test_lint_names_the_failing_naming_rule',
     'test_lint_flags_what_update_fixes',
+    'test_lint_names_bare_page',
+    'test_lint_names_nested_wiki_root',
     'test_lint_flags_human_only_issues',
     'test_lint_names_formatter_damage',
     'test_lint_names_formatter_damage_with_multiline_desc',
@@ -32,6 +36,13 @@ __all__ = [
     'test_lint_link_desc_period',
     'test_lint_scoped',
     'test_lint_flags_blank_created',
+    'test_lint_flags_unparseable_stamp',
+    'test_lint_future_stamp_is_clean',
+    'test_lint_stamp_parse_follows_configured_format',
+    'test_lint_hyphen_dangle',
+    'test_lint_wrapped_list_marker',
+    'test_lint_blank_led_list_is_clean',
+    'test_lint_code_span_lead_is_not_marker',
     'test_lint_ignores_code_blocks',
     'test_lint_ignores_multiline_code_span',
     'test_lint_conflict_markers_scan_raw',
@@ -40,7 +51,9 @@ __all__ = [
     'test_region_directives_pair_per_directive',
     'test_lint_clean',
     'test_quoted_placeholder_desc_is_soft',
+    'test_long_desc_is_note_only',
     'test_lint_stale_body_link_names_canonical',
+    'test_index_broken_link_is_issue_but_body_link_is_note',
     'test_lint_flags_folder_shadowing_page',
     'test_lint_accepts_anchor_links',
 ]
@@ -81,6 +94,32 @@ def test_lint_flags_invalid_name(tmp_path: pathlib.Path) -> None:
     assert all('bad#name' in issue for issue in invalid)
 
 
+def test_lint_names_the_failing_naming_rule(tmp_path: pathlib.Path) -> None:
+    """An invalid-name issue says which naming rule the name breaks.
+
+    A rejection that names the rule is diagnosable on its own; the message
+    carries no remediation how-to.
+    """
+    # an identifier-policy wiki (the strict project-wiki seed shape)
+    wiki = Wiki(tmp_path)
+    wiki.init(
+        name='root',
+        settings={'naming': {'validate': ['ascii', 'identifier']}},
+    )
+    (tmp_path / 'command-core.md').write_text(
+        '---\nname: command-core\ndesc: A page.\n---\n\n# x\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # the issue names the broken rule, with no how-to
+    issues = wiki.lint()
+    invalid = [issue for issue in issues if 'Invalid page name' in issue]
+    assert invalid
+    assert all("fails the 'identifier' rule" in issue for issue in invalid)
+    assert all('naming.allow' not in issue for issue in invalid)
+    assert all('snake_case' not in issue for issue in invalid)
+
+
 @pytest.mark.parametrize(
     'perturb',
     [
@@ -89,6 +128,8 @@ def test_lint_flags_invalid_name(tmp_path: pathlib.Path) -> None:
         'missing_field',
         'missing_marker',
         'missing_page_frontmatter',
+        'misplaced_title',
+        'null_title',
     ],
 )
 def test_lint_flags_what_update_fixes(tmp_path: pathlib.Path, perturb: str) -> None:
@@ -125,12 +166,63 @@ def test_lint_flags_what_update_fixes(tmp_path: pathlib.Path, perturb: str) -> N
         index.write_text(text.replace('***\n', ''), encoding='utf-8')
     elif perturb == 'missing_page_frontmatter':
         page.write_text('# design\n\nJust a body.\n', encoding='utf-8')
+    elif perturb == 'misplaced_title':
+        # a title at the block tail belongs directly under name
+        text = index.read_text(encoding='utf-8')
+        index.write_text(
+            text.replace('\n---\n', '\ntitle: Fancy\n---\n', 1),
+            encoding='utf-8',
+        )
+    elif perturb == 'null_title':
+        # a null title is the transient unset request update removes
+        text = index.read_text(encoding='utf-8')
+        index.write_text(
+            text.replace('name: core\n', 'name: core\ntitle: null\n'),
+            encoding='utf-8',
+        )
 
     # lint flags the drift; one update fixes it; lint is then clean
     assert wiki.lint() != []
     assert wiki.update() != []
     assert wiki.lint() == []
     assert wiki.update(check=True) == []
+
+
+def test_lint_names_bare_page(tmp_path: pathlib.Path) -> None:
+    """A frontmatterless page draws a named hard issue until adopted.
+
+    The bare page is already diff-flagged as out of date; the named
+    issue says what the rewrite is -- an adoption -- and one update
+    clears it.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    (tmp_path / 'core' / 'notes.md').write_text(
+        '# Notes\n\nBody prose.\n',
+        encoding='utf-8',
+    )
+
+    # the bare page is named beside its adoption diff; update clears it
+    issues = wiki.lint()
+    assert 'core/notes.md: Bare page (no frontmatter); update will adopt it' in issues
+    wiki.update()
+    assert wiki.lint() == []
+
+
+def test_lint_names_nested_wiki_root(tmp_path: pathlib.Path) -> None:
+    """A nested declared wiki is a hard issue naming its root.
+
+    ``update`` refuses to sweep across a nested ``.wiki/settings.json``,
+    so lint names the marker as the root cause rather than leaving the
+    would-be absorption diffs as the only signal.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    nested = tmp_path / 'backup'
+    (nested / '.wiki').mkdir(parents=True)
+    (nested / '.wiki' / 'settings.json').write_text('{}\n', encoding='utf-8')
+
+    issues = wiki.lint()
+    needle = 'backup/: Nested wiki root (declared by .wiki/settings.json)'
+    assert any(issue.startswith(needle) for issue in issues)
 
 
 # ------ human-only issues
@@ -142,9 +234,7 @@ def test_lint_flags_what_update_fixes(tmp_path: pathlib.Path, perturb: str) -> N
         ('invalid_folder', 'Invalid folder name'),
         ('invalid_page', 'Invalid page name'),
         ('invalid_nonmd', 'Invalid page name'),
-        ('conflict_markers', 'Merge conflict markers'),
         ('broken_link', 'Broken link'),
-        ('stale_user_link', 'Stale link'),
         ('missing_period', 'Missing period'),
         ('escaped_wikilink', 'Escaped wikilinks'),
         ('unclosed_frontmatter', 'Malformed frontmatter'),
@@ -175,19 +265,8 @@ def test_lint_flags_human_only_issues(
         )
     elif perturb == 'invalid_nonmd':
         (tmp_path / 'core' / 'bad#data.csv').write_text('raw,data\n', encoding='utf-8')
-    elif perturb == 'conflict_markers':
-        page.write_text(
-            page.read_text(encoding='utf-8')
-            + '<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\n',
-            encoding='utf-8',
-        )
     elif perturb == 'broken_link':
         page.unlink()
-    elif perturb == 'stale_user_link':
-        index.write_text(
-            index.read_text(encoding='utf-8') + '\nSee [[ghost]] for more.\n',
-            encoding='utf-8',
-        )
     elif perturb == 'missing_period':
         page.write_text(
             page.read_text(encoding='utf-8').replace(
@@ -502,11 +581,216 @@ def test_lint_flags_blank_created(tmp_path: pathlib.Path) -> None:
     assert any('+created:' in issue for issue in flagged)
 
 
+@pytest.mark.parametrize('target', ['page', 'index'])
+@pytest.mark.parametrize('field', ['created', 'updated'])
+def test_lint_flags_unparseable_stamp(
+    tmp_path: pathlib.Path,
+    field: str,
+    target: str,
+) -> None:
+    """A non-blank stamp that defies the timestamp format is a hard issue.
+
+    The stamps are tool-owned, so lint cannot tell a hand edit from a
+    tool write by value -- but a value the configured format cannot
+    parse is detectable damage, flagged naming the file and field.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    name = 'design.md' if target == 'page' else '_index.md'
+    path = tmp_path / 'core' / name
+    path.write_text(
+        re.sub(
+            rf'^{field}:.*$',
+            f'{field}: around noon',
+            path.read_text(encoding='utf-8'),
+            count=1,
+            flags=re.MULTILINE,
+        ),
+        encoding='utf-8',
+    )
+    issues = wiki.lint()
+    flagged = [issue for issue in issues if f'Unparseable {field}' in issue]
+    assert flagged
+    assert all(f'core/{name}' in issue for issue in flagged)
+
+
+def test_lint_future_stamp_is_clean(tmp_path: pathlib.Path) -> None:
+    """A parseable stamp is never judged against a clock.
+
+    Machines sharing a wiki skew, so the stamps are tool-owned rather
+    than audited: a future-dated ``created:``/``updated:`` pair that
+    parses under the configured format lints clean.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    text = page.read_text(encoding='utf-8')
+    for field in ('created', 'updated'):
+        text = re.sub(
+            rf'^{field}:.*$',
+            f'{field}: 2999-01-01T00:00:00Z',
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+    page.write_text(text, encoding='utf-8')
+    assert wiki.lint() == []
+
+
+def test_lint_stamp_parse_follows_configured_format(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The stamp parse honors a custom ``timestamp.format``.
+
+    Under a custom format the tool's own stamps parse clean, and a
+    default-ISO value is the unparseable one.
+    """
+    wiki = Wiki(tmp_path)
+    wiki.init(name='root', settings={'timestamp': {'format': '%d.%m.%Y %H:%M'}})
+    page = tmp_path / 'page.md'
+    page.write_text(
+        '---\nname: page\ndesc: A page.\n---\n\n# page\n\nBody.\n',
+        encoding='utf-8',
+    )
+    wiki.update()
+    assert not any('Unparseable' in issue for issue in wiki.lint())
+    page.write_text(
+        re.sub(
+            r'^created:.*$',
+            'created: 2026-01-01T00:00:00Z',
+            page.read_text(encoding='utf-8'),
+            count=1,
+            flags=re.MULTILINE,
+        ),
+        encoding='utf-8',
+    )
+    assert any('Unparseable created' in issue for issue in wiki.lint())
+
+
+# ------ wrap mangles
+
+
+@pytest.mark.parametrize(
+    ('body', 'flagged'),
+    [
+        ('supports twenty-\nclass workloads.', True),
+        ('supports twenty-\nand thirty-class workloads.', False),
+    ],
+    ids=['dangle', 'suspended-hyphen'],
+)
+def test_lint_hyphen_dangle(
+    tmp_path: pathlib.Path,
+    body: str,
+    flagged: bool,
+) -> None:
+    """A line break splitting a hyphenated word is a hard issue.
+
+    Every folded read joins the pair with a space, mangling the word;
+    only the suspended-hyphen idiom (a next line opening ``and ``/
+    ``or ``) legitimately ends a line on a hyphen.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        page.read_text(encoding='utf-8').replace('Content for design.', body),
+        encoding='utf-8',
+    )
+    issues = wiki.lint()
+    dangles = [issue for issue in issues if 'Hyphen dangle' in issue]
+    assert bool(dangles) == flagged
+
+
+@pytest.mark.parametrize('surface', ['desc', 'index-row', 'prose'])
+def test_lint_wrapped_list_marker(
+    tmp_path: pathlib.Path,
+    surface: str,
+) -> None:
+    """A list marker continuing a sentence is flagged on every surface.
+
+    A wrapped continuation opening with ``+ ``/``- ``/``* `` renders as
+    a phantom list item -- in a page desc's raw block lines, an index
+    link row, and page prose alike.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    index = tmp_path / 'core' / '_index.md'
+    page = tmp_path / 'core' / 'design.md'
+    if surface == 'desc':
+        target = page
+        page.write_text(
+            page.read_text(encoding='utf-8').replace(
+                'desc: The design page.',
+                'desc: >\n  handles cases\n  + streaming input.',
+            ),
+            encoding='utf-8',
+        )
+    elif surface == 'index-row':
+        target = index
+        index.write_text(
+            index.read_text(encoding='utf-8').replace(
+                '[[core/design|design]]: The design page.',
+                '[[core/design|design]]: handles cases\n+ streaming input.',
+            ),
+            encoding='utf-8',
+        )
+    else:
+        target = page
+        page.write_text(
+            page.read_text(encoding='utf-8').replace(
+                'Content for design.',
+                'handles cases\n+ streaming input.',
+            ),
+            encoding='utf-8',
+        )
+    issues = wiki.lint()
+    flagged = [issue for issue in issues if 'Wrapped list marker' in issue]
+    assert flagged
+    assert all(str(target.relative_to(tmp_path)) in issue for issue in flagged)
+
+
+def test_lint_blank_led_list_is_clean(tmp_path: pathlib.Path) -> None:
+    """The house list shapes are never flagged as wrap mangles.
+
+    A list opening after a blank line, a bullet following its sibling's
+    wrapped continuation line, and a nested sublist opening after its
+    parent's continuation are all healthy -- only a marker continuing a
+    sentence or interrupting a paragraph is a mangle.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    body = (
+        'Intro paragraph.\n\n'
+        '- item one\n- item two\n\n'
+        '1. step\n   - detail\n\n'
+        '- an item that wraps\n  onto a continuation line\n- next item\n'
+        '- another wrapping item\n  with its continuation\n  - nested detail\n'
+    )
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        page.read_text(encoding='utf-8').replace('Content for design.\n', body),
+        encoding='utf-8',
+    )
+    assert wiki.lint() == []
+
+
+def test_lint_code_span_lead_is_not_marker(tmp_path: pathlib.Path) -> None:
+    """A line opening with a code span then ``+`` is prose, not a bullet.
+
+    Masking removes inline-span bytes, which can leave a marker-shaped
+    remainder on a wrapped paragraph line; list rendering keys on the
+    raw leading bytes, so the line is never a phantom list item.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    body = 'Reject the\n`--preview` + `--commit` combination.'
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        page.read_text(encoding='utf-8').replace('Content for design.', body),
+        encoding='utf-8',
+    )
+    assert wiki.lint() == []
+
+
 # ------ masked regions and suppression
 
 
 def test_lint_ignores_code_blocks(tmp_path: pathlib.Path) -> None:
-    """Wikilinks inside code blocks are not flagged as stale."""
+    """Wikilinks inside code blocks are never noted as stale."""
     wiki = Wiki(tmp_path)
     wiki.init()
     (tmp_path / 'page.md').write_text(
@@ -515,8 +799,10 @@ def test_lint_ignores_code_blocks(tmp_path: pathlib.Path) -> None:
         encoding='utf-8',
     )
     wiki.update()
+    notices = _capture_notices(wiki)
     issues = wiki.lint()
-    stale = [i for i in issues if 'nonexistent' in i.lower()]
+    lines = issues + [event.description for event in notices]
+    stale = [line for line in lines if 'nonexistent' in line.lower()]
     assert not stale
 
 
@@ -537,7 +823,9 @@ def test_lint_ignores_multiline_code_span(tmp_path: pathlib.Path) -> None:
         encoding='utf-8',
     )
     wiki.update()
-    assert not any('Stale link' in issue for issue in wiki.lint())
+    notices = _capture_notices(wiki)
+    assert wiki.lint() == []
+    assert not any('Stale link' in event.description for event in notices)
 
 
 @pytest.mark.parametrize(
@@ -601,12 +889,16 @@ def test_no_lint_region_scopes_positional_rules(tmp_path: pathlib.Path) -> None:
         encoding='utf-8',
     )
 
-    # inside the region nothing positional fires; outside still does
+    # inside the region nothing positional fires -- issue or note --
+    # while the stale link outside still draws its note
+    notices = _capture_notices(wiki)
     issues = wiki.lint()
+    notes = '\n'.join(event.description for event in notices)
     assert not any('Merge conflict markers' in issue for issue in issues)
     assert not any('Escaped wikilinks' in issue for issue in issues)
     assert not any('missing_inside' in issue for issue in issues)
-    assert any('Stale link [[missing_outside]]' in issue for issue in issues)
+    assert 'missing_inside' not in notes
+    assert 'Stale link [[missing_outside]]' in notes
 
     # file-level checks ignore regions: a drifted H1 still requires update
     drifted = page.read_text(encoding='utf-8').replace(
@@ -730,6 +1022,34 @@ def test_quoted_placeholder_desc_is_soft(
     assert "'...'" not in core_index
 
 
+def test_long_desc_is_note_only(tmp_path: pathlib.Path) -> None:
+    """An oversized desc draws a soft note, never an issue.
+
+    Every map row and parent index link reproduces the desc, so lint
+    nudges toward concision -- but length is author judgment, not
+    structure, and must not fail the wiki.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    long_desc = ('A design note that explains far too much detail. ' * 11).strip()
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        page.read_text(encoding='utf-8').replace(
+            'desc: The design page.',
+            f'desc: {long_desc}',
+        ),
+        encoding='utf-8',
+    )
+    wiki.update()
+
+    # the note names the page; the wiki stays clean
+    notices = _capture_notices(wiki)
+    issues = wiki.lint()
+    err = '\n'.join(event.description for event in notices)
+    assert 'keep descs under' in err
+    assert 'design.md' in err
+    assert issues == []
+
+
 # ------ body links and structure
 
 
@@ -738,7 +1058,7 @@ def test_lint_stale_body_link_names_canonical(
     tmp_path: pathlib.Path,
     anchor: str,
 ) -> None:
-    """A folder-relative body link is flagged with its root-relative fix.
+    """A folder-relative body link is noted with its root-relative fix.
 
     An anchor suffix rides along on the suggestion: dropping it would make
     a user applying the fix verbatim silently lose the anchor.
@@ -759,12 +1079,52 @@ def test_lint_stale_body_link_names_canonical(
         encoding='utf-8',
     )
     wiki.update()
-    # the stale link is flagged with the canonical [[overview]] as the fix
+    # the stale link is noted with the canonical [[overview]] as the fix
+    notices = _capture_notices(wiki)
+    wiki.lint()
     stale = [
-        issue for issue in wiki.lint() if f'Stale link [[../overview{anchor}]]' in issue
+        event.description
+        for event in notices
+        if f'Stale link [[../overview{anchor}]]' in event.description
     ]
     assert stale
-    assert all(f'(use [[overview{anchor}]])' in issue for issue in stale)
+    assert all(f'(use [[overview{anchor}]])' in note for note in stale)
+
+
+def test_index_broken_link_is_issue_but_body_link_is_note(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Index-block broken links fail hard; an identical body link is a note.
+
+    User prose references pages that come and go, so a stale body-level
+    wikilink draws a soft note (run over run -- update never silences
+    it) without failing the wiki, while the generated index link block
+    keeps its broken-link hard issue for the same missing target.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design', 'ghost']})
+    # reference the page from the index body, then delete it: the
+    # generated row and the body link now dangle identically
+    index = tmp_path / 'core' / '_index.md'
+    index.write_text(
+        index.read_text(encoding='utf-8') + '\nSee [[core/ghost]] for more.\n',
+        encoding='utf-8',
+    )
+    (tmp_path / 'core' / 'ghost.md').unlink()
+
+    # the generated row fails hard; the body link is a note only
+    notices = _capture_notices(wiki)
+    issues = wiki.lint()
+    notes = '\n'.join(event.description for event in notices)
+    assert any('Broken link [[core/ghost|ghost]]' in issue for issue in issues)
+    assert not any('Stale link' in issue for issue in issues)
+    assert 'core/_index.md: Stale link [[core/ghost]]' in notes
+
+    # update keeps both (no prune), so the issue and the note persist
+    wiki.update()
+    notices.clear()
+    assert any('Broken link [[core/ghost|ghost]]' in issue for issue in wiki.lint())
+    notes = '\n'.join(event.description for event in notices)
+    assert 'core/_index.md: Stale link [[core/ghost]]' in notes
 
 
 def test_lint_flags_folder_shadowing_page(tmp_path: pathlib.Path) -> None:
@@ -801,7 +1161,12 @@ def test_lint_accepts_anchor_links(tmp_path: pathlib.Path) -> None:
     )
     wiki.update()
 
-    # only the link whose page is gone is stale; anchors alone never are
-    stale = [issue for issue in wiki.lint() if 'Stale link' in issue]
+    # only the link whose page is gone draws the note (and never an
+    # issue); anchors alone are never stale
+    notices = _capture_notices(wiki)
+    assert wiki.lint() == []
+    stale = [
+        event.description for event in notices if 'Stale link' in event.description
+    ]
     assert len(stale) == 1
     assert 'missing' in stale[0]

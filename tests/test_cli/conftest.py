@@ -53,13 +53,14 @@ def _wiki(
     """Run the ``wiki`` CLI in ``cwd`` and capture text output.
 
     Plugin downloads are skipped by default so the suite stays offline;
-    pass ``allow_download=True`` to exercise the real network fetch, and
-    ``home`` to isolate commands that write under the home directory.
+    pass ``allow_download=True`` to exercise the real network fetch.
+    ``HOME`` is always isolated -- to ``home`` when given, else ``cwd``
+    -- so commands that write under the home directory (install
+    targets) never touch or depend on the developer's real one.
     """
     env = _env()
     env[OFFLINE_MODE] = 'false' if allow_download else 'true'
-    if home is not None:
-        env['HOME'] = str(home)
+    env['HOME'] = str(home if home is not None else cwd)
     return subprocess.run(
         [WIKI, *args],
         cwd=cwd,

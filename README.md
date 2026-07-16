@@ -70,6 +70,10 @@ Or from the CLI, which copies the skill into `~/.claude/skills` and
 wiki install
 ```
 
+After upgrading the package, re-run `wiki install` to refresh the copied
+skill (a symlinked install via `--link` tracks the source
+automatically).
+
 ## Usage
 
 A wiki is a tree of markdown files linked together by `_index.md` files.
@@ -92,7 +96,20 @@ that violates the policy.
 
 Frontmatter timestamps default to UTC in ISO-8601. To change them, set a
 timezone (any IANA name) and format (a strftime string) under
-`timestamp` in `.wiki/settings.json`.
+`timestamp` in `.wiki/settings.json`. The stamps are tool-owned:
+`created:` is written when a file gains frontmatter and kept from then
+on, and `updated:` is rewritten on every actual write. A hand edit goes
+undetected unless the value stops parsing under the configured format —
+`wiki lint` fails an unparseable stamp.
+
+Display names are path-derived: `wiki update` owns each entry's `name:`
+frontmatter and rewrites the H1 heading to match. An optional authored
+`title:` field — on any index or page — overrides the H1 while `name`
+stays tool-owned; set `title: null` (or delete the line) to unset it.
+Setting `titles.required` in `.wiki/settings.json` demands an authored
+title everywhere: `wiki update` seeds a `title: null` placeholder on
+every entry missing one and `wiki lint` fails each placeholder until a
+title is authored.
 
 Word counts shown by `wiki map` are computed from page bodies and cached
 in `.wiki/cache/word_counts.json` under the wiki root — never stored in
@@ -100,9 +117,12 @@ frontmatter, so editing a page dirties nothing else. The cache directory
 ignores itself via its own `.gitignore` and can be deleted at any time;
 it is rebuilt on demand. In the map, a page shows its own count and a
 folder shows `page/tree` (its index's words over the subtree total),
-abbreviated with `k`/`m` suffixes past a thousand; the map's indent unit
-and description-truncation marker are configurable via `map.indent` and
-`map.ellipsis` in `.wiki/settings.json`.
+abbreviated with `k`/`m` suffixes past a thousand. Descriptions truncate
+at 200 characters by default — `--desc-limit` (or the `map.desc_limit`
+setting) adjusts the budget, with `-1` for no truncation — and
+`wiki map --stat` sizes the dump (lines, chars, words) without printing
+it. The map's indent unit and truncation marker are configurable via
+`map.indent` and `map.ellipsis` in `.wiki/settings.json`.
 
 ### CLI
 
@@ -123,11 +143,12 @@ Maintain indexes as files are added and removed:
 - `wiki update` — sync index links with the filesystem
 
 `wiki lint` exits 1 on issues and 0 on a clean wiki (soft notes go to
-stderr and never affect the exit code). A page that must display
-otherwise-flagged content — sample conflict markers, deliberately stale
-links — wraps those lines in a `<!-- start: no-lint -->` …
-`<!-- end: no-lint -->` region, which suppresses the positional rules
-for just that span.
+stderr and never affect the exit code — a stale wikilink in prose is a
+note, while a broken link in a generated index block is an issue). A
+page that must display otherwise-flagged content — sample conflict
+markers, stale link examples — wraps those lines in a
+`<!-- start: no-lint -->` … `<!-- end: no-lint -->` region, which
+suppresses the positional rules, notes included, for just that span.
 
 Browse structure, search across content, and read entries:
 
@@ -198,6 +219,10 @@ the caller: `uv pip install --editable <path>`.
 
 Once installed, run tools with `uv run --no-sync <command>`, or activate
 the environment first (`source .venv/bin/activate`).
+
+With an editable install, `wiki install --link` symlinks the bundled
+skill into the agent skill directories instead of copying it, so skill
+edits apply without re-running the install.
 
 ### Tests
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.metadata
 import importlib.resources
 import pathlib
 import shutil
@@ -13,6 +12,7 @@ from typing import Any, Optional
 
 import typer
 
+import wiki
 from wiki.cli.utils import (
     command,
     configure_git_merge_driver,
@@ -33,6 +33,7 @@ from wiki.core.wiki import (
     LinkBreakEvent,
     LinkPruneEvent,
     NameSkipEvent,
+    PageAdoptEvent,
     Wiki,
     WriteSkipEvent,
 )
@@ -66,6 +67,13 @@ _UPDATE_CATEGORIES = [
         'Created {n} new indexes (fill in their descs)',
         'Would create 1 new index',
         'Would create {n} new indexes',
+    ),
+    (
+        PageAdoptEvent,
+        'Adopted 1 bare page (frontmatter added)',
+        'Adopted {n} bare pages (frontmatter added)',
+        'Would adopt 1 bare page',
+        'Would adopt {n} bare pages',
     ),
     (
         LinkAddEvent,
@@ -130,9 +138,11 @@ def version(app: typer.Typer) -> typer.Typer:
     """Register the ``--version`` flag on the root callback."""
 
     def _version_callback(value: bool) -> None:
-        """Print the installed ``plasma-wiki`` version and exit."""
+        """Print the running ``wiki`` package's version and exit."""
         if value:
-            typer.echo(importlib.metadata.version('plasma-wiki'))
+            # the package's own __version__, so an editable install reports
+            # the code it runs, not install-time dist-info
+            typer.echo(wiki.__version__)
             raise typer.Exit()
 
     # version flag
@@ -157,16 +167,26 @@ def install(app: typer.Typer) -> typer.Typer:
     # project flag
     project_help = 'Install config in cwd rather than home directory.'
     project = typer.Option(False, '--project', help=project_help)
+    # link flag
+    link_help = (
+        'Symlink the bundled skill instead of copying (requires the package'
+        ' files on disk, e.g. an editable install), so source edits apply'
+        ' without re-installing.'
+    )
+    link = typer.Option(False, '--link', help=link_help)
 
     @command(app, 'install')
     def _install(
         project: bool = project,
+        link: bool = link,
     ) -> None:
         """Install the wiki skill for Claude Code and Codex.
 
         Copies the bundled skill into the Claude (.claude/skills) and Codex
         (.agents/skills) skill directories. Targets your home directory by
-        default, or the current project with --project.
+        default, or the current project with --project. --link symlinks the
+        skill instead of copying -- the editable-install dev setup, where
+        source edits apply without re-installing.
         """
         # resolve install directory
         if project:
@@ -181,7 +201,15 @@ def install(app: typer.Typer) -> typer.Typer:
         # collect skills
         skills_dir = importlib.resources.files('wiki').joinpath('skills')
         skills = [path for path in skills_dir.iterdir() if path.is_dir()]
-        # copy each skill into every target (replaces any prior copy)
+        # a symlink needs a real directory to point at; only an on-disk
+        # package (an editable install, not a zipped one) provides it
+        if link and not isinstance(skills_dir, pathlib.Path):
+            raise ValueError(
+                '--link requires the bundled skill to be a real directory'
+                ' (an editable install); this install ships it zipped,'
+                ' so install without --link.'
+            )
+        # copy or link each skill into every target (replaces any prior install)
         for skill in sorted(skills, key=lambda path: path.name):
             for target in targets:
                 dest = target / skill.name
@@ -190,8 +218,12 @@ def install(app: typer.Typer) -> typer.Typer:
                     dest.unlink()
                 elif dest.is_dir():
                     shutil.rmtree(dest)
-                shutil.copytree(skill, dest)
-                typer.echo(f'Installed {skill.name} -> {dest}')
+                if link:
+                    dest.symlink_to(skill)
+                    typer.echo(f'Linked {skill.name} -> {dest}')
+                else:
+                    shutil.copytree(skill, dest)
+                    typer.echo(f'Installed {skill.name} -> {dest}')
 
     return app
 
@@ -664,7 +696,10 @@ def map(
     desc_help = 'Show descriptions from parent index.'
     desc = typer.Option(True, '--desc/--no-desc', help=desc_help)
     # description character limit option
-    desc_limit_help = 'Max characters per description.'
+    desc_limit_help = (
+        'Max characters per description (defaults to the map.desc_limit'
+        ' setting, else 200); -1 disables truncation.'
+    )
     desc_limit = typer.Option(None, '--desc-limit', help=desc_limit_help)
     # category filter option
     category_help = 'Comma-separated categories (empty string for uncategorized only).'
@@ -679,6 +714,12 @@ def map(
         ' cached under .wiki/cache/.'
     )
     words = typer.Option(True, '--words/--no-words', help=words_help)
+    # stat flag
+    stat_help = (
+        'Print a one-line size summary of the rendered tree (lines, chars,'
+        ' words) instead of the tree itself.'
+    )
+    stat = typer.Option(False, '--stat', help=stat_help)
 
     @command(app, 'map')
     def _map(
@@ -690,13 +731,18 @@ def map(
         category: Optional[str] = category,
         markdown: Optional[bool] = markdown,
         words: bool = words,
+        stat: bool = stat,
     ) -> None:
-        """Print a compact tree overview of the wiki."""
+        """Print a compact tree overview of the wiki.
+
+        --stat sizes the dump instead of printing it -- the cheap probe
+        before dumping a large wiki.
+        """
         # validate numeric bounds
         if depth is not None and depth < 0:
             raise typer.BadParameter('--depth must be >= 0.')
-        if desc_limit is not None and desc_limit < 0:
-            raise typer.BadParameter('--desc-limit must be >= 0.')
+        if desc_limit is not None and desc_limit < -1:
+            raise typer.BadParameter('--desc-limit must be >= -1.')
         # parse category filter
         category_filter = None
         if category is not None:
@@ -713,6 +759,20 @@ def map(
             markdown=markdown,
             words=words,
         )
+        # --stat: report the size of the tree the same flags would print
+        if stat:
+            line_count = len(result.splitlines())
+            char_count = len(result)
+            word_count = len(result.split())
+            line_s = 's' if line_count != 1 else ''
+            char_s = 's' if char_count != 1 else ''
+            word_s = 's' if word_count != 1 else ''
+            summary = (
+                f'{line_count} line{line_s}, {char_count} char{char_s},'
+                f' {word_count} word{word_s}'
+            )
+            typer.echo(summary)
+            return
         if result:
             typer.echo(result)
             return

@@ -27,6 +27,7 @@ __all__ = [
     'test_init_seeds_custom_settings',
     'test_init_rejects_bad_settings_before_writing',
     'test_init_rejects_invalid_wiki_name',
+    'test_init_refuses_conflict_markers',
     'test_settings_reject_malformed_values',
     'test_timestamp_format_configurable',
     'test_timestamp_timezone_configurable',
@@ -232,6 +233,31 @@ def test_init_rejects_invalid_wiki_name(tmp_path: pathlib.Path) -> None:
     with pytest.raises(ValueError, match='Invalid wiki name'):
         Wiki(root).init(name='bad|name')
     assert not root.exists()
+
+
+def test_init_refuses_conflict_markers(tmp_path: pathlib.Path) -> None:
+    """Re-init over a conflict-marked tree refuses before the sweep writes.
+
+    Init runs the same plan/apply sweep as update, which reads the markers
+    as index structure and would rewrite the file with one conflict side
+    silently dropped -- so init refuses alike, naming every marked file.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    # plant a real conflict in an index
+    index = tmp_path / 'core' / '_index.md'
+    conflict = '\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\n'
+    index.write_text(
+        index.read_text(encoding='utf-8') + conflict,
+        encoding='utf-8',
+    )
+    before = {path: path.read_text(encoding='utf-8') for path in tmp_path.rglob('*.md')}
+
+    # init refuses, naming the marked file, and nothing was rewritten
+    message = r'Merge conflict markers in: core/_index\.md'
+    with pytest.raises(ValueError, match=message):
+        Wiki(tmp_path).init()
+    after = {path: path.read_text(encoding='utf-8') for path in tmp_path.rglob('*.md')}
+    assert after == before
 
 
 @pytest.mark.parametrize(

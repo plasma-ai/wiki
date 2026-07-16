@@ -28,7 +28,7 @@ from wiki.core import format, obsidian
 from wiki.core.event import Event
 from wiki.typing import Link, PathLike
 from wiki.util.filesystem import write_atomic
-from wiki.util.markdown import mask_code
+from wiki.util.markdown import find_heading, mask_code
 from wiki.util.str import format_words
 
 __all__ = ['Wiki']
@@ -36,6 +36,10 @@ __all__ = ['Wiki']
 # bounds the plugin-asset fetch in _download; ample for the kilobyte-scale
 # release assets, small enough that a dead network fails the run fast
 _TIMEOUT_SECONDS = 10
+
+# soft ceiling for a folded frontmatter desc: past it lint notes the page,
+# since every map row and parent index link reproduces the whole desc
+_DESC_NOTE_CHARS = 500
 
 # str.is* predicates a policy may require (applied to the name minus allow chars)
 _NAMING_PREDICATES = {
@@ -97,7 +101,7 @@ class Wiki:
         """
         root_index = self._root / WIKI_INDEX
         if root_index.exists():
-            text = root_index.read_text(encoding='utf-8')
+            text = self._read_text(root_index)
         else:
             return self._root.name
         frontmatter, _, _ = format.parse_index(text, delimiter=self.index_delimiter)
@@ -125,7 +129,7 @@ class Wiki:
         return result
 
     @functools.cached_property
-    def _naming(self: Wiki) -> dict:
+    def _naming_policy(self: Wiki) -> dict:
         """Return the effective naming policy from ``settings.json``.
 
         Overlays the per-wiki ``naming`` block from ``settings.json`` onto the
@@ -143,12 +147,15 @@ class Wiki:
         # validate predicate names (settings.json is user input -> fail loudly)
         if not isinstance(policy['validate'], list):
             raise ValueError(
-                f'naming.validate must be a list of predicate names in {WIKI_SETTINGS}.'
+                f'naming.validate must be a list of predicate names, got'
+                f' {policy["validate"]!r} in {WIKI_SETTINGS}.'
             )
         for predicate in policy['validate']:
             if predicate not in _NAMING_PREDICATES:
+                options = ', '.join(_NAMING_PREDICATES)
                 raise ValueError(
-                    f'Unknown naming predicate {predicate!r} in {WIKI_SETTINGS}.'
+                    f'Unknown naming predicate {predicate!r} (must be one of'
+                    f' {options}) in {WIKI_SETTINGS}.'
                 )
         # min_length defaults to 1; an explicit value must be a positive int
         min_length = policy['min_length']
@@ -171,15 +178,18 @@ class Wiki:
         for leaf in ('deny', 'allow'):
             if not isinstance(policy[leaf], str):
                 raise ValueError(
-                    f'naming.{leaf} must be a string of characters in {WIKI_SETTINGS}.'
+                    f'naming.{leaf} must be a string of characters, got'
+                    f' {policy[leaf]!r} in {WIKI_SETTINGS}.'
                 )
         if not isinstance(policy['reserved'], list):
             raise ValueError(
-                f'naming.reserved must be a list of strings in {WIKI_SETTINGS}.'
+                f'naming.reserved must be a list of strings, got'
+                f' {policy["reserved"]!r} in {WIKI_SETTINGS}.'
             )
         if not isinstance(policy['leading_digits'], bool):
             raise ValueError(
-                f'naming.leading_digits must be a boolean in {WIKI_SETTINGS}.'
+                f'naming.leading_digits must be a boolean, got'
+                f' {policy["leading_digits"]!r} in {WIKI_SETTINGS}.'
             )
         # always deny the path separator, index delimiter, and link/markdown grammar
         deny = set(policy['deny'])
@@ -218,7 +228,7 @@ class Wiki:
         }
 
     @functools.cached_property
-    def _timestamp(self: Wiki) -> dict:
+    def _timestamp_policy(self: Wiki) -> dict:
         """Return the effective timestamp policy from ``settings.json``.
 
         Validates the per-wiki ``timestamp`` block (``timezone`` / ``format``) so
@@ -243,7 +253,7 @@ class Wiki:
         breakers = ('%n', '%t', '\n', '\r')
         if not format.strip() or any(token in format for token in breakers):
             raise ValueError(
-                f'timestamp.format must render a single non-empty line; got'
+                f'timestamp.format must render a single non-empty line, got'
                 f' {format!r} in {WIKI_SETTINGS}.'
             )
         timezone = override.get('timezone')
@@ -263,38 +273,88 @@ class Wiki:
             timezone = dt.UTC
         return {'format': format, 'zone': timezone}
 
-    def validate_name(self: Wiki, name: str) -> bool:
-        """Return ``True`` if ``name`` satisfies the wiki's naming policy.
+    @functools.cached_property
+    def _map_policy(self: Wiki) -> dict:
+        """Return the effective map presentation policy from ``settings.json``.
 
-        The policy is the field defaults overlaid by the per-wiki ``naming`` block
-        in ``.wiki/settings.json``; see :attr:`_naming`. The path separator,
-        index delimiter, link/markdown grammar characters, and the reserved
-        ``_index`` name are always rejected; the ``.wiki`` tool directory needs
-        no reservation, since leading-dot names are rejected wholesale.
+        Validates the per-wiki ``map`` block (``desc_limit`` / ``indent`` /
+        ``ellipsis``) so a bad value fails loudly with a file+key message
+        rather than leaking a raw exception from deep inside the map render
+        (settings.json is user input).
+        """
+        # overlay the settings.json map block onto the defaults
+        override = self._settings.get('map', {})
+        if not isinstance(override, dict):
+            raise ValueError(f'The map block must be a JSON object in {WIKI_SETTINGS}.')
+        # desc_limit bounds each rendered description; -1 (or null) disables it
+        desc_limit = override.get('desc_limit', 200)
+        if desc_limit is None:
+            desc_limit = -1
+        if not (isinstance(desc_limit, int) and desc_limit >= -1):
+            raise ValueError(
+                f'map.desc_limit must be an int >= -1 or null, got'
+                f' {desc_limit!r} in {WIKI_SETTINGS}.'
+            )
+        # indent is the per-level unit; ellipsis marks a truncated desc
+        indent = override.get('indent', '  ')
+        if not isinstance(indent, str):
+            raise ValueError(
+                f'map.indent must be a string, got {indent!r} in {WIKI_SETTINGS}.'
+            )
+        ellipsis = override.get('ellipsis', '...')
+        if not isinstance(ellipsis, str):
+            raise ValueError(
+                f'map.ellipsis must be a string, got {ellipsis!r} in {WIKI_SETTINGS}.'
+            )
+        return {'desc_limit': desc_limit, 'indent': indent, 'ellipsis': ellipsis}
 
-        Override in subclasses for naming rules a data policy cannot express.
+    @functools.cached_property
+    def _titles_required(self: Wiki) -> bool:
+        """Return the effective ``titles.required`` flag from ``settings.json``.
 
-        Args:
-            name: Name to validate (page stem or folder name).
+        When true, every index and page must carry an authored ``title:``:
+        update seeds a ``title: null`` placeholder on files missing the
+        field (instead of removing null titles as the transient unset
+        idiom), and lint fails each placeholder until a value is authored.
+        """
+        # overlay the settings.json titles block onto the default
+        override = self._settings.get('titles', {})
+        if not isinstance(override, dict):
+            raise ValueError(
+                f'The titles block must be a JSON object in {WIKI_SETTINGS}.'
+            )
+        required = override.get('required', False)
+        if not isinstance(required, bool):
+            raise ValueError(
+                f'titles.required must be a boolean, got'
+                f' {required!r} in {WIKI_SETTINGS}.'
+            )
+        return required
 
-        Returns:
-            ``True`` if the name is valid.
+    def _name_violation(self: Wiki, name: str) -> Optional[str]:
+        """Return the naming rule ``name`` breaks, or ``None`` if it is valid.
 
+        Names the failing rule for a caller's error message, so a rejection
+        says which policy the name tripped rather than a bare "invalid". The
+        policy fields are :attr:`_naming_policy`; :meth:`validate_name` is the
+        boolean gate over this. Override in subclasses for naming rules a data
+        policy cannot express -- every internal name check delegates here, so
+        this is the effective extension point.
         """
         # alias naming policy
-        policy = self._naming
+        policy = self._naming_policy
         # reject empty, over-long, non-printable, and hidden (leading-dot) names
         if len(name) < policy['min_length']:
-            return False
+            return f'shorter than {policy["min_length"]} character(s)'
         if policy['max_length'] is not None and len(name) > policy['max_length']:
-            return False
+            return f'longer than {policy["max_length"]} character(s)'
         if not name.isprintable() or name.startswith('.'):
-            return False
+            return 'non-printable or a leading-dot name'
         # reject reserved structural names and any denied character
         if name in policy['reserved']:
-            return False
+            return 'a reserved name'
         if any(char in policy['deny'] for char in name):
-            return False
+            return 'contains a denied character'
         # apply the str.is* predicates to the name minus any allowed characters
         probe = ''.join(char for char in name if char not in policy['allow'])
         for predicate in policy['validate']:
@@ -303,11 +363,29 @@ class Wiki:
             else:
                 valid = _NAMING_PREDICATES[predicate](probe)
             if not valid:
-                return False
+                return f"fails the '{predicate}' rule"
         # apply the optional full-match regex
         if policy['pattern'] is not None and not policy['pattern'].fullmatch(name):
-            return False
-        return True
+            return 'does not match the required pattern'
+        return None
+
+    def validate_name(self: Wiki, name: str) -> bool:
+        """Return ``True`` if ``name`` satisfies the wiki's naming policy.
+
+        The policy is the field defaults overlaid by the per-wiki ``naming`` block
+        in ``.wiki/settings.json``; see :attr:`_naming_policy`. The path separator,
+        index delimiter, link/markdown grammar characters, and the reserved
+        ``_index`` name are always rejected; the ``.wiki`` tool directory needs
+        no reservation, since leading-dot names are rejected wholesale.
+
+        Args:
+            name: Name to validate (page stem or folder name).
+
+        Returns:
+            ``True`` if the name is valid.
+
+        """
+        return self._name_violation(name) is None
 
     def init(
         self: Wiki,
@@ -334,7 +412,7 @@ class Wiki:
         # TODO: remove back-compat in future versions
         self._refuse_legacy_layout()
         # resolve the settings seed and prime the _settings cache with it, so
-        # the accesses below (validate_name, _utc_now) read this wiki's real
+        # the accesses below (_name_violation, _utc_now) read this wiki's real
         # policy rather than caching {} from the not-yet-written file
         # NOTE: the priming assignment shadows the _settings cached_property --
         #   the instance attribute takes precedence over the descriptor, so
@@ -349,8 +427,9 @@ class Wiki:
         # seed must fail cleanly rather than strand a wiki whose settings.json
         # every later command (and re-init, which never overwrites it) rejects
         name = name or self._root.name
-        if not self.validate_name(name):
-            raise ValueError(f'Invalid wiki name: {name!r}')
+        violation = self._name_violation(name)
+        if violation is not None:
+            raise ValueError(f'Invalid wiki name {name!r}: {violation}')
         # alias current timestamp
         now = self._utc_now()
         # initialize wiki root
@@ -380,8 +459,11 @@ class Wiki:
                     delimiter=self.index_delimiter,
                 ),
             )
-        # update all indexes (reuse this run's timestamp)
+        # update all indexes (reuse this run's timestamp); a re-init sweeps
+        # an existing tree like update, so it refuses over merge conflict
+        # markers rather than bake one conflict side into the rewrite
         overlay, baseline, _ = self._plan(self._root, now=now)
+        self._refuse_conflicted(baseline)
         self._apply_plan(overlay, baseline, now)
         # materialize the self-ignoring counts cache
         self._load_counts()
@@ -499,11 +581,22 @@ class Wiki:
 
         Walks the filesystem, refreshing category labels from child
         frontmatter and preserving existing descriptions. Adds
-        frontmatter to pages that lack it; a page whose frontmatter
-        never closes (no closing ``---``) is left untouched and warned
-        about rather than rewritten, and an existing index with no
-        (closed) frontmatter -- an emptied or truncated file -- is
-        likewise skipped with a notice rather than rebuilt from scratch.
+        frontmatter to pages that lack it (seeding ``title:`` from an
+        authored H1, so adoption preserves the heading, while a page
+        with no H1 gains the path-joined heading in its body, never a
+        seeded title), announcing each adoption; a page whose
+        frontmatter never closes (no closing ``---``) is left untouched
+        and warned about rather than rewritten, and an existing index
+        with no (closed) frontmatter -- an emptied or truncated file --
+        is likewise skipped with a notice rather than rebuilt from
+        scratch.
+
+        An authored ``title:`` (on an index or a page) wins the file's
+        H1 and is kept directly under ``name:``; a blank or lowercase
+        ``null`` value unsets it -- the line is removed. Under
+        ``titles.required`` (``.wiki/settings.json``) a missing title is
+        instead seeded as a ``title: null`` placeholder, kept for lint
+        to fail until a value is authored.
 
         When broken links are found (targets in the existing index
         that no longer exist on the filesystem), they are preserved
@@ -534,6 +627,17 @@ class Wiki:
             List of relative paths of updated files (or, when ``check``
             is set, the files that *would* be updated).
 
+        Raises:
+            ValueError: If the scope encloses a nested declared wiki (a
+                directory carrying its own ``.wiki/settings.json``) --
+                sweeping across it would absorb that wiki, so the write
+                and the dry run refuse alike, naming the nested root.
+            ValueError: If a scope file carries merge conflict markers
+                outside a well-formed ``no-lint`` region -- the plan
+                would read the markers as authored content and bake
+                them into the rewrite, so the write and the dry run
+                refuse alike, naming every marked file.
+
         Note:
             A scoped update (``name`` set) does not refresh the parent
             index label for a category change at the scope root, since
@@ -548,6 +652,15 @@ class Wiki:
             folder = self._root
         # TODO: remove back-compat in future versions
         self._refuse_legacy_layout()
+        # refuse to sweep across a nested declared wiki: absorbing it would
+        # rewrite its name: paths against the wrong root, and a dry run
+        # would preview that same absorption, so both refuse alike
+        for nested in self._find_dirs(folder):
+            if nested != self._root and (nested / WIKI_SETTINGS).is_file():
+                raise ValueError(
+                    f'Path encloses the wiki at: {nested};'
+                    f' run the command from that declared root.'
+                )
         # a dry run reports without mutating, so the marker guarantee
         # applies only to a writing run
         if not check:
@@ -557,6 +670,9 @@ class Wiki:
         # compute corrected content for the scope (single timestamp)
         now = self._utc_now()
         overlay, baseline, notices = self._plan(folder, prune=prune, now=now)
+        # refuse to write over merge conflict markers: the write and the
+        # dry run refuse alike, naming every marked file
+        self._refuse_conflicted(baseline)
         # report every broken/new link (preserved or added during the run)
         # individually and statelessly; the CLI condenses by default
         for event in notices:
@@ -593,27 +709,39 @@ class Wiki:
           comparison against the plan (:meth:`_plan`), so lint flags
           exactly what ``update`` changes. (A file with merge conflict
           markers is the one exception: it is reported only as such,
-          with its diff suppressed.)
+          with its diff suppressed.) A bare page (no frontmatter) is
+          additionally named as one, so the pending adoption is
+          legible without reading its diff.
         - **Needs attention:** problems ``update`` cannot fix --
-          invalid names, merge conflict markers, unclosed page
-          frontmatter, emptied or truncated indexes, likely formatter
+          invalid names, merge conflict markers (``update`` refuses
+          the sweep until they are resolved), unclosed page
+          frontmatter, emptied or truncated indexes, nested wiki roots
+          (``update`` refuses to sweep across a directory declaring
+          its own ``.wiki/settings.json``), likely formatter
           damage (escaped wikilinks, or a thematic break standing
-          where ``***`` belongs), missing trailing periods, stale
-          links in user content, and broken links (targets that no
-          longer exist; ``update`` keeps these without ``--prune``).
+          where ``***`` belongs), hand-wrap mangles (a hyphen dangle,
+          or a list marker mid-sentence or directly under a
+          paragraph), missing trailing periods, unparseable
+          ``created:``/``updated:`` stamps (the fields are
+          tool-owned, so a parseable value is never judged), broken
+          index links (targets that no longer exist; ``update`` keeps
+          these without ``--prune``), and -- under ``titles.required``
+          -- a missing or unfilled ``title:``.
 
         Every line begins with the relevant path; an out-of-date file's
         diff follows its ``Requires update`` header, indented.
 
         A ``<!-- start: no-lint -->`` ... ``<!-- end: no-lint -->`` region
         suppresses the positional rules (conflict markers, escaped
-        wikilinks, stale links) for the lines it wraps; file-level checks
-        ignore regions, and a nested or dangling region marker is itself
-        a hard issue.
+        wikilinks, wrap mangles, stale links) for the lines it wraps;
+        file-level checks ignore regions, and a nested or dangling
+        region marker is itself a hard issue.
 
-        Placeholder descriptions, empty content sections, and CRLF line
-        endings (which the next ``update`` normalizes) are soft notes
-        (stderr) and do not count as issues.
+        Placeholder and oversized descriptions, empty content sections,
+        stale links in user content (index bodies and pages -- the
+        generated link block's broken-link check is the hard surface),
+        and CRLF line endings (which the next ``update`` normalizes)
+        are soft notes (stderr) and do not count as issues.
 
         Args:
             name: Restrict scope to named subtree (relative
@@ -638,9 +766,20 @@ class Wiki:
         folders = self._find_dirs(folder)
         for folder in folders:
             folder_relpath = folder.relative_to(self._root)
+            # a nested declared root marks a foreign wiki: update refuses to
+            # sweep across it, so name the marker as the root cause
+            if folder != self._root and (folder / WIKI_SETTINGS).is_file():
+                result.append(
+                    f'{folder_relpath}/: Nested wiki root (declared by'
+                    f' {WIKI_SETTINGS}); update refuses to sweep across it'
+                )
             # check folder name
-            if folder != self._root and not self.validate_name(folder.name):
-                result.append(f'{folder_relpath}/: Invalid folder name')
+            if folder != self._root:
+                violation = self._name_violation(folder.name)
+                if violation is not None:
+                    result.append(
+                        f'{folder_relpath}/: Invalid folder name: {violation}'
+                    )
             # flag a folder that shadows a same-named page: read <name> returns the
             # folder index, hiding <name>.md (resolution is directory-first)
             for child in sorted(folder.iterdir()):
@@ -717,12 +856,18 @@ class Wiki:
                             ' to rebuild'
                         )
                     result.extend(self._lint_desc(index_path, frontmatter))
+                    result.extend(self._lint_title(index_path, frontmatter))
+                    result.extend(self._lint_timestamps(index_path, frontmatter))
                     # the root display name has no enclosing dir to validate it
                     if folder == self._root:
                         root_name = format.read_frontmatter_name(frontmatter)
-                        if root_name and not self.validate_name(root_name):
+                        violation = (
+                            self._name_violation(root_name) if root_name else None
+                        )
+                        if violation is not None:
                             result.append(
-                                f'{index_relpath}: Invalid wiki name {root_name!r}'
+                                f'{index_relpath}: Invalid wiki name'
+                                f' {root_name!r}: {violation}'
                             )
                     # broken links (targets gone; update keeps them) + descriptions
                     expected_targets = {
@@ -757,16 +902,28 @@ class Wiki:
                                     link_desc,
                                 )
                             )
-                    # stale links in user content; empty content is a soft note
-                    result.extend(self._lint_stale_links(index_path, user_content))
+                    # hand-wrap artifacts in the link rows, user content,
+                    # and raw desc lines are hard issues
+                    result.extend(
+                        self._lint_wrap_mangles(
+                            index_path,
+                            text,
+                            masked,
+                            suppressed,
+                            frontmatter,
+                        )
+                    )
+                    # stale links in user content and empty content are soft notes
+                    self._lint_stale_links(index_path, user_content)
                     if not user_content.strip():
                         self.on_content_empty(path=str(index_relpath))
             # check pages (always, even when the index is missing)
             for page in self._find_pages(folder):
                 page_relpath = page.relative_to(self._root)
                 # report an invalid name for every file, including non-markdown
-                if not self.validate_name(page.stem):
-                    result.append(f'{page_relpath}: Invalid page name')
+                violation = self._name_violation(page.stem)
+                if violation is not None:
+                    result.append(f'{page_relpath}: Invalid page name: {violation}')
                 # only markdown pages carry frontmatter/content to lint further
                 if page.suffix != '.md':
                     continue
@@ -803,15 +960,29 @@ class Wiki:
                 # human-only checks on current content
                 frontmatter, content = format.parse_page(text)
                 # unclosed frontmatter is left untouched by update (see
-                # _plan_page), so surface it as a hard issue
+                # _plan_page), so surface it as a hard issue; any other
+                # frontmatterless page is bare -- name the pending adoption
                 first_line = text.split('\n', 1)[0].lstrip('\ufeff')
                 if not frontmatter and first_line.strip() == '---':
                     result.append(
                         f'{page_relpath}: Malformed frontmatter (no closing ---)'
                     )
+                elif not frontmatter:
+                    result.append(
+                        f'{page_relpath}: Bare page (no frontmatter);'
+                        ' update will adopt it'
+                    )
                 if frontmatter:
                     result.extend(self._lint_desc(page, frontmatter))
-                result.extend(self._lint_stale_links(page, content))
+                    result.extend(self._lint_title(page, frontmatter))
+                    result.extend(self._lint_timestamps(page, frontmatter))
+                # hand-wrap artifacts in the content and raw desc lines
+                # are hard issues
+                result.extend(
+                    self._lint_wrap_mangles(page, text, masked, suppressed, frontmatter)
+                )
+                # stale links in page content are soft notes
+                self._lint_stale_links(page, content)
         return result
 
     def read(
@@ -970,7 +1141,9 @@ class Wiki:
             desc: Show descriptions from parent index.
             desc_limit: Maximum characters per description.
                 Longer descriptions are truncated with ``...``
-                suffix. ``None`` = no truncation.
+                suffix. ``None`` resolves ``map.desc_limit``
+                from ``settings.json`` (default 200); ``-1``
+                disables truncation.
             category: Filter by category at root level.
                 ``None`` means no filter (show all entries).
                 A list of category names shows only entries
@@ -988,6 +1161,12 @@ class Wiki:
         """
         if isinstance(category, str):
             category = [category]
+        # resolve the desc limit (argument > map.desc_limit setting > 200);
+        # -1 explicitly disables truncation
+        if desc_limit is None:
+            desc_limit = self._map_policy['desc_limit']
+        if desc_limit == -1:
+            desc_limit = None
         if name:
             folder = self._resolve_folder(name)
         else:
@@ -1038,7 +1217,7 @@ class Wiki:
             Timestamp string like ``2026-01-15T12:30:00Z``.
 
         """
-        policy = self._timestamp
+        policy = self._timestamp_policy
         return dt.datetime.now(policy['zone']).strftime(policy['format'])
 
     @functools.cached_property
@@ -1070,6 +1249,26 @@ class Wiki:
         """
         if event is None:
             event = IndexCreateEvent(message, **kwargs)
+        return self.on_notice(event, logging_level=logging_level)
+
+    def on_page_adopt(
+        self: Wiki,
+        message: Optional[str] = None,
+        *,
+        logging_level: int = logging.INFO,
+        event: Optional[PageAdoptEvent] = None,
+        **kwargs: Any,
+    ) -> Event:
+        """Handle an adopted-page notice event.
+
+        Constructs a ``PageAdoptEvent`` from ``message`` and the
+        payload kwargs unless a pre-built plan-phase ``event`` is passed
+        through, then delegates to ``on_notice``. Override in subclasses
+        to intercept this notice kind alone; override ``on_notice`` to
+        intercept every notice.
+        """
+        if event is None:
+            event = PageAdoptEvent(message, **kwargs)
         return self.on_notice(event, logging_level=logging_level)
 
     def on_link_add(
@@ -1312,6 +1511,27 @@ class Wiki:
             event = DescMissingEvent(message, **kwargs)
         return self.on_notice(event, logging_level=logging_level)
 
+    def on_desc_long(
+        self: Wiki,
+        message: Optional[str] = None,
+        *,
+        logging_level: int = logging.INFO,
+        event: Optional[DescLongEvent] = None,
+        **kwargs: Any,
+    ) -> Event:
+        """Handle a long-desc notice event.
+
+        Constructs a ``DescLongEvent`` from ``message`` and the
+        payload kwargs (the live-site path and folded desc length)
+        unless a pre-built ``event`` is passed through, then delegates
+        to ``on_notice``. Override in subclasses to intercept this
+        notice kind alone; override ``on_notice`` to intercept every
+        notice.
+        """
+        if event is None:
+            event = DescLongEvent(message, **kwargs)
+        return self.on_notice(event, logging_level=logging_level)
+
     def on_content_empty(
         self: Wiki,
         message: Optional[str] = None,
@@ -1350,6 +1570,26 @@ class Wiki:
         """
         if event is None:
             event = CrlfNoticeEvent(message, **kwargs)
+        return self.on_notice(event, logging_level=logging_level)
+
+    def on_stale_link(
+        self: Wiki,
+        message: Optional[str] = None,
+        *,
+        logging_level: int = logging.INFO,
+        event: Optional[StaleLinkEvent] = None,
+        **kwargs: Any,
+    ) -> Event:
+        """Handle a stale-link note event.
+
+        Constructs a ``StaleLinkEvent`` from ``message`` and the
+        payload kwargs (the live-site path) unless a pre-built ``event``
+        is passed through, then delegates to ``on_notice``. Override in
+        subclasses to intercept this notice kind alone; override
+        ``on_notice`` to intercept every notice.
+        """
+        if event is None:
+            event = StaleLinkEvent(message, **kwargs)
         return self.on_notice(event, logging_level=logging_level)
 
     def on_notice(
@@ -1722,6 +1962,7 @@ class Wiki:
     def _search_files(
         self: Wiki,
         folder: pathlib.Path,
+        *,
         all_files: bool = False,
     ) -> list[pathlib.Path]:
         """Enumerate wiki files for search.
@@ -1994,32 +2235,36 @@ class Wiki:
     def _invalid_links(
         self: Wiki,
         folder: pathlib.Path,
-    ) -> list[tuple[str, str]]:
-        """Return ``(target, relpath)`` for folder entries with invalid names.
+    ) -> list[tuple[str, str, str]]:
+        """Return ``(target, relpath, reason)`` for entries with invalid names.
 
         A child folder or page whose name/stem fails :meth:`validate_name`
         (e.g. a denied ``|`` or ``#``) is reported so the plan can drop its
         link rather than emit a malformed wikilink. ``target`` matches the
         wikilink target :meth:`_build_expected_links` would have produced;
-        ``relpath`` names the offending path for the warning.
+        ``relpath`` names the offending path and ``reason`` the broken rule
+        for the warning.
         """
         # initialize results
         result = []
         # child directory entries (validated on the folder name)
         for path in sorted(folder.iterdir()):
             if path.is_dir() and not self._is_excluded_dir(path):
-                if not self.validate_name(path.name):
+                violation = self._name_violation(path.name)
+                if violation is not None:
                     target = path / WIKI_INDEX
                     target = str(target.relative_to(self._root).with_suffix(''))
-                    result.append((target, str(path.relative_to(self._root))))
+                    relpath = str(path.relative_to(self._root))
+                    result.append((target, relpath, violation))
         # page entries (validated on the stem)
         for page in self._find_pages(folder):
-            if not self.validate_name(page.stem):
+            violation = self._name_violation(page.stem)
+            if violation is not None:
                 if page.suffix == '.md':
                     target = str(page.relative_to(self._root).with_suffix(''))
                 else:
                     target = str(page.relative_to(self._root))
-                result.append((target, str(page.relative_to(self._root))))
+                result.append((target, str(page.relative_to(self._root)), violation))
         # return invalid entries
         return result
 
@@ -2223,9 +2468,9 @@ class Wiki:
             maps each planned file to the on-disk text it was planned
             from (``None`` when it did not exist) -- the writer compares
             against it to detect a concurrent edit -- and ``notices``
-            are the broken/new-link, desc-overwrite, and
-            malformed-frontmatter notice events collected across all
-            indexes and pages.
+            are the broken/new-link, desc-overwrite,
+            malformed-frontmatter, and adoption notice events collected
+            across all indexes and pages.
 
         """
         # alias directories
@@ -2311,6 +2556,35 @@ class Wiki:
             result.append(str(path.relative_to(self._root)))
         return result
 
+    def _refuse_conflicted(
+        self: Wiki,
+        baseline: dict[pathlib.Path, Optional[str]],
+    ) -> None:
+        """Refuse a sweep whose baseline carries merge conflict markers.
+
+        The plan reads the markers as authored content and would bake
+        them into the rewrite -- silently dropping one conflict side --
+        so every sweep over an existing tree refuses before writing,
+        naming every marked file.
+        """
+        conflicted = []
+        for path, text in baseline.items():
+            if text is None:
+                continue
+            markers = _conflict_marker_lines(text)
+            if not markers:
+                continue
+            # a well-formed no-lint region sanctions marker-shaped lines
+            # (e.g. a git tutorial), exactly as lint suppresses them
+            suppressed, _ = self._lint_regions(path, mask_code(text))
+            if any(n not in suppressed for n in markers):
+                conflicted.append(str(path.relative_to(self._root)))
+        if conflicted:
+            names = ', '.join(sorted(conflicted))
+            raise ValueError(
+                f'Merge conflict markers in: {names}; resolve them and rerun.'
+            )
+
     def _plan_index(
         self: Wiki,
         folder: pathlib.Path,
@@ -2355,12 +2629,14 @@ class Wiki:
                 delimiter=self.index_delimiter,
             )
             if frontmatter:
-                # refresh the name from the folder path and fill the
-                # missing or blank desc/created/updated keys
+                # refresh the name from the folder path, fill the missing
+                # or blank desc/created/updated keys, and normalize an
+                # authored title
                 frontmatter = format.repair_frontmatter(
                     frontmatter,
                     name=name,
                     now=now,
+                    title=True,
                 )
             else:
                 # an existing index with no (closed) frontmatter is an emptied or
@@ -2378,6 +2654,10 @@ class Wiki:
             user_content = ''
         # enrich frontmatter (hook for subclass tag enrichment)
         frontmatter = self._enrich_frontmatter(path, frontmatter)
+        # required-titles mode: seed the null placeholder lint holds open
+        # until a title is authored
+        if self._titles_required:
+            frontmatter = format.seed_frontmatter_title(frontmatter)
         # build expected links from filesystem
         expected = self._build_expected_links(folder)
         # drop links for filesystem entries whose stem/name fails the naming
@@ -2390,9 +2670,9 @@ class Wiki:
         if text is None:
             notices.append(IndexCreateEvent(path=str(relpath)))
         invalid = self._invalid_links(folder)
-        for _target, skipped in invalid:
-            notices.append(NameSkipEvent(path=skipped))
-        invalid_targets = {target for target, _ in invalid}
+        for _target, skipped, reason in invalid:
+            notices.append(NameSkipEvent(path=skipped, reason=reason))
+        invalid_targets = {target for target, _, _ in invalid}
         expected = [(t, label) for t, label in expected if t not in invalid_targets]
         # enrich new entries from child frontmatter
         labels = self._read_child_labels(folder, overlay)
@@ -2464,9 +2744,11 @@ class Wiki:
             else:
                 propagated.append((target, label, link_desc))
         links = propagated
+        # resolve the H1: an authored title wins over the path-derived name
+        title = format.read_frontmatter_title(frontmatter)
         # render the corrected index
         content = format.render_index(
-            name,
+            title or name,
             frontmatter,
             links,
             user_content,
@@ -2482,16 +2764,20 @@ class Wiki:
         """Compute the corrected content for a page file.
 
         Pure with respect to the filesystem (see :meth:`_plan_index`).
-        The page's ``name`` and H1 heading are set to the path-joined
-        name (e.g. ``core/design``); an authored title is intentionally
-        overwritten so names stay consistent with the tree structure.
-        Missing or blank frontmatter fields (``desc``/``created``/
-        ``updated``) are filled in. A page whose frontmatter
-        never closes is left untouched and reported instead: prepending
-        a fresh block would demote the authored fields to body text. The
-        returned content carries the file's *original* ``updated:``
-        value (a page has no cross-file reads, so it is computed once
-        from its own content).
+        The page's ``name`` is set to the path-joined name (e.g.
+        ``core/design``) and the H1 heading follows it, so names stay
+        consistent with the tree structure; an authored ``title:``
+        (indexes and pages alike) wins the H1 instead, and adopting a
+        page with no frontmatter seeds ``title:`` from its authored
+        heading, so adoption preserves it, while a page with no H1
+        gains the path-joined heading in its body, never a seeded
+        title. Missing or blank frontmatter fields
+        (``desc``/``created``/``updated``) are filled in. A page
+        whose frontmatter never closes is left untouched and reported
+        instead: prepending a fresh block would demote the authored
+        fields to body text. The returned content carries the file's
+        *original* ``updated:`` value (a page has no cross-file reads,
+        so it is computed once from its own content).
 
         Args:
             path: Page file to compute.
@@ -2499,7 +2785,8 @@ class Wiki:
 
         Returns:
             Tuple of ``(content, notices)`` where ``notices`` name a
-            malformed frontmatter (emitted by the writer, not here).
+            malformed frontmatter or an adoption (emitted by the
+            writer, not here).
 
         """
         # read page
@@ -2512,29 +2799,53 @@ class Wiki:
             relpath = path.relative_to(self._root)
             return text, [FrontmatterMalformedEvent(path=str(relpath))]
         # update or create frontmatter
+        notices: list[Event] = []
         if frontmatter:
-            # refresh the name from the file path and fill the missing or
-            # blank desc/created/updated keys, then rewrite the H1 to match
+            # refresh the name from the file path, fill the missing or
+            # blank desc/created/updated keys, and normalize an authored
+            # title
             page_name = self._path_to_name(path)
             frontmatter = format.repair_frontmatter(
                 frontmatter,
                 name=page_name,
                 now=now,
+                title=True,
             )
-            content = format.replace_heading(content, page_name)
         else:
-            # use the path-joined name (not the bare stem) and rewrite the H1 to
-            # match, so a fresh page converges in one pass instead of two
+            # use the path-joined name (not the bare stem), so a fresh page
+            # converges in one pass instead of two
             page_name = self._path_to_name(path)
             frontmatter = format.build_frontmatter(
                 name=page_name,
                 created=now,
                 updated=now,
             )
-            content = format.replace_heading('\n' + text, page_name)
+            content = '\n' + text
+            # adoption seeds title: from the authored H1, so the heading
+            # the author wrote survives the name rewrite below
+            adopted_title = None
+            heading = find_heading(content)
+            if heading and (authored := heading[1].strip()):
+                frontmatter = format.seed_frontmatter_title(frontmatter, authored)
+                adopted_title = authored
+            elif heading is None:
+                # a page with no H1 at all gains the path-joined one in
+                # its body; the invented heading is not authored, so it
+                # never seeds title:
+                content = f'\n# {page_name}\n' + content
+            # adoption rewrites the file wholesale, so announce the act
+            relpath = path.relative_to(self._root)
+            notices.append(PageAdoptEvent(path=str(relpath), title=adopted_title))
+        # required-titles mode: seed the null placeholder lint holds open
+        # until a title is authored
+        if self._titles_required:
+            frontmatter = format.seed_frontmatter_title(frontmatter)
+        # rewrite the H1: an authored title wins over the path-joined name
+        title = format.read_frontmatter_title(frontmatter)
+        content = format.replace_heading(content, title or page_name)
         # render the corrected page
         result = format.render_page(frontmatter, content)
-        return result, []
+        return result, notices
 
     def _category_matches(
         self: Wiki,
@@ -2558,7 +2869,7 @@ class Wiki:
         index_path = folder / WIKI_INDEX
         if not index_path.is_file():
             return False
-        text = index_path.read_text(encoding='utf-8')
+        text = self._read_text(index_path)
         _, links, _ = format.parse_index(text, delimiter=self.index_delimiter)
         found = False
         for target, label, _ in links:
@@ -2626,13 +2937,13 @@ class Wiki:
         # default lines to empty (use the passed buffer even when it is empty)
         result = _lines if _lines is not None else []
         # map presentation knobs (settings.json map.*)
-        map_config = self._settings.get('map', {})
-        indent_unit = map_config.get('indent', '  ')
-        ellipsis = map_config.get('ellipsis', '...')
+        policy = self._map_policy
+        indent_unit = policy['indent']
+        ellipsis = policy['ellipsis']
         # read and parse the folder's index
         index_path = folder / WIKI_INDEX
         if index_path.is_file():
-            text = index_path.read_text(encoding='utf-8')
+            text = self._read_text(index_path)
             _, links, _ = format.parse_index(text, delimiter=self.index_delimiter)
         elif current_depth == 0:
             # top-level target has no index: mark it unindexed
@@ -2837,9 +3148,10 @@ class Wiki:
         path: pathlib.Path,
         frontmatter: str,
     ) -> list[str]:
-        """Check desc is present and ends in a period."""
-        # alias relative path
+        """Check desc is present, concise, and ends in a period."""
+        # initialize issues
         result = []
+        # alias relative path
         relpath = path.relative_to(self._root)
         desc = format.read_frontmatter_desc(frontmatter)
         # a placeholder desc is a soft, "not yet authored" state (init seeds it),
@@ -2848,6 +3160,72 @@ class Wiki:
             self.on_desc_missing(path=str(relpath))
         elif desc and not desc.strip().endswith('.'):
             result.append(f'{relpath}: Missing period in desc')
+        # desc length is author judgment, not structure, so an oversized desc
+        # draws a soft note rather than an issue
+        if desc:
+            folded = format.join_lines(desc)
+            if len(folded) > _DESC_NOTE_CHARS:
+                self.on_desc_long(path=str(relpath), length=len(folded))
+        return result
+
+    def _lint_title(
+        self: Wiki,
+        path: pathlib.Path,
+        frontmatter: str,
+    ) -> list[str]:
+        """Check the authored title ``titles.required`` demands.
+
+        Under ``titles.required`` every index and page must carry an
+        authored ``title:``; update seeds a ``title: null`` placeholder
+        on files missing the field, and the file stays a hard issue
+        until a value is authored. Without the setting, titles are
+        optional and never checked. A truncated index (no frontmatter)
+        is reported as such, not as a missing title.
+        """
+        # initialize issues
+        result = []
+        # alias relative path
+        relpath = path.relative_to(self._root)
+        # only an authored value satisfies the requirement: the field is
+        # absent (update seeds it), blank, or the null placeholder
+        if self._titles_required and frontmatter:
+            if not format.read_frontmatter_title(frontmatter):
+                result.append(f'{relpath}: Missing title (author a value)')
+        return result
+
+    def _lint_timestamps(
+        self: Wiki,
+        path: pathlib.Path,
+        frontmatter: str,
+    ) -> list[str]:
+        """Check ``created:``/``updated:`` parse under the timestamp policy.
+
+        The stamps are tool-owned -- seeded when a file gains
+        frontmatter, ``updated:`` rewritten on every actual write -- so
+        lint never judges a parseable value against a clock: a hand
+        edit goes undetected unless it breaks ``timestamp.format``,
+        which is a hard issue. A missing or blank field is the repair
+        path's business (update stamps it in place), so only a present,
+        non-blank value is parsed.
+        """
+        # initialize issues
+        result = []
+        # alias relative path
+        relpath = path.relative_to(self._root)
+        # parse each present stamp against the configured strftime format
+        policy = self._timestamp_policy
+        for field in ('created', 'updated'):
+            value = format.read_frontmatter_field(frontmatter, field)
+            if not value:
+                continue
+            try:
+                dt.datetime.strptime(value, policy['format'])
+            except ValueError:
+                fmt = policy['format']
+                result.append(
+                    f'{relpath}: Unparseable {field}: stamp {value!r}'
+                    f' (expected timestamp format {fmt!r})'
+                )
         return result
 
     def _lint_link_desc(
@@ -2863,13 +3241,63 @@ class Wiki:
         by ``update`` and surfaced by the generated diff; only the
         trailing period -- which ``update`` never adds -- is checked here.
         """
-        # alias relative path
+        # initialize issues
         result = []
+        # alias relative path
         relpath = path.relative_to(self._root)
         # check link description ends in period
         joined = format.join_lines(link_desc)
         if joined and joined != '...' and not joined.endswith('.'):
             result.append(f'{relpath}: Missing period in [[{target}|{label}]]')
+        return result
+
+    def _lint_wrap_mangles(
+        self: Wiki,
+        path: pathlib.Path,
+        text: str,
+        masked: str,
+        suppressed: set[int],
+        frontmatter: str,
+    ) -> list[str]:
+        """Flag hand-wrap artifacts that read back as mangled text.
+
+        Two line-level signatures: a hyphen dangle (a break inside a
+        hyphenated word -- every folded read rejoins the pair with a
+        space) and a list marker opening a line mid-sentence or
+        directly under a paragraph line (rendered as a phantom list
+        item). The scan covers the content region -- minus ``no-lint``
+        suppression -- plus the raw ``desc:`` field lines, whose wrap
+        artifacts the folded field reads structurally cannot see; the
+        rest of the frontmatter never wraps, so it stays out of scope.
+        """
+        # scope: content lines minus suppression, plus the raw desc lines
+        lines = masked.split('\n')
+        in_scope = format.field_line_ranges(frontmatter, lines, ['desc'])
+        frontmatter_end = len(frontmatter.split('\n')) if frontmatter else 0
+        in_scope.update(
+            lineno
+            for lineno in range(frontmatter_end + 1, len(lines) + 1)
+            if lineno not in suppressed
+        )
+        # initialize issues
+        result = []
+        # alias relative path
+        relpath = path.relative_to(self._root)
+        # a finding needs its pair line in scope too: the dangle reads one
+        # line ahead, the marker one line back
+        for lineno in format.hyphen_dangle_lines(masked):
+            if lineno in in_scope and lineno + 1 in in_scope:
+                result.append(
+                    f'{relpath}: Hyphen dangle (line {lineno}): the line break'
+                    ' splits a hyphenated word; rejoin the wrapped line'
+                )
+        for lineno in format.wrapped_marker_lines(masked, text):
+            if lineno in in_scope and lineno - 1 in in_scope:
+                result.append(
+                    f'{relpath}: Wrapped list marker (line {lineno}): the line'
+                    ' reads as a list item; rejoin the wrapped line or open a'
+                    ' real list after a blank line'
+                )
         return result
 
     def _canonical_link_target(
@@ -2898,20 +3326,22 @@ class Wiki:
         self: Wiki,
         path: pathlib.Path,
         content: str,
-    ) -> list[str]:
-        """Check wikilinks in content resolve to existing files.
+    ) -> None:
+        """Note wikilinks in content that resolve to no existing file.
 
-        Lines inside a well-formed ``no-lint`` region are exempt; the
-        region is parsed from the scanned content itself, so the region
-        must wrap the link lines.
+        A stale link in user content is a soft note (``on_stale_link``),
+        not an issue: prose references pages that come and go, and the
+        generated index link block's broken-link check is the hard
+        surface. Lines inside a well-formed ``no-lint`` region are
+        exempt; the region is parsed from the scanned content itself,
+        so the region must wrap the link lines.
         """
         # alias relative path
-        result = []
         relpath = path.relative_to(self._root)
         # strip fenced code blocks and inline code spans before scanning;
         # the region parse below shares this content-local mask
         stripped = mask_code(content)
-        # no-lint regions suppress the stale-link check line by line
+        # no-lint regions suppress the stale-link note line by line
         suppressed = format.no_lint_lines(stripped)
         for match in re.finditer(r'\[\[([^\]|]+)', stripped):
             # the masked scan preserves line structure, so the match
@@ -2935,13 +3365,13 @@ class Wiki:
                     # from this file's folder, name the canonical form as the fix
                     canonical = self._canonical_link_target(path, page_target)
                     if canonical is not None and canonical != page_target:
-                        result.append(
-                            f'{relpath}: Stale link [[{target}]] '
-                            f'(use [[{canonical}{anchor}]])'
+                        self.on_stale_link(
+                            path=str(relpath),
+                            target=target,
+                            canonical=canonical + anchor,
                         )
                     else:
-                        result.append(f'{relpath}: Stale link [[{target}]]')
-        return result
+                        self.on_stale_link(path=str(relpath), target=target)
 
 
 # ------ events
@@ -2956,6 +3386,21 @@ class IndexCreateEvent(Event):
     def description(self: IndexCreateEvent) -> str:
         """Return the created-index notice line."""
         return f'New index: {self.path} (fill in its desc)'
+
+
+class PageAdoptEvent(Event):
+    """Emitted when update adopts a bare page by adding frontmatter."""
+
+    path: str
+    title: Optional[str] = None
+
+    @property
+    def description(self: PageAdoptEvent) -> str:
+        """Return the adopted-page notice line."""
+        result = f'Adopted bare page: {self.path} (frontmatter added'
+        if self.title:
+            result += '; title: seeded from its H1'
+        return result + ')'
 
 
 class LinkAddEvent(Event):
@@ -3017,11 +3462,12 @@ class NameSkipEvent(Event):
     """Emitted when update skips an entry whose name breaks the policy."""
 
     path: str
+    reason: str
 
     @property
     def description(self: NameSkipEvent) -> str:
         """Return the invalid-name skip notice line."""
-        return f'Skipping {self.path}: invalid name'
+        return f'Skipping {self.path}: invalid name ({self.reason})'
 
 
 class WriteSkipEvent(Event):
@@ -3104,6 +3550,21 @@ class DescMissingEvent(Event):
         return f'{self.path}: Needs desc'
 
 
+class DescLongEvent(Event):
+    """Emitted when lint notes an oversized desc."""
+
+    path: str
+    length: int
+
+    @property
+    def description(self: DescLongEvent) -> str:
+        """Return the long-desc note line."""
+        return (
+            f'{self.path}: Desc is {self.length} chars;'
+            f' keep descs under {_DESC_NOTE_CHARS}'
+        )
+
+
 class ContentEmptyEvent(Event):
     """Emitted when lint notes an empty user-content section."""
 
@@ -3126,10 +3587,27 @@ class CrlfNoticeEvent(Event):
         return f'{self.path}: CRLF line endings; update will normalize'
 
 
+class StaleLinkEvent(Event):
+    """Emitted when lint notes a stale wikilink in user content."""
+
+    path: str
+    target: str
+    canonical: Optional[str] = None
+
+    @property
+    def description(self: StaleLinkEvent) -> str:
+        """Return the stale-link note line."""
+        result = f'{self.path}: Stale link [[{self.target}]]'
+        if self.canonical:
+            result += f' (use [[{self.canonical}]])'
+        return result
+
+
 # plan-phase dispatch: event class -> per-kind hook name (kept in lockstep
 # with the events above; the CLI's _UPDATE_CATEGORIES keys on the same classes)
 _NOTICE_HOOKS = {
     IndexCreateEvent: 'on_index_create',
+    PageAdoptEvent: 'on_page_adopt',
     LinkAddEvent: 'on_link_add',
     LinkBreakEvent: 'on_link_break',
     LinkPruneEvent: 'on_link_prune',
@@ -3142,8 +3620,10 @@ _NOTICE_HOOKS = {
     SettingsRestoreEvent: 'on_settings_restore',
     CacheRestoreEvent: 'on_cache_restore',
     DescMissingEvent: 'on_desc_missing',
+    DescLongEvent: 'on_desc_long',
     ContentEmptyEvent: 'on_content_empty',
     CrlfNoticeEvent: 'on_crlf_notice',
+    StaleLinkEvent: 'on_stale_link',
 }
 
 
@@ -3180,5 +3660,5 @@ def _is_offline() -> bool:
     if value == 'true':
         return True
     if value not in ('false', ''):
-        raise ValueError(f'{OFFLINE_MODE} must be "true" or "false", got: {value!r}')
+        raise ValueError(f'{OFFLINE_MODE} must be "true" or "false", got {value!r}.')
     return False

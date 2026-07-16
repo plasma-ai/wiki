@@ -8,8 +8,12 @@ set -euo pipefail
 # merged field-aware: the regenerated keys (name/updated) and the
 # link block are normalized to "ours" on all three inputs -- wiki update
 # owns them, so their churn must never conflict -- and the remaining
-# authored keys (desc/created/category/tags/sources) get a normal
-# three-way merge that may produce conflicts. On add/add merges (empty
+# authored keys (title/desc/created/category/tags/sources) get a normal
+# three-way merge that may produce conflicts. title is authored (update
+# never invents a value), so it must stay out of REGENERATED_KEYS --
+# normalizing it to ours would silently discard theirs' titles; the H1
+# rides the take-ours link block, so a merged-in title shows in the H1
+# only after the post-merge wiki update. On add/add merges (empty
 # base) created joins the regenerated keys: both sides seed it from
 # independent wiki update runs, so the stamps are churn, not authorship.
 # A side whose frontmatter is undetectable (formatter-mangled or

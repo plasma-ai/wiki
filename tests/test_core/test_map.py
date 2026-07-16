@@ -34,6 +34,9 @@ __all__ = [
     'test_map_word_counts',
     'test_map_handles_dotted_markdown_stem',
     'test_map_presentation_configurable',
+    'test_map_rejects_malformed_settings',
+    'test_map_names_undecodable_index',
+    'test_map_bounds_descs_by_default',
     'test_markerless_index_warns_in_map_and_flags_in_lint',
     'test_map_survives_binary_attachment',
     'test_non_word_category_labels_filters_and_resolves',
@@ -284,14 +287,14 @@ def test_map_handles_dotted_markdown_stem(tmp_path: pathlib.Path) -> None:
 
 
 def test_map_presentation_configurable(tmp_path: pathlib.Path) -> None:
-    """settings.json ``map.*`` knobs customize the indent unit and ellipsis."""
+    """settings.json ``map.*`` knobs set the indent, ellipsis, and desc limit."""
     config = tmp_path / '.wiki'
     config.mkdir()
     (config / 'settings.json').write_text(
-        json.dumps({'map': {'indent': '. ', 'ellipsis': '###'}}),
+        json.dumps({'map': {'indent': '. ', 'ellipsis': '###', 'desc_limit': 15}}),
         encoding='utf-8',
     )
-    # a page with a long desc so --desc-limit truncates it
+    # a page with a long desc so the desc limit truncates it
     _make_wiki(tmp_path, folders={'core': ['design']})
     page = tmp_path / 'core' / 'design.md'
     page.write_text(
@@ -300,11 +303,98 @@ def test_map_presentation_configurable(tmp_path: pathlib.Path) -> None:
         encoding='utf-8',
     )
     Wiki(tmp_path).update()
-    out = Wiki(tmp_path).map(desc_limit=15)
+    out = Wiki(tmp_path).map()
     # map.indent: the nested page entry uses the custom indent unit
     assert any(line.startswith('. ') for line in out.splitlines())
-    # map.ellipsis: a desc past --desc-limit is truncated with the custom marker
+    # map.desc_limit: the settings value stands in for the 200 default;
+    # map.ellipsis: a truncated desc ends with the custom marker
+    assert 'A long design note about the subsystem.' not in out
     assert '###' in out
+    # an explicit limit beats the settings value, and -1 disables truncation
+    wide = Wiki(tmp_path).map(desc_limit=100)
+    assert 'A long design note about the subsystem.' in wide
+    unlimited = Wiki(tmp_path).map(desc_limit=-1)
+    assert 'A long design note about the subsystem.' in unlimited
+
+
+@pytest.mark.parametrize(
+    ('content', 'match'),
+    [
+        ('{"map": [1]}', r'map block must be a JSON object'),
+        ('{"map": {"desc_limit": "10"}}', r'desc_limit must be an int'),
+        ('{"map": {"indent": 2}}', r'indent must be a string'),
+        ('{"map": {"ellipsis": 5}}', r'ellipsis must be a string'),
+    ],
+    ids=[
+        'non-object-map',
+        'non-int-desc-limit',
+        'non-string-indent',
+        'non-string-ellipsis',
+    ],
+)
+def test_map_rejects_malformed_settings(
+    tmp_path: pathlib.Path,
+    content: str,
+    match: str,
+) -> None:
+    """Malformed ``map.*`` settings fail loudly, naming the file and key.
+
+    ``settings.json`` is user-editable input: a wrong-typed presentation
+    knob raises ``ValueError`` naming the file rather than leaking a raw
+    exception from deep inside the map render.
+    """
+    # build a valid wiki, then corrupt its settings.json
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    settings = tmp_path / '.wiki' / 'settings.json'
+    settings.write_text(content, encoding='utf-8')
+
+    # a fresh instance fails loudly, naming the settings file
+    with pytest.raises(ValueError, match=match) as excinfo:
+        Wiki(tmp_path).map()
+    assert 'settings.json' in str(excinfo.value)
+
+
+def test_map_names_undecodable_index(tmp_path: pathlib.Path) -> None:
+    """An undecodable ``_index.md`` fails map with an error naming the file.
+
+    A bare decode error carries only a byte offset -- unactionable on a
+    tree of thousands of files -- so the render walk and the category
+    prune must both name the offending index.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    index = tmp_path / 'core' / '_index.md'
+    index.write_bytes(b'\xff\xfe not utf-8')
+
+    # both the render walk and the category prune name the file
+    with pytest.raises(UnicodeDecodeError, match=r'core/_index\.md'):
+        wiki.map(words=False)
+    with pytest.raises(UnicodeDecodeError, match=r'core/_index\.md'):
+        wiki.map(category=['x'], words=False)
+
+
+def test_map_bounds_descs_by_default(tmp_path: pathlib.Path) -> None:
+    """Descs truncate at 200 chars unless ``-1`` lifts the cap.
+
+    Every map row naming a page reproduces its desc, so a dump of a
+    large wiki stays readable by default and unlimited output is an
+    explicit choice.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    long_desc = ('All about the widget design and its many moving parts. ' * 4).strip()
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        f'---\nname: design\ndesc: {long_desc}\n---\n\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+    wiki.update()
+
+    # the default map bounds each desc, marking the cut
+    bounded = Wiki(tmp_path).map()
+    assert long_desc not in bounded
+    assert '...' in bounded
+    # -1 reproduces the full desc
+    unlimited = Wiki(tmp_path).map(desc_limit=-1)
+    assert long_desc in unlimited
 
 
 def test_markerless_index_warns_in_map_and_flags_in_lint(

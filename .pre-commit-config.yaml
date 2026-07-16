@@ -45,7 +45,7 @@ repos:
         additional_dependencies:
           - mdformat-gfm
           - mdformat-gfm-alerts
-          - mdformat-frontmatter
+          - mdformat-wiki
         args:
           - --wrap
           - "72"
