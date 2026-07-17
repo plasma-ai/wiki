@@ -117,9 +117,9 @@ frontmatter, so editing a page dirties nothing else. The cache directory
 ignores itself via its own `.gitignore` and can be deleted at any time;
 it is rebuilt on demand. In the map, a page shows its own count and a
 folder shows `page/tree` (its index's words over the subtree total),
-abbreviated with `k`/`m` suffixes past a thousand. Descriptions truncate
-at 200 characters by default — `--desc-limit` (or the `map.desc_limit`
-setting) adjusts the budget, with `-1` for no truncation — and
+abbreviated with `k`/`m` suffixes past a thousand. Descriptions print in
+full by default — `--desc-limit` (or the `map.desc_limit` setting) caps
+them to a character budget, and `-1` forces no truncation — while
 `wiki map --stat` sizes the dump (lines, chars, words) without printing
 it. The map's indent unit and truncation marker are configurable via
 `map.indent` and `map.ellipsis` in `.wiki/settings.json`.

@@ -24,8 +24,9 @@ from wiki.constants import (
     WIKI_INDEX,
     WIKI_SETTINGS,
 )
-from wiki.core import format, obsidian
+from wiki.core import format
 from wiki.core.event import Event
+from wiki.impl import obsidian
 from wiki.typing import Link, PathLike
 from wiki.util.filesystem import write_atomic
 from wiki.util.markdown import find_heading, mask_code
@@ -286,8 +287,8 @@ class Wiki:
         override = self._settings.get('map', {})
         if not isinstance(override, dict):
             raise ValueError(f'The map block must be a JSON object in {WIKI_SETTINGS}.')
-        # desc_limit bounds each rendered description; -1 (or null) disables it
-        desc_limit = override.get('desc_limit', 200)
+        # desc_limit bounds each rendered description; -1 (or null/unset) disables it
+        desc_limit = override.get('desc_limit')
         if desc_limit is None:
             desc_limit = -1
         if not (isinstance(desc_limit, int) and desc_limit >= -1):
@@ -1141,8 +1142,8 @@ class Wiki:
             desc: Show descriptions from parent index.
             desc_limit: Maximum characters per description.
                 Longer descriptions are truncated with ``...``
-                suffix. ``None`` resolves ``map.desc_limit``
-                from ``settings.json`` (default 200); ``-1``
+                suffix. ``None`` resolves ``map.desc_limit`` from
+                ``settings.json`` (untruncated when unset); ``-1``
                 disables truncation.
             category: Filter by category at root level.
                 ``None`` means no filter (show all entries).
@@ -1161,8 +1162,8 @@ class Wiki:
         """
         if isinstance(category, str):
             category = [category]
-        # resolve the desc limit (argument > map.desc_limit setting > 200);
-        # -1 explicitly disables truncation
+        # resolve the desc limit (argument > map.desc_limit setting,
+        # untruncated if neither is set); -1 explicitly disables truncation
         if desc_limit is None:
             desc_limit = self._map_policy['desc_limit']
         if desc_limit == -1:

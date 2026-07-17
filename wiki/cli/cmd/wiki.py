@@ -698,7 +698,7 @@ def map(
     # description character limit option
     desc_limit_help = (
         'Max characters per description (defaults to the map.desc_limit'
-        ' setting, else 200); -1 disables truncation.'
+        ' setting, else untruncated); -1 disables truncation.'
     )
     desc_limit = typer.Option(None, '--desc-limit', help=desc_limit_help)
     # category filter option

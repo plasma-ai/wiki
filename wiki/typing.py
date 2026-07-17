@@ -6,12 +6,12 @@ import os
 from typing import Union
 
 __all__ = [
-    'Link',
     'PathLike',
+    'Link',
 ]
-
-# index link row as (target, label, desc)
-Link = tuple[str, str, str]
 
 # filesystem path accepted at boundaries
 PathLike = Union[str, os.PathLike]
+
+# index link row as (target, label, desc)
+Link = tuple[str, str, str]

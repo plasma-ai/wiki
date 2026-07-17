@@ -36,7 +36,7 @@ __all__ = [
     'test_map_presentation_configurable',
     'test_map_rejects_malformed_settings',
     'test_map_names_undecodable_index',
-    'test_map_bounds_descs_by_default',
+    'test_map_descs_unbounded_by_default',
     'test_markerless_index_warns_in_map_and_flags_in_lint',
     'test_map_survives_binary_attachment',
     'test_non_word_category_labels_filters_and_resolves',
@@ -306,7 +306,7 @@ def test_map_presentation_configurable(tmp_path: pathlib.Path) -> None:
     out = Wiki(tmp_path).map()
     # map.indent: the nested page entry uses the custom indent unit
     assert any(line.startswith('. ') for line in out.splitlines())
-    # map.desc_limit: the settings value stands in for the 200 default;
+    # map.desc_limit: the settings value bounds each desc;
     # map.ellipsis: a truncated desc ends with the custom marker
     assert 'A long design note about the subsystem.' not in out
     assert '###' in out
@@ -372,12 +372,12 @@ def test_map_names_undecodable_index(tmp_path: pathlib.Path) -> None:
         wiki.map(category=['x'], words=False)
 
 
-def test_map_bounds_descs_by_default(tmp_path: pathlib.Path) -> None:
-    """Descs truncate at 200 chars unless ``-1`` lifts the cap.
+def test_map_descs_unbounded_by_default(tmp_path: pathlib.Path) -> None:
+    """Descs reproduce whole unless a limit opts into truncation.
 
-    Every map row naming a page reproduces its desc, so a dump of a
-    large wiki stays readable by default and unlimited output is an
-    explicit choice.
+    Every map row naming a page reproduces its desc; with no
+    ``map.desc_limit`` and no ``--desc-limit``, the dump stays faithful,
+    and bounding the output is an explicit choice.
     """
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
     long_desc = ('All about the widget design and its many moving parts. ' * 4).strip()
@@ -388,13 +388,14 @@ def test_map_bounds_descs_by_default(tmp_path: pathlib.Path) -> None:
     )
     wiki.update()
 
-    # the default map bounds each desc, marking the cut
-    bounded = Wiki(tmp_path).map()
+    # the default map reproduces the full desc, no cut marker
+    unbounded = Wiki(tmp_path).map()
+    assert long_desc in unbounded
+    assert '...' not in unbounded
+    # an explicit limit bounds each desc, marking the cut
+    bounded = Wiki(tmp_path).map(desc_limit=200)
     assert long_desc not in bounded
     assert '...' in bounded
-    # -1 reproduces the full desc
-    unlimited = Wiki(tmp_path).map(desc_limit=-1)
-    assert long_desc in unlimited
 
 
 def test_markerless_index_warns_in_map_and_flags_in_lint(
