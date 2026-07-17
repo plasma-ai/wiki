@@ -31,7 +31,10 @@ def mask_code(text: str, /) -> str:
     for line in text.split('\n'):
         if fence is not None:
             lines.append('')
-            if line.strip() == fence:
+            # CommonMark closes on a same-char run at least as long as
+            # the opening fence
+            close = line.strip()
+            if set(close) == {fence[0]} and len(close) >= len(fence):
                 fence = None
             continue
         match = re.match(r'^ {0,3}(`{3,}|~{3,})', line)
@@ -66,7 +69,8 @@ def find_heading(text: str, /) -> Optional[tuple[int, str]]:
     fence = None
     for index, line in enumerate(text.split('\n')):
         if fence is not None:
-            if line.strip() == fence:
+            close = line.strip()
+            if set(close) == {fence[0]} and len(close) >= len(fence):
                 fence = None
             continue
         match = re.match(r'^ {0,3}(`{3,}|~{3,})', line)

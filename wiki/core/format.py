@@ -381,7 +381,9 @@ def repair_frontmatter(
     if re.search(r'^created:[^\S\n]*$', frontmatter, re.MULTILINE):
         frontmatter = re.sub(
             r'^created:[^\S\n]*$',
-            f'created: {now}',
+            # a callable repl, so a backslash in a user timestamp.format is
+            # emitted verbatim, not parsed as a group reference
+            lambda _: f'created: {now}',
             frontmatter,
             count=1,
             flags=re.MULTILINE,
@@ -393,7 +395,7 @@ def repair_frontmatter(
     if re.search(r'^updated:[^\S\n]*$', frontmatter, re.MULTILINE):
         frontmatter = re.sub(
             r'^updated:[^\S\n]*$',
-            f'updated: {now}',
+            lambda _: f'updated: {now}',
             frontmatter,
             count=1,
             flags=re.MULTILINE,
@@ -705,6 +707,11 @@ def format_link(target: str, label: str, description: str) -> str:
     if label == '..':
         return f'[[{target}|{label}]]'
     desc = description or '...'
+    # a desc opening on its own line -- the formatter wraps a link too long
+    # to hold the desc after "]]:" -- keeps that break, so the round-trip with
+    # the formatter converges instead of re-flowing the row on every run
+    if desc.startswith('\n'):
+        return f'[[{target}|{label}]]:{desc}'
     return f'[[{target}|{label}]]: {desc}'
 
 

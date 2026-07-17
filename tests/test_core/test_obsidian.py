@@ -1,4 +1,4 @@
-"""Test the ``wiki.impl.obsidian`` module.
+"""Test the ``wiki.core._obsidian`` module.
 
 Obsidian integration functions with no unit surface of their own; the
 config seeding and merge behavior is covered end-to-end by

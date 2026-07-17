@@ -140,8 +140,6 @@ def version(app: typer.Typer) -> typer.Typer:
     def _version_callback(value: bool) -> None:
         """Print the running ``wiki`` package's version and exit."""
         if value:
-            # the package's own __version__, so an editable install reports
-            # the code it runs, not install-time dist-info
             typer.echo(wiki.__version__)
             raise typer.Exit()
 

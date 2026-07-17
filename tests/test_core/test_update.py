@@ -35,10 +35,12 @@ __all__ = [
     'test_update_no_delimiter_keeps_content',
     'test_update_repairs_formatter_mangled_index',
     'test_update_reports_page_with_unclosed_frontmatter',
+    'test_update_does_not_restamp_a_crlf_passthrough_page',
     'test_update_refuses_truncated_index',
     'test_update_refuses_nested_wiki',
     'test_update_refuses_conflict_markers',
     'test_update_survives_backslash_digit_name',
+    'test_repair_frontmatter_survives_backslash_timestamp',
     'test_update_accepts_block_scalar_desc',
     'test_update_accepts_block_scalar_name',
     'test_update_folds_and_preserves_inline_desc',
@@ -333,6 +335,31 @@ def test_update_reports_page_with_unclosed_frontmatter(
     assert page.read_text(encoding='utf-8') == authored
 
 
+def test_update_does_not_restamp_a_crlf_passthrough_page(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A CRLF passthrough page normalizes to LF without re-stamping its body.
+
+    An unclosed-frontmatter page plans verbatim; its CRLF endings force a
+    normalizing write, but the ``updated:`` re-stamp must not fire -- the
+    parse left the body's ``updated:`` line as authored text, so rewriting it
+    would corrupt the authored value.
+    """
+    wiki = _make_wiki(tmp_path, folders={'notes': ['readme']})
+    page = tmp_path / 'notes' / 'readme.md'
+    # unclosed frontmatter (passthrough) + a body line the parse reads as body,
+    # written with CRLF so the byte probe forces a normalizing write
+    authored = '---\nname: readme\ndesc: Important.\n\nupdated: KEEP-ME\n'
+    page.write_bytes(authored.replace('\n', '\r\n').encode('utf-8'))
+
+    wiki.update()
+
+    text = page.read_text(encoding='utf-8')
+    # the write normalized CRLF->LF, but the authored body line survives intact
+    assert 'updated: KEEP-ME' in text
+    assert '\r\n' not in text
+
+
 @pytest.mark.parametrize(
     'damage',
     ['', '---\nname: core\ndesc: Authored.\n'],
@@ -479,6 +506,19 @@ def test_update_survives_backslash_digit_name(
     assert name in target.read_text(encoding='utf-8')
     wiki.lint()
     assert wiki.update() == []
+
+
+def test_repair_frontmatter_survives_backslash_timestamp() -> None:
+    r"""A backslash in the rendered timestamp stamps verbatim, not a group ref.
+
+    The created/updated stamps mirror the ``name:`` callable-repl safety: a
+    user ``timestamp.format`` may render a literal ``\1`` that would otherwise
+    abort update on any node.
+    """
+    fm = '---\nname: pg\ndesc: A page.\ncreated:\nupdated:\n---\n'
+    out = format.repair_frontmatter(fm, name='pg', now='2026\\1-ts')
+    assert 'created: 2026\\1-ts' in out
+    assert 'updated: 2026\\1-ts' in out
 
 
 # ------ desc parsing and prose placement

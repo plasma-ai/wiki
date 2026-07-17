@@ -25,12 +25,12 @@ on authored prose; `wiki config` installs the Obsidian integration.
 
 `core/` decomposes into `wiki.py` (the `Wiki` engine class), `format.py`
 (functions over the on-disk page format), `event.py` (the payload-only
-`Event` base), and `obsidian.py` (the Obsidian integration). Engine
-diagnostics are typed notice events: each kind has an `on_<kind>` hook
-delegating to the `on_notice` funnel, which logs `event.description`
-through the stdlib `Wiki.logger`; hosts intercept by overriding hooks
-(the CLI swaps `on_notice` per instance to capture and condense
-narration).
+`Event` base), and `_obsidian.py` (the internal Obsidian integration).
+Engine diagnostics are typed notice events: each kind has an `on_<kind>`
+hook delegating to the `on_notice` funnel, which logs
+`event.description` through the stdlib `Wiki.logger`; hosts intercept by
+overriding hooks (the CLI swaps `on_notice` per instance to capture and
+condense narration).
 
 ## Build & Development
 

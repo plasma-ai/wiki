@@ -24,9 +24,8 @@ from wiki.constants import (
     WIKI_INDEX,
     WIKI_SETTINGS,
 )
-from wiki.core import format
+from wiki.core import _obsidian, format
 from wiki.core.event import Event
-from wiki.impl import obsidian
 from wiki.typing import Link, PathLike
 from wiki.util.filesystem import write_atomic
 from wiki.util.markdown import find_heading, mask_code
@@ -441,7 +440,7 @@ class Wiki:
             content = json.dumps(seed, indent=2)
             write_atomic(settings_path, content + '\n')
         # seed .wiki/obsidian from stock template
-        obsidian.seed_template(self._root)
+        _obsidian.seed_template(self._root)
         # create root index
         root_index = self._root / WIKI_INDEX
         if not root_index.exists():
@@ -500,7 +499,7 @@ class Wiki:
             self._dispatch_notice(event)
         # seed a missing .wiki/obsidian from the stock template, so an
         # adopted tree (or one whose .wiki/ was lost) gets the full setup
-        obsidian.seed_template(self._root)
+        _obsidian.seed_template(self._root)
         config_dir = self._root / WIKI_DIR / 'obsidian'
         # prepare the .obsidian/ vault directory
         obsidian_dir = self._root / '.obsidian'
@@ -515,7 +514,7 @@ class Wiki:
                 target = obsidian_dir / 'plugins' / source.name
                 shutil.copytree(source, target, dirs_exist_ok=True)
                 # download pinned plugin code from its release, unless offline
-                release_url = obsidian._OBSIDIAN_PLUGINS.get(source.name)
+                release_url = _obsidian._OBSIDIAN_PLUGINS.get(source.name)
                 if release_url and offline:
                     warnings.append(
                         f'Skipped {source.name} download (OFFLINE_MODE).'
@@ -527,7 +526,7 @@ class Wiki:
                     # failure never leaves a skewed main.js/manifest.json pair
                     staged = []
                     try:
-                        for asset in obsidian._OBSIDIAN_PLUGIN_ASSETS:
+                        for asset in _obsidian._OBSIDIAN_PLUGIN_ASSETS:
                             url = release_url.format(asset=asset)
                             fd, tmp = tempfile.mkstemp(dir=target, suffix=asset)
                             os.close(fd)
@@ -562,7 +561,7 @@ class Wiki:
                     f'Malformed JSON in .obsidian/{source.name}: {e}'
                 ) from e
             # merge per the install policy (arrays union, dicts deep)
-            merged = obsidian.merge_settings(
+            merged = _obsidian.merge_settings(
                 target_data,
                 source_data,
                 name=source.name,
@@ -2545,14 +2544,20 @@ class Wiki:
                 relpath = path.relative_to(self._root)
                 self.on_write_skip(path=str(relpath))
                 continue
-            # stamp updated: now that a write is happening
-            content = re.sub(
-                r'^updated:.*$',
-                f'updated: {now}',
-                content,
-                count=1,
-                flags=re.MULTILINE,
-            )
+            # re-stamp updated: only on a real content change; a write forced
+            # solely to normalize CRLF->LF (content == disk) must not re-stamp
+            # -- on a verbatim passthrough of an unclosed-frontmatter page the
+            # re.sub would rewrite an authored body line the parse left as body
+            if current is None or content != current:
+                content = re.sub(
+                    r'^updated:.*$',
+                    # a callable repl, so a backslash in a user timestamp.format
+                    # is emitted verbatim, not parsed as a group reference
+                    lambda _: f'updated: {now}',
+                    content,
+                    count=1,
+                    flags=re.MULTILINE,
+                )
             write_atomic(path, content)
             result.append(str(path.relative_to(self._root)))
         return result
@@ -2727,8 +2732,12 @@ class Wiki:
                 # line breaks are formatter-owned: a link desc differing only
                 # in wrapping is already converged, so the index's own breaks
                 # survive and only a content change ports the frontmatter
-                # desc (with its breaks) back onto the row
-                if link_desc.replace('\n', ' ') == child_desc.replace('\n', ' '):
+                # desc (with its breaks) back onto the row; a leading break --
+                # the formatter wrapping an over-long link onto its own line --
+                # folds away the same as any other
+                link_folded = link_desc.replace('\n', ' ').strip()
+                child_folded = child_desc.replace('\n', ' ').strip()
+                if link_folded == child_folded:
                     propagated.append((target, label, link_desc))
                     continue
                 # announce a genuine overwrite (a hand-edit would otherwise vanish
