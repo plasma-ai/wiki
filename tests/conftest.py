@@ -27,6 +27,23 @@ if any(arg == '--cov' or arg.startswith('--cov=') for arg in sys.argv):
 _AMBIENT_ENV_VARS = [OFFLINE_MODE]
 
 
+@pytest.fixture(autouse=True)
+def _isolate_trust_store(
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Point the user-global trust store at a throwaway dir per test.
+
+    The ``.wiki/wiki.py`` trust gate reads ``~/.wiki/settings.json``;
+    without this a hook-loading test would read (and a ``wiki trust`` test
+    would mutate) the real user's trusted-wiki list. ``WIKI_CONFIG_DIR``
+    redirects it to a fresh dir, so every test starts trusting nothing and
+    the CLI subprocesses inherit the same isolated store.
+    """
+    home = tmp_path_factory.mktemp('wiki_config')
+    monkeypatch.setenv('WIKI_CONFIG_DIR', str(home))
+
+
 @pytest.fixture(scope='session', autouse=True)
 def _isolate_ambient_env() -> Iterator[None]:
     """Strip a live deployment's exported env for the whole session.

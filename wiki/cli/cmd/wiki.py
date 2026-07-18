@@ -21,8 +21,9 @@ from wiki.cli.utils import (
     refuse_nested_init,
     resolve_wiki,
     resolve_wiki_root,
+    trust_root,
 )
-from wiki.constants import DEFAULT_WIKI_NAME, WIKI_INDEX
+from wiki.constants import DEFAULT_WIKI_NAME, WIKI_DIR, WIKI_INDEX
 from wiki.core.event import Event
 from wiki.core.wiki import (
     DescOverwriteEvent,
@@ -43,6 +44,7 @@ __all__ = [
     'install',
     'init',
     'config',
+    'trust',
     'read',
     'search',
     'update',
@@ -348,6 +350,42 @@ def config(
                 typer.echo(_OBSIDIAN_SETUP_HINT, err=True)
         # (re)configure git merge driver
         configure_git_merge_driver(wiki._root)
+
+    return app
+
+
+def trust(app: typer.Typer) -> typer.Typer:
+    """Register the ``trust`` command."""
+    # wiki root option
+    path_help = (
+        'Wiki root directory. Defaults to the enclosing wiki root (the'
+        ' ancestor declaring .wiki/settings.json, else the outermost'
+        ' _index.md chain), else {cwd}/wiki/.'
+    )
+    path = typer.Option(None, '--path', help=path_help)
+
+    @command(app, 'trust')
+    def _trust(
+        path: Optional[str] = path,
+    ) -> None:
+        """Mark a wiki as trusted to run its .wiki/wiki.py hook.
+
+        A .wiki/wiki.py runs code with your privileges, so wiki refuses to
+        load one from an untrusted root (any command that resolves the
+        wiki). Run this from inside a wiki you trust to record its root in
+        ~/.wiki/settings.json; a hookless wiki records trust too (harmless,
+        future-proofing a hook added later). Only trust a wiki whose
+        contents you have vetted.
+        """
+        # resolve the root without loading the hook (resolve_wiki_root
+        # never execs .wiki/wiki.py), then record it as trusted
+        root = resolve_wiki_root(path)
+        resolved = trust_root(root)
+        hook = resolved / WIKI_DIR / 'wiki.py'
+        if hook.is_file():
+            typer.echo(f'Trusted wiki: {resolved}')
+        else:
+            typer.echo(f'Trusted wiki: {resolved} (no {WIKI_DIR}/wiki.py hook present)')
 
     return app
 

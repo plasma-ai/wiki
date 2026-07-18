@@ -13,9 +13,11 @@ from wiki.cli import cmd
 from wiki.cli.utils import (
     configure_git_merge_driver,
     enclosing_wiki_root,
+    is_trusted,
     load_wiki_class,
     resolve_wiki,
     resolve_wiki_root,
+    trust_root,
 )
 from wiki.core.wiki import Wiki
 
@@ -29,6 +31,8 @@ __all__ = [
     'test_resolver_refuses_ambiguous_root',
     'test_resolve_wiki_corroboration_notices',
     'test_load_wiki_class',
+    'test_load_wiki_class_refuses_untrusted_hook',
+    'test_trust_root_records_resolved_root',
     'test_reused_command_honors_resolve_override',
     'test_resolve_wiki_default_class',
     'test_configure_git_merge_driver',
@@ -220,9 +224,12 @@ def test_resolve_wiki_corroboration_notices(
 
 def test_load_wiki_class(tmp_path: pathlib.Path) -> None:
     """Loads the default ``Wiki`` or the subclass named by the sole ``__all__`` entry."""
-    # no config file -- returns default Wiki
+    # no config file -- returns default Wiki (a hookless wiki needs no trust)
     cls = load_wiki_class(tmp_path)
     assert cls is Wiki
+
+    # the hook cases below run code, so the root must be trusted first
+    trust_root(tmp_path)
 
     # custom subclass named by the sole __all__ entry
     config_dir = tmp_path / '.wiki'
@@ -267,6 +274,58 @@ def test_load_wiki_class(tmp_path: pathlib.Path) -> None:
     )
     with pytest.raises(RuntimeError, match=r'\.wiki/wiki\.py'):
         load_wiki_class(tmp_path)
+
+
+def test_load_wiki_class_refuses_untrusted_hook(tmp_path: pathlib.Path) -> None:
+    """A ``.wiki/wiki.py`` on an untrusted root is refused, not executed.
+
+    The refusal names the hook and points at ``wiki trust``; once the root
+    is trusted the same hook loads. A hookless root never needs trust.
+    """
+    config_dir = tmp_path / '.wiki'
+    config_dir.mkdir()
+    # a hook whose top-level code drops a sentinel beside the wiki root
+    # (an absolute path off __file__, so running it is observable without
+    # polluting the caller's cwd)
+    sentinel = tmp_path / 'ran'
+    (config_dir / 'wiki.py').write_text(
+        'import pathlib\n'
+        'from wiki.core.wiki import Wiki\n\n'
+        "(pathlib.Path(__file__).resolve().parent.parent / 'ran').touch()\n\n"
+        'class MyWiki(Wiki):\n    pass\n\n'
+        "__all__ = ['MyWiki']\n",
+        encoding='utf-8',
+    )
+    assert not is_trusted(tmp_path)
+    with pytest.raises(PermissionError, match=r'(?s)untrusted wiki hook.*wiki trust'):
+        load_wiki_class(tmp_path)
+    # the hook never ran, so its side effect never happened
+    assert not sentinel.exists()
+
+    # trusting the root lets the same hook load and run
+    trust_root(tmp_path)
+    cls = load_wiki_class(tmp_path)
+    assert cls is not Wiki
+    assert issubclass(cls, Wiki)
+    assert sentinel.exists()
+
+
+def test_trust_root_records_resolved_root(tmp_path: pathlib.Path) -> None:
+    """``trust_root`` records the resolved root and reports it as trusted.
+
+    Trust keys on the resolved path, so a symlink alias to the same tree
+    reads back as trusted; the store never depends on how it was reached.
+    """
+    root = tmp_path / 'wiki'
+    root.mkdir()
+    assert not is_trusted(root)
+    recorded = trust_root(root)
+    assert recorded == root.resolve()
+    assert is_trusted(root)
+    # an alias resolving to the same root is covered by the one record
+    alias = tmp_path / 'alias'
+    alias.symlink_to(root)
+    assert is_trusted(alias)
 
 
 # ------ command registration seam
@@ -321,7 +380,8 @@ def test_resolve_wiki_default_class(tmp_path: pathlib.Path) -> None:
     assert type(wiki) is EmbedderWiki
     # the bare default remains the base class
     assert type(resolve_wiki(str(root))) is Wiki
-    # a hook still overrides any default
+    # a hook still overrides any default (once the root is trusted to run it)
+    trust_root(root)
     (root / '.wiki' / 'wiki.py').write_text(
         'from wiki.core.wiki import Wiki\n\n'
         'class HookWiki(Wiki):\n'

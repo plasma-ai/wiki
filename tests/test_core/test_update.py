@@ -83,6 +83,9 @@ __all__ = [
     'test_required_titles_seed_lint_and_flip_off',
     'test_required_titles_adopts_no_h1_page',
     'test_update_materializes_missing_settings',
+    'test_update_skips_symlinked_page',
+    'test_update_skips_out_of_root_desc_propagation',
+    'test_update_escapes_damage_shaped_child_desc',
 ]
 
 
@@ -1867,3 +1870,101 @@ def test_update_materializes_missing_settings(
         wiki.update(check=True)
     with pytest.raises(ValueError, match=r'(?s)Legacy wiki layout.*wiki update'):
         wiki.lint()
+
+
+def test_update_skips_symlinked_page(tmp_path: pathlib.Path) -> None:
+    """A symlinked ``.md`` page is never walked, read, or rewritten.
+
+    ``write_atomic`` replaces its target via ``os.replace``, so reading a
+    page through a symlink and writing it back would overwrite the symlink
+    with a regular file holding the (possibly out-of-root) target's
+    content -- exfiltrating an arbitrary local file into a tracked page.
+    """
+    root = tmp_path / 'wiki'
+    root.mkdir()
+    wiki = _make_wiki(root, folders={'sub': ['child']})
+    # a sensitive file outside the wiki root
+    secret = tmp_path / 'secret.md'
+    secret.write_text(
+        '---\nname: secret\ndesc: TOP SECRET\n---\n\n# secret\n\nsensitive.\n',
+        encoding='utf-8',
+    )
+    # a symlinked page inside the wiki pointing at it
+    link = root / 'sub' / 'leak.md'
+    link.symlink_to(secret)
+
+    wiki.update()
+    # the symlink is left intact (not read, not replaced by a regular file)
+    assert link.is_symlink()
+    # its target's content never reaches a tracked page or the index
+    sub_index = (root / 'sub' / '_index.md').read_text(encoding='utf-8')
+    assert 'TOP SECRET' not in sub_index
+    assert 'leak' not in sub_index
+
+
+def test_update_skips_out_of_root_desc_propagation(tmp_path: pathlib.Path) -> None:
+    """Desc propagation never dereferences a link target outside the root.
+
+    A hand-authored (or merged) index link whose target escapes the wiki
+    via ``..`` is preserved as a broken link, but the desc-propagation
+    pass must not resolve it and copy the out-of-root file's ``desc:``
+    into the generated link block -- that would exfiltrate a foreign
+    file's content into a tracked wiki artifact.
+    """
+    root = tmp_path / 'wiki'
+    root.mkdir()
+    wiki = _make_wiki(root, folders={'sub': ['child']})
+    # a file outside the wiki root carrying a desc an attacker wants leaked
+    (tmp_path / 'secret.md').write_text(
+        '---\nname: secret\ndesc: LEAKED SECRET\n---\n\n# secret\n\nx.\n',
+        encoding='utf-8',
+    )
+    # inject a traversal link into the generated region of sub/_index.md
+    # (index targets are root-relative, e.g. ``sub/child``)
+    sub_index = root / 'sub' / '_index.md'
+    text = sub_index.read_text(encoding='utf-8')
+    text = text.replace(
+        '[[sub/child|child]]',
+        '[[../secret|leaked]]: ...\n[[sub/child|child]]',
+        1,
+    )
+    sub_index.write_text(text, encoding='utf-8')
+
+    wiki.update()
+    updated = sub_index.read_text(encoding='utf-8')
+    # the link is preserved (propagation ran) but the out-of-root desc is
+    # never read, so the secret never lands in the index
+    assert '../secret' in updated
+    assert 'LEAKED SECRET' not in updated
+
+
+def test_update_escapes_damage_shaped_child_desc(tmp_path: pathlib.Path) -> None:
+    r"""A child desc already carrying the ``\[\[`` damage shape is escaped.
+
+    ``escape_desc`` neutralizes exactly the lines the reader
+    (:func:`format.parse_index`) would promote to a link, and the reader
+    repairs the leading-escape damage shape. So a child ``desc:`` whose
+    continuation line is ``\[\[target|label\]\]`` must be escaped on
+    propagation -- otherwise it survives verbatim into the parent index
+    and is promoted to a phantom link on the next parse.
+    """
+    wiki = _make_wiki(tmp_path, folders={'sub': ['child']})
+    # a child desc whose second line is a pre-damaged link (a block scalar
+    # keeps the backslashes literal, as synced/merged frontmatter would)
+    (tmp_path / 'sub' / 'child.md').write_text(
+        '---\nname: child\ndesc: |\n  A child page.\n'
+        r'  \[\[evil|../secret\]\]' + '\n'
+        '---\n\n# child\n\nBody.\n',
+        encoding='utf-8',
+    )
+    wiki.update()
+    index = (tmp_path / 'sub' / '_index.md').read_text(encoding='utf-8')
+    # escaped as a continuation, never promoted to a link
+    assert r'[\[\[evil|../secret\]\]' in index
+    assert '[[evil|../secret]]' not in index
+    # a phantom link would resurface on the next parse; it must not, and
+    # the escape is stable so the tree converges
+    wiki.update()
+    reparsed = (tmp_path / 'sub' / '_index.md').read_text(encoding='utf-8')
+    assert '[[evil|../secret]]' not in reparsed
+    assert wiki.update() == []

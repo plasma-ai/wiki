@@ -22,6 +22,7 @@ def cli(**kwargs: Any) -> None:
     cmd.install(app)
     cmd.init(app)
     cmd.config(app)
+    cmd.trust(app)
     cmd.read(app)
     cmd.search(app)
     cmd.update(app)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import functools
 import importlib.util
 import json
@@ -15,14 +16,23 @@ from typing import Any, Literal, Optional
 
 import typer
 
-from wiki.constants import DEFAULT_WIKI_NAME, WIKI_DIR, WIKI_INDEX, WIKI_SETTINGS
+from wiki.constants import (
+    DEFAULT_WIKI_NAME,
+    WIKI_CONFIG_DIR,
+    WIKI_DIR,
+    WIKI_INDEX,
+    WIKI_SETTINGS,
+)
 from wiki.core.wiki import Wiki
+from wiki.util.filesystem import write_atomic
 
 __all__ = [
     'command',
     'parse_slice',
     'parse_settings',
     'load_wiki_class',
+    'is_trusted',
+    'trust_root',
     'resolve_wiki',
     'resolve_wiki_root',
     'enclosing_wiki_root',
@@ -94,17 +104,90 @@ def parse_settings(value: Optional[str]) -> Optional[dict]:
     return result
 
 
+def _config_home() -> pathlib.Path:
+    """Return the user-global config home (``~/.wiki``, ``$WIKI_CONFIG_DIR`` wins).
+
+    A dedicated home dotdir mirrors the neighboring agent tools
+    (``~/.claude``, ``~/.codex``) and the per-project ``.wiki/`` marker.
+    The trust list lives here, outside any wiki -- an in-wiki marker
+    would let a cloned/untrusted wiki vouch for itself.
+    """
+    override = os.environ.get(WIKI_CONFIG_DIR)
+    if override:
+        return pathlib.Path(override).expanduser()
+    return pathlib.Path.home() / WIKI_DIR
+
+
+def _settings_path() -> pathlib.Path:
+    """Return the user-global settings file (``~/.wiki/settings.json``).
+
+    The basename matches the per-project marker, so the global file is the
+    plain counterpart of a project's ``.wiki/settings.json``.
+    """
+    return _config_home() / pathlib.Path(WIKI_SETTINGS).name
+
+
+def _read_global_settings() -> dict:
+    """Read the user-global settings, tolerating absence or corruption."""
+    try:
+        result = json.loads(_settings_path().read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return result if isinstance(result, dict) else {}
+
+
+def is_trusted(root: pathlib.Path) -> bool:
+    """Return whether ``root`` is on the user's trusted-wiki list."""
+    trusted = _read_global_settings().get('trusted') or {}
+    return str(root.expanduser().resolve()) in trusted
+
+
+def trust_root(root: pathlib.Path) -> pathlib.Path:
+    """Record ``root`` as trusted in the user-global settings; return the key.
+
+    The store is ``~/.wiki/settings.json`` (``0600`` under a ``0700``
+    home), a ``{trusted: {resolved_path: timestamp}}`` map keyed by the
+    resolved root. Absolute paths are correct here -- this is a
+    machine-local store, not repo-committed data.
+    """
+    resolved = root.expanduser().resolve()
+    home = _config_home()
+    home.mkdir(parents=True, exist_ok=True)
+    os.chmod(home, 0o700)
+    settings = _read_global_settings()
+    trusted = settings.get('trusted')
+    if not isinstance(trusted, dict):
+        trusted = {}
+    trusted[str(resolved)] = dt.datetime.now(dt.UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
+    settings['trusted'] = trusted
+    path = _settings_path()
+    write_atomic(path, json.dumps(settings, indent=2, sort_keys=True) + '\n')
+    os.chmod(path, 0o600)
+    return resolved
+
+
 def load_wiki_class(
     root: pathlib.Path,
     default: type[Wiki] = Wiki,
 ) -> type[Wiki]:
-    """Load the Wiki subclass named by ``.wiki/wiki.py``'s sole ``__all__`` entry."""
+    """Load the Wiki subclass named by ``.wiki/wiki.py``'s sole ``__all__`` entry.
+
+    A ``.wiki/wiki.py`` hook runs arbitrary code with the user's
+    privileges, so it executes only for a root the user has trusted via
+    ``wiki trust``. An untrusted hook is refused (never silently ignored:
+    a custom subclass changes indexing/formatting, so falling back to the
+    base class could generate a wrong wiki). A hookless wiki needs no
+    trust and always loads the default class.
+    """
     config_path = root / WIKI_DIR / 'wiki.py'
     if not config_path.exists():
         return default
-    # NOTE: this executes arbitrary code from the wiki's .wiki/wiki.py,
-    #   so it is safe only for first-party wikis -- opening an untrusted
-    #   wiki would need an opt-in or an allowlist of trusted roots
+    if not is_trusted(root):
+        raise PermissionError(
+            f'Refusing to run untrusted wiki hook: {config_path}\n'
+            f'This wiki defines a {WIKI_DIR}/wiki.py that runs code with your'
+            f' privileges.\nIf you trust this wiki, run:  wiki trust'
+        )
     spec = importlib.util.spec_from_file_location('_wiki', config_path)
     module = importlib.util.module_from_spec(spec)
     # a wiki that declares a subclass this environment cannot load must

@@ -725,8 +725,11 @@ def escape_desc(desc: str, *, delimiter: str) -> str:
     link-shaped line would parse as a phantom entry. A delimiter line
     gets a leading backslash; a link-shaped line gets the backslash
     inside its leading brackets (``[\[``) so the healthy escape never
-    carries the ``\[[`` formatter-damage signature lint scans for.
-    Markdown renders the text unchanged either way, and the parser
+    carries the ``\[[`` formatter-damage signature lint scans for. Link
+    detection uses the same ``repair`` the reader (:func:`parse_index`)
+    applies, so a line already carrying that damage shape is escaped here
+    rather than surviving to be promoted to a real link on the next
+    parse. Markdown renders the text unchanged either way, and the parser
     reads both as ordinary continuations. The escape is stable, so
     re-propagation converges. The first line never needs it -- it sits
     on the link line itself.
@@ -737,7 +740,7 @@ def escape_desc(desc: str, *, delimiter: str) -> str:
         stripped = line.strip()
         if stripped == delimiter:
             line = line.replace(stripped, f'\\{stripped}', 1)
-        elif match_link_row(stripped, repair=False) is not None:
+        elif match_link_row(stripped, repair=True) is not None:
             line = line.replace(stripped, f'[\\{stripped[1:]}', 1)
         lines.append(line)
     return '\n'.join(lines)

@@ -15,6 +15,7 @@ Initialize a wiki in the current project and configure Obsidian plugins:
 
 - `wiki init` — scaffold a new wiki with a root index
 - `wiki config` — install plugins into `.obsidian/`
+- `wiki trust` — authorize a wiki to run its `.wiki/wiki.py` hook
 
 Maintain indexes as files are added and removed:
 
@@ -184,3 +185,12 @@ yourself:
   index body empty until after the merge wave, then author it once. The
   merge driver plants a one-line HTML-comment hint above such add/add
   conflict markers naming this convention — delete it as you resolve.
+- **A `.wiki/wiki.py` hook needs explicit trust.** A wiki may ship a
+  `.wiki/wiki.py` (a custom `Wiki` subclass) that runs code with the
+  user's privileges, so `wiki` refuses to load an untrusted hook — every
+  command that resolves the wiki fails, naming the hook and pointing at
+  `wiki trust`. This is a security decision for the human: surface the
+  error and let the user run `wiki trust` for a wiki they have vetted,
+  rather than running it yourself or working around the refusal. A
+  hookless wiki needs no trust; trust is recorded per resolved root in
+  `~/.wiki/settings.json` (`WIKI_CONFIG_DIR` overrides the config home).

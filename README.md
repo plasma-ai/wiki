@@ -137,6 +137,20 @@ The merge driver itself lives in each clone's local git config; the
 committed `.gitattributes` only names it, so every contributor runs
 `wiki config` once after cloning.
 
+A wiki may define a `.wiki/wiki.py` hook — a custom `Wiki` subclass the
+tool loads to change indexing or formatting. Because the hook runs code
+with your privileges, `wiki` refuses to load one from a wiki you have
+not trusted (every command that resolves the wiki fails, naming the
+hook) and points you at:
+
+- `wiki trust` — authorize the enclosing wiki to run its `.wiki/wiki.py`
+
+Run it once from inside a wiki whose contents you have vetted; it
+records the wiki's resolved root in `~/.wiki/settings.json` (override
+the config home with `WIKI_CONFIG_DIR`). A wiki with no hook needs no
+trust. Never trust a wiki cloned from an untrusted source without first
+reading its `.wiki/wiki.py`.
+
 Maintain indexes as files are added and removed:
 
 - `wiki lint` — validate structure and flag issues

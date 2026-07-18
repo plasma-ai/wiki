@@ -75,6 +75,7 @@ __all__ = [
     'test_merge_conflicts_when_side_loses_separator',
     'test_merge_hints_add_add_body_conflicts',
     'test_version_flag_reports_a_version',
+    'test_trust_gates_hook_execution',
 ]
 
 pytestmark = pytest.mark.skipif(
@@ -1576,6 +1577,37 @@ def test_version_flag_reports_a_version(tmp_path: pathlib.Path) -> None:
     result = _wiki(tmp_path, '--version')
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.strip() == WIKI_VERSION
+
+
+# ------ trust
+
+
+def test_trust_gates_hook_execution(tmp_path: pathlib.Path) -> None:
+    """A ``.wiki/wiki.py`` hook runs only after ``wiki trust``.
+
+    An untrusted hook makes a resolving command refuse -- naming the hook
+    and pointing at ``wiki trust`` -- without executing it; trusting the
+    root lets the same command run. The suite's ``WIKI_CONFIG_DIR`` keeps
+    the trust store hermetic across the subprocess calls.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', 'Trusted', '--path', str(root)).returncode == 0
+    # a benign custom-subclass hook
+    (root / '.wiki' / 'wiki.py').write_text(
+        'from wiki.core.wiki import Wiki\n\n'
+        'class MyWiki(Wiki):\n    pass\n\n'
+        "__all__ = ['MyWiki']\n",
+        encoding='utf-8',
+    )
+    # a resolving command refuses the untrusted hook, naming the fix
+    refused = _wiki(root, 'map', '--path', str(root))
+    assert refused.returncode != 0
+    assert 'wiki trust' in refused.stderr
+    # trusting the root lets the same command run
+    trusted = _wiki(root, 'trust', '--path', str(root))
+    assert trusted.returncode == 0
+    assert 'Trusted wiki' in trusted.stdout
+    assert _wiki(root, 'map', '--path', str(root)).returncode == 0
 
 
 # ------ helpers

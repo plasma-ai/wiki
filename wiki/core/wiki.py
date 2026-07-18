@@ -1929,9 +1929,12 @@ class Wiki:
         """Return ``True`` if file should be excluded from index links.
 
         Excludes wiki index files (handled separately as the folder
-        index) and files with ``.`` prefix.
+        index), files with ``.`` prefix, and symlinked files (reading and
+        rewriting a page through a symlink would copy the symlink target's
+        content -- possibly from outside the wiki root -- into a tracked
+        file, the file-level analogue of the ``_is_excluded_dir`` guard).
         """
-        return path.name == WIKI_INDEX or path.name.startswith('.')
+        return path.name == WIKI_INDEX or path.name.startswith('.') or path.is_symlink()
 
     def _is_excluded_dir(self: Wiki, path: pathlib.Path) -> bool:
         """Return ``True`` if directory should be excluded from index links.
@@ -2708,8 +2711,17 @@ class Wiki:
             if label == '..':
                 propagated.append((target, label, link_desc))
                 continue
-            # resolve child path from target (staged content wins over disk)
+            # resolve child path from target (staged content wins over disk);
+            # a broken/preserved target may carry '..' or an absolute path, so
+            # contain the resolved form to the root before dereferencing -- an
+            # out-of-root read would copy a foreign file's desc into the
+            # generated link block. The unresolved path stays the overlay key
+            # (self._root is already resolved, so the two agree for in-root
+            # targets), only the containment test resolves.
             child_path = self._root / (target + '.md')
+            if not child_path.resolve().is_relative_to(self._root):
+                propagated.append((target, label, link_desc))
+                continue
             child_text = self._current_text(child_path, overlay)
             if child_text is None:
                 propagated.append((target, label, link_desc))
