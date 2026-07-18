@@ -1,6 +1,6 @@
 # wiki
 
-[![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/plasma-ai/wiki/blob/main/LICENSE)
 [![build](https://github.com/plasma-ai/wiki/actions/workflows/build.yaml/badge.svg)](https://github.com/plasma-ai/wiki/actions/workflows/build.yaml)
 [![docs](https://github.com/plasma-ai/wiki/actions/workflows/docs.yaml/badge.svg)](https://github.com/plasma-ai/wiki/actions/workflows/docs.yaml)
 [![lint](https://github.com/plasma-ai/wiki/actions/workflows/lint.yaml/badge.svg)](https://github.com/plasma-ai/wiki/actions/workflows/lint.yaml)
@@ -258,8 +258,10 @@ pre-commit run --all-files
 
 The contribution workflow is covered by the organization-wide
 [CONTRIBUTING.md](https://github.com/plasma-ai/.github/blob/main/CONTRIBUTING.md);
-repository conventions live in [AGENTS.md](AGENTS.md), and the release
-process (version sources, tagging, CI guard) in the organization-wide
+repository conventions live in
+[AGENTS.md](https://github.com/plasma-ai/wiki/blob/main/AGENTS.md), and
+the release process (version sources, tagging, CI guard) in the
+organization-wide
 [RELEASING.md](https://github.com/plasma-ai/.github/blob/main/RELEASING.md).
 
 ## Third-Party Software
@@ -273,6 +275,7 @@ GitHub release at setup time rather than redistributing it.
 
 ## License
 
-Licensed under the Apache License 2.0 — see [LICENSE](LICENSE).
+Licensed under the Apache License 2.0 — see
+[LICENSE](https://github.com/plasma-ai/wiki/blob/main/LICENSE).
 
 Copyright © 2026 Plasma AI
