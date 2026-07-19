@@ -13,6 +13,7 @@ repos:
     hooks:
       - id: check-json
       - id: check-toml
+      - id: check-yaml
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-merge-conflict
@@ -45,7 +46,7 @@ repos:
         additional_dependencies:
           - mdformat-gfm
           - mdformat-gfm-alerts
-          - mdformat-frontmatter
+          - mdformat-wiki
         args:
           - --wrap
           - "72"

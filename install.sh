@@ -17,6 +17,8 @@ usage() {
     cat <<USAGE
 Usage: $(basename "$0") [options]
 
+Install the project (editable) plus requested extras and dependency groups.
+
 Options:
     --all-extras         Install all optional dependency extras
     --extras=<extras>    Comma-separated optional dependency extras
@@ -82,6 +84,11 @@ done
 
 if [[ "$ALL_EXTRAS" == true ]] && [[ ${#INSTALL_EXTRAS[@]} -gt 0 ]]; then
     echo "Error: --all-extras and --extras are mutually exclusive" >&2
+    exit 1
+fi
+
+if ! command -v uv &>/dev/null; then
+    echo "Error: uv is required (brew install uv)" >&2
     exit 1
 fi
 

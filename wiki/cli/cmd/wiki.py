@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-import importlib.metadata
 import importlib.resources
 import pathlib
+import re
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 
+import wiki
 from wiki.cli.utils import (
+    _no_wiki_error,
     command,
     configure_git_merge_driver,
     parse_settings,
@@ -20,15 +23,30 @@ from wiki.cli.utils import (
     refuse_nested_init,
     resolve_wiki,
     resolve_wiki_root,
+    trust_root,
 )
-from wiki.constants import DEFAULT_WIKI_NAME, WIKI_INDEX
-from wiki.core.wiki import Wiki
+from wiki.constants import DEFAULT_WIKI_NAME, WIKI_DIR, WIKI_INDEX, WIKI_SETTINGS
+from wiki.core.event import Event
+from wiki.core.wiki import (
+    DescOverwriteEvent,
+    FrontmatterMalformedEvent,
+    IndexCreateEvent,
+    IndexTruncatedEvent,
+    LinkAddEvent,
+    LinkBreakEvent,
+    LinkPruneEvent,
+    NameSkipEvent,
+    PageAdoptEvent,
+    Wiki,
+    WriteSkipEvent,
+)
 
 __all__ = [
     'version',
     'install',
     'init',
     'config',
+    'trust',
     'read',
     'search',
     'update',
@@ -38,82 +56,80 @@ __all__ = [
 ]
 
 # manual step: Obsidian gates community plugins behind "Restricted Mode"
-OBSIDIAN_SETUP_HINT = (
+_OBSIDIAN_SETUP_HINT = (
     'In Obsidian: Settings -> Community plugins -> turn off Restricted'
     ' Mode, then enable Front Matter Title if needed.'
 )
 
-# condensed-mode narration categories, as (prefix, marker, one, many,
-# check_one, check_many): a notice matching prefix+marker collapses into the
-# category's count line, worded for apply and --check runs
+# condensed-mode narration categories, as (event class, one, many, check_one,
+# check_many): a notice of the class collapses into the category's count
+# line, worded for apply and --check runs
 _UPDATE_CATEGORIES = [
     (
-        'New index: ',
-        '',
+        IndexCreateEvent,
         'Created 1 new index (fill in its desc)',
         'Created {n} new indexes (fill in their descs)',
         'Would create 1 new index',
         'Would create {n} new indexes',
     ),
     (
-        'New link: ',
-        '',
+        PageAdoptEvent,
+        'Adopted 1 bare page (frontmatter added)',
+        'Adopted {n} bare pages (frontmatter added)',
+        'Would adopt 1 bare page',
+        'Would adopt {n} bare pages',
+    ),
+    (
+        LinkAddEvent,
         'Added 1 new link',
         'Added {n} new links',
         'Would add 1 new link',
         'Would add {n} new links',
     ),
     (
-        'Broken link: ',
-        '',
+        LinkBreakEvent,
         '1 broken link (run `wiki lint` to list it)',
         '{n} broken links (run `wiki lint` to list them)',
         '1 broken link (run `wiki lint` to list it)',
         '{n} broken links (run `wiki lint` to list them)',
     ),
     (
-        'Pruned link: ',
-        '',
+        LinkPruneEvent,
         'Pruned 1 broken link',
         'Pruned {n} broken links',
         'Would prune 1 broken link',
         'Would prune {n} broken links',
     ),
     (
-        'Overwrote desc: ',
-        '',
+        DescOverwriteEvent,
         'Overwrote 1 link desc (page frontmatter descs win)',
         'Overwrote {n} link descs (page frontmatter descs win)',
         'Would overwrite 1 link desc (page frontmatter descs win)',
         'Would overwrite {n} link descs (page frontmatter descs win)',
     ),
     (
-        'Skipping ',
-        ': invalid name',
+        NameSkipEvent,
         'Skipped 1 invalid name',
         'Skipped {n} invalid names',
         'Skipped 1 invalid name',
         'Skipped {n} invalid names',
     ),
     (
-        'Skipping ',
-        'changed during update',
+        WriteSkipEvent,
         'Skipped 1 concurrently-edited file (re-run `wiki update`)',
         'Skipped {n} concurrently-edited files (re-run `wiki update`)',
         'Skipped 1 concurrently-edited file (re-run `wiki update`)',
         'Skipped {n} concurrently-edited files (re-run `wiki update`)',
     ),
     (
-        'Malformed frontmatter',
-        '',
+        FrontmatterMalformedEvent,
         '1 page with malformed frontmatter (no closing ---)',
         '{n} pages with malformed frontmatter (no closing ---)',
         '1 page with malformed frontmatter (no closing ---)',
         '{n} pages with malformed frontmatter (no closing ---)',
     ),
     (
-        'Empty or truncated index',
-        '',
+        IndexTruncatedEvent,
         '1 empty or truncated index (restore from git or delete to rebuild)',
         '{n} empty or truncated indexes (restore from git or delete to rebuild)',
         '1 empty or truncated index (restore from git or delete to rebuild)',
@@ -126,9 +142,9 @@ def version(app: typer.Typer) -> typer.Typer:
     """Register the ``--version`` flag on the root callback."""
 
     def _version_callback(value: bool) -> None:
-        """Print the installed ``plasma-wiki`` version and exit."""
+        """Print the running ``wiki`` package's version and exit."""
         if value:
-            typer.echo(importlib.metadata.version('plasma-wiki'))
+            typer.echo(wiki.__version__)
             raise typer.Exit()
 
     # version flag
@@ -151,18 +167,28 @@ def version(app: typer.Typer) -> typer.Typer:
 def install(app: typer.Typer) -> typer.Typer:
     """Register the ``install`` command."""
     # project flag
-    project_help = 'Install config in cwd rather than home directory.'
+    project_help = 'Install the skill in cwd rather than home directory.'
     project = typer.Option(False, '--project', help=project_help)
+    # link flag
+    link_help = (
+        'Symlink the bundled skill instead of copying (requires the package'
+        ' files on disk, e.g. an editable install), so source edits apply'
+        ' without re-installing.'
+    )
+    link = typer.Option(False, '--link', help=link_help)
 
     @command(app, 'install')
     def _install(
         project: bool = project,
+        link: bool = link,
     ) -> None:
         """Install the wiki skill for Claude Code and Codex.
 
         Copies the bundled skill into the Claude (.claude/skills) and Codex
         (.agents/skills) skill directories. Targets your home directory by
-        default, or the current project with --project.
+        default, or the current project with --project. --link symlinks the
+        skill instead of copying -- the editable-install dev setup, where
+        source edits apply without re-installing.
         """
         # resolve install directory
         if project:
@@ -177,7 +203,15 @@ def install(app: typer.Typer) -> typer.Typer:
         # collect skills
         skills_dir = importlib.resources.files('wiki').joinpath('skills')
         skills = [path for path in skills_dir.iterdir() if path.is_dir()]
-        # copy each skill into every target (replaces any prior copy)
+        # a symlink needs a real directory to point at; only an on-disk
+        # package (an editable install, not a zipped one) provides it
+        if link and not isinstance(skills_dir, pathlib.Path):
+            raise RuntimeError(
+                '--link requires the bundled skill to be a real directory'
+                ' (an editable install); a zipped install cannot install'
+                ' the skill from the CLI.'
+            )
+        # copy or link each skill into every target (replaces any prior install)
         for skill in sorted(skills, key=lambda path: path.name):
             for target in targets:
                 dest = target / skill.name
@@ -186,8 +220,12 @@ def install(app: typer.Typer) -> typer.Typer:
                     dest.unlink()
                 elif dest.is_dir():
                     shutil.rmtree(dest)
-                shutil.copytree(skill, dest)
-                typer.echo(f'Installed {skill.name} -> {dest}')
+                if link:
+                    dest.symlink_to(skill)
+                    typer.echo(f'Linked {skill.name} -> {dest}.')
+                else:
+                    shutil.copytree(skill, dest)
+                    typer.echo(f'Installed {skill.name} -> {dest}.')
 
     return app
 
@@ -246,8 +284,9 @@ def init(app: typer.Typer) -> typer.Typer:
             if not quiet:
                 typer.echo(f'Wiki already initialized at: {path}')
             return
-        # initialize wiki
+        # initialize wiki, streaming its notices to stderr
         wiki = Wiki(path)
+        wiki.on_notice = _echo_notice
         wiki.init(name, settings=settings)
         # materialize Obsidian config (downloads community plugins)
         warnings = wiki.update_config()
@@ -259,9 +298,11 @@ def init(app: typer.Typer) -> typer.Typer:
         if warnings:
             for warning in warnings:
                 typer.echo(warning, err=True)
-        elif not quiet:
-            typer.echo('')
-            typer.echo(OBSIDIAN_SETUP_HINT)
+        # the manual Obsidian step is human-only guidance: TTY only, on
+        # stderr, so piped stdout stays parseable
+        elif not quiet and sys.stderr.isatty():
+            typer.echo('', err=True)
+            typer.echo(_OBSIDIAN_SETUP_HINT, err=True)
 
     return app
 
@@ -294,18 +335,63 @@ def config(
         when a plugin download fails -- download failures are stderr
         warnings (re-run online to finish setup), never the exit code.
         """
-        # merge Obsidian config
+        # merge Obsidian config, streaming notices (the restored-marker
+        # line the help text documents) to stderr
         wiki = resolve(path)
+        wiki.on_notice = _echo_notice
         warnings = wiki.update_config()
         if warnings:
             for warning in warnings:
                 typer.echo(warning, err=True)
         else:
             typer.echo('Updated Obsidian config.')
-            typer.echo('')
-            typer.echo(OBSIDIAN_SETUP_HINT)
+            # the manual Obsidian step is human-only guidance: TTY only,
+            # on stderr, so piped stdout stays parseable
+            if sys.stderr.isatty():
+                typer.echo('', err=True)
+                typer.echo(_OBSIDIAN_SETUP_HINT, err=True)
         # (re)configure git merge driver
         configure_git_merge_driver(wiki._root)
+
+    return app
+
+
+def trust(app: typer.Typer) -> typer.Typer:
+    """Register the ``trust`` command."""
+    # wiki root option
+    path_help = (
+        'Wiki root directory. Defaults to the enclosing wiki root (the'
+        ' ancestor declaring .wiki/settings.json, else the outermost'
+        ' _index.md chain), else {cwd}/wiki/.'
+    )
+    path = typer.Option(None, '--path', help=path_help)
+
+    @command(app, 'trust')
+    def _trust(
+        path: Optional[str] = path,
+    ) -> None:
+        """Mark a wiki as trusted to run its .wiki/wiki.py hook.
+
+        A .wiki/wiki.py runs code with your privileges, so wiki refuses to
+        load one from an untrusted root (any command that resolves the
+        wiki). Run this from inside a wiki you trust to record its root in
+        ~/.wiki/settings.json; a hookless wiki records trust too (harmless,
+        future-proofing a hook added later). Only trust a wiki whose
+        contents you have vetted.
+        """
+        # resolve the root without loading the hook (resolve_wiki_root
+        # never execs .wiki/wiki.py), then record it as trusted
+        root = resolve_wiki_root(path)
+        # trust pre-authorizes arbitrary code, so only a real wiki (declared
+        # or at least indexed) may be recorded -- never a typo'd path
+        if not ((root / WIKI_SETTINGS).is_file() or (root / WIKI_INDEX).is_file()):
+            raise _no_wiki_error(root)
+        resolved = trust_root(root)
+        hook = resolved / WIKI_DIR / 'wiki.py'
+        if hook.is_file():
+            typer.echo(f'Trusted wiki: {resolved}')
+        else:
+            typer.echo(f'Trusted wiki: {resolved} (no {WIKI_DIR}/wiki.py hook present)')
 
     return app
 
@@ -353,11 +439,16 @@ def read(
         normalize CRLF); a slice keeps the frontmatter and appends a
         trailing newline.
         """
-        # only one of --lines/--words/--chars may be given
+        # validate arguments: the slice units are pairwise exclusive
+        if lines and words:
+            raise typer.BadParameter('--lines and --words are mutually exclusive.')
+        if lines and chars:
+            raise typer.BadParameter('--lines and --chars are mutually exclusive.')
+        if words and chars:
+            raise typer.BadParameter('--words and --chars are mutually exclusive.')
+        # resolve the one given slice unit, if any
         ranges = {'lines': lines, 'words': words, 'chars': chars}
         given = {on: spec for on, spec in ranges.items() if spec}
-        if len(given) > 1:
-            raise typer.BadParameter('Use only one of --lines/--words/--chars.')
         wiki = resolve(path)
         if given:
             on, spec = next(iter(given.items()))
@@ -418,17 +509,31 @@ def search(
         lines: bool = lines,
         lineno: bool = lineno,
     ) -> None:
-        """Search wiki content for a regex pattern."""
+        """Search wiki content for a regex pattern.
+
+        Follows the grep convention: a match exits 0, no match prints a
+        notice on stderr and exits 1, and an error (invalid regex, no
+        resolvable wiki) exits 2, so scripts should branch on the exit
+        code rather than parse the output.
+        """
         if lines and lineno:
             raise typer.BadParameter('--lines and --lineno are mutually exclusive.')
-        wiki = resolve(path)
-        matches = wiki.search(
-            pattern,
-            name=name,
-            field=field,
-            ignore_case=ignore_case,
-            all_files=all_files,
-        )
+        # a bad pattern raises re.error; an unresolvable wiki or subtree
+        # raises FileNotFoundError/NotADirectoryError
+        try:
+            wiki = resolve(path)
+            matches = wiki.search(
+                pattern,
+                name=name,
+                field=field,
+                ignore_case=ignore_case,
+                all_files=all_files,
+            )
+        except (re.error, FileNotFoundError, NotADirectoryError) as e:
+            # grep triple: runtime errors exit 2 (the wrapper's exception
+            # path exits 1), so the body renders in the wrapper's grammar
+            typer.echo(f'Error: {e}', err=True)
+            raise typer.Exit(code=2) from e
         # grep convention: no-match exits 1 with the notice on stderr, so
         # scripts can distinguish no-match from match by exit code alone
         if not matches:
@@ -503,10 +608,16 @@ def update(
         wiki = resolve(path)
         # update narrations are a side report (the diff is the record), so
         # they default to condensed; --full restores the per-line narration
-        notices: list[str] = []
-        emit = wiki._warn
-        if not full:
-            wiki._warn = notices.append
+        notices: list[Event] = []
+
+        def _capture(event: Event, **kwargs: Any) -> Event:
+            """Capture a notice; stream it in --full mode (order preserved)."""
+            notices.append(event)
+            if full:
+                typer.echo(event.description, err=True)
+            return event
+
+        wiki.on_notice = _capture
         # flush the captured notices even when update raises: one-time lines
         # (a restored marker) describe mutations that already happened and
         # must never be swallowed by the error path
@@ -515,7 +626,7 @@ def update(
         finally:
             if not full:
                 for line in _condense(notices, check):
-                    emit(line)
+                    typer.echo(line, err=True)
         file_count = len(updated)
         s = 's' if file_count != 1 else ''
         # dry run: report would-change files and exit nonzero if any
@@ -581,17 +692,18 @@ def lint(
         wiki = resolve(path)
         # count the soft notes lint sends to stderr, so the closing summary
         # reflects them instead of contradicting the notes still on screen
-        notes = []
-        emit = wiki._warn
+        notices: list[Event] = []
 
-        def _warn(message: str) -> None:
-            notes.append(message)
+        def _capture(event: Event, **kwargs: Any) -> Event:
+            """Capture a notice; stream it unless --count condenses the run."""
+            notices.append(event)
             if not count:
-                emit(message)
+                typer.echo(event.description, err=True)
+            return event
 
-        wiki._warn = _warn
+        wiki.on_notice = _capture
         issues = wiki.lint(name=name)
-        note_count = len(notes)
+        note_count = len(notices)
         note_s = 's' if note_count != 1 else ''
         if issues:
             # issues are the product: every line prints unless condensed
@@ -640,7 +752,10 @@ def map(
     desc_help = 'Show descriptions from parent index.'
     desc = typer.Option(True, '--desc/--no-desc', help=desc_help)
     # description character limit option
-    desc_limit_help = 'Max characters per description.'
+    desc_limit_help = (
+        'Max characters per description (defaults to the map.desc_limit'
+        ' setting, else untruncated); -1 disables truncation.'
+    )
     desc_limit = typer.Option(None, '--desc-limit', help=desc_limit_help)
     # category filter option
     category_help = 'Comma-separated categories (empty string for uncategorized only).'
@@ -655,6 +770,12 @@ def map(
         ' cached under .wiki/cache/.'
     )
     words = typer.Option(True, '--words/--no-words', help=words_help)
+    # stat flag
+    stat_help = (
+        'Print a one-line size summary of the rendered tree (lines, chars,'
+        ' words) instead of the tree itself.'
+    )
+    stat = typer.Option(False, '--stat', help=stat_help)
 
     @command(app, 'map')
     def _map(
@@ -666,18 +787,25 @@ def map(
         category: Optional[str] = category,
         markdown: Optional[bool] = markdown,
         words: bool = words,
+        stat: bool = stat,
     ) -> None:
-        """Print a compact tree overview of the wiki."""
+        """Print a compact tree overview of the wiki.
+
+        --stat sizes the dump instead of printing it -- the cheap probe
+        before dumping a large wiki.
+        """
         # validate numeric bounds
-        if depth is not None and depth < 0:
+        if (depth is not None) and (depth < 0):
             raise typer.BadParameter('--depth must be >= 0.')
-        if desc_limit is not None and desc_limit < 0:
-            raise typer.BadParameter('--desc-limit must be >= 0.')
+        if (desc_limit is not None) and (desc_limit < -1):
+            raise typer.BadParameter('--desc-limit must be >= -1.')
         # parse category filter
         category_filter = None
         if category is not None:
             category_filter = [c for c in category.split(',') if c]
+        # stream map's notices (the markerless-index warning) to stderr
         wiki = resolve(path)
+        wiki.on_notice = _echo_notice
         result = wiki.map(
             name=name,
             depth=depth,
@@ -687,6 +815,20 @@ def map(
             markdown=markdown,
             words=words,
         )
+        # --stat: report the size of the tree the same flags would print
+        if stat:
+            line_count = len(result.splitlines())
+            char_count = len(result)
+            word_count = len(result.split())
+            line_s = 's' if line_count != 1 else ''
+            char_s = 's' if char_count != 1 else ''
+            word_s = 's' if word_count != 1 else ''
+            summary = (
+                f'{line_count} line{line_s}, {char_count} char{char_s},'
+                f' {word_count} word{word_s}'
+            )
+            typer.echo(summary)
+            return
         if result:
             typer.echo(result)
             return
@@ -700,7 +842,7 @@ def map(
 
 
 def merge(app: typer.Typer) -> typer.Typer:
-    """Register the hidden ``_merge`` command (the git merge driver)."""
+    """Register the ``_merge`` command."""
     # base argument
     base_help = 'Common ancestor version (%O).'
     base = typer.Argument(..., help=base_help)
@@ -728,7 +870,7 @@ def merge(app: typer.Typer) -> typer.Typer:
     ) -> None:
         """Run the wiki merge driver (invoked by git).
 
-        init/config register `wiki _merge %O %A %B %L %P` as the merge.wiki
+        init/config register ``wiki _merge %O %A %B %L %P`` as the merge.wiki
         driver -- a stable entry point that survives the venv rebuilds and
         moves an absolute script path silently breaks on. The real pathname
         (%P) dispatches internally, so .gitattributes stays the single
@@ -738,7 +880,7 @@ def merge(app: typer.Typer) -> typer.Typer:
         if pathlib.PurePosixPath(pathname).name == WIKI_INDEX:
             package = pathlib.Path(__file__).parent.parent.parent
             script = package / '_assets' / 'git' / 'merge_index.sh'
-            cmd = ['bash', str(script), ours, base, theirs, marker_size]
+            cmd = ['bash', f'{script}', ours, base, theirs, marker_size]
         # any other file class: git's default three-way text merge
         else:
             size = f'--marker-size={marker_size}'
@@ -753,32 +895,58 @@ def merge(app: typer.Typer) -> typer.Typer:
 # ------ helper functions
 
 
-def _condense(notices: list[str], check: bool) -> list[str]:
-    """Collapse update narrations to one count line per category.
+def _condense(notices: list[Event], check: bool) -> list[str]:
+    """Collapse captured update events to one count line per category.
 
     Each known category (see ``_UPDATE_CATEGORIES``) aggregates into a
     single count line standing at its first occurrence, worded for an
-    apply or ``--check`` run; unmatched notices (one-time lines) pass
-    through verbatim in place.
+    apply or ``--check`` run; events with no category row (one-time
+    restore lines) pass through as their description verbatim in place.
+
+    Args:
+        notices: Captured update events, in emission order.
+        check: Whether the run is a ``--check`` dry run.
+
+    Returns:
+        Condensed narration lines, in first-occurrence order.
+
     """
     # tally each category, remembering where it first appeared
     counts: dict[int, int] = {}
     first_seen: dict[int, int] = {}
     lines: list[tuple[int, str]] = []
-    for position, notice in enumerate(notices):
-        for index, (prefix, marker, *_rest) in enumerate(_UPDATE_CATEGORIES):
-            if notice.startswith(prefix) and marker in notice:
+    for position, event in enumerate(notices):
+        for index, (event_class, *_rest) in enumerate(_UPDATE_CATEGORIES):
+            if type(event) is event_class:
                 counts[index] = counts.get(index, 0) + 1
                 first_seen.setdefault(index, position)
                 break
         else:
-            lines.append((position, notice))
+            lines.append((position, event.description))
     # render one count line per category at its first-seen position
     for index, position in first_seen.items():
-        _prefix, _marker, one, many, check_one, check_many = _UPDATE_CATEGORIES[index]
+        _event_class, one, many, check_one, check_many = _UPDATE_CATEGORIES[index]
         if check:
             one, many = check_one, check_many
         n = counts[index]
         line = one if n == 1 else many.format(n=n)
         lines.append((position, line))
     return [line for _position, line in sorted(lines)]
+
+
+def _echo_notice(event: Event, **kwargs: Any) -> Event:
+    """Stream a notice event to stderr.
+
+    The ``on_notice`` sink for commands with no capture or condensed
+    mode (init, config, map), so their notices print as they fire.
+
+    Args:
+        event: The notice event to stream.
+        **kwargs: Extra hook arguments (unused).
+
+    Returns:
+        The event, unchanged.
+
+    """
+    typer.echo(event.description, err=True)
+    return event

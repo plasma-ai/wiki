@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import os
 import pathlib
-import subprocess
 from typing import Optional
 
 import pytest
@@ -14,11 +15,15 @@ from wiki.cli import cmd
 from wiki.cli.utils import (
     configure_git_merge_driver,
     enclosing_wiki_root,
+    is_trusted,
     load_wiki_class,
     resolve_wiki,
     resolve_wiki_root,
+    trust_root,
 )
 from wiki.core.wiki import Wiki
+
+from .conftest import GIT, _git
 
 __all__ = [
     'test_resolve_wiki_root',
@@ -28,10 +33,14 @@ __all__ = [
     'test_resolver_refuses_ambiguous_root',
     'test_resolve_wiki_corroboration_notices',
     'test_load_wiki_class',
+    'test_load_wiki_class_refuses_untrusted_hook',
+    'test_trust_root_records_resolved_root',
+    'test_is_trusted_ignores_malformed_store',
     'test_reused_command_honors_resolve_override',
     'test_resolve_wiki_default_class',
     'test_configure_git_merge_driver',
     'test_merge_driver_skips_dirty_gitattributes',
+    'test_merge_driver_tolerates_undecodable_git_output',
 ]
 
 
@@ -219,9 +228,12 @@ def test_resolve_wiki_corroboration_notices(
 
 def test_load_wiki_class(tmp_path: pathlib.Path) -> None:
     """Loads the default ``Wiki`` or the subclass named by the sole ``__all__`` entry."""
-    # no config file -- returns default Wiki
+    # no config file -- returns default Wiki (a hookless wiki needs no trust)
     cls = load_wiki_class(tmp_path)
     assert cls is Wiki
+
+    # the hook cases below run code, so the root must be trusted first
+    trust_root(tmp_path)
 
     # custom subclass named by the sole __all__ entry
     config_dir = tmp_path / '.wiki'
@@ -239,7 +251,7 @@ def test_load_wiki_class(tmp_path: pathlib.Path) -> None:
 
     # missing __all__
     (config_dir / 'wiki.py').write_text('x = 1\n', encoding='utf-8')
-    with pytest.raises(AttributeError):
+    with pytest.raises(TypeError):
         load_wiki_class(tmp_path)
 
     # __all__ must have exactly one entry
@@ -247,7 +259,7 @@ def test_load_wiki_class(tmp_path: pathlib.Path) -> None:
         "__all__ = ['A', 'B']\nA = 1\nB = 2\n",
         encoding='utf-8',
     )
-    with pytest.raises(AttributeError):
+    with pytest.raises(TypeError):
         load_wiki_class(tmp_path)
 
     # the named object is not a Wiki subclass
@@ -268,6 +280,71 @@ def test_load_wiki_class(tmp_path: pathlib.Path) -> None:
         load_wiki_class(tmp_path)
 
 
+def test_load_wiki_class_refuses_untrusted_hook(tmp_path: pathlib.Path) -> None:
+    """A ``.wiki/wiki.py`` on an untrusted root is refused, not executed.
+
+    The refusal names the hook and points at ``wiki trust``; once the root
+    is trusted the same hook loads. A hookless root never needs trust.
+    """
+    config_dir = tmp_path / '.wiki'
+    config_dir.mkdir()
+    # a hook whose top-level code drops a sentinel beside the wiki root
+    # (an absolute path off __file__, so running it is observable without
+    # polluting the caller's cwd)
+    sentinel = tmp_path / 'ran'
+    (config_dir / 'wiki.py').write_text(
+        'import pathlib\n'
+        'from wiki.core.wiki import Wiki\n\n'
+        "(pathlib.Path(__file__).resolve().parent.parent / 'ran').touch()\n\n"
+        'class MyWiki(Wiki):\n    pass\n\n'
+        "__all__ = ['MyWiki']\n",
+        encoding='utf-8',
+    )
+    assert not is_trusted(tmp_path)
+    with pytest.raises(PermissionError, match=r'(?s)untrusted wiki hook.*wiki trust'):
+        load_wiki_class(tmp_path)
+    # the hook never ran, so its side effect never happened
+    assert not sentinel.exists()
+
+    # trusting the root lets the same hook load and run
+    trust_root(tmp_path)
+    cls = load_wiki_class(tmp_path)
+    assert cls is not Wiki
+    assert issubclass(cls, Wiki)
+    assert sentinel.exists()
+
+
+def test_trust_root_records_resolved_root(tmp_path: pathlib.Path) -> None:
+    """``trust_root`` records the resolved root and reports it as trusted.
+
+    Trust keys on the resolved path, so a symlink alias to the same tree
+    reads back as trusted; the store never depends on how it was reached.
+    """
+    root = tmp_path / 'wiki'
+    root.mkdir()
+    assert not is_trusted(root)
+    recorded = trust_root(root)
+    assert recorded == root.resolve()
+    assert is_trusted(root)
+    # an alias resolving to the same root is covered by the one record
+    alias = tmp_path / 'alias'
+    alias.symlink_to(root)
+    assert is_trusted(alias)
+
+
+def test_is_trusted_ignores_malformed_store(tmp_path: pathlib.Path) -> None:
+    """A hand-edited non-dict ``trusted`` value reads as an empty store.
+
+    A string value would turn the membership check into substring
+    matching, marking any prefix of the stored text as trusted.
+    """
+    store = pathlib.Path(os.environ['WIKI_CONFIG_DIR']) / 'settings.json'
+    store.parent.mkdir(parents=True, exist_ok=True)
+    corrupt = json.dumps({'trusted': str(tmp_path / 'wikis')})
+    store.write_text(corrupt, encoding='utf-8')
+    assert not is_trusted(tmp_path)
+
+
 # ------ command registration seam
 
 
@@ -284,7 +361,8 @@ def test_reused_command_honors_resolve_override(tmp_path: pathlib.Path) -> None:
     Wiki(root).init('demo')
     page = root / 'notes.md'
     page.write_text(
-        '---\nname: notes\ndesc: Notes.\n---\n\n# notes\n', encoding='utf-8'
+        '---\nname: notes\ndesc: Notes.\n---\n\n# notes\n',
+        encoding='utf-8',
     )
     calls = []
 
@@ -310,7 +388,7 @@ def test_resolve_wiki_default_class(tmp_path: pathlib.Path) -> None:
     """
 
     class EmbedderWiki(Wiki):
-        pass
+        """Wiki subclass standing in for an embedder CLI's default."""
 
     root = tmp_path / 'docs'
     root.mkdir()
@@ -320,7 +398,8 @@ def test_resolve_wiki_default_class(tmp_path: pathlib.Path) -> None:
     assert type(wiki) is EmbedderWiki
     # the bare default remains the base class
     assert type(resolve_wiki(str(root))) is Wiki
-    # a hook still overrides any default
+    # a hook still overrides any default (once the root is trusted to run it)
+    trust_root(root)
     (root / '.wiki' / 'wiki.py').write_text(
         'from wiki.core.wiki import Wiki\n\n'
         'class HookWiki(Wiki):\n'
@@ -334,6 +413,7 @@ def test_resolve_wiki_default_class(tmp_path: pathlib.Path) -> None:
 # ------ configure_git_merge_driver
 
 
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
 def test_configure_git_merge_driver(tmp_path: pathlib.Path) -> None:
     """Wiring sets the git driver and writes the glob without ever committing.
 
@@ -343,41 +423,35 @@ def test_configure_git_merge_driver(tmp_path: pathlib.Path) -> None:
     stable ``wiki _merge`` command -- an absolute path into the installing
     venv silently breaks on a rebuild/move.
     """
-
-    def git(*args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            ['git', '-C', f'{tmp_path}', *args],
-            capture_output=True,
-            text=True,
-        )
-
     # no-op outside a git repo
     configure_git_merge_driver(tmp_path)
     assert not (tmp_path / '.gitattributes').exists()
 
     # a real repo with a wiki subdir
-    git('init', '-b', 'main')
-    git('config', 'user.email', 'test@test.com')
-    git('config', 'user.name', 'Test')
+    _git(tmp_path, 'init', '-b', 'main')
+    _git(tmp_path, 'config', 'user.email', 'test@test.com')
+    _git(tmp_path, 'config', 'user.name', 'Test')
     (tmp_path / 'README.md').write_text('# r\n', encoding='utf-8')
-    git('add', 'README.md')
-    git('commit', '-m', 'init')
+    _git(tmp_path, 'add', 'README.md')
+    _git(tmp_path, 'commit', '-m', 'init')
     wiki_dir = tmp_path / 'wiki'
     wiki_dir.mkdir()
-    head_before = git('rev-parse', 'HEAD').stdout
+    head_before = _git(tmp_path, 'rev-parse', 'HEAD').stdout
 
     configure_git_merge_driver(wiki_dir)
 
     # driver is the stable CLI command and the glob is written to the worktree
-    assert git('config', 'merge.wiki.driver').stdout.strip() == (
+    assert _git(tmp_path, 'config', 'merge.wiki.driver').stdout.strip() == (
         'wiki _merge %O %A %B %L %P'
     )
     attributes = (tmp_path / '.gitattributes').read_text(encoding='utf-8')
     assert '**/_index.md merge=wiki' in attributes.splitlines()
     # nothing is committed (no new HEAD) and nothing is staged (the rule)
-    assert git('rev-parse', 'HEAD').stdout == head_before
-    assert '.gitattributes' not in git('diff', '--cached', '--name-only').stdout
-    assert '.gitattributes' in git('status', '--porcelain').stdout
+    assert _git(tmp_path, 'rev-parse', 'HEAD').stdout == head_before
+    assert (
+        '.gitattributes' not in _git(tmp_path, 'diff', '--cached', '--name-only').stdout
+    )
+    assert '.gitattributes' in _git(tmp_path, 'status', '--porcelain').stdout
 
     # idempotent -- a second call does not duplicate the mapping
     configure_git_merge_driver(wiki_dir)
@@ -385,6 +459,7 @@ def test_configure_git_merge_driver(tmp_path: pathlib.Path) -> None:
     assert final.splitlines().count('**/_index.md merge=wiki') == 1
 
 
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
 def test_merge_driver_skips_dirty_gitattributes(tmp_path: pathlib.Path) -> None:
     """The wiring leaves ``.gitattributes`` untouched while it has pending edits.
 
@@ -392,24 +467,14 @@ def test_merge_driver_skips_dirty_gitattributes(tmp_path: pathlib.Path) -> None:
     ``merge.wiki`` config still applies), so it never entangles with the
     user's uncommitted work; once clean, a re-run writes the map (it converges).
     """
-
-    def git(*args: str) -> str:
-        result = subprocess.run(
-            ['git', '-C', f'{tmp_path}', *args],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return result.stdout
-
     # a repo whose tracked .gitattributes has an uncommitted edit
-    git('init', '-b', 'main')
-    git('config', 'user.email', 'test@test.com')
-    git('config', 'user.name', 'Test')
+    _git(tmp_path, 'init', '-b', 'main')
+    _git(tmp_path, 'config', 'user.email', 'test@test.com')
+    _git(tmp_path, 'config', 'user.name', 'Test')
     attributes = tmp_path / '.gitattributes'
     attributes.write_text('*.txt text\n', encoding='utf-8')
-    git('add', '.gitattributes')
-    git('commit', '-m', 'init')
+    _git(tmp_path, 'add', '.gitattributes')
+    _git(tmp_path, 'commit', '-m', 'init')
     attributes.write_text('*.txt text\n*.md text\n', encoding='utf-8')
     wiki_dir = tmp_path / 'wiki'
     wiki_dir.mkdir()
@@ -417,13 +482,40 @@ def test_merge_driver_skips_dirty_gitattributes(tmp_path: pathlib.Path) -> None:
     # dirty .gitattributes: the map is not written, but the config is still set
     configure_git_merge_driver(wiki_dir)
     assert 'merge=wiki' not in attributes.read_text(encoding='utf-8')
-    assert '_merge' in git('config', 'merge.wiki.driver')
+    assert '_merge' in _git(tmp_path, 'config', 'merge.wiki.driver').stdout
 
     # once .gitattributes is clean, a re-run writes the map (it converges)
-    git('add', '.gitattributes')
-    git('commit', '-m', 'edit')
+    _git(tmp_path, 'add', '.gitattributes')
+    _git(tmp_path, 'commit', '-m', 'edit')
     configure_git_merge_driver(wiki_dir)
     assert '**/_index.md merge=wiki' in attributes.read_text(encoding='utf-8')
+
+
+def test_merge_driver_tolerates_undecodable_git_output(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Git output the locale codec cannot decode never crashes the wiring.
+
+    Repo paths are raw bytes, so a toplevel undecodable in the active
+    locale must round-trip through the driver configuration instead of
+    raising mid-run. The stub git emits such a toplevel and reports a
+    dirty ``.gitattributes``, so the run completes as a clean no-op.
+    """
+    stub_dir = tmp_path / 'bin'
+    stub_dir.mkdir()
+    stub = stub_dir / 'git'
+    stub.write_bytes(
+        b'#!/bin/sh\n'
+        b'case "$*" in\n'
+        b"*rev-parse*) printf '/caf\\351\\n' ;;\n"
+        b"*status*) printf ' M .gitattributes\\n' ;;\n"
+        b'esac\n'
+    )
+    stub.chmod(0o755)
+    path = os.environ['PATH']
+    monkeypatch.setenv('PATH', f'{stub_dir}{os.pathsep}{path}')
+    configure_git_merge_driver(tmp_path)
 
 
 # ------ helpers

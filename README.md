@@ -1,6 +1,6 @@
 # wiki
 
-[![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/plasma-ai/wiki/blob/main/LICENSE)
 [![build](https://github.com/plasma-ai/wiki/actions/workflows/build.yaml/badge.svg)](https://github.com/plasma-ai/wiki/actions/workflows/build.yaml)
 [![docs](https://github.com/plasma-ai/wiki/actions/workflows/docs.yaml/badge.svg)](https://github.com/plasma-ai/wiki/actions/workflows/docs.yaml)
 [![lint](https://github.com/plasma-ai/wiki/actions/workflows/lint.yaml/badge.svg)](https://github.com/plasma-ai/wiki/actions/workflows/lint.yaml)
@@ -45,13 +45,13 @@ Install the `wiki` package from PyPI:
 pip install plasma-wiki
 ```
 
-Use `pipx install plasma-wiki` or `uv tool install plasma-wiki` to
-install in an isolated environment.
+Use `pipx install` or `uv tool install` to install the package in an
+isolated environment.
 
 ### Skill
 
-Install the `/wiki` skill for your agent via the plugin marketplace
-(Claude Code and Codex):
+Install the skill for your agent via the plugin marketplace (Claude Code
+and Codex):
 
 ```bash
 # Claude Code
@@ -67,8 +67,11 @@ Or from the CLI, which copies the skill into `~/.claude/skills` and
 `~/.agents/skills` (add `--project` for the current project only):
 
 ```bash
-wiki install
+wiki install [--link]
 ```
+
+After upgrading the package, re-run `wiki install` to refresh the copied
+skill (pass `--link` for symlinked install).
 
 ## Usage
 
@@ -92,7 +95,20 @@ that violates the policy.
 
 Frontmatter timestamps default to UTC in ISO-8601. To change them, set a
 timezone (any IANA name) and format (a strftime string) under
-`timestamp` in `.wiki/settings.json`.
+`timestamp` in `.wiki/settings.json`. The stamps are tool-owned:
+`created:` is written when a file gains frontmatter and kept from then
+on, and `updated:` is rewritten on every actual write. A hand edit goes
+undetected unless the value stops parsing under the configured format —
+`wiki lint` fails an unparseable stamp.
+
+Display names are path-derived: `wiki update` owns each entry's `name:`
+frontmatter and rewrites the H1 heading to match. An optional authored
+`title:` field — on any index or page — overrides the H1 while `name`
+stays tool-owned; set `title: null` (or delete the line) to unset it.
+Setting `titles.required` in `.wiki/settings.json` demands an authored
+title everywhere: `wiki update` seeds a `title: null` placeholder on
+every entry missing one and `wiki lint` fails each placeholder until a
+title is authored.
 
 Word counts shown by `wiki map` are computed from page bodies and cached
 in `.wiki/cache/word_counts.json` under the wiki root — never stored in
@@ -100,9 +116,12 @@ frontmatter, so editing a page dirties nothing else. The cache directory
 ignores itself via its own `.gitignore` and can be deleted at any time;
 it is rebuilt on demand. In the map, a page shows its own count and a
 folder shows `page/tree` (its index's words over the subtree total),
-abbreviated with `k`/`m` suffixes past a thousand; the map's indent unit
-and description-truncation marker are configurable via `map.indent` and
-`map.ellipsis` in `.wiki/settings.json`.
+abbreviated with `k`/`m` suffixes past a thousand. Descriptions print in
+full by default — `--desc-limit` (or the `map.desc_limit` setting) caps
+them to a character budget, and `-1` forces no truncation — while
+`wiki map --stat` sizes the dump (lines, chars, words) without printing
+it. The map's indent unit and truncation marker are configurable via
+`map.indent` and `map.ellipsis` in `.wiki/settings.json`.
 
 ### CLI
 
@@ -117,17 +136,32 @@ The merge driver itself lives in each clone's local git config; the
 committed `.gitattributes` only names it, so every contributor runs
 `wiki config` once after cloning.
 
+A wiki may define a `.wiki/wiki.py` hook — a custom `Wiki` subclass the
+tool loads to change indexing or formatting. Because the hook runs code
+with your privileges, `wiki` refuses to load one from a wiki you have
+not trusted (every command that resolves the wiki fails, naming the
+hook) and points you at:
+
+- `wiki trust` — authorize the enclosing wiki to run its `.wiki/wiki.py`
+
+Run it once from inside a wiki whose contents you have vetted; it
+records the wiki's resolved root in `~/.wiki/settings.json` (override
+the config home with `WIKI_CONFIG_DIR`). A wiki with no hook needs no
+trust. Never trust a wiki cloned from an untrusted source without first
+reading its `.wiki/wiki.py`.
+
 Maintain indexes as files are added and removed:
 
 - `wiki lint` — validate structure and flag issues
 - `wiki update` — sync index links with the filesystem
 
 `wiki lint` exits 1 on issues and 0 on a clean wiki (soft notes go to
-stderr and never affect the exit code). A page that must display
-otherwise-flagged content — sample conflict markers, deliberately stale
-links — wraps those lines in a `<!-- start: no-lint -->` …
-`<!-- end: no-lint -->` region, which suppresses the positional rules
-for just that span.
+stderr and never affect the exit code — a stale wikilink in prose is a
+note, while a broken link in a generated index block is an issue). A
+page that must display otherwise-flagged content — sample conflict
+markers, stale link examples — wraps those lines in a
+`<!-- start: no-lint -->` … `<!-- end: no-lint -->` region, which
+suppresses the positional rules, notes included, for just that span.
 
 Browse structure, search across content, and read entries:
 
@@ -196,8 +230,12 @@ Run `./install.sh --help` for all options. Alternatively, run
 Installing a dependency as editable (e.g. a sibling package) is left to
 the caller: `uv pip install --editable <path>`.
 
-Once installed, run tools with `uv run <command>`, or activate the
-environment first (`source .venv/bin/activate`).
+With an editable install, `wiki install --link` symlinks the bundled
+skill into the agent skill directories instead of copying it, so skill
+edits apply without re-running the install.
+
+Once installed, run tools with `uv run --no-sync <command>`, or activate
+the environment first (`source .venv/bin/activate`).
 
 ### Tests
 
@@ -217,11 +255,15 @@ pre-commit run --all-files
 
 ### Contributing
 
-The contribution workflow is covered by the organization-wide
-[CONTRIBUTING.md](https://github.com/plasma-ai/.github/blob/main/CONTRIBUTING.md);
-repository conventions live in [AGENTS.md](AGENTS.md), and the release
-process (version sources, tagging, CI guard) in the organization-wide
-[RELEASING.md](https://github.com/plasma-ai/.github/blob/main/RELEASING.md).
+The contribution workflow, repository conventions, and release process
+(version sources, tagging, CI guard) are documented in:
+
+- Contribution workflow (organization-wide):
+  [CONTRIBUTING.md](https://github.com/plasma-ai/.github/blob/main/CONTRIBUTING.md)
+- Repository conventions:
+  [AGENTS.md](https://github.com/plasma-ai/wiki/blob/main/AGENTS.md)
+- Release process (organization-wide):
+  [RELEASING.md](https://github.com/plasma-ai/.github/blob/main/RELEASING.md)
 
 ## Third-Party Software
 
@@ -234,6 +276,7 @@ GitHub release at setup time rather than redistributing it.
 
 ## License
 
-Licensed under the Apache License 2.0 — see [LICENSE](LICENSE).
+Licensed under the Apache License 2.0 — see
+[LICENSE](https://github.com/plasma-ai/wiki/blob/main/LICENSE).
 
 Copyright © 2026 Plasma AI

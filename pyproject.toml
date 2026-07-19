@@ -1,18 +1,16 @@
 [project]
 name = "plasma-wiki"
-version = "0.2.0"
+version = "1.0.0"
 description = "Indexed knowledge bases with command-line tools for agents."
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [
-    { name = "Andrew Turner", email = "aturner@plasma.ai" },
-    { name = "Nicholas Diao", email = "ndiao@plasma.ai" },
+    { name = "Plasma AI", email = "eng@plasma.ai" },
 ]
 maintainers = [
-    { name = "Andrew Turner", email = "aturner@plasma.ai" },
-    { name = "Nicholas Diao", email = "ndiao@plasma.ai" },
+    { name = "Plasma AI", email = "eng@plasma.ai" },
 ]
 dependencies = [
     "typer>=0.24,<1",

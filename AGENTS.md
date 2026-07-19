@@ -23,6 +23,15 @@ blocks, frontmatter, and path-derived names from the filesystem, and
 generated region of `_index.md` merges, so parallel edits conflict only
 on authored prose; `wiki config` installs the Obsidian integration.
 
+`core/` decomposes into `wiki.py` (the `Wiki` engine class), `format.py`
+(functions over the on-disk page format), `event.py` (the payload-only
+`Event` base), and `_obsidian.py` (the internal Obsidian integration).
+Engine diagnostics are typed notice events: each kind has an `on_<kind>`
+hook delegating to the `on_notice` funnel, which logs
+`event.description` through the stdlib `Wiki.logger`; hosts intercept by
+overriding hooks (the CLI swaps `on_notice` per instance to capture and
+condense narration).
+
 ## Build & Development
 
 ```bash
@@ -114,9 +123,8 @@ just accelerate your ramp-up.
   aren't yet documented, add them to the appropriate `AGENTS.md`:
   repo-specific conventions belong in the repo's own file; org-wide
   conventions belong in the shared sections, which are maintained at the
-  organization level and synced verbatim across repositories — make
-  shared-section changes at the source (or flag them for promotion),
-  never in a synced copy.
+  organization level — make shared-section changes at the org root (or
+  flag them for promotion) and propagate them to repo copies.
 
 **Propose better conventions.** If you see a pattern that could be
 improved across the codebase — a more readable structure, a safer error
@@ -261,11 +269,11 @@ random magic numbers — use descriptive variable names or setup helpers
 that make the test's intent clear.
 
 **Red before green across boundaries.** A failing test that must land
-before its fix — crossing a commit or merge boundary — carries
-`pytest.mark.xfail(strict=True)` naming the reason; the fix commit
-removes the marker, and strict mode makes a lingering marker fail the
-suite. A red-then-fix chain inside a single change stays bare-red and
-never commits red.
+before its fix — crossing a commit or merge boundary — carries the test
+framework's strict expected-failure marker naming the reason; the fix
+commit removes the marker, and strict mode makes a lingering marker fail
+the suite. A red-then-fix chain inside a single change stays bare-red
+and never commits red.
 
 ### Good Tests
 
@@ -324,11 +332,28 @@ See `pyproject.toml` for formatter/linter config.
 - Each command's registration function is named after the command, with
   signature `def name(app: typer.Typer) -> typer.Typer`, registered
   directly on the wiki app in `cli/main.py`
+- Use the `@command(app, 'name')` decorator (from `wiki.cli.utils`) —
+  commands are error-wrapped, catching all but typer's
+  `Exit`/`Abort`/`BadParameter`
 - Typer args/options as local variables before the inner function
 - Do not inline method calls in `typer.echo()` — assign to a variable
   first
 - When mixing positional and keyword args in multi-line calls, pass all
   as kwargs (unless the param is positional-only with `/`)
+
+### Event Hooks
+
+Event hooks follow a uniform shape: the per-kind `on_<kind>` hooks on
+`Wiki` (`core/wiki.py`) each carry a
+`logging_level: int = logging.<LEVEL>` signature default and delegate to
+the `on_notice` funnel. Two sanctioned exceptions skew the audit (the
+`logging_level: int = logging\.` grep count vs the `def on_` count):
+`on_notice` itself takes `logging_level: Optional[int] = None` (severity
+falls back to the event's own `logging_level`), and the `Event` base in
+`core/event.py` declares a `logging_level` class default that the grep
+counts without being a hook. The two offset, so the raw totals happen to
+match — audit per-kind hooks against per-kind signature defaults, not
+the raw grep totals.
 
 ### Shell Scripts
 

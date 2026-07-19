@@ -16,8 +16,7 @@
 __MACOSX/
 .AppleDouble
 .LSOverride
-Icon[
-]
+Icon[]
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

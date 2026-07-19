@@ -14,12 +14,40 @@ import subprocess
 import sys
 from typing import Optional
 
-from wiki.core.wiki import _OFFLINE_MODE
+from wiki.constants import OFFLINE_MODE
 
 # prefer the console script beside the running interpreter (this checkout's
 # venv) over PATH, which may resolve a different install or a broken shim
 VENV_BIN = pathlib.Path(sys.executable).parent
 WIKI = shutil.which('wiki', path=VENV_BIN) or shutil.which('wiki')
+GIT = shutil.which('git')
+
+
+def _env() -> dict[str, str]:
+    """Build the hermetic base environment for suite subprocesses."""
+    env = dict(os.environ)
+    # drop color-forcing vars: typer force-enables ANSI when any is set (e.g.
+    # GITHUB_ACTIONS in CI), and the escapes it injects inside option names
+    # break plain-substring assertions on captured output
+    for var in ('GITHUB_ACTIONS', 'FORCE_COLOR', 'PY_COLORS'):
+        env.pop(var, None)
+    # point git's global and system config at the null device: the developer's
+    # ~/.gitconfig (commit.gpgsign, core.hooksPath, merge.conflictstyle, ...)
+    # must not perturb _git commits or the nested `git merge` runs
+    env['GIT_CONFIG_GLOBAL'] = os.devnull
+    env['GIT_CONFIG_SYSTEM'] = os.devnull
+    # the site-packages install is a frozen copy, so PYTHONPATH puts this
+    # worktree first and the console script imports the edited package
+    worktree = pathlib.Path(__file__).resolve().parents[2]
+    env['PYTHONPATH'] = os.pathsep.join(
+        part for part in (str(worktree), env.get('PYTHONPATH', '')) if part
+    )
+    # the console script's directory leads PATH so nested invocations by bare
+    # name (a `git merge` running the registered `wiki _merge` driver) resolve
+    # this checkout's install
+    path = env.get('PATH', '')
+    env['PATH'] = f'{VENV_BIN}{os.pathsep}{path}'
+    return env
 
 
 def _wiki(
@@ -31,28 +59,34 @@ def _wiki(
     """Run the ``wiki`` CLI in ``cwd`` and capture text output.
 
     Plugin downloads are skipped by default so the suite stays offline;
-    pass ``allow_download=True`` to exercise the real network fetch, and
-    ``home`` to isolate commands that write under the home directory.
+    pass ``allow_download=True`` to exercise the real network fetch.
+    ``HOME`` is always isolated -- to ``home`` when given, else ``cwd``
+    -- so commands that write under the home directory (install
+    targets) never touch or depend on the developer's real one.
     """
-    env = dict(os.environ)
-    # drop color-forcing vars: typer force-enables ANSI when any is set (e.g.
-    # GITHUB_ACTIONS in CI), and the escapes it injects inside option names
-    # break plain-substring assertions on captured output
-    for var in ('GITHUB_ACTIONS', 'FORCE_COLOR', 'PY_COLORS'):
-        env.pop(var, None)
-    # the site-packages install is a frozen copy, so PYTHONPATH puts this
-    # worktree first and the console script imports the edited package
-    worktree = pathlib.Path(__file__).resolve().parents[2]
-    env['PYTHONPATH'] = os.pathsep.join(
-        part for part in (str(worktree), env.get('PYTHONPATH', '')) if part
-    )
-    env[_OFFLINE_MODE] = 'false' if allow_download else 'true'
-    if home is not None:
-        env['HOME'] = str(home)
+    env = _env()
+    env[OFFLINE_MODE] = 'false' if allow_download else 'true'
+    env['HOME'] = str(home if home is not None else cwd)
     return subprocess.run(
         [WIKI, *args],
         cwd=cwd,
         capture_output=True,
         text=True,
         env=env,
+    )
+
+
+def _git(cwd: pathlib.Path, *args: str) -> subprocess.CompletedProcess:
+    """Run a git command in ``cwd``, capturing text output.
+
+    Runs under the suite's hermetic environment (see ``_env``), whose
+    PATH prepend lets a ``git merge`` resolve the registered
+    ``wiki _merge`` driver by bare name. No ``check``: the merge tests
+    assert on conflict exit codes.
+    """
+    return subprocess.run(
+        [GIT, '-C', f'{cwd}', *args],
+        capture_output=True,
+        text=True,
+        env=_env(),
     )

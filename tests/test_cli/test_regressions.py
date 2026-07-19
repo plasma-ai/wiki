@@ -7,10 +7,9 @@ import subprocess
 
 import pytest
 
-from .conftest import WIKI, _wiki
+from .conftest import WIKI, _env, _wiki
 
 __all__ = [
-    'test_update_adds_missing_name',
     'test_not_found_message_is_clean',
     'test_broken_pipe_is_quiet',
 ]
@@ -21,21 +20,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-# ------ update and output behaviors
-
-
-def test_update_adds_missing_name(tmp_path: pathlib.Path) -> None:
-    """Update adds a ``name:`` field to a page that lacks one."""
-    root = _new_wiki(tmp_path)
-    core = root / 'core'
-    core.mkdir()
-    page = core / 'design.md'
-    page.write_text(
-        '---\ndesc: A design doc.\n---\n# Design\n\nBody text here.\n',
-        encoding='utf-8',
-    )
-    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
-    assert 'name:' in page.read_text(encoding='utf-8')
+# ------ output behaviors
 
 
 def test_not_found_message_is_clean(tmp_path: pathlib.Path) -> None:
@@ -53,7 +38,8 @@ def test_broken_pipe_is_quiet(tmp_path: pathlib.Path) -> None:
     the closed pipe must end the command successfully instead of spilling
     'Error: [Errno 32] Broken pipe' and failing the pipeline.
     """
-    root = _new_wiki(tmp_path)
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     # a page far past the 64KB pipe buffer, so the write outlives the reader
     body = 'filler prose line\n' * 30_000
     (root / 'big.md').write_text(
@@ -66,18 +52,9 @@ def test_broken_pipe_is_quiet(tmp_path: pathlib.Path) -> None:
         ['bash', '-c', script],
         capture_output=True,
         text=True,
+        env=_env(),
     )
     assert result.returncode == 0, result.stderr
     assert 'name: big' in result.stdout
     assert 'Broken pipe' not in result.stderr
     assert 'BrokenPipeError' not in result.stderr
-
-
-# ------ helpers
-
-
-def _new_wiki(tmp_path: pathlib.Path) -> pathlib.Path:
-    """Initialize an empty wiki under ``tmp_path`` and return its root."""
-    root = tmp_path / 'wiki'
-    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
-    return root

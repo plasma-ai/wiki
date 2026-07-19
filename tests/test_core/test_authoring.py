@@ -45,7 +45,7 @@ def test_authoring_workflow_init_update_lint_read_search(
 
     # author a titled page in a subfolder, then update the tree
     page = _author_page(
-        root,
+        root=root,
         folder='guides',
         stem='Onboarding',
         desc='How a new teammate gets started.',
@@ -88,14 +88,16 @@ def test_update_path_joins_title(tmp_path: pathlib.Path) -> None:
     """Update sets ``name``/H1 to the path-joined name by design.
 
     ``update`` rewrites the page ``name`` and H1 to the path-joined name
-    (``guides/Onboarding``) so names stay consistent with the tree; an
-    authored title is intentionally overwritten (documented behavior).
+    (``guides/Onboarding``) so names stay consistent with the tree; a
+    hand-edited heading on a title-less page is overwritten, and an
+    authored ``title:`` frontmatter field is the sanctioned way to keep
+    a display heading.
     """
     root = tmp_path / 'wiki'
     wiki = Wiki(root)
     wiki.init(name='KnowledgeBase')
     page = _author_page(
-        root,
+        root=root,
         folder='guides',
         stem='Onboarding',
         desc='How a new teammate gets started.',
@@ -105,6 +107,19 @@ def test_update_path_joins_title(tmp_path: pathlib.Path) -> None:
     text = page.read_text(encoding='utf-8')
     assert 'name: guides/Onboarding\n' in text
     assert '# guides/Onboarding\n' in text
+
+    # an authored title: wins the H1 while name stays path-joined
+    page.write_text(
+        text.replace(
+            'name: guides/Onboarding\n',
+            'name: guides/Onboarding\ntitle: Onboarding Guide\n',
+        ),
+        encoding='utf-8',
+    )
+    wiki.update()
+    titled = page.read_text(encoding='utf-8')
+    assert 'name: guides/Onboarding\n' in titled
+    assert '# Onboarding Guide\n' in titled
 
 
 # ------ helpers
