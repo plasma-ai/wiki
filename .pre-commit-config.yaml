@@ -49,5 +49,5 @@ repos:
           - mdformat-wiki
         args:
           - --wrap
-          - "72"
+          - "80"
           - --number
