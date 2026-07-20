@@ -63,8 +63,9 @@ codex plugin marketplace add plasma-ai/plugins
 codex plugin add wiki@plasma
 ```
 
-Or from the CLI, which copies the skill into `~/.claude/skills` and
-`~/.agents/skills` (add `--project` for the current project only):
+Another install route is from the CLI, which copies (or symlinks) the
+skill into `~/.claude/skills` and `~/.agents/skills` (add `--project`
+for the current project only):
 
 ```bash
 wiki install [--link]

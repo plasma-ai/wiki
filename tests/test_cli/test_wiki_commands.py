@@ -76,12 +76,14 @@ __all__ = [
     'test_merge_driver_merges_authored_frontmatter',
     'test_merge_keeps_frontmatter_when_side_is_mangled',
     'test_merge_dispatches_on_pathname',
+    'test_merge_driver_skips_non_wiki_index_files',
     'test_merge_conflicts_when_side_loses_separator',
     'test_merge_hints_add_add_body_conflicts',
     'test_version_flag_reports_a_version',
     'test_trust_gates_hook_execution',
     'test_trust_refuses_non_wiki_path',
     'test_trust_store_does_not_mark_home_as_wiki_root',
+    'test_trust_store_exemption_survives_symlinked_home',
 ]
 
 pytestmark = pytest.mark.skipif(
@@ -488,13 +490,21 @@ def test_read_only_commands_are_deterministic(wiki: pathlib.Path) -> None:
 
 
 @pytest.mark.parametrize(
-    argnames='args',
-    argvalues=[['update'], ['lint'], ['map'], ['search', 'widget']],
+    argnames=('args', 'code'),
+    argvalues=[
+        (['update'], 1),
+        (['lint'], 1),
+        (['map'], 1),
+        # search's grep triple reserves exit 1 for a clean no-match, so
+        # its resolution failure lands on the error leg
+        (['search', 'widget'], 2),
+    ],
     ids=['update', 'lint', 'map', 'search'],
 )
 def test_path_inside_wiki_is_refused(
     tmp_path: pathlib.Path,
     args: list[str],
+    code: int,
 ) -> None:
     """``--path`` at a folder inside a wiki aborts, naming the enclosing root.
 
@@ -511,7 +521,7 @@ def test_path_inside_wiki_is_refused(
     # the inside path is refused, naming the enclosing root and the fix
     result = _wiki(root, *args, '--path', str(root / 'core'))
     combined = result.stdout + result.stderr
-    assert result.returncode == 1
+    assert result.returncode == code
     assert 'inside the wiki' in combined
     assert str(root) in combined
     assert '<entry>' in combined
@@ -982,9 +992,10 @@ def test_search_resolution_failure_exits_two(
 ) -> None:
     """A search that cannot resolve its wiki or subtree is an error (exit 2).
 
-    A wiki-less cwd and a missing subtree argument are failed searches,
-    not absent terms; exit 1 stays reserved for a clean no-match so the
-    branch-on-exit-code contract holds.
+    A wiki-less cwd, a missing/out-of-root/excluded subtree argument, and
+    an untrusted or broken hook are failed searches, not absent terms;
+    exit 1 stays reserved for a clean no-match so the branch-on-exit-code
+    contract holds.
     """
     no_wiki = _wiki(tmp_path, 'search', 'widget')
     assert no_wiki.returncode == 2
@@ -992,6 +1003,30 @@ def test_search_resolution_failure_exits_two(
     missing = _wiki(wiki, 'search', 'widget', 'no_such_subtree', '--path', str(wiki))
     assert missing.returncode == 2
     assert 'Error:' in missing.stderr
+    # a subtree escaping the root or naming an excluded dot directory
+    outside = _wiki(wiki, 'search', 'widget', '../..', '--path', str(wiki))
+    assert outside.returncode == 2
+    assert 'Error:' in outside.stderr
+    excluded = _wiki(wiki, 'search', 'widget', '.wiki', '--path', str(wiki))
+    assert excluded.returncode == 2
+    assert 'Error:' in excluded.stderr
+    # an untrusted .wiki/wiki.py hook is refused, not read as an absent
+    # term (the hook never executes, so its broken import is inert here)
+    hooked = tmp_path / 'hooked'
+    assert _wiki(tmp_path, 'init', 'Hooked', '--path', str(hooked)).returncode == 0
+    (hooked / '.wiki' / 'wiki.py').write_text(
+        'import nonexistent_module\n',
+        encoding='utf-8',
+    )
+    untrusted = _wiki(hooked, 'search', 'widget', '--path', str(hooked))
+    assert untrusted.returncode == 2
+    assert 'wiki trust' in untrusted.stderr
+    # trusting the root executes the hook; its failure to load is the
+    # error leg too, not a no-match
+    assert _wiki(hooked, 'trust', '--path', str(hooked)).returncode == 0
+    broken = _wiki(hooked, 'search', 'widget', '--path', str(hooked))
+    assert broken.returncode == 2
+    assert 'Failed to load' in broken.stderr
 
 
 def test_search_all_skips_undecodable_files(wiki: pathlib.Path) -> None:
@@ -1467,8 +1502,9 @@ def test_merge_keeps_frontmatter_when_side_is_mangled(tmp_path: pathlib.Path) ->
 def test_merge_dispatches_on_pathname(tmp_path: pathlib.Path) -> None:
     """The kindless ``_merge`` driver routes by the real pathname (%P).
 
-    ``.gitattributes`` stays the single routing table: the pathname alone
-    picks the index merge or git's default text merge (%L honored on both).
+    An ``_index.md`` below a declared wiki root takes the index merge;
+    any other pathname -- including an ``_index.md`` outside every wiki
+    -- takes git's default text merge (%L honored on both routes).
     """
     fm = (
         '---\nname: core\ndesc: Original.\nupdated: 2026-01-01T00:00:00Z\n---\n'
@@ -1483,6 +1519,9 @@ def test_merge_dispatches_on_pathname(tmp_path: pathlib.Path) -> None:
         fm.replace('updated: 2026-01-01T00:00:00Z', 'updated: 2026-02-02T00:00:00Z'),
         encoding='utf-8',
     )
+    # declared roots for the wiki-owned pathnames below
+    _write(tmp_path / 'wiki' / '.wiki' / 'settings.json', '{}\n')
+    _write(tmp_path / '-notes' / '.wiki' / 'settings.json', '{}\n')
 
     # an _index.md pathname: updated is a regenerated key, so ours wins
     args = [str(base), str(ours), str(theirs), '7', 'wiki/core/_index.md']
@@ -1504,6 +1543,14 @@ def test_merge_dispatches_on_pathname(tmp_path: pathlib.Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'updated: 2026-02-02T00:00:00Z' in ours.read_text(encoding='utf-8')
 
+    # an _index.md outside every declared wiki (a site generator's content
+    # page): the default text merge, so theirs' line edit still lands
+    ours.write_text(fm, encoding='utf-8')
+    args = [str(base), str(ours), str(theirs), '7', 'content/_index.md']
+    result = _wiki(tmp_path, '_merge', *args)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'updated: 2026-02-02T00:00:00Z' in ours.read_text(encoding='utf-8')
+
     # the marker size flows through to conflict markers on both routes
     ours.write_text(fm.replace('Body.', 'Ours body.'), encoding='utf-8')
     theirs.write_text(fm.replace('Body.', 'Theirs body.'), encoding='utf-8')
@@ -1511,6 +1558,50 @@ def test_merge_dispatches_on_pathname(tmp_path: pathlib.Path) -> None:
     result = _wiki(tmp_path, '_merge', *args)
     assert result.returncode != 0
     assert '<' * 15 in ours.read_text(encoding='utf-8')
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_merge_driver_skips_non_wiki_index_files(tmp_path: pathlib.Path) -> None:
+    """A non-wiki ``_index.md`` merges with git's default, never the driver.
+
+    The committed ``**/_index.md`` attribute matches every so-named file
+    in the repo -- e.g. a Hugo content page whose ``***`` is an ordinary
+    thematic break. Routing such a file through the index merge would
+    resolve everything above its first ``***`` to ours and silently drop
+    theirs' committed edits on a clean exit; outside a declared wiki root
+    the driver takes the default text merge, so both sides' edits land.
+    """
+    root = tmp_path / 'wiki'
+    # a real repo whose wiki has the driver registered by init
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # a site generator's content page outside the wiki, with a thematic break
+    page = tmp_path / 'content' / '_index.md'
+    base = (
+        '---\ntitle: Home\n---\n\nWelcome to the site.\n\n***\n\nMore content below.\n'
+    )
+    _write(page, base)
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # theirs edits above the thematic break, ours below it
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    _write(page, base.replace('Welcome to the site.', 'Welcome, edited by theirs.'))
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    _write(page, base.replace('More content below.', 'More content, edited by ours.'))
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
+
+    # the merge is clean and both sides' edits land -- the index merge
+    # would have taken ours above *** and dropped theirs' edit silently
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    merged = page.read_text(encoding='utf-8')
+    assert 'Welcome, edited by theirs.' in merged
+    assert 'More content, edited by ours.' in merged
+    assert '<<<<<<<' not in merged
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
@@ -1532,6 +1623,8 @@ def test_merge_conflicts_when_side_loses_separator(tmp_path: pathlib.Path) -> No
     ours = tmp_path / 'ours'
     theirs = tmp_path / 'theirs'
     base.write_text(fm, encoding='utf-8')
+    # a declared root, so the pathname routes to the index merge
+    _write(tmp_path / 'wiki' / '.wiki' / 'settings.json', '{}\n')
     args = [str(base), str(ours), str(theirs), '7', 'wiki/core/_index.md']
 
     # theirs mangled (mdformat *** -> ---) alongside a genuine body edit
@@ -1596,6 +1689,8 @@ def test_merge_hints_add_add_body_conflicts(tmp_path: pathlib.Path) -> None:
     theirs = tmp_path / 'theirs'
     # add/add: git hands the driver an empty base file
     base.write_text('', encoding='utf-8')
+    # a declared root, so the pathname routes to the index merge
+    _write(tmp_path / 'wiki' / '.wiki' / 'settings.json', '{}\n')
     args = [str(base), str(ours), str(theirs), '7', 'wiki/core/_index.md']
 
     # empty bodies leave only the created: stamps apart, and ours' stamp
@@ -1719,6 +1814,36 @@ def test_trust_store_does_not_mark_home_as_wiki_root(
     # the wiki nested under $HOME still resolves (same home as the trust run)
     result = _wiki(root, 'update', '--path', str(root), home=tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_trust_store_exemption_survives_symlinked_home(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The config-home exemption holds when ``$HOME`` is a symlink.
+
+    Root detection resolves candidate paths, while the trust store's
+    home is spelled from ``$HOME`` as given -- so with a symlinked home
+    (an automounted or relocated home directory) the exemption must
+    compare resolved paths; otherwise one ``wiki trust`` run declares
+    the physical home directory itself a wiki root and commands
+    resolving from inside it sweep the entire home tree.
+    """
+    monkeypatch.delenv('WIKI_CONFIG_DIR')
+    physical = tmp_path / 'physical_home'
+    physical.mkdir()
+    home = tmp_path / 'home'
+    home.symlink_to(physical)
+    root = physical / 'projects' / 'wiki'
+    init = _wiki(tmp_path, 'init', 'Home', '--path', str(root), home=home)
+    assert init.returncode == 0, init.stdout + init.stderr
+    # trust writes the default store under the symlinked $HOME
+    assert _wiki(tmp_path, 'trust', '--path', str(root), home=home).returncode == 0
+    # resolving from cwd walks the resolved (physical) ancestor chain;
+    # the store must stay exempt rather than shadow the project root
+    result = _wiki(root, 'update', home=home)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (physical / '_index.md').exists()
 
 
 # ------ helpers

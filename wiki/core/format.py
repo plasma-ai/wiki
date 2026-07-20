@@ -630,9 +630,18 @@ def read_frontmatter_name(frontmatter: str) -> Optional[str]:
     Handles multi-line YAML values (block scalars ``|``, ``>``) the
     same way :func:`read_frontmatter_desc` does, so a block-scalar
     name resolves to its body text rather than the ``|``/``>``
-    indicator. Returns ``None`` if no name field is found.
+    indicator. A multi-line value (block scalar, or a bare ``name:``
+    over an indented body) is joined to a single line: repair writes
+    the name back as a plain ``name:`` scalar and the H1 renders on
+    one line, so a raw newline would land a stray unindented
+    frontmatter line and a second H1 line that every parse folds
+    into user content (authored frontmatter is user input; this is
+    boundary validation). Returns ``None`` if no name field is found.
     """
-    return read_frontmatter_field(frontmatter, 'name')
+    value = read_frontmatter_field(frontmatter, 'name')
+    if value is None:
+        return None
+    return join_lines(value)
 
 
 def read_frontmatter_title(frontmatter: str) -> str:
@@ -641,16 +650,19 @@ def read_frontmatter_title(frontmatter: str) -> str:
     Returns an empty string if the field is absent, blank, or the plain
     lowercase ``null`` spelling, so callers resolve a display heading as
     ``title or name``; a quoted or block-scalar ``null`` is authored
-    text and reads back literally. A multi-line value (block scalar) is
-    joined to a single line: the H1 renders on one line, and a raw
-    newline would leak lines above the link block that every parse folds
-    into user content -- unbounded growth (authored frontmatter is user
-    input; this is boundary validation).
+    text and reads back literally. A multi-line value (block scalar, or
+    a bare ``title:`` over an indented body) is joined to a single line:
+    the H1 renders on one line, and a raw newline would leak lines above
+    the link block that every parse folds into user content -- unbounded
+    growth (authored frontmatter is user input; this is boundary
+    validation).
     """
     # the unset check reads the raw spelling: unquoting first would
-    # collapse an authored 'null' into the reset idiom
+    # collapse an authored 'null' into the reset idiom; a bare 'title:'
+    # defers to the delegate, which resolves an indented body as a plain
+    # multi-line scalar and no body as an absent value
     match = re.search(r'^title:[^\S\n]*(.*)$', frontmatter, re.MULTILINE)
-    if (match is None) or (match.group(1).strip() in ('', 'null')):
+    if (match is None) or (match.group(1).strip() == 'null'):
         return ''
     value = read_frontmatter_field(frontmatter, 'title')
     return join_lines(value or '')
@@ -672,15 +684,18 @@ def read_frontmatter_category(frontmatter: str) -> str:
     Returns an empty string if the field is absent, blank, or the plain
     lowercase ``null`` spelling (absence is the canonical unset form);
     a quoted or block-scalar ``null`` is authored text and reads back
-    literally. A multi-line value (block scalar) is joined to a single
-    line: the category renders inside the parent's ``[category] name``
-    link label, where a raw newline would break the row on every parse
-    (authored frontmatter is user input; this is boundary validation).
+    literally. A multi-line value (block scalar, or a bare ``category:``
+    over an indented body) is joined to a single line: the category
+    renders inside the parent's ``[category] name`` link label, where a
+    raw newline would break the row on every parse (authored frontmatter
+    is user input; this is boundary validation).
     """
     # the unset check reads the raw spelling: unquoting first would
-    # collapse an authored 'null' into the reset idiom
+    # collapse an authored 'null' into the reset idiom; a bare
+    # 'category:' defers to the delegate, which resolves an indented
+    # body as a plain multi-line scalar and no body as an absent value
     match = re.search(r'^category:[^\S\n]*(.*)$', frontmatter, re.MULTILINE)
-    if (match is None) or (match.group(1).strip() in ('', 'null')):
+    if (match is None) or (match.group(1).strip() == 'null'):
         return ''
     value = read_frontmatter_field(frontmatter, 'category')
     return join_lines(value or '')

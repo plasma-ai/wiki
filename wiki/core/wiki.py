@@ -952,11 +952,16 @@ class Wiki:
                             continue
                         # the period check applies only to an authored description:
                         # when the child supplies a real desc, update propagates it,
-                        # so any drift (period included) is the diff's concern
-                        child_text = self._current_text(
-                            path=self._root / (target + '.md'),
-                            overlay=overlay,
-                        )
+                        # so any drift (period included) is the diff's concern --
+                        # resolved like update (_target_page), so a raw file's row
+                        # stays authored despite a same-named sidecar page
+                        child_page = self._target_page(target)
+                        child_text = None
+                        if child_page is not None:
+                            child_text = self._current_text(
+                                path=child_page,
+                                overlay=overlay,
+                            )
                         child_desc = None
                         if child_text is not None:
                             child_frontmatter, _ = format.parse_page(child_text)
@@ -989,9 +994,10 @@ class Wiki:
             for page in self._find_pages(folder):
                 page_relpath = page.relative_to(self._root)
                 # report an invalid name for every file, including non-markdown
-                # (a non-markdown file links by its full name, suffix included,
-                # so validate what the wikilink would carry)
-                if page.suffix == '.md':
+                # (a non-markdown file -- or a page whose stripped name a
+                # sibling file claims -- links by its full name, suffix
+                # included, so validate what the wikilink would carry)
+                if (page.suffix == '.md') and not page.with_suffix('').is_file():
                     violation = self._name_violation(page.stem)
                 else:
                     violation = self._name_violation(page.name)
@@ -1122,7 +1128,9 @@ class Wiki:
                 included), never the ``key:`` prefix.
             ignore_case: Use case-insensitive matching.
             all_files: Include non-markdown files in the
-                search.
+                search. Non-markdown files are searched whole
+                (frontmatter is a markdown concept), so ``field``
+                mode never matches them.
 
         Returns:
             List of ``(relative_path, line_number, line_text)``
@@ -1155,9 +1163,15 @@ class Wiki:
                 continue
             relpath = str(path.relative_to(self._root))
             lines = text.split('\n')
+            # frontmatter is a markdown concept -- read slices non-md files
+            # whole, so a non-md file's leading '---' pair is body content
+            # here too, not a frontmatter block to lift off
+            if path.suffix == '.md':
+                frontmatter, _ = format.parse_page(text)
+            else:
+                frontmatter = ''
             # search frontmatter fields
             if fields:
-                frontmatter, _ = format.parse_page(text)
                 if not frontmatter:
                     continue
                 field_lines = format.field_line_ranges(frontmatter, lines, fields)
@@ -1177,7 +1191,6 @@ class Wiki:
                 # word count and read slicing also exclude), so the three agree --
                 # the H1 heading and an index's link block are body content and
                 # are searched, since they are part of what read returns
-                frontmatter, _ = format.parse_page(text)
                 if frontmatter:
                     body_start = len(frontmatter.split('\n'))
                 else:
@@ -2033,6 +2046,26 @@ class Wiki:
         relpath = path.relative_to(self._root)
         return relpath.with_suffix('').as_posix()
 
+    def _target_page(self: Wiki, target: str) -> Optional[pathlib.Path]:
+        """Return the markdown page a link ``target`` names, or ``None``.
+
+        Mirrors read resolution: the literal on-disk file wins, so an
+        explicit ``.md`` target is the page itself and a raw file's
+        target never dereferences to a same-named sidecar page (e.g.
+        ``Makefile`` beside ``Makefile.md`` -- the page's desc and word
+        count belong on the page's own row); otherwise the target
+        appends ``.md``, the form the wikilink grammar strips.
+        """
+        literal = self._root / target
+        if literal.is_file():
+            if literal.suffix == '.md':
+                return literal
+            return None
+        page = self._root / (target + '.md')
+        if page.is_file():
+            return page
+        return None
+
     def _is_excluded_file(self: Wiki, path: pathlib.Path) -> bool:
         """Return ``True`` if file should be excluded from index links.
 
@@ -2373,9 +2406,12 @@ class Wiki:
             target = child / WIKI_INDEX
             target = target.relative_to(self._root).with_suffix('').as_posix()
             result.append((target, f'{child.name}/'))
-        # page links
+        # page links; a page whose stripped name a sibling file claims (e.g.
+        # Makefile.md beside Makefile) links by its full name, suffix included,
+        # like a non-markdown file -- stripping would collide both entries on
+        # one target, duplicating rows and shadowing the page on read
         for page in self._find_pages(folder):
-            if page.suffix == '.md':
+            if (page.suffix == '.md') and not page.with_suffix('').is_file():
                 target = page.relative_to(self._root).with_suffix('').as_posix()
                 result.append((target, page.stem))
             else:
@@ -2414,15 +2450,16 @@ class Wiki:
                     relpath = str(path.relative_to(self._root))
                     result.append((target, relpath, violation))
         # page entries (validated on the stem for pages; a non-markdown file
-        # links by its full name, suffix included, so validate what the
+        # -- or a page linking by its full name because a sibling file claims
+        # the stripped one -- links suffix included, so validate what the
         # wikilink would carry)
         for page in self._find_pages(folder):
-            if page.suffix == '.md':
+            if (page.suffix == '.md') and not page.with_suffix('').is_file():
                 violation = self._name_violation(page.stem)
             else:
                 violation = self._name_violation(page.name)
             if violation is not None:
-                if page.suffix == '.md':
+                if (page.suffix == '.md') and not page.with_suffix('').is_file():
                     target = page.relative_to(self._root).with_suffix('').as_posix()
                 else:
                     target = page.relative_to(self._root).as_posix()
@@ -2609,9 +2646,14 @@ class Wiki:
             else:
                 category = ''
             if category:
-                # compose the label to NFC, like _build_expected_links
-                target = self._link_target(page)
-                label = f'[{category}] {page.stem}'
+                # compose the label to NFC, like _build_expected_links (which
+                # keeps the suffix when a sibling file claims the stripped name)
+                if page.with_suffix('').is_file():
+                    target = page.relative_to(self._root).as_posix()
+                    label = f'[{category}] {page.name}'
+                else:
+                    target = self._link_target(page)
+                    label = f'[{category}] {page.stem}'
                 result[target] = unicodedata.normalize('NFC', label)
         return result
 
@@ -2908,14 +2950,19 @@ class Wiki:
             if label == '..':
                 propagated.append((target, label, link_desc))
                 continue
-            # resolve child path from target (staged content wins over disk)
+            # resolve child path from target (staged content wins over disk);
+            # a row with no markdown page behind it -- a raw file, even one
+            # with a same-named sidecar page -- carries no desc to propagate
             # NOTE: a broken/preserved target may carry '..' or an absolute path,
             #   so contain the resolved form to the root before dereferencing --
             #   an out-of-root read would copy a foreign file's desc into the
-            #   generated link block. The unresolved path stays the overlay key
+            #   generated link block; the unresolved path stays the overlay key
             #   (self._root is already resolved, so the two agree for in-root
-            #   targets), only the containment test resolves.
-            child_path = self._root / (target + '.md')
+            #   targets), only the containment test resolves
+            child_path = self._target_page(target)
+            if child_path is None:
+                propagated.append((target, label, link_desc))
+                continue
             if not child_path.resolve().is_relative_to(self._root):
                 propagated.append((target, label, link_desc))
                 continue
@@ -2942,9 +2989,9 @@ class Wiki:
                 # NOTE: line breaks and blank lines are formatter-owned: a link
                 #   desc differing only in wrapping -- or in a blank line the
                 #   formatter inserts before a block (list/heading/fence) -- is
-                #   already converged. The index's own breaks survive; only a
+                #   already converged; the index's own breaks survive; only a
                 #   content change ports the frontmatter desc (with its breaks)
-                #   back onto the row.
+                #   back onto the row
                 link_folded = ' '.join(link_desc.split())
                 child_folded = ' '.join(child_desc.split())
                 if link_folded == child_folded:
@@ -3046,7 +3093,9 @@ class Wiki:
                 created=now,
                 updated=now,
             )
-            content = '\n' + text
+            # drop a UTF-8 BOM: it hides the authored H1 from the seeding
+            # below and would land mid-file under the fresh frontmatter
+            content = '\n' + text.lstrip('\ufeff')
             # adoption seeds title: from the authored H1, so the heading
             # the author wrote survives the name rewrite below
             adopted_title = None
@@ -3120,7 +3169,7 @@ class Wiki:
             if not is_folder:
                 if not matches_category:
                     continue
-                is_markdown = (self._root / (target + '.md')).is_file()
+                is_markdown = self._target_page(target) is not None
                 if (markdown is None) or (markdown == is_markdown):
                     found = True
                 continue
@@ -3216,14 +3265,16 @@ class Wiki:
                 continue
             # resolve the child path from the link target, never the display
             # label (a preserved broken link keeps a live sibling's label);
-            # markdown-ness probes the actual <name>.md file, since a
-            # '.'-in-target test misfires on a dotted stem like my.notes
+            # markdown-ness resolves like read (_target_page), since a
+            # '.'-in-target test misfires on a dotted stem like my.notes and
+            # a raw file's row must not render a same-named sidecar's count
             child_folder = (self._root / target).parent
+            child_page = self._target_page(target)
             if is_folder:
                 child_path = child_folder / WIKI_INDEX
                 is_markdown = False
-            elif (self._root / (target + '.md')).is_file():
-                child_path = self._root / (target + '.md')
+            elif child_page is not None:
+                child_path = child_page
                 is_markdown = True
             else:
                 child_path = self._root / target

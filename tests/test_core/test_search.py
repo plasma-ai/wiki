@@ -15,6 +15,7 @@ from ._helpers import _make_wiki
 __all__ = [
     'test_body_includes_h1_for_counts_and_search',
     'test_search_field_matches_value_only',
+    'test_all_files_searches_non_markdown_whole',
 ]
 
 
@@ -76,3 +77,26 @@ def test_search_field_matches_value_only(tmp_path: pathlib.Path) -> None:
     for anchored in ('^core/note', 'draft$', '^core/note: draft$'):
         hits = wiki.search(anchored, field='name')
         assert [relpath for relpath, _, _ in hits] == ['core/note: draft.md']
+
+
+def test_all_files_searches_non_markdown_whole(tmp_path: pathlib.Path) -> None:
+    """Frontmatter is a markdown concept; non-md files are searched whole.
+
+    ``read`` slices non-markdown files whole, so a non-md file whose
+    first lines form a ``---`` pair (a multi-document YAML, say) has no
+    frontmatter to skip -- body search matches inside the leading block
+    and ``field`` search never reads it as frontmatter.
+    """
+    wiki = Wiki(tmp_path)
+    wiki.init(name='root')
+    (tmp_path / 'deploy.yaml').write_text(
+        '---\nhost: prod.example.com\nport: 443\n---\nhost: staging.example.com\n',
+        encoding='utf-8',
+    )
+    wiki.update()
+    # body search matches inside the leading '---' pair and below it alike
+    for pattern, lineno in [(r'prod\.example', 2), (r'staging\.example', 5)]:
+        hits = wiki.search(pattern, all_files=True)
+        assert [(path, num) for path, num, _ in hits] == [('deploy.yaml', lineno)]
+    # field mode searches frontmatter, which a non-md file never carries
+    assert wiki.search('prod', field='host', all_files=True) == []

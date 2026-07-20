@@ -32,8 +32,11 @@ set -euo pipefail
 #     name = wiki merge (auto-resolve generated sections)
 #     driver = wiki _merge %O %A %B %L %P
 #
-# The `wiki _merge` command dispatches _index.md pathnames here with the
-# conflict-marker size as the fourth argument (default 7 standalone).
+# The `wiki _merge` command dispatches _index.md pathnames below a
+# declared wiki root here with the conflict-marker size as the fourth
+# argument (default 7 standalone); an _index.md outside every wiki
+# (e.g. a site generator's content page) is not tool-owned and takes
+# git's default text merge instead.
 
 OURS="$1"
 BASE="$2"

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib.resources
 import pathlib
-import re
 import shutil
 import subprocess
 import sys
@@ -518,8 +517,10 @@ def search(
         """
         if lines and lineno:
             raise typer.BadParameter('--lines and --lineno are mutually exclusive.')
-        # a bad pattern raises re.error; an unresolvable wiki or subtree
-        # raises FileNotFoundError/NotADirectoryError
+        # every failure here -- a bad pattern, an unresolvable wiki or
+        # subtree, a refused or broken hook -- is the triple's error leg,
+        # so the catch is total: a per-type list would leak new failure
+        # modes to the wrapper's exit 1, aliasing them with a no-match
         try:
             wiki = resolve(path)
             matches = wiki.search(
@@ -529,7 +530,7 @@ def search(
                 ignore_case=ignore_case,
                 all_files=all_files,
             )
-        except (re.error, FileNotFoundError, NotADirectoryError) as e:
+        except Exception as e:
             # grep triple: runtime errors exit 2 (the wrapper's exception
             # path exits 1), so the body renders in the wrapper's grammar
             typer.echo(f'Error: {e}', err=True)
@@ -873,15 +874,26 @@ def merge(app: typer.Typer) -> typer.Typer:
         init/config register ``wiki _merge %O %A %B %L %P`` as the merge.wiki
         driver -- a stable entry point that survives the venv rebuilds and
         moves an absolute script path silently breaks on. The real pathname
-        (%P) dispatches internally, so .gitattributes stays the single
-        routing table and the registration string never changes.
+        (%P) dispatches internally, so the registration string never changes:
+        an ``_index.md`` below a declared wiki root gets the field-aware
+        index merge, everything else git's default text merge.
         """
-        # dispatch on the real pathname: _index.md -> field-aware index merge
-        if pathlib.PurePosixPath(pathname).name == WIKI_INDEX:
+        # dispatch on the real pathname: an _index.md below a declared wiki
+        # root -> field-aware index merge (git runs merge drivers at the
+        # worktree toplevel, so the repo-relative %P resolves from the cwd)
+        folder = pathlib.Path(pathname).parent
+        in_wiki = any(
+            (ancestor / WIKI_SETTINGS).is_file()
+            for ancestor in (folder, *folder.parents)
+        )
+        if pathlib.PurePosixPath(pathname).name == WIKI_INDEX and in_wiki:
             package = pathlib.Path(__file__).parent.parent.parent
             script = package / '_assets' / 'git' / 'merge_index.sh'
             cmd = ['bash', f'{script}', ours, base, theirs, marker_size]
-        # any other file class: git's default three-way text merge
+        # any other file class: git's default three-way text merge -- an
+        # _index.md outside every declared wiki (a site generator's content
+        # page) is not tool-owned, and the index merge would resolve its
+        # pre-*** region to ours, silently dropping theirs' edits
         else:
             size = f'--marker-size={marker_size}'
             cmd = ['git', 'merge-file', size, ours, base, theirs]

@@ -477,7 +477,10 @@ def _is_wiki_root(path: pathlib.Path) -> bool:
     trust store, not a root marker, so the default ``~/.wiki`` never
     declares the home directory itself a wiki root.
     """
-    if path / WIKI_DIR == _config_home():
+    # compare resolved on both sides: candidates arrive resolved, so an
+    # unresolved config home under a symlinked $HOME would never match
+    # and the trust store would declare the home directory a wiki root
+    if (path / WIKI_DIR).resolve() == _config_home().resolve():
         return False
     return (path / WIKI_SETTINGS).is_file()
 

@@ -47,6 +47,7 @@ __all__ = [
     'test_update_accepts_block_scalar_desc',
     'test_update_restores_valueless_desc_but_keeps_a_real_block_scalar',
     'test_update_accepts_block_scalar_name',
+    'test_update_joins_multiline_block_scalar_name',
     'test_update_folds_and_preserves_inline_desc',
     'test_update_preserves_prose_above_delimiter',
     'test_update_preserves_prose_below_delimiter_above_h1',
@@ -76,6 +77,7 @@ __all__ = [
     'test_update_removes_unset_category',
     'test_update_skips_invalid_name',
     'test_update_matches_decomposed_names',
+    'test_sidecar_page_links_by_full_name',
     'test_undecodable_page_error_names_the_file',
     'test_update_converges_on_structural_desc_lines',
     'test_update_restores_missing_index_name',
@@ -86,7 +88,7 @@ __all__ = [
     'test_title_wins_heading_and_null_reverts',
     'test_update_repositions_title_under_name',
     'test_update_inserts_desc_under_title',
-    'test_block_scalar_title_moves_as_one_unit',
+    'test_multi_line_title_moves_as_one_unit',
     'test_update_removes_valueless_title',
     'test_quoted_colon_title_renders_unquoted_heading',
     'test_update_adopts_bare_page_seeding_title',
@@ -669,6 +671,35 @@ def test_update_accepts_block_scalar_name(
     assert wiki._root_name == 'KeptName'
 
 
+def test_update_joins_multiline_block_scalar_name(tmp_path: pathlib.Path) -> None:
+    """A multi-line block-scalar ``name:`` joins to a single-line name.
+
+    Repair writes the resolved name back as a plain ``name:`` scalar and
+    the H1 renders on one line, so a raw newline would land a stray
+    unindented frontmatter line and a second H1 line that the next parse
+    folds into user content; the joined name keeps both surfaces intact.
+    """
+    wiki = Wiki(tmp_path)
+    wiki.init(name='root')
+
+    # author the root index with a multi-line block-scalar name
+    root_index = tmp_path / '_index.md'
+    body = root_index.read_text(encoding='utf-8')
+    scalar = 'name: |\n  Line One\n  Line Two'
+    body = re.sub(r'^name:.*$', scalar, body, flags=re.MULTILINE)
+    root_index.write_text(body, encoding='utf-8')
+    # a fresh instance reads the authored name (instances are one-shot:
+    # init cached the pre-edit root name)
+    wiki = Wiki(tmp_path)
+
+    # the name folds onto the header line and renders one H1 line
+    wiki.update()
+    updated = root_index.read_text(encoding='utf-8')
+    assert 'name: Line One Line Two\n' in updated
+    assert '# Line One Line Two\n' in updated
+    assert Wiki(tmp_path).update() == []
+
+
 def test_update_folds_and_preserves_inline_desc(tmp_path: pathlib.Path) -> None:
     """A folded ``desc: >`` joins lines with a space; inline text is not dropped.
 
@@ -1028,13 +1059,11 @@ def test_update_converges_on_wrap_mangled_desc(tmp_path: pathlib.Path) -> None:
 def test_update_scoped(tmp_path: pathlib.Path) -> None:
     """Scoped update only modifies the specified subtree."""
     # build a populated wiki with two sibling folders
-    wiki = _make_wiki(
-        tmp_path,
-        folders={
-            'core': ['design'],
-            'api': ['endpoints'],
-        },
-    )
+    folders = {
+        'core': ['design'],
+        'api': ['endpoints'],
+    }
+    wiki = _make_wiki(tmp_path, folders=folders)
 
     # capture the out-of-scope sibling's bytes to prove scoping skips it
     api_files = [tmp_path / 'api' / '_index.md', tmp_path / 'api' / 'endpoints.md']
@@ -1310,6 +1339,8 @@ def test_update_enforces_canonical_field_order(tmp_path: pathlib.Path) -> None:
         ('category: null', ''),
         ("category: 'null'", 'null'),
         ('category: |\n  multi\n  line\n', 'multi line'),
+        ('category:\n  multi\n  line\n', 'multi line'),
+        ('category:\n', ''),
         ('tags: []\ncategory: input', 'input'),
         ('tags: [foo]', ''),
         ('name: test', ''),
@@ -1320,6 +1351,8 @@ def test_update_enforces_canonical_field_order(tmp_path: pathlib.Path) -> None:
         'null',
         'quoted-null',
         'block-joins',
+        'plain-joins',
+        'bare-no-body',
         'after-tags',
         'no-category',
         'absent',
@@ -1589,6 +1622,44 @@ def test_update_matches_decomposed_names(tmp_path: pathlib.Path) -> None:
     assert 'New link' not in err
     updated = root_index.read_text(encoding='utf-8')
     assert f'[[{nfc}|{nfc}]]: The cafe page.' in updated
+
+
+def test_sidecar_page_links_by_full_name(tmp_path: pathlib.Path) -> None:
+    """A page named after a sibling file links by its full name, suffix included.
+
+    Stripping ``Makefile.md`` beside ``Makefile`` would collide both
+    entries on the raw file's target: duplicate index rows, the page's
+    desc and word count rendered on the raw file's row, and the page
+    unreachable by its own link (read resolves the literal file first).
+    Each entry keeps its own row, desc, count, and read key instead.
+    """
+    wiki = _make_wiki(tmp_path, folders={'tools': []})
+    (tmp_path / 'tools' / 'Makefile').write_text(
+        'all:\n\techo hi\n',
+        encoding='utf-8',
+    )
+    (tmp_path / 'tools' / 'Makefile.md').write_text(
+        '---\nname: tools/Makefile\ndesc: Documentation for the build.\n---\n\n'
+        '# tools/Makefile\n\nBuild docs.\n',
+        encoding='utf-8',
+    )
+    wiki.update()
+    # one row per entry: the raw file keeps the bare target and its own
+    # (placeholder) desc; the page's row carries its full name and desc
+    tools_index = (tmp_path / 'tools' / '_index.md').read_text(encoding='utf-8')
+    assert tools_index.count('[[tools/Makefile|Makefile]]: ...') == 1
+    page_row = '[[tools/Makefile.md|Makefile.md]]: Documentation for the build.'
+    assert page_row in tools_index
+    # each read key resolves its own entry
+    assert wiki.read('tools/Makefile').startswith('all:')
+    assert 'Build docs.' in wiki.read('tools/Makefile.md')
+    # the page's word count renders on its own row only; the raw row stays bare
+    out = wiki.map('tools')
+    assert re.search(r'^Makefile \(0\)$', out, flags=re.MULTILINE)
+    assert re.search(r'Makefile\.md \(4\): Documentation', out)
+    # the layout is supported: converged and clean
+    assert wiki.update() == []
+    assert wiki.lint() == []
 
 
 @pytest.mark.parametrize('command', ['update', 'lint'])
@@ -1894,10 +1965,22 @@ def test_update_inserts_desc_under_title(tmp_path: pathlib.Path) -> None:
     assert wiki.update() == []
 
 
-def test_block_scalar_title_moves_as_one_unit(tmp_path: pathlib.Path) -> None:
-    """A block-scalar title moves with its body and folds to one H1 line.
+@pytest.mark.parametrize(
+    argnames='scalar',
+    argvalues=[
+        'title: >-\n  A folded\n  headline\n',
+        'title:\n  A folded\n  headline\n',
+    ],
+    ids=['block', 'plain'],
+)
+def test_multi_line_title_moves_as_one_unit(
+    tmp_path: pathlib.Path,
+    scalar: str,
+) -> None:
+    """A multi-line title moves with its body and folds to one H1 line.
 
-    The field extent is the indicator line plus its indented body, so a
+    The field extent is the key line plus its indented body -- a block
+    scalar, or a bare ``title:`` over a plain multi-line scalar -- so a
     reposition never strands continuation lines; the H1 folds the value
     to a single line (a raw newline would leak lines above the link
     block), and the tree is byte-converged afterwards.
@@ -1905,7 +1988,6 @@ def test_block_scalar_title_moves_as_one_unit(tmp_path: pathlib.Path) -> None:
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
     index = tmp_path / 'core' / '_index.md'
     text = index.read_text(encoding='utf-8')
-    scalar = 'title: >-\n  A folded\n  headline\n'
     index.write_text(text.replace('\n---\n', f'\n{scalar}---\n', 1), encoding='utf-8')
 
     # the verbatim block lands under name and renders one folded H1 line
@@ -1987,9 +2069,19 @@ def test_quoted_colon_title_renders_unquoted_heading(
         ('# null\n\nBody prose.\n', "title: 'null'"),
         ('# "Quoted Title"\n\nBody prose.\n', 'title: \'"Quoted Title"\''),
         ("# 'null'\n\nBody prose.\n", "title: '''null'''"),
+        ('﻿# The L25 Wall\n\nBody prose.\n', 'title: The L25 Wall'),
         ('Body prose only.\n', None),
+        ('﻿Body prose only.\n', None),
     ],
-    ids=['h1', 'null-h1', 'quoted-h1', 'quoted-null-h1', 'no-h1'],
+    ids=[
+        'h1',
+        'null-h1',
+        'quoted-h1',
+        'quoted-null-h1',
+        'bom-h1',
+        'no-h1',
+        'bom-no-h1',
+    ],
 )
 def test_update_adopts_bare_page_seeding_title(
     tmp_path: pathlib.Path,
@@ -2003,7 +2095,9 @@ def test_update_adopts_bare_page_seeding_title(
     reading ``null`` is seeded quoted so it survives as text, and a
     heading wrapped in quote chars is seeded re-quoted so the read does
     not strip the authored quotes -- while a page with no H1 gains the
-    path-joined heading, title-less.
+    path-joined heading, title-less. A UTF-8 BOM is dropped, so it
+    neither hides the authored H1 nor lands mid-file under the fresh
+    frontmatter.
     """
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
     page = tmp_path / 'core' / 'notes.md'
@@ -2015,13 +2109,14 @@ def test_update_adopts_bare_page_seeding_title(
     if seeded:
         # the authored heading survives, preserved through the title
         assert f'name: core/notes\n{seeded}\n' in adopted
-        heading = body.split('\n', 1)[0]
+        heading = body.split('\n', 1)[0].lstrip('﻿')
         assert f'{heading}\n' in adopted
         assert '# core/notes' not in adopted
     else:
         # the invented heading is not authored, so it seeds no title
         assert '# core/notes\n' in adopted
         assert 'title:' not in adopted
+    assert '﻿' not in adopted
     assert wiki.update() == []
 
 
