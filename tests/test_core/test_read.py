@@ -22,6 +22,7 @@ __all__ = [
     'test_read_root_without_index_never_escapes',
     'test_read_slice_units',
     'test_read_suggests_unique_leaf_match',
+    'test_read_resolves_a_page_beside_a_broken_symlink',
 ]
 
 
@@ -30,8 +31,9 @@ __all__ = [
     argvalues=[
         ('core', 'core/_index.md'),
         ('core/design', 'core/design.md'),
+        ('core/design/', 'core/design.md'),
     ],
-    ids=['folder', 'page'],
+    ids=['folder', 'page', 'page-trailing-slash'],
 )
 def test_read_resolution(
     tmp_path: pathlib.Path,
@@ -168,3 +170,23 @@ def test_read_suggests_unique_leaf_match(tmp_path: pathlib.Path) -> None:
     # the bare leaf misses, but the error names the path-joined key that resolves
     with pytest.raises(FileNotFoundError, match=r'did you mean team/eng/oncall'):
         wiki.read('oncall')
+
+
+def test_read_resolves_a_page_beside_a_broken_symlink(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A same-stem broken symlink never hijacks a page's read key.
+
+    Path resolution follows the symlink to its missing target, so the
+    ``.md`` fallback must probe the requested name as typed -- the page
+    reads back even though its bare stem names a dangling link on disk.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'ghost.md'
+    page.write_text(
+        '---\nname: core/ghost\ndesc: A page.\n---\n\n# ghost\n\nBody.\n',
+        encoding='utf-8',
+    )
+    (tmp_path / 'core' / 'ghost').symlink_to(tmp_path / 'core' / 'missing-target')
+    wiki = Wiki(tmp_path)
+    assert wiki.read('core/ghost') == page.read_text(encoding='utf-8')

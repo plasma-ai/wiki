@@ -680,23 +680,24 @@ class Wiki:
         When broken links are found (targets in the existing index
         that no longer exist on the filesystem), they are preserved
         and a warning is logged per link. Set ``prune=True`` to
-        remove them instead. A link whose target still exists on disk
-        as a symlinked file is warned about as a symlink skip instead
-        of a broken link -- symlinked files are excluded from the walk. A file whose only drift is CRLF line
-        endings is rewritten, normalizing it to LF. Every notice is
-        emitted individually -- output modes (the CLI's condensed
-        default) are the caller's concern.
+        remove them instead. A link whose target still exists on
+        disk as a symlinked file is warned about as a symlink skip
+        instead of a broken link -- symlinked files are excluded
+        from the walk. A file whose only drift is CRLF line endings
+        is rewritten, normalizing it to LF. Every notice is emitted
+        individually -- output modes (the CLI's condensed default)
+        are the caller's concern.
 
         Emits a notice for each new link added with a placeholder
         ``...`` description and when a deleted ``.wiki/cache/`` is
         recreated, and a warning for each index-side link description
         overwritten because it diverged from its page's frontmatter
         ``desc`` (the source of truth -- the page is the place to
-        edit). A
-        missing ``.wiki/settings.json`` -- the declared-root marker --
-        is restored as ``{}`` (all defaults; policy is never invented)
-        with a notice; a dry run leaves it untouched, neither restoring
-        nor reporting it (the CLI's resolver names it instead).
+        edit). A missing ``.wiki/settings.json`` -- the declared-root
+        marker -- is restored as ``{}`` (all defaults; policy is never
+        invented) with a notice; a dry run leaves it untouched,
+        neither restoring nor reporting it (the CLI's resolver
+        names it instead).
 
         Args:
             name: Restrict scope to named subtree (relative
@@ -1025,11 +1026,10 @@ class Wiki:
             # check pages (always, even when the index is missing)
             for page in self._find_pages(folder):
                 page_relpath = page.relative_to(self._root)
-                # report an invalid name for every file, including non-markdown
-                # (a non-markdown file -- or a page whose stripped name a
-                # sibling file claims -- links by its full name, suffix
-                # included, so validate what the wikilink would carry)
-                if (page.suffix == '.md') and not page.with_suffix('').is_file():
+                # report an invalid name for every file, including
+                # non-markdown -- validate what the wikilink would carry
+                # (stem or full name per _links_by_stem)
+                if self._links_by_stem(page):
                     violation = self._name_violation(page.stem)
                 else:
                     violation = self._name_violation(page.name)
@@ -1719,7 +1719,7 @@ class Wiki:
         event: Optional[LinkStaleEvent] = None,
         **kwargs: Any,
     ) -> Event:
-        """Handle a stale-link note event.
+        """Handle a stale-link notice event.
 
         Constructs a ``LinkStaleEvent`` from ``message`` and the
         payload kwargs (the live-site path) unless a pre-built ``event``
@@ -1971,10 +1971,14 @@ class Wiki:
             return path
         # append (not with_suffix, which would replace a dotted name's last
         # segment -- 'app.config' -> 'app.md') so a page whose name contains a
-        # dot (e.g. 'app.config', 'v1.2') resolves to '<name>.md'; on the root
-        # itself with_name escapes to '<root parent>/<root name>.md', so the
-        # fallback must stay contained before it is probed
-        result = path.with_name(path.name + '.md')
+        # dot (e.g. 'app.config', 'v1.2') resolves to '<name>.md'; the fallback
+        # builds from the REQUESTED name, never the resolved path -- resolve()
+        # follows a same-stem symlink (broken or foreign) and would probe the
+        # target's '.md' sibling instead of the page as typed -- shedding a
+        # trailing slash (a page name typed shell-style would otherwise probe
+        # '<name>/.md'), and must stay contained before it is probed
+        requested = name.rstrip('/')
+        result = (self._root / f'{requested}.md').resolve()
         if result.is_relative_to(self._root) and result.is_file():
             return result
         # the literal path missed; a bare leaf ('oncall') for a nested page
@@ -2097,6 +2101,19 @@ class Wiki:
         if page.is_file():
             return page
         return None
+
+    def _links_by_stem(self: Wiki, page: pathlib.Path) -> bool:
+        """Return ``True`` if ``page`` links by its ``.md``-stripped stem.
+
+        A markdown page normally links by its stem (the form the
+        wikilink grammar strips), but one whose stripped name a sibling
+        file claims (e.g. ``Makefile.md`` beside ``Makefile``) links by
+        its full name, suffix included, like a non-markdown file --
+        stripping would collide both entries on one target, duplicating
+        rows and shadowing the page on read. The one link identity
+        update, lint, and the label reads share.
+        """
+        return (page.suffix == '.md') and not page.with_suffix('').is_file()
 
     def _is_excluded_file(self: Wiki, path: pathlib.Path) -> bool:
         """Return ``True`` if file should be excluded from index links.
@@ -2438,12 +2455,9 @@ class Wiki:
             target = child / WIKI_INDEX
             target = target.relative_to(self._root).with_suffix('').as_posix()
             result.append((target, f'{child.name}/'))
-        # page links; a page whose stripped name a sibling file claims (e.g.
-        # Makefile.md beside Makefile) links by its full name, suffix included,
-        # like a non-markdown file -- stripping would collide both entries on
-        # one target, duplicating rows and shadowing the page on read
+        # page links, stem or full name per _links_by_stem
         for page in self._find_pages(folder):
-            if (page.suffix == '.md') and not page.with_suffix('').is_file():
+            if self._links_by_stem(page):
                 target = page.relative_to(self._root).with_suffix('').as_posix()
                 result.append((target, page.stem))
             else:
@@ -2481,17 +2495,15 @@ class Wiki:
                     target = target.relative_to(self._root).with_suffix('').as_posix()
                     relpath = str(path.relative_to(self._root))
                     result.append((target, relpath, violation))
-        # page entries (validated on the stem for pages; a non-markdown file
-        # -- or a page linking by its full name because a sibling file claims
-        # the stripped one -- links suffix included, so validate what the
-        # wikilink would carry)
+        # page entries -- validate what the wikilink would carry
+        # (stem or full name per _links_by_stem)
         for page in self._find_pages(folder):
-            if (page.suffix == '.md') and not page.with_suffix('').is_file():
+            if self._links_by_stem(page):
                 violation = self._name_violation(page.stem)
             else:
                 violation = self._name_violation(page.name)
             if violation is not None:
-                if (page.suffix == '.md') and not page.with_suffix('').is_file():
+                if self._links_by_stem(page):
                     target = page.relative_to(self._root).with_suffix('').as_posix()
                 else:
                     target = page.relative_to(self._root).as_posix()
@@ -2678,14 +2690,14 @@ class Wiki:
             else:
                 category = ''
             if category:
-                # compose the label to NFC, like _build_expected_links (which
-                # keeps the suffix when a sibling file claims the stripped name)
-                if page.with_suffix('').is_file():
-                    target = page.relative_to(self._root).as_posix()
-                    label = f'[{category}] {page.name}'
-                else:
+                # compose the label to NFC, like _build_expected_links,
+                # keyed by the same stem-or-full-name link identity
+                if self._links_by_stem(page):
                     target = self._link_target(page)
                     label = f'[{category}] {page.stem}'
+                else:
+                    target = page.relative_to(self._root).as_posix()
+                    label = f'[{category}] {page.name}'
                 result[target] = unicodedata.normalize('NFC', label)
         return result
 

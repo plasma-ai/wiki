@@ -408,9 +408,9 @@ def configure_git_merge_driver(path: pathlib.Path) -> None:
         prefix = '\n\n'
     # write the attribute map into the working tree only; the user stages and
     # commits .gitattributes themselves (this command never touches the index)
-    gitattributes.write_text(
+    wiki.util.fs.write_atomic(
+        gitattributes,
         f'{current}{prefix}# Wiki index merge driver\n**/_index.md merge=wiki\n',
-        encoding='utf-8',
     )
 
 

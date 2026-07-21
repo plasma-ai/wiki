@@ -63,6 +63,17 @@ def test_search_field_matches_value_only(tmp_path: pathlib.Path) -> None:
         '---\nname: note: draft\ndesc: d\n---\n\n# note: draft\n\nBody.\n',
         encoding='utf-8',
     )
+    # a custom key may carry a hyphen (the field grammar is [\w-]+)
+    (tmp_path / 'core' / 'tracked.md').write_text(
+        '---\nname: tracked\ndesc: d\nreview-status: approved\n---\n\n# t\n\nBody.\n',
+        encoding='utf-8',
+    )
+    # a dotted key sits outside the field grammar but still ends its neighbor
+    (tmp_path / 'core' / 'foreign.md').write_text(
+        '---\nname: foreign\ndesc: d\ncom.example: |\n  needle body\n---\n'
+        '\n# f\n\nBody.\n',
+        encoding='utf-8',
+    )
     wiki.update()
 
     # a value anchor matches from the value's first character
@@ -77,6 +88,14 @@ def test_search_field_matches_value_only(tmp_path: pathlib.Path) -> None:
     for anchored in ('^core/note', 'draft$', '^core/note: draft$'):
         hits = wiki.search(anchored, field='name')
         assert [relpath for relpath, _, _ in hits] == ['core/note: draft.md']
+    # a hyphenated custom key is a field like any other: the value anchor
+    # hits and the key name stays out of the searched text
+    hits = wiki.search('^approved', field='review-status')
+    assert [relpath for relpath, _, _ in hits] == ['core/tracked.md']
+    assert wiki.search('review', field='review-status') == []
+    # a dotted key's line and block body never attribute to the field
+    # before it: field-scoped search must not hit foreign-key content
+    assert wiki.search('needle', field='desc') == []
 
 
 def test_all_files_searches_non_markdown_whole(tmp_path: pathlib.Path) -> None:

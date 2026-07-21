@@ -16,6 +16,7 @@ import unicodedata
 from typing import Optional
 
 import pytest
+import yaml
 
 from wiki.core import format
 from wiki.core.wiki import Wiki
@@ -48,6 +49,19 @@ __all__ = [
     'test_update_restores_valueless_desc_but_keeps_a_real_block_scalar',
     'test_update_accepts_block_scalar_name',
     'test_update_joins_multiline_block_scalar_name',
+    'test_update_drops_block_scalar_name_body',
+    'test_update_keeps_a_comment_under_name',
+    'test_update_drops_plain_name_continuations',
+    'test_update_drops_stray_frontmatter_blanks',
+    'test_update_keeps_bare_key_multiline_paragraph_break',
+    'test_update_keeps_keep_chomping_trailing_blanks',
+    'test_update_keeps_inline_multiline_scalar_paragraph_break',
+    'test_update_keeps_over_indented_block_body_whitespace',
+    'test_update_keeps_exotic_key_block_body_blanks',
+    'test_update_strands_no_line_from_a_sandwiched_name_comment',
+    'test_update_drops_blank_separated_name_continuations',
+    'test_update_preserves_authored_yaml_values',
+    'test_update_refreshes_any_name_shape_to_the_path',
     'test_update_folds_and_preserves_inline_desc',
     'test_update_preserves_prose_above_delimiter',
     'test_update_preserves_prose_below_delimiter_above_h1',
@@ -697,6 +711,410 @@ def test_update_joins_multiline_block_scalar_name(tmp_path: pathlib.Path) -> Non
     updated = root_index.read_text(encoding='utf-8')
     assert 'name: Line One Line Two\n' in updated
     assert '# Line One Line Two\n' in updated
+    assert Wiki(tmp_path).update() == []
+
+
+def test_update_drops_block_scalar_name_body(tmp_path: pathlib.Path) -> None:
+    """Refreshing a block-scalar ``name:`` takes its body lines with it.
+
+    The refresh spans the field's full extent -- indicator plus indented
+    body -- so the stale body cannot survive under the fresh one-line
+    ``name:``, where real YAML would fold it into the value and corrupt
+    the name Obsidian displays.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+
+    # author a child page whose name uses a multi-line block scalar
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        '---\nname: |\n  old\n  broken\ndesc: A page.\n---\n\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # the path-derived name lands as a one-line scalar, body lines gone
+    wiki.update()
+    updated = page.read_text(encoding='utf-8')
+    assert 'name: core/design\n' in updated
+    assert '  old' not in updated
+    assert '  broken' not in updated
+    assert Wiki(tmp_path).update() == []
+
+
+def test_update_keeps_a_comment_under_name(tmp_path: pathlib.Path) -> None:
+    """An indented ``# comment`` under a one-line ``name:`` survives the refresh.
+
+    Under a plain value an indented hash line is a YAML comment, not a
+    continuation -- the refresh consumes value lines and blanks only, so
+    an authored annotation is neither folded into the name nor deleted.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+
+    # author a child page annotating its (already canonical) name
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        '---\nname: core/design\n  # named for the design doc\ndesc: A page.\n'
+        '---\n\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # the comment stays put under the refreshed name
+    wiki.update()
+    updated = page.read_text(encoding='utf-8')
+    assert 'name: core/design\n  # named for the design doc\n' in updated
+    assert Wiki(tmp_path).update() == []
+
+
+def test_update_drops_plain_name_continuations(tmp_path: pathlib.Path) -> None:
+    """Plain continuation lines and blank lines under ``name:`` go with the value.
+
+    A plain value's indented continuation is value text (real YAML folds
+    it into the name), and a blank line is never frontmatter structure --
+    both are consumed by the refresh, so the fresh one-line ``name:`` sits
+    directly above the next field.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+
+    # author a child page whose name continues onto a second line, with a
+    # stray blank before the next field
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        '---\nname: old\n  broken\n\ndesc: A page.\n---\n\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # the continuation and the blank go with the stale value
+    wiki.update()
+    updated = page.read_text(encoding='utf-8')
+    assert 'name: core/design\ndesc: A page.\n' in updated
+    assert 'broken' not in updated
+    assert Wiki(tmp_path).update() == []
+
+
+def test_update_drops_stray_frontmatter_blanks(tmp_path: pathlib.Path) -> None:
+    """Blank lines between fields go; a block-scalar body keeps its blanks.
+
+    A blank line is never frontmatter structure, so strays are repaired
+    away wherever they sit -- but inside a ``|`` body a blank line is a
+    paragraph break the author wrote, out of the repair's reach.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+
+    # author a child page with stray blanks around a real block-scalar desc
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        '---\nname: core/design\n\ndesc: |\n  One.\n\n  Two.\n\ntags: []\n'
+        '---\n\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # the strays go, the body's paragraph break stays
+    wiki.update()
+    updated = page.read_text(encoding='utf-8')
+    assert 'name: core/design\ndesc: |\n  One.\n\n  Two.\ntags: []\n' in updated
+    assert Wiki(tmp_path).update() == []
+
+
+def test_update_keeps_bare_key_multiline_paragraph_break(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A bare ``desc:`` over an indented body keeps its paragraph-break blank.
+
+    A bare key over an indented body is a plain multi-line scalar that
+    folds the way ``>`` does, so a blank line in it is authored content,
+    not stray structure -- the refresh must leave it on disk.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+
+    # author a child page whose desc is a bare-key plain multi-line scalar
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        '---\nname: core/design\ndesc:\n  One paragraph.\n\n  Two paragraph.\n'
+        'tags: []\n---\n\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # the paragraph break survives the repair
+    wiki.update()
+    updated = page.read_text(encoding='utf-8')
+    assert 'desc:\n  One paragraph.\n\n  Two paragraph.\ntags: []\n' in updated
+    assert Wiki(tmp_path).update() == []
+
+
+def test_update_keeps_keep_chomping_trailing_blanks(tmp_path: pathlib.Path) -> None:
+    """A ``|+`` block keeps its trailing blank lines; a plain ``|`` drops them.
+
+    Under keep chomping the trailing newlines are part of the value, so
+    they survive; a clip-chomped ``|`` body's trailing blanks are stray
+    structure and go.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['keep', 'clip']})
+
+    # a keep-chomping desc keeps its trailing blanks
+    keep = tmp_path / 'core' / 'keep.md'
+    keep.write_text(
+        '---\nname: core/keep\ndesc: |+\n  Text.\n\n\ntags: []\n---\n\n# keep\n\nB.\n',
+        encoding='utf-8',
+    )
+    # a clip-chomping desc drops the same trailing blanks
+    clip = tmp_path / 'core' / 'clip.md'
+    clip.write_text(
+        '---\nname: core/clip\ndesc: |\n  Text.\n\n\ntags: []\n---\n\n# clip\n\nB.\n',
+        encoding='utf-8',
+    )
+
+    wiki.update()
+    assert 'desc: |+\n  Text.\n\n\ntags: []\n' in keep.read_text(encoding='utf-8')
+    assert 'desc: |\n  Text.\ntags: []\n' in clip.read_text(encoding='utf-8')
+    assert Wiki(tmp_path).update() == []
+
+
+def test_update_keeps_inline_multiline_scalar_paragraph_break(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A blank inside an inline-value multi-line scalar is content, not stray.
+
+    A plain scalar whose value starts on the key line and continues on
+    indented lines folds a blank into a paragraph break, exactly as a
+    ``>`` body does -- so the refresh must keep it. The value continues
+    while the next line stays indented, which is the signal the repair
+    keys on regardless of how the scalar opened.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+
+    # author a page whose desc is an inline-value plain multi-line scalar
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        '---\nname: core/design\ndesc: First line\n  continuation\n\n  more text\n'
+        'tags: []\n---\n\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # the embedded paragraph break survives the repair
+    wiki.update()
+    updated = page.read_text(encoding='utf-8')
+    assert 'desc: First line\n  continuation\n\n  more text\ntags: []\n' in updated
+    assert Wiki(tmp_path).update() == []
+
+
+def test_update_keeps_over_indented_block_body_whitespace(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A whitespace-only body line over the block indent keeps its spaces.
+
+    In a ``|`` body a line indented past the block's own indent carries
+    content spaces, so the repair re-emits blank lines verbatim rather
+    than collapsing them to empty.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+
+    # author a block body whose interior line is indented past the block indent
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        '---\nname: core/design\ndesc: |\n  a\n    \n  b\ntags: []\n---\n'
+        '\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # the over-indented whitespace line keeps its spaces, not collapsed to empty
+    wiki.update()
+    updated = page.read_text(encoding='utf-8')
+    assert 'desc: |\n  a\n    \n  b\ntags: []\n' in updated
+    assert Wiki(tmp_path).update() == []
+
+
+def test_update_keeps_exotic_key_block_body_blanks(tmp_path: pathlib.Path) -> None:
+    """A block body under a key outside the schema grammar keeps its blanks.
+
+    Frontmatter is user-extensible, so the block-body detection is not
+    gated on the schema's field-name grammar -- a dotted or otherwise
+    exotic key opening a block scalar arms the same body handling.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+
+    # author a page carrying a block scalar under a dotted custom key
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        '---\nname: core/design\ndesc: A page.\ncom.example: |\n  One.\n\n  Two.\n'
+        'tags: []\n---\n\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # the custom block body keeps its paragraph break
+    wiki.update()
+    updated = page.read_text(encoding='utf-8')
+    assert 'com.example: |\n  One.\n\n  Two.\ntags: []\n' in updated
+    assert Wiki(tmp_path).update() == []
+
+
+def test_update_strands_no_line_from_a_sandwiched_name_comment(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A comment among plain-name continuations survives; no line strands.
+
+    Every plain continuation line is stale value text and goes with the
+    refreshed name; a ``# comment`` among them re-emits under the fresh
+    one-line name, so nothing is left dangling as a bogus continuation of
+    the new value.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+
+    # author a page whose stale name spans continuations sandwiching a comment
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        '---\nname: old\n  stale one\n  # authored note\n  stale two\ndesc: A page.\n'
+        '---\n\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # the comment survives, both continuation lines go, nothing strands
+    wiki.update()
+    updated = page.read_text(encoding='utf-8')
+    assert 'name: core/design\n  # authored note\ndesc: A page.\n' in updated
+    assert 'stale one' not in updated
+    assert 'stale two' not in updated
+    assert Wiki(tmp_path).update() == []
+
+
+def test_update_drops_blank_separated_name_continuations(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Continuations across a paragraph break go with the stale name.
+
+    The blank repair keeps a blank whose next line stays indented (it
+    reads as multi-line-value content), so the name refresh must consume
+    the full extent across it -- post-blank continuations never strand
+    under the fresh one-line name, and a comment among them still
+    re-emits.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+
+    # author a stale name whose continuations span blanks around a comment
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        '---\nname: old\n  stale one\n\n  # authored note\n\n  stale two\n'
+        'desc: A page.\n---\n\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # the full extent goes; the comment re-emits; nothing strands
+    wiki.update()
+    updated = page.read_text(encoding='utf-8')
+    assert 'name: core/design\n  # authored note\ndesc: A page.\n' in updated
+    assert 'stale one' not in updated
+    assert 'stale two' not in updated
+    assert Wiki(tmp_path).update() == []
+
+
+@pytest.mark.parametrize(
+    argnames='shape',
+    argvalues=[
+        pytest.param('extra: plain value', id='plain-one-line'),
+        pytest.param('extra: First line\n  continuation', id='plain-continuation'),
+        pytest.param(
+            'extra: First\n  middle\n\n  after-break',
+            id='plain-paragraph-break',
+        ),
+        pytest.param(
+            'extra:\n  bare body\n\n  after-break',
+            id='bare-key-paragraph-break',
+        ),
+        pytest.param('extra: |\n  One.\n\n  Two.', id='literal-paragraph-break'),
+        pytest.param('extra: |-\n  strip-chomp', id='literal-strip-chomp'),
+        pytest.param('extra: |+\n  keep\n', id='literal-keep-chomp-tail'),
+        pytest.param('extra: |2\n   indented', id='literal-indent-indicator'),
+        pytest.param('extra: >\n  folded\n\n  break', id='folded-paragraph-break'),
+        pytest.param('extra: >-\n  folded-strip', id='folded-strip-chomp'),
+        pytest.param('extra: "quoted\n\n  spanning"', id='double-quoted-spanning'),
+        pytest.param("extra: 'single\n\n  spanning'", id='single-quoted-spanning'),
+        pytest.param("extra: '|not a block'", id='quoted-pipe-value'),
+        pytest.param('extra-key: hyphenated', id='hyphenated-key'),
+        pytest.param('com.example: |\n  dotted\n\n  body', id='dotted-key-block'),
+        pytest.param('extra: |\n  a\n    \n  b', id='over-indented-ws-line'),
+        pytest.param('extra: unicode ✓ value', id='unicode-value'),
+        pytest.param('extra: back\\1slash', id='backslash-digit-value'),
+    ],
+)
+def test_update_preserves_authored_yaml_values(
+    tmp_path: pathlib.Path,
+    shape: str,
+) -> None:
+    """Authored values survive the repair under a strict YAML reader.
+
+    The repair owns the generated fields (``name``, the
+    ``created``/``updated`` stamps) and any cosmetic reshape -- but every
+    authored VALUE must parse identically before and after, whatever
+    scalar flavor carries it, and the second pass must be a no-op.
+    ``yaml.safe_load`` is the oracle, so a repair edit that would change
+    what Obsidian or any strict reader sees fails here.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+
+    # author a page carrying the shape under test beside normal fields
+    page = tmp_path / 'core' / 'design.md'
+    text = (
+        f'---\nname: core/design\ndesc: A page.\n{shape}\ntags: []\n---\n'
+        '\n# design\n\nBody.\n'
+    )
+    page.write_text(text, encoding='utf-8')
+
+    def parse(content: str) -> dict:
+        """Parse the frontmatter mapping with the strict oracle."""
+        frontmatter = content.split('---\n')[1]
+        return yaml.safe_load(frontmatter)
+
+    # every authored value parses identically after the repair
+    before = parse(text)
+    wiki.update()
+    after = parse(page.read_text(encoding='utf-8'))
+    for generated in ('name', 'created', 'updated'):
+        before.pop(generated, None)
+        after.pop(generated, None)
+    assert after == before
+    assert Wiki(tmp_path).update() == []
+
+
+@pytest.mark.parametrize(
+    argnames='stale',
+    argvalues=[
+        pytest.param('name: old', id='plain-one-line'),
+        pytest.param('name: old\n  continuation', id='plain-continuation'),
+        pytest.param('name: old\n  cont\n\n  more', id='plain-paragraph-break'),
+        pytest.param('name: old\n  # note\n\n  more', id='comment-in-run'),
+        pytest.param('name: |\n  old\n  broken', id='literal-body'),
+        pytest.param('name: >-\n  old\n\n  folded', id='folded-paragraph-break'),
+        pytest.param('name:\n  bare body', id='bare-key-body'),
+        pytest.param('name: "old\n\n  quoted"', id='double-quoted-spanning'),
+        pytest.param('name: old\n  # only a note', id='comment-only-run'),
+    ],
+)
+def test_update_refreshes_any_name_shape_to_the_path(
+    tmp_path: pathlib.Path,
+    stale: str,
+) -> None:
+    """Whatever shape a stale ``name:`` takes, the refresh yields the path.
+
+    The name is the one field the repair always regenerates, so the
+    oracle here is the OUTPUT: a strict YAML reader must see exactly the
+    path-derived name -- never a stranded continuation folded into it or
+    unparseable frontmatter -- the sibling fields must survive untouched,
+    and the second pass must be a no-op.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+
+    # author a page whose name field carries the stale shape under test
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        f'---\n{stale}\ndesc: A page.\ntags: []\n---\n\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # the refreshed name parses as exactly the path-derived value
+    wiki.update()
+    frontmatter = page.read_text(encoding='utf-8').split('---\n')[1]
+    parsed = yaml.safe_load(frontmatter)
+    assert parsed['name'] == 'core/design'
+    assert parsed['desc'] == 'A page.'
+    assert parsed['tags'] == []
     assert Wiki(tmp_path).update() == []
 
 

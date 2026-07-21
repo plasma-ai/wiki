@@ -49,6 +49,7 @@ security = [
 test = [
     "pytest-cov",
     "pytest-xdist",
+    "pyyaml",
 ]
 type = [
     "pyright",

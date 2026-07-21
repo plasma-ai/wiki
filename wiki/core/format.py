@@ -145,7 +145,8 @@ def parse_index(text: str, *, delimiter: str) -> tuple[str, list[Link], str]:
     # trailing blank lines drop here so render owns the canonical shape
     # (one blank after the delimiter, one trailing newline)
     user_content = '\n'.join(lines[marker + 1 :]).strip('\n')
-    # extract links (everything between frontmatter and the marker)
+    # extract links (everything between frontmatter and the marker;
+    # the marker is the first delimiter, so the range holds none)
     end = marker
     links = []
     current_link = None
@@ -159,14 +160,6 @@ def parse_index(text: str, *, delimiter: str) -> tuple[str, list[Link], str]:
     pending_blanks = 0
     for i in range(line_number, end):
         line = lines[i]
-        # skip delimiters (rstrip, matching the marker rule: an indented
-        # delimiter is a desc continuation, not structure)
-        if line.rstrip() == delimiter:
-            if current_link is not None:
-                links.append(current_link)
-                current_link = None
-            pending_blanks = 0
-            continue
         # try to match a new link (formatter escape damage tolerated)
         link = match_link_row(line)
         if link is not None:
@@ -331,6 +324,45 @@ def build_frontmatter(*, name: str, created: str, updated: str) -> str:
     return '\n'.join(lines)
 
 
+def strip_blank_lines(frontmatter: str) -> str:
+    """Drop frontmatter blank lines that are not scalar body content.
+
+    A blank line between one-line fields is never structure, so strays
+    are repaired away -- but inside a multi-line value it is content: a
+    paragraph break in a block (``|``/``>``), plain, or quoted scalar
+    that spans lines. A blank run is kept whenever the value continues
+    after it (the next line stays indented), and kept at the end of a
+    keep-chomping block (``|+``/``>+``), whose trailing newlines are
+    themselves the value. Blanks re-emit verbatim, so an over-indented
+    whitespace-only body line keeps its content spaces.
+    """
+    result = []
+    pending = []  # blank lines held verbatim until the next line reveals them
+    keep_chomp = False
+    for line in frontmatter.split('\n'):
+        if not line.strip():
+            pending.append(line)
+            continue
+        # an indented line continues a multi-line value, so a preceding blank
+        # run is a paragraph break; a keep-chomping block keeps its trailing
+        # blanks even where the next line dedents to the following field
+        if line[:1] in (' ', '\t') or keep_chomp:
+            result.extend(pending)
+        pending = []
+        result.append(line)
+        if line[:1] not in (' ', '\t'):
+            # only a field opening a keep-chomping block owns the blank run
+            # that trails it; every other dedent ends the value
+            key, sep, value = line.partition(':')
+            value = value.strip()
+            field = bool(sep) and not key.strip().startswith('#')
+            block = field and value[:1] in ('|', '>')
+            keep_chomp = block and '+' in value.partition('#')[0]
+    # blanks past the closing delimiter sit outside the frontmatter block
+    result.extend(pending)
+    return '\n'.join(result)
+
+
 def repair_frontmatter(
     frontmatter: str,
     *,
@@ -342,12 +374,13 @@ def repair_frontmatter(
 ) -> str:
     """Refresh ``name:`` and fill missing/blank desc/created/updated keys.
 
-    The shared frontmatter surgery for index and page planning: callable
-    ``name:`` replacement (backslash-digit safe), placeholder restore on
-    blank keys, in-place stamps so duplicates are never appended,
-    insertions in schema order (desc after name; created before
-    updated), removal of an unset ``title:``/``category:`` (per their
-    flags), and -- when ``order`` is set -- canonical field ordering
+    The shared frontmatter surgery for index and page planning: stray
+    blank-line removal (:func:`strip_blank_lines`; block-scalar bodies
+    keep theirs), callable ``name:`` replacement (backslash-digit safe),
+    placeholder restore on blank keys, in-place stamps so duplicates are
+    never appended, insertions in schema order (desc after name; created
+    before updated), removal of an unset ``title:``/``category:`` (per
+    their flags), and -- when ``order`` is set -- canonical field ordering
     (:func:`order_frontmatter`) with the final word.
 
     Args:
@@ -364,18 +397,47 @@ def repair_frontmatter(
             after all other repairs.
 
     """
+    # a blank line is never frontmatter structure -- drop strays before
+    # any field surgery (block-scalar bodies keep theirs)
+    frontmatter = strip_blank_lines(frontmatter)
     # update name from the path-derived name (add it if the field is
     # missing, so frontmatter with no name: does not stay un-named)
-    if re.search(r'^name:', frontmatter, re.MULTILINE):
-        # callable repl so a backslash-digit in the
-        # name is not read as a group reference
-        frontmatter = re.sub(
-            pattern=r'^name:.*$',
-            repl=lambda _: f'name: {quote(name)}',
-            string=frontmatter,
-            count=1,
-            flags=re.MULTILINE,
-        )
+    name_field = re.search(r'^name:(.*)$', frontmatter, re.MULTILINE)
+    if name_field:
+        # the refresh spans the field's full extent, so a multi-line value's
+        # body goes with the stale value it continues; callable repls so a
+        # backslash-digit in the name is not read as a group reference
+        fresh = f'name: {quote(name)}\n'
+        value = name_field.group(1).strip()
+        if value.startswith(('|', '>')) or not value:
+            # block scalar (or bare key, folding like >): the whole indented
+            # body goes -- a `#` line or a blank inside it is content
+            frontmatter = re.sub(
+                pattern=r'^name:.*\n(?:[ \t]+.*\n|[ \t]*\n)*',
+                repl=lambda _: fresh,
+                string=frontmatter,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            # plain value: every continuation line is value text and goes -- blank
+            # lines included, since strip_blank_lines keeps a blank whose next line
+            # stays indented and a paragraph break belongs to the stale value being
+            # replaced -- while the `# comment` lines among them re-emit under the
+            # fresh name; consuming the full extent means nothing strands as a
+            # continuation of the fresh one-liner
+            def keep_comments(match: re.Match[str]) -> str:
+                lines = match.group(1).splitlines(keepends=True)
+                comments = [line for line in lines if line.lstrip().startswith('#')]
+                return fresh + ''.join(comments)
+
+            frontmatter = re.sub(
+                pattern=r'^name:.*\n((?:[ \t]+.*\n|[ \t]*\n)*)',
+                repl=keep_comments,
+                string=frontmatter,
+                count=1,
+                flags=re.MULTILINE,
+            )
     else:
         pos = frontmatter.rfind('---')
         frontmatter = frontmatter[:pos] + f'name: {quote(name)}\n---'
@@ -711,7 +773,7 @@ def field_value(line: str) -> str:
     joined value of a whole field, this reads a single line so matches
     keep their line numbers.
     """
-    match = re.match(r'^(\w+):[^\S\n]*', line)
+    match = re.match(r'^([\w-]+):[^\S\n]*', line)
     if match:
         return unquote(line[match.end() :].strip())
     return line.strip()
@@ -759,6 +821,13 @@ def field_line_ranges(
             current_field = match.group(1)
             if current_field in fields:
                 result.add(lineno)
+            continue
+        # a dedented field line whose key sits outside the [\w-]+ grammar
+        # (e.g. dotted) still ends the current field -- its line and block
+        # body must not attribute to the preceding field
+        dedented = line[:1] not in (' ', '\t')
+        if dedented and ':' in line and not line.startswith('#'):
+            current_field = None
             continue
         # continuation line of current field
         if current_field in fields:

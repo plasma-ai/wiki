@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import pathlib
 import sys
@@ -9,6 +10,7 @@ from collections.abc import Iterator
 
 import pytest
 
+import wiki
 from wiki.constants import OFFLINE_MODE
 
 # the CLI suite drives the installed wiki console script as a subprocess,
@@ -62,3 +64,32 @@ def _isolate_ambient_env() -> Iterator[None]:
         monkeypatch.delenv(var, raising=False)
     yield
     monkeypatch.undo()
+
+
+@pytest.fixture(scope='session', autouse=True)
+def _package_seeds_stay_pristine() -> Iterator[None]:
+    """Fail the session when a test mutates the package's seed trees.
+
+    Templates and skills are read straight from the installed package,
+    so a test that writes through such a path corrupts the working tree
+    for every later test and every live run. Digest the seed trees
+    before and after the session and fail loudly on drift.
+    """
+    package = pathlib.Path(wiki.__file__).parent
+    seeds = ('_assets', 'skills')
+
+    def digest() -> str:
+        sha = hashlib.sha256()
+        for seed in seeds:
+            for path in sorted((package / seed).rglob('*')):
+                if path.is_file():
+                    sha.update(str(path.relative_to(package)).encode())
+                    sha.update(path.read_bytes())
+        return sha.hexdigest()
+
+    before = digest()
+    yield
+    assert digest() == before, (
+        'package seed trees (_assets/skills) were modified by the test'
+        ' suite -- a test wrote through a package path'
+    )
