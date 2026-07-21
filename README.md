@@ -152,7 +152,7 @@ Maintain indexes as files are added and removed:
 never affect the exit code — a stale wikilink in prose is a note, while a broken
 link in a generated index block is an issue). A page that must display
 otherwise-flagged content — sample conflict markers, stale link examples — wraps
-those lines in a `<!-- start: no-lint -->` … `<!-- end: no-lint -->` region,
+those lines in a `<!-- start: no-lint -->` ... `<!-- end: no-lint -->` region,
 which suppresses the positional rules, notes included, for just that span.
 
 Browse structure, search across content, and read entries:

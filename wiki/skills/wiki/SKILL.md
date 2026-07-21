@@ -143,7 +143,7 @@ rather than authoring or auditing page by page yourself:
   diff.
 - **Suppress lint locally with a `no-lint` region.** A page that must display
   otherwise-flagged content (sample conflict markers, stale link examples) wraps
-  those lines in `<!-- start: no-lint -->` … `<!-- end: no-lint -->`, which
+  those lines in `<!-- start: no-lint -->` ... `<!-- end: no-lint -->`, which
   silences the positional rules — hard issues and soft notes alike — for just
   that span. Regions never affect file-level checks, and a dangling or nested
   marker is itself a hard lint issue.
