@@ -7,18 +7,22 @@ notices, and the ``OFFLINE_MODE`` matrix.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import pathlib
 
 import pytest
 
 from wiki.constants import OFFLINE_MODE
+from wiki.core import _obsidian
 from wiki.core.wiki import Wiki
 
 from ._helpers import _capture_notices
 
 __all__ = [
     'test_update_config_installs_plugin',
+    'test_update_config_refuses_a_checksum_mismatch',
     'test_update_config_offline_warns',
     'test_update_config_keeps_notices_off_warnings',
     'test_update_config_preserves_existing',
@@ -37,13 +41,24 @@ __all__ = [
 
 @pytest.fixture
 def stub_download(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the plugin download with a marker write (no real network)."""
+    """Stub the plugin download with a marker write (no real network).
+
+    The digest pins follow the marker bytes, so the stubbed install
+    passes the checksum gate the way a genuinely pinned release does.
+    """
 
     def download(self: Wiki, url: str, target: pathlib.Path) -> None:
         """Write marker bytes instead of fetching from the network."""
         target.write_bytes(b'CODE')
 
     monkeypatch.setattr(Wiki, '_download', download)
+    digest = hashlib.sha256(b'CODE').hexdigest()
+    for plugin, digests in _obsidian._OBSIDIAN_PLUGIN_DIGESTS.items():
+        monkeypatch.setitem(
+            _obsidian._OBSIDIAN_PLUGIN_DIGESTS,
+            plugin,
+            dict.fromkeys(digests, digest),
+        )
 
 
 # ------ plugin install and merge
@@ -65,6 +80,51 @@ def test_update_config_installs_plugin(
     plugin = tmp_path / '.obsidian' / 'plugins' / plugin_id
     assert (plugin / 'main.js').read_bytes() == b'CODE'
     assert (plugin / 'manifest.json').read_bytes() == b'CODE'
+    assert (plugin / 'data.json').is_file()
+    cp_file = tmp_path / '.obsidian' / 'community-plugins.json'
+    assert plugin_id in json.loads(cp_file.read_text(encoding='utf-8'))
+    # installed assets honor the umask like every write_atomic surface,
+    # never mkstemp's owner-only temp mode
+    umask = os.umask(0)
+    os.umask(umask)
+    expected = 0o666 & ~umask
+    assert (plugin / 'main.js').stat().st_mode & 0o777 == expected
+    assert (plugin / 'manifest.json').stat().st_mode & 0o777 == expected
+
+
+def test_update_config_refuses_a_checksum_mismatch(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A download failing its pinned digest is refused, never installed.
+
+    Release assets are mutable upstream, so the install trusts the
+    pinned digest, not the URL: a swapped artifact is discarded before
+    it reaches the vault, the warning names the mismatch (a refusal,
+    not a network hiccup), and no staged temp file is left behind.
+    """
+    wiki = Wiki(tmp_path)
+    wiki.init()
+
+    # the fetched bytes do not match the real pinned digests
+    def tampered(self: Wiki, url: str, target: pathlib.Path) -> None:
+        """Write bytes that fail the pinned-digest check."""
+        target.write_bytes(b'EVIL')
+
+    monkeypatch.setattr(Wiki, '_download', tampered)
+
+    # the mismatch is refused with a warning naming the digest failure
+    warnings = wiki.update_config()
+    assert any('refused' in warning.lower() for warning in warnings)
+    assert any('digest' in warning.lower() for warning in warnings)
+
+    # nothing installed: no plugin code, no stray staged temp files
+    plugin_id = 'obsidian-front-matter-title-plugin'
+    plugin = tmp_path / '.obsidian' / 'plugins' / plugin_id
+    assert not (plugin / 'main.js').exists()
+    assert not list(plugin.glob('*main.js'))
+    assert not list(plugin.glob('*manifest.json'))
+    # settings and the enabled-plugins list still apply (soft failure)
     assert (plugin / 'data.json').is_file()
     cp_file = tmp_path / '.obsidian' / 'community-plugins.json'
     assert plugin_id in json.loads(cp_file.read_text(encoding='utf-8'))

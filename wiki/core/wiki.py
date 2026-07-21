@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import difflib
 import functools
+import hashlib
 import http.client
 import json
 import logging
@@ -542,15 +543,36 @@ class Wiki:
                     # fetch all assets to temp paths first, then move them into
                     # place only after every fetch succeeds, so a mid-fetch
                     # failure never leaves a skewed main.js/manifest.json pair
+                    digests = _obsidian._OBSIDIAN_PLUGIN_DIGESTS[source.name]
                     staged = []
                     try:
-                        for asset in _obsidian._OBSIDIAN_PLUGIN_ASSETS:
+                        for asset in digests:
                             url = release_url.format(asset=asset)
                             fd, tmp = tempfile.mkstemp(dir=target, suffix=asset)
                             os.close(fd)
                             tmp = pathlib.Path(tmp)
                             staged.append((tmp, target / asset))
                             self._download(url, tmp)
+                            # verify the pinned digest before anything installs:
+                            # release assets are mutable upstream, so a swapped
+                            # artifact is refused here, never written to the
+                            # vault (the check sits above _download overrides)
+                            digest = hashlib.sha256(tmp.read_bytes()).hexdigest()
+                            if digest != digests[asset]:
+                                raise _obsidian.PluginChecksumError(
+                                    f'{asset} digest {digest[:16]}... does not'
+                                    f' match the pinned release'
+                                )
+                    except _obsidian.PluginChecksumError as e:
+                        # discard everything: a failed digest is a refusal,
+                        # not a retryable network hiccup
+                        for tmp, _ in staged:
+                            tmp.unlink(missing_ok=True)
+                        warnings.append(
+                            f'Refused {source.name}: {e}. The published asset'
+                            ' changed since it was pinned -- verify upstream'
+                            ' before re-pinning.'
+                        )
                     except (OSError, http.client.HTTPException) as e:
                         # discard the partial download, leaving existing files
                         for tmp, _ in staged:
@@ -567,6 +589,16 @@ class Wiki:
                         raise
                     else:
                         for tmp, dest in staged:
+                            # mkstemp creates the temp 0600 and os.replace
+                            # carries that mode onto the target: preserve the
+                            # existing mode, or honor the umask for a fresh
+                            # asset (mirrors write_atomic)
+                            try:
+                                os.chmod(tmp, dest.stat().st_mode & 0o777)
+                            except FileNotFoundError:
+                                umask = os.umask(0)
+                                os.umask(umask)
+                                os.chmod(tmp, 0o666 & ~umask)
                             os.replace(tmp, dest)
         # create or merge each top-level json file
         for source in sorted(config_dir.glob('*.json')):

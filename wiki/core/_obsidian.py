@@ -11,14 +11,29 @@ from wiki.constants import WIKI_DIR
 
 __all__ = []
 
-# NOTE: plugin versions should be periodically updated
+# TODO: plugin versions should be periodically updated
 _OBSIDIAN_PLUGINS = {
     'obsidian-front-matter-title-plugin': (
         'https://github.com/snezhig/obsidian-front-matter-title'
         '/releases/download/4.1.0/{asset}'
     ),
 }
-_OBSIDIAN_PLUGIN_ASSETS = ('main.js', 'manifest.json')
+# sha256 per release asset, keyed like _OBSIDIAN_PLUGINS and pinned when the
+# version is adopted: the keys are the asset manifest (what the install
+# fetches), and release assets are mutable upstream, so the install trusts
+# the digest, never the URL -- a swapped artifact is refused
+_OBSIDIAN_PLUGIN_DIGESTS = {
+    'obsidian-front-matter-title-plugin': {
+        'main.js': '56c4a50a9536a42144902a9e0ba8250db768f6ed92592ab85ae8e98ec3335393',
+        'manifest.json': (
+            'd6df75d19bb005e9b4b05b7f5edc175070420dd85fab11950b9e39f5aebe4648'
+        ),
+    },
+}
+
+
+class PluginChecksumError(Exception):
+    """A downloaded plugin asset failed its pinned-digest check."""
 
 
 def seed_template(root: pathlib.Path) -> None:
