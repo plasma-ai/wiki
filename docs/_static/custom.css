@@ -1,0 +1,213 @@
+/* Plasma brand theming for pydata-sphinx-theme.
+ *
+ * The charcoal anchor (#212121) matches the Plasma logo background exactly, so
+ * dark mode renders the site on the logo's own color. Everything else derives
+ * from a neutral gray ramp; the violet accent is the one non-neutral color and
+ * can be swapped by editing the two accent variables below.
+ */
+
+:root {
+    /* brand anchor -- background color of the Plasma logo */
+    --plasma-charcoal: #212121;
+    /* accent pair -- light-mode and dark-mode link/interaction color */
+    --plasma-accent: #6d28d9;
+    --plasma-accent-dark: #a78bfa;
+}
+
+/* -- Light mode -------------------------------------------------------------- */
+
+html[data-theme="light"] {
+    /* neutral surfaces in place of the theme's blue-tinted grays */
+    --pst-color-background: #ffffff;
+    --pst-color-on-background: #ffffff;
+    --pst-color-surface: #f5f5f5;
+    --pst-color-on-surface: #e0e0e0;
+    --pst-color-border: #e0e0e0;
+    --pst-color-border-muted: #eeeeee;
+    --pst-color-shadow: rgba(33, 33, 33, 0.08);
+
+    /* text set in the brand charcoal */
+    --pst-color-text-base: var(--plasma-charcoal);
+    --pst-color-heading: var(--plasma-charcoal);
+    --pst-color-text-muted: #5f5f5f;
+
+    /* charcoal chrome, violet interactions */
+    --pst-color-primary: var(--plasma-charcoal);
+    --pst-color-primary-bg: #ededed;
+    --pst-color-secondary: var(--plasma-accent);
+    --pst-color-secondary-bg: #ede9fe;
+    --pst-color-accent: var(--plasma-accent);
+    --pst-color-accent-bg: #ede9fe;
+    --pst-color-link: var(--plasma-accent);
+    --pst-color-link-hover: #4c1d95;
+    --pst-color-link-higher-contrast: #5b21b6;
+    --pst-color-inline-code: #3d3d3d;
+    --pst-color-inline-code-links: var(--plasma-accent);
+    --pst-color-target: #ebebeb;
+}
+
+/* -- Dark mode --------------------------------------------------------------- */
+
+html[data-theme="dark"] {
+    /* page background matches the Plasma logo's charcoal exactly */
+    --pst-color-background: var(--plasma-charcoal);
+    --pst-color-on-background: #2a2a2a;
+    --pst-color-surface: #2c2c2c;
+    --pst-color-on-surface: #3a3a3a;
+    --pst-color-border: #3d3d3d;
+    --pst-color-border-muted: #333333;
+    --pst-color-shadow: rgba(0, 0, 0, 0.4);
+
+    /* neutral light text in place of the theme's blue-tinted grays */
+    --pst-color-text-base: #e6e6e6;
+    --pst-color-heading: #ffffff;
+    --pst-color-text-muted: #a3a3a3;
+
+    /* light chrome, violet interactions */
+    --pst-color-primary: #e6e6e6;
+    --pst-color-primary-bg: #333333;
+    --pst-color-secondary: var(--plasma-accent-dark);
+    --pst-color-secondary-bg: #322a4d;
+    --pst-color-accent: var(--plasma-accent-dark);
+    --pst-color-accent-bg: #322a4d;
+    --pst-color-link: var(--plasma-accent-dark);
+    --pst-color-link-hover: #c4b5fd;
+    --pst-color-link-higher-contrast: #c4b5fd;
+    --pst-color-inline-code: #e0e0e0;
+    --pst-color-inline-code-links: var(--plasma-accent-dark);
+    --pst-color-target: #3d3d3d;
+}
+
+/* -- Code highlighting --------------------------------------------------------- */
+
+/* Cursor (Anysphere) editor palettes, mapped onto pygments classes over the
+ * theme's default styles; unmapped tokens keep the default style's colors */
+html[data-theme="light"] {
+    --code-bg: #fcfcfc;
+    --code-fg: #141414;
+    --code-comment: #6f6f6f;
+    --code-keyword: #a30034;
+    --code-builtin: #3b7e84;
+    --code-number: #92156a;
+    --code-string: #7565cc;
+    --code-function: #cd4500;
+    --code-class: #005293;
+    --code-decorator: #007041;
+    --code-self: #92156a;
+    --code-constant: #92156a;
+    --code-punct: #141414;
+    --code-error: #cd3131;
+}
+html[data-theme="dark"] {
+    --code-bg: #181818;
+    --code-fg: #d6d6dd;
+    --code-comment: #8a8a8a;
+    --code-keyword: #82d2ce;
+    --code-builtin: #aaa0fa;
+    --code-number: #ebc88d;
+    --code-string: #e394dc;
+    --code-function: #efb080;
+    --code-class: #87c3ff;
+    --code-decorator: #a8cc7c;
+    --code-self: #efb080;
+    --code-constant: #efb080;
+    --code-punct: #a5a5b0;
+    --code-error: #f44747;
+}
+html[data-theme] .highlight {
+    background-color: var(--code-bg);
+    border: 1px solid var(--pst-color-border-muted);
+    color: var(--code-fg);
+}
+html[data-theme] .highlight .c,
+html[data-theme] .highlight .ch,
+html[data-theme] .highlight .cm,
+html[data-theme] .highlight .cp,
+html[data-theme] .highlight .cs,
+html[data-theme] .highlight .c1,
+html[data-theme] .highlight .gp {
+    color: var(--code-comment);
+    font-style: italic;
+}
+html[data-theme] .highlight .k,
+html[data-theme] .highlight .kd,
+html[data-theme] .highlight .kr,
+html[data-theme] .highlight .ow,
+html[data-theme] .highlight .sa {
+    color: var(--code-keyword);
+}
+html[data-theme] .highlight .kn {
+    color: var(--code-keyword);
+    font-style: italic;
+}
+html[data-theme] .highlight .kc,
+html[data-theme] .highlight .kt,
+html[data-theme] .highlight .nb {
+    color: var(--code-builtin);
+}
+html[data-theme] .highlight .m,
+html[data-theme] .highlight .mb,
+html[data-theme] .highlight .mf,
+html[data-theme] .highlight .mh,
+html[data-theme] .highlight .mi,
+html[data-theme] .highlight .mo,
+html[data-theme] .highlight .il {
+    color: var(--code-number);
+}
+html[data-theme] .highlight .s,
+html[data-theme] .highlight .sb,
+html[data-theme] .highlight .sc,
+html[data-theme] .highlight .sd,
+html[data-theme] .highlight .sh,
+html[data-theme] .highlight .sr,
+html[data-theme] .highlight .sx,
+html[data-theme] .highlight .si,
+html[data-theme] .highlight .s1,
+html[data-theme] .highlight .s2 {
+    color: var(--code-string);
+}
+html[data-theme] .highlight .nf,
+html[data-theme] .highlight .fm {
+    color: var(--code-function);
+}
+html[data-theme] .highlight .nd {
+    color: var(--code-decorator);
+}
+html[data-theme] .highlight .nc,
+html[data-theme] .highlight .ne {
+    color: var(--code-class);
+}
+html[data-theme] .highlight .bp {
+    color: var(--code-self);
+}
+html[data-theme] .highlight .no {
+    color: var(--code-constant);
+}
+html[data-theme] .highlight .o,
+html[data-theme] .highlight .p {
+    color: var(--code-punct);
+}
+html[data-theme] .highlight .se,
+html[data-theme] .highlight .nn,
+html[data-theme] .highlight .nv,
+html[data-theme] .highlight .vm,
+html[data-theme] .highlight .go {
+    color: var(--code-fg);
+}
+html[data-theme] .highlight .err {
+    color: var(--code-error);
+}
+
+/* -- Component polish ---------------------------------------------------------- */
+
+/* size the logo mark to sit balanced beside the brand text */
+.navbar-brand .logo__image {
+    height: 2rem;
+    width: auto;
+}
+
+/* set the brand text in a heavier weight for a wordmark feel */
+.navbar-brand .logo__title {
+    font-weight: 600;
+    letter-spacing: 0.01em;
+}

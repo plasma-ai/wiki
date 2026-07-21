@@ -100,15 +100,15 @@ exclude_patterns = []
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = []
+html_static_path = ['_static']
 
 # Refer to the following links for pydata-sphinx-theme options:
 # Configuration (https://pydata-sphinx-theme.readthedocs.io/en/latest/user_guide/configuring.html)
 # Customization (https://pydata-sphinx-theme.readthedocs.io/en/latest/user_guide/customizing.html)
 html_theme = 'pydata_sphinx_theme'
 
-# html_logo = '_static/logo.png'
-# html_css_files = ['custom.css']
+html_favicon = '_static/favicon.png'
+html_css_files = ['custom.css']
 html_title = 'Wiki Documentation'
 html_file_suffix = '.html'
 
@@ -116,9 +116,15 @@ htmlhelp_basename = project
 
 # Additional options
 html_context = {
-    'default_mode': 'light',
+    'default_mode': 'dark',
 }
 html_theme_options = {
+    # Logo variants for light/dark mode, shown beside the project title
+    'logo': {
+        'text': 'Wiki',
+        'image_light': '_static/logo-light.png',
+        'image_dark': '_static/logo-dark.png',
+    },
     # Show previous/next at page bottom
     'show_prev_next': True,
     # Search bar options
@@ -135,4 +141,7 @@ html_theme_options = {
     'github_url': 'https://github.com/plasma-ai/wiki',
     # Other links without icons
     'external_links': [],
+    # Keep the footer to the copyright line
+    'footer_start': ['copyright'],
+    'footer_end': [],
 }
