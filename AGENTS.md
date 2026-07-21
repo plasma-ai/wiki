@@ -297,6 +297,10 @@ middle ground: short methods need no comments; longer methods label logical
 blocks, not every line, and never leave long stretches of dense logic
 uncommented.
 
+Module-level public data (constants, type aliases) carries `#:` doc-comments
+rather than plain `#` comments — Sphinx autodoc renders only doc-commented data
+members.
+
 No absolute paths in persisted data — everything should be relative or derivable
 from the git repo root.
 

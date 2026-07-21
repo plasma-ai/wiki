@@ -1333,7 +1333,7 @@ class Wiki:
         offset. Override in subclasses for a different time source.
 
         Returns:
-            Timestamp string like ``2026-01-15T12:30:00Z``.
+            Timestamp string like ``YYYY-MM-DDTHH:MM:SSZ``.
 
         """
         policy = self._timestamp_policy
