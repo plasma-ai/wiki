@@ -15,7 +15,7 @@ import pytest
 
 from wiki.core.wiki import Wiki
 
-from ._helpers import _capture_notices, _make_wiki, page_index
+from ._helpers import _capture_notices, _make_wiki, _set_exclude_patterns, page_index
 
 __all__ = [
     'test_lint_reports_missing_root_name_without_crashing',
@@ -55,6 +55,9 @@ __all__ = [
     'test_long_desc_is_note_only',
     'test_lint_stale_body_link_names_canonical',
     'test_index_broken_link_is_issue_but_body_link_is_note',
+    'test_lint_names_excluded_link_target',
+    'test_lint_silent_inside_excluded_subtree',
+    'test_lint_stale_link_into_excluded_subtree_is_live',
     'test_lint_flags_folder_shadowing_page',
     'test_lint_accepts_anchor_links',
 ]
@@ -1161,6 +1164,78 @@ def test_index_broken_link_is_issue_but_body_link_is_note(
     assert any('Broken link [[core/ghost|ghost]]' in issue for issue in wiki.lint())
     notes = '\n'.join(event.description for event in notices)
     assert 'core/_index.md: Stale link [[core/ghost]]' in notes
+
+
+def test_lint_names_excluded_link_target(tmp_path: pathlib.Path) -> None:
+    """A preserved row into an excluded target is a hard issue naming the pattern.
+
+    The row's target is still on disk, so a generic broken-link report
+    would send the user hunting for a deleted file; the issue names the
+    exclusion and the ``exclude.patterns`` pattern behind it instead.
+    """
+    _make_wiki(tmp_path, folders={'data': ['child', 'report']})
+    # index the page first, then exclude it, preserving the stale row
+    _set_exclude_patterns(tmp_path, ['data/report.md'])
+
+    issues = Wiki(tmp_path).lint()
+    joined = '\n'.join(issues)
+    assert 'targets an excluded path; excluded paths are not indexed' in joined
+    assert "exclude.patterns: 'data/report.md'" in joined
+    assert 'Broken link' not in joined
+
+
+def test_lint_silent_inside_excluded_subtree(tmp_path: pathlib.Path) -> None:
+    """Lint checks nothing inside an excluded subtree (dot-dir parity).
+
+    Violations lint flags anywhere indexed -- an invalid name, a bare
+    page, conflict markers, a missing index -- go unreported inside the
+    excluded subtree, because the walk never enters it.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    # plant violations lint would flag anywhere indexed
+    vendor = tmp_path / 'vendor'
+    vendor.mkdir()
+    (vendor / 'bad|name.md').write_text('# bad\n\nBody.\n', encoding='utf-8')
+    (vendor / 'bare.md').write_text('No frontmatter.\n', encoding='utf-8')
+    (vendor / 'conflict.md').write_text(
+        '<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\n',
+        encoding='utf-8',
+    )
+    _set_exclude_patterns(tmp_path, ['vendor'])
+
+    assert Wiki(tmp_path).lint() == []
+
+
+def test_lint_stale_link_into_excluded_subtree_is_live(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A prose wikilink into an excluded-but-present file stays live.
+
+    Exclusion is indexing policy, not access control: body prose
+    referencing excluded content resolves on the filesystem (matching
+    how symlinked targets probe today), so it draws no stale-link note.
+    """
+    _make_wiki(tmp_path, folders={'notes': ['meeting']})
+    (tmp_path / 'vendor').mkdir()
+    (tmp_path / 'vendor' / 'lib.md').write_text(
+        '---\nname: lib\ndesc: A vendored page.\n---\n\n# lib\n\nBody.\n',
+        encoding='utf-8',
+    )
+    # reference the excluded page from an indexed page's prose
+    meeting = tmp_path / 'notes' / 'meeting.md'
+    meeting.write_text(
+        meeting.read_text(encoding='utf-8').replace(
+            'Content for meeting.',
+            'See [[vendor/lib]] for details.',
+        ),
+        encoding='utf-8',
+    )
+    _set_exclude_patterns(tmp_path, ['vendor'])
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+
+    assert wiki.lint() == []
+    assert not any('Stale link' in event.description for event in notices)
 
 
 def test_lint_flags_folder_shadowing_page(tmp_path: pathlib.Path) -> None:

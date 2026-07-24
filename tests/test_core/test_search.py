@@ -10,12 +10,13 @@ import pathlib
 
 from wiki.core.wiki import Wiki
 
-from ._helpers import _make_wiki
+from ._helpers import _make_wiki, _set_exclude_patterns
 
 __all__ = [
     'test_body_includes_h1_for_counts_and_search',
     'test_search_field_matches_value_only',
     'test_all_files_searches_non_markdown_whole',
+    'test_search_skips_excluded_paths',
 ]
 
 
@@ -119,3 +120,31 @@ def test_all_files_searches_non_markdown_whole(tmp_path: pathlib.Path) -> None:
         assert [(path, num) for path, num, _ in hits] == [('deploy.yaml', lineno)]
     # field mode searches frontmatter, which a non-md file never carries
     assert wiki.search('prod', field='host', all_files=True) == []
+
+
+def test_search_skips_excluded_paths(tmp_path: pathlib.Path) -> None:
+    """Excluded files never surface in search, ``all_files`` included.
+
+    Search enumerates through the same walk update indexes with, so an
+    ``exclude.patterns`` subtree is invisible to body search and to the
+    ``all_files`` sweep over non-markdown files alike.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    (tmp_path / 'vendor').mkdir()
+    (tmp_path / 'vendor' / 'lib.md').write_text(
+        '---\nname: lib\ndesc: A page.\n---\n\n# lib\n\nneedle prose\n',
+        encoding='utf-8',
+    )
+    (tmp_path / 'vendor' / 'raw.txt').write_text('needle raw\n', encoding='utf-8')
+    (tmp_path / 'core' / 'keep.md').write_text(
+        '---\nname: keep\ndesc: A page.\n---\n\n# keep\n\nneedle kept\n',
+        encoding='utf-8',
+    )
+    _set_exclude_patterns(tmp_path, ['vendor'])
+    wiki = Wiki(tmp_path)
+
+    # only the indexed sibling matches, with or without all_files
+    hits = wiki.search('needle')
+    assert [relpath for relpath, _, _ in hits] == ['core/keep.md']
+    hits = wiki.search('needle', all_files=True)
+    assert [relpath for relpath, _, _ in hits] == ['core/keep.md']

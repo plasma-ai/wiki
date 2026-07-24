@@ -22,6 +22,7 @@ from ._helpers import (
     _capture_notices,
     _make_category_folder,
     _make_wiki,
+    _set_exclude_patterns,
 )
 
 __all__ = [
@@ -47,6 +48,7 @@ __all__ = [
     'test_map_category_shows_matches_beyond_depth',
     'test_map_marks_copied_subtree_links_broken',
     'test_map_marks_case_renamed_target_broken',
+    'test_map_drops_excluded_entries',
 ]
 
 
@@ -643,3 +645,32 @@ def test_map_marks_case_renamed_target_broken(tmp_path: pathlib.Path) -> None:
     output = wiki.map()
     assert re.search(r'^\s*Store \(\d', output, re.M)
     assert re.search(r'^\s*store \(broken\)', output, re.M)
+
+
+def test_map_drops_excluded_entries(tmp_path: pathlib.Path) -> None:
+    """Excluded entries leave the map render and its word counts.
+
+    Map renders from index links, so a preserved row into a freshly
+    excluded folder shows the existing broken marker (never recursed);
+    ``--prune`` drops the row, and the walk-driven counts cache sheds
+    the excluded entries on its own.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design'], 'vendor': ['lib']})
+    assert 'vendor/' in wiki.map()
+    _set_exclude_patterns(tmp_path, ['vendor'])
+    wiki = Wiki(tmp_path)
+
+    # the preserved row shows the existing broken marker, never recursed
+    rendered = wiki.map()
+    assert 'vendor/ (broken)' in rendered
+    assert 'lib' not in rendered
+    # prune drops the row; the sibling and its counts stay
+    wiki.update(prune=True)
+    rendered = wiki.map()
+    assert 'vendor' not in rendered
+    assert re.search(r'^\s*design \(\d', rendered, re.M)
+    # the counts cache drops the excluded entries with the walk
+    counts = json.loads(
+        (tmp_path / '.wiki' / 'cache' / 'word_counts.json').read_text(encoding='utf-8')
+    )
+    assert not any(key.startswith('vendor/') for key in counts)

@@ -150,3 +150,10 @@ above, and every other file — including an ``_index.md`` outside any wiki,
 such as a static-site generator's content page — gets git's default three-way
 text merge. The exit code passes through to git: nonzero means conflicts were
 left in the file.
+
+The dispatch is per-file and policy-free — it never reads
+``exclude.patterns`` (a malformed ``exclude`` block must not fail a git
+merge). An orphaned ``_index.md`` left inside an excluded subtree is still
+index-structured bytes below a declared root, so it keeps getting the
+field-aware merge; delete orphaned indexes when excluding an already-indexed
+subtree (see the ``exclude`` section in :doc:`/configuration`).

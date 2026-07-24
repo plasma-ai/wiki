@@ -203,12 +203,14 @@ def test_init_seeds_custom_settings(tmp_path: pathlib.Path) -> None:
         {'timestamp': {'timezone': 'Mars/Olympus'}},
         {'titles': {'required': 'yes'}},
         {'map': {'desc_limit': 'wide'}},
+        {'exclude': {'patterns': ['!vendor']}},
     ],
     ids=[
         'bad-naming',
         'bad-timestamp',
         'bad-titles',
         'bad-map',
+        'bad-exclude',
     ],
 )
 def test_init_rejects_bad_settings_before_writing(

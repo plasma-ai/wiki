@@ -45,6 +45,7 @@ __all__ = [
     'test_update_cli_refuses_nested_wiki',
     'test_update_refuses_a_scope_inside_a_nested_wiki',
     'test_update_refuses_an_excluded_dot_directory_scope',
+    'test_exclude_patterns_end_to_end',
     'test_update_cli_refuses_conflict_markers',
     'test_lint_reports_issue_taxonomy_and_exits_nonzero',
     'test_lint_summary_counts_notes',
@@ -666,6 +667,45 @@ def test_update_refuses_an_excluded_dot_directory_scope(
     assert 'excluded directory' in combined
     # nothing scaffolded inside the tool directory
     assert not (root / '.wiki' / '_index.md').exists()
+
+
+def test_exclude_patterns_end_to_end(tmp_path: pathlib.Path) -> None:
+    """``exclude.patterns`` flows through init, update, and lint.
+
+    An init-seeded pattern keeps its subtree unindexed from the first
+    sweep; extending the exclusion to an already-indexed page preserves
+    its row with the verbatim cause line (no condensed category), and
+    lint reports the row as a hard issue naming the pattern.
+    """
+    root = tmp_path / 'wiki'
+    settings = '{"exclude": {"patterns": ["vendor"]}}'
+    init = _wiki(tmp_path, 'init', '--path', str(root), '--settings', settings)
+    assert init.returncode == 0, init.stdout + init.stderr
+    _write(root / 'core' / '_index.md', _index('Core', 'Core concepts.', 'Text.'))
+    _write(root / 'core' / 'gone.md', _page('Gone', 'Excluded soon.', 'Body.'))
+    _write(root / 'vendor' / 'lib.md', _page('Lib', 'Vendored.', 'Body.'))
+    # the first sweep never indexes the excluded subtree
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    assert not (root / 'vendor' / '_index.md').exists()
+    index = root / 'core' / '_index.md'
+    assert '[[core/gone|gone]]' in index.read_text(encoding='utf-8')
+    # extend the exclusion to the already-indexed page
+    config = root / '.wiki' / 'settings.json'
+    data = json.loads(config.read_text(encoding='utf-8'))
+    data['exclude']['patterns'].append('core/gone.md')
+    config.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
+    # the second sweep preserves the row, naming the cause verbatim
+    result = _wiki(root, 'update', '--path', str(root))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'Link targets an excluded path:' in result.stderr
+    assert "excluded by exclude.patterns 'core/gone.md'" in result.stderr
+    assert '[[core/gone|gone]]' in index.read_text(encoding='utf-8')
+    # lint reports the preserved row as a hard issue naming the pattern
+    lint = _wiki(root, 'lint', '--path', str(root))
+    combined = lint.stdout + lint.stderr
+    assert lint.returncode == 1
+    assert 'targets an excluded path' in combined
+    assert "exclude.patterns: 'core/gone.md'" in combined
 
 
 def test_update_cli_refuses_conflict_markers(tmp_path: pathlib.Path) -> None:

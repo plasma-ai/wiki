@@ -70,6 +70,10 @@ rather than authoring or auditing page by page yourself:
   writes it and `wiki update` restores a missing one — plus the derived
   word-counts cache and the staged Obsidian config. Never author content there;
   the walk skips dot-directories by construction.
+- **Exclusions are configurable.** Beyond the built-ins (dot-paths, symlinks,
+  `_index.md`), gitignore-style globs in `exclude.patterns` in
+  `.wiki/settings.json` exclude whole subtrees from indexing — never walked,
+  scaffolded, or linted, though `wiki read` still serves them.
 - **Name validation is configurable.** By default the wiki rejects only
   structural characters (`/`, `\`, `*`, `[`, `]`, `|`, `#`), a leading dot, and
   the reserved `_index` stem — spaces, dashes, and unicode all pass. Stricter

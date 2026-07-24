@@ -89,7 +89,9 @@ break the wiki's structure — its path, link, and index syntax — are rejected
 along with leading dots (hidden files) and the reserved `_index` name. A wiki
 can opt into stricter rules, such as ASCII-only or identifier-style names,
 through the `naming` block in `.wiki/settings.json`; `wiki lint` flags any name
-that violates the policy.
+that violates the policy. Whole subtrees can be excluded from indexing with
+gitignore-style globs in `exclude.patterns` — excluded paths are never walked or
+linted, though `wiki read` still serves them.
 
 Frontmatter timestamps default to UTC in ISO-8601. To change them, set a
 timezone (any IANA name) and format (a strftime string) under `timestamp` in

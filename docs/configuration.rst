@@ -57,9 +57,9 @@ The settings file: ``.wiki/settings.json``
 A JSON object at the wiki root. An absent file means all defaults; malformed
 JSON or a non-object top level fails every command that reads policy, with a
 message naming the file. The recognized blocks — ``naming``, ``timestamp``,
-``map``, and ``titles`` — are all optional, all objects. Unknown top-level
-keys are ignored, but a wrong-typed known block or key is an error naming
-the file and key.
+``map``, ``titles``, and ``exclude`` — are all optional, all objects.
+Unknown top-level keys are ignored, but a wrong-typed known block or key is
+an error naming the file and key.
 
 Seeding and restoration are asymmetric:
 
@@ -198,6 +198,83 @@ Presentation defaults for ``wiki map``.
    on files missing the field, and ``wiki lint`` fails each placeholder
    until a value is authored. (When false, a ``null`` title is the transient
    unset idiom and update removes the line — see :doc:`/guide/pages`.)
+
+``exclude`` — indexing exclusions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Excludes paths from indexing entirely. An excluded subtree is invisible to
+every walk: ``wiki update`` never scaffolds indexes, adopts pages, or
+rewrites anything inside it, ``wiki lint`` checks nothing there, ``wiki
+map`` and ``wiki search`` never enumerate it (``--all`` included), and its
+word counts drop from the cache. ``wiki read`` stays permissive — exclusion
+is indexing policy, not access control, and ``wiki read`` is how one
+inspects deliberately unindexed content (dot-paths read the same way).
+
+.. code-block:: json
+
+   {
+     "exclude": {
+       "patterns": ["vendor/", "**/evidence/util", "*.tmp", "/scratch.md"]
+     }
+   }
+
+``exclude.patterns``
+   List of strings, default ``[]``. Gitignore-style globs matched against
+   each entry's root-relative path (``/``-joined), case-sensitively, in the
+   on-disk byte form, full-match only:
+
+   - A pattern containing no ``/`` **floats** — ``*.tmp`` matches its
+     single segment at any depth. A pattern containing ``/`` is
+     **anchored** at the wiki root, as is one with a leading ``/`` (which
+     is stripped): ``/scratch.md`` matches only the root-level file.
+   - One trailing ``/`` is stripped (before the anchoring rule applies),
+     so a pasted gitignore directory line (``vendor/``) just works and
+     floats like ``vendor``; there is no file/dir distinction.
+   - Excluding a directory excludes its whole subtree: ``vendor`` (or
+     ``vendor/``) covers everything under ``vendor``. The wiki root itself
+     can never be excluded.
+   - A whole segment of ``**`` spans directories: ``**/build`` matches
+     ``build`` at any depth, ``a/**/b`` matches ``a/b`` through any
+     nesting, and ``vendor/**`` matches everything *strictly inside*
+     ``vendor`` — never ``vendor`` itself, which stays indexed as an empty
+     folder (use ``vendor`` or ``vendor/`` to exclude the folder too).
+   - Within a segment, ``*``, ``?``, and ``[...]`` never cross ``/``.
+     Classes are fnmatch-style (``[!...]`` negates); a reversed range
+     like ``[z-a]`` matches nothing. An embedded ``**`` (``a**b``)
+     collapses to ``*``.
+   - No negation (a leading ``!`` is rejected; the syntax is reserved) and
+     no escapes (``\`` is rejected — ``/`` is the separator). Empty or
+     whitespace-only patterns, empty segments (``//``), and ``.``/``..``
+     segments are rejected when the policy loads. A pattern that matches
+     nothing is not an error (the gitignore precedent).
+
+The built-in exclusions need no pattern: dot-paths (including ``.wiki``),
+symlinked files and directories, and ``_index.md`` files are always
+excluded, and are checked first. A pattern matching only an ``_index.md``
+path has no effect — indexes are tool-owned per folder, so the unit of
+exclusion is the folder or the page.
+
+A parent index row pointing into a newly excluded target is preserved by
+default: ``wiki update`` warns per row, naming the matching pattern, and
+``wiki lint`` reports the row as a hard issue naming the pattern;
+``wiki update --prune`` removes the row with the normal prune notice. Prose
+wikilinks into excluded-but-present files stay live — the generated index
+link block is the hard surface, body prose is not. Scoping ``update``,
+``lint``, ``map``, or ``search`` at or under an excluded directory is
+refused with an error naming the pattern.
+
+Any ``_index.md`` files already inside an excluded subtree become inert
+unmanaged bytes — never rewritten, never deleted. A nested wiki (a
+directory carrying its own ``.wiki/settings.json``) under an excluded
+directory no longer trips the nested-wiki sweep refusal, so a vendored or
+checked-out wiki can live inside a host wiki once its subtree is excluded.
+
+To exclude an already-indexed subtree: add the pattern, delete any
+``_index.md`` inside the subtree, run ``wiki update --prune`` once, and
+``wiki lint`` to confirm. Older plasma-wiki versions ignore unknown
+settings blocks, so a wiki carrying ``exclude`` silently re-indexes the
+subtree when driven by an old version — upgrade, delete the stray
+``_index.md`` files, and run ``wiki update --prune`` to recover.
 
 The trust store: ``~/.wiki/settings.json``
 ------------------------------------------

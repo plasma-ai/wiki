@@ -344,6 +344,64 @@ class Wiki:
             )
         return required
 
+    @functools.cached_property
+    def _exclude_policy(self: Wiki) -> list[tuple[str, re.Pattern[str]]]:
+        """Return the compiled ``exclude.patterns`` from ``settings.json``.
+
+        Validates the per-wiki ``exclude`` block (``patterns`` -- a list
+        of gitignore-style globs, see :func:`wiki.util.glob.translate`
+        for the grammar) so a bad value fails loudly with a file+key
+        message rather than leaking a raw exception from deep inside a
+        walk (settings.json is user input). Each entry pairs the pattern
+        as written with its compiled regex, so a match can name its
+        cause.
+        """
+        # overlay the settings.json exclude block onto the default
+        override = self._settings.get('exclude', {})
+        if not isinstance(override, dict):
+            raise ValueError(
+                f'The exclude block must be a JSON object in {WIKI_SETTINGS}.'
+            )
+        patterns = override.get('patterns', [])
+        if not isinstance(patterns, list):
+            raise ValueError(
+                f'exclude.patterns must be a list of glob strings, got'
+                f' {patterns!r} in {WIKI_SETTINGS}.'
+            )
+        # compile each pattern, keeping its text as written so a match
+        # names its cause; the segment checks mirror the grammar the
+        # translation implements (one trailing '/' stripped, a leading
+        # '/' legal -- it anchors the pattern at the root)
+        result = []
+        for pattern in patterns:
+            if not isinstance(pattern, str):
+                raise ValueError(
+                    f'exclude.patterns entry must be a string, got'
+                    f' {pattern!r} in {WIKI_SETTINGS}.'
+                )
+            stripped = pattern[:-1] if pattern.endswith('/') else pattern
+            body = stripped[1:] if stripped.startswith('/') else stripped
+            segments = body.split('/')
+            if not stripped.strip():
+                reason = 'empty or whitespace-only pattern'
+            elif pattern.startswith('!'):
+                reason = "negation ('!') is not supported"
+            elif '\\' in pattern:
+                reason = "use '/' as the separator (no '\\')"
+            elif '' in segments:
+                reason = "empty segment ('//')"
+            elif ('.' in segments) or ('..' in segments):
+                reason = "'.' and '..' segments are not allowed"
+            else:
+                reason = None
+            if reason is not None:
+                raise ValueError(
+                    f'Invalid exclude.patterns pattern {pattern!r}: {reason}'
+                    f' in {WIKI_SETTINGS}.'
+                )
+            result.append((pattern, re.compile(wiki.util.glob.translate(pattern))))
+        return result
+
     def _name_violation(self: Wiki, name: str) -> Optional[str]:
         """Return the naming rule ``name`` breaks, or ``None`` if it is valid.
 
@@ -447,10 +505,12 @@ class Wiki:
         violation = self._name_violation(name)
         if violation is not None:
             raise ValueError(f'Invalid wiki name {name!r}: {violation}')
-        # the titles and map policies are read lazily (first inside the plan
-        # and the map render), so touch them here to reject a bad seed early
+        # the titles, map, and exclude policies are read lazily (first inside
+        # the plan, the map render, and the walk), so touch them here to
+        # reject a bad seed early
         self._titles_required  # noqa: B018
         self._map_policy  # noqa: B018
+        self._exclude_policy  # noqa: B018
         # alias current timestamp
         now = self._utc_now()
         # initialize wiki root
@@ -683,8 +743,12 @@ class Wiki:
         remove them instead. A link whose target still exists on
         disk as a symlinked file is warned about as a symlink skip
         instead of a broken link -- symlinked files are excluded
-        from the walk. A file whose only drift is CRLF line endings
-        is rewritten, normalizing it to LF. Every notice is emitted
+        from the walk. A link whose target still exists on disk
+        under an ``exclude.patterns`` glob (``.wiki/settings.json``)
+        is likewise warned about as an exclusion skip naming the
+        pattern -- excluded paths are not indexed. A file whose
+        only drift is CRLF line endings is rewritten, normalizing
+        it to LF. Every notice is emitted
         individually -- output modes (the CLI's condensed default)
         are the caller's concern.
 
@@ -809,9 +873,11 @@ class Wiki:
           ``created:``/``updated:`` stamps (the fields are
           tool-owned, so a parseable value is never judged), broken
           index links (targets that no longer exist; ``update`` keeps
-          these without ``--prune``, and a target still on disk as a
+          these without ``--prune``, a target still on disk as a
           symlinked file is named as such -- symlinked files are not
-          indexed), and -- under ``titles.required``
+          indexed -- and a target still on disk under an
+          ``exclude.patterns`` glob is named with its pattern), and
+          -- under ``titles.required``
           -- a missing or unfilled ``title:``.
 
         Every line begins with the relevant path; an out-of-date file's
@@ -969,14 +1035,22 @@ class Wiki:
                         if label == '..':
                             continue
                         # broken link: target no longer on the filesystem (a
-                        # target still on disk as a symlinked file is not
-                        # missing, so name the exclusion as the cause)
+                        # target still on disk as a symlinked or pattern-
+                        # excluded file is not missing, so name the exclusion
+                        # as the cause)
                         if unicodedata.normalize('NFC', target) not in expected_targets:
                             if self._is_symlink_skipped(target):
                                 result.append(
                                     f'{index_relpath}: Link [[{target}|{label}]]'
                                     ' targets a symlink; symlinked files are'
                                     ' not indexed'
+                                )
+                            elif pattern := self._target_excluded_by(target):
+                                result.append(
+                                    f'{index_relpath}: Link [[{target}|{label}]]'
+                                    ' targets an excluded path; excluded paths'
+                                    ' are not indexed (exclude.patterns:'
+                                    f' {pattern!r})'
                                 )
                             else:
                                 result.append(
@@ -1508,6 +1582,26 @@ class Wiki:
         """
         if event is None:
             event = SymlinkSkipEvent(message, **kwargs)
+        return self.on_notice(event, logging_level=logging_level)
+
+    def on_exclude_skip(
+        self: Wiki,
+        message: Optional[str] = None,
+        *,
+        logging_level: int = logging.WARNING,
+        event: Optional[ExcludeSkipEvent] = None,
+        **kwargs: Any,
+    ) -> Event:
+        """Handle an excluded-target skip notice event.
+
+        Constructs an ``ExcludeSkipEvent`` from ``message`` and the
+        payload kwargs unless a pre-built plan-phase ``event`` is passed
+        through, then delegates to ``on_notice``. Override in subclasses
+        to intercept this notice kind alone; override ``on_notice`` to
+        intercept every notice.
+        """
+        if event is None:
+            event = ExcludeSkipEvent(message, **kwargs)
         return self.on_notice(event, logging_level=logging_level)
 
     def on_write_skip(
@@ -2045,10 +2139,17 @@ class Wiki:
             # directory (a symlinked scope already resolved to its real
             # target above): the walk skips those by construction, so
             # scaffolding indexes into .wiki/.git/.obsidian would leave
-            # junk no later walk can see or repair
+            # junk no later walk can see or repair; a pattern-excluded
+            # scope is refused the same way, naming its pattern
             for ancestor in (resolved, *resolved.parents):
                 if ancestor == self._root:
                     break
+                if pattern := self._excluded_by(ancestor):
+                    raise ValueError(
+                        f'Path is inside an excluded directory: {path!r}'
+                        f' (excluded by exclude.patterns {pattern!r}'
+                        f' in {WIKI_SETTINGS})'
+                    )
                 if self._is_excluded_dir(ancestor):
                     raise ValueError(f'Path is inside an excluded directory: {path!r}')
             return resolved
@@ -2115,26 +2216,59 @@ class Wiki:
         """
         return (page.suffix == '.md') and not page.with_suffix('').is_file()
 
+    def _excluded_by(self: Wiki, path: pathlib.Path) -> Optional[str]:
+        """Return the ``exclude.patterns`` pattern that excludes ``path``.
+
+        Names the matching pattern (as written) so a caller's message
+        can say which pattern excluded the entry, the way
+        :meth:`_name_violation` names the broken rule; returns ``None``
+        when no pattern matches. A pattern matches the entry's
+        root-relative POSIX path or the relpath of any strict in-root
+        ancestor -- excluding a directory excludes its whole subtree.
+        The root itself (empty relpath) is never tested.
+        """
+        if not self._exclude_policy:
+            return None
+        # test the path and every strict in-root ancestor, so a pattern
+        # naming a directory covers everything inside it
+        relative = path.relative_to(self._root)
+        candidates = [
+            part.as_posix() for part in (relative, *relative.parents) if part.parts
+        ]
+        for pattern, compiled in self._exclude_policy:
+            for candidate in candidates:
+                if compiled.match(candidate):
+                    return pattern
+        return None
+
     def _is_excluded_file(self: Wiki, path: pathlib.Path) -> bool:
         """Return ``True`` if file should be excluded from index links.
 
         Excludes wiki index files (handled separately as the folder
-        index), files with ``.`` prefix, and symlinked files (reading and
+        index), files with ``.`` prefix, symlinked files (reading and
         rewriting a page through a symlink would copy the symlink target's
         content -- possibly from outside the wiki root -- into a tracked
-        file, the file-level analogue of the ``_is_excluded_dir`` guard).
+        file, the file-level analogue of the ``_is_excluded_dir`` guard),
+        and files an ``exclude.patterns`` glob matches
+        (:meth:`_excluded_by`).
         """
-        return path.name == WIKI_INDEX or path.name.startswith('.') or path.is_symlink()
+        if path.name == WIKI_INDEX or path.name.startswith('.') or path.is_symlink():
+            return True
+        return self._excluded_by(path) is not None
 
     def _is_excluded_dir(self: Wiki, path: pathlib.Path) -> bool:
         """Return ``True`` if directory should be excluded from index links.
 
         Excludes directories with ``.`` prefix (which keeps the ``.wiki``
-        tool directory out of the walk by construction) and symlinked
+        tool directory out of the walk by construction), symlinked
         directories (following a symlink re-walks the same inode, producing
-        duplicate/conflicting index writes and risking loops).
+        duplicate/conflicting index writes and risking loops), and
+        directories an ``exclude.patterns`` glob matches
+        (:meth:`_excluded_by`).
         """
-        return path.name.startswith('.') or path.is_symlink()
+        if path.name.startswith('.') or path.is_symlink():
+            return True
+        return self._excluded_by(path) is not None
 
     def _is_symlink_skipped(self: Wiki, target: str) -> bool:
         """Return ``True`` if link ``target`` names a symlinked file on disk.
@@ -2156,6 +2290,31 @@ class Wiki:
             if probe.is_symlink():
                 return True
         return False
+
+    def _target_excluded_by(self: Wiki, target: str) -> Optional[str]:
+        """Return the pattern excluding link ``target``, or ``None``.
+
+        A broken index link whose target still exists on disk under an
+        ``exclude.patterns`` glob is not missing -- :meth:`_excluded_by`
+        drops excluded paths from the walk -- so callers can name the
+        exclusion as the cause instead of a generic broken-link report;
+        a genuinely deleted target stays a plain broken link. Probes the
+        target's byte form and the ``.md`` form the wikilink grammar
+        strips.
+        """
+        for name in (target, target + '.md'):
+            # a preserved target may carry '..' or an absolute path, so
+            # contain the probe to the root lexically (never resolved --
+            # a symlinked segment may point outside the root)
+            joined = os.path.normpath(self._root / name)
+            probe = pathlib.Path(joined)
+            if not probe.is_relative_to(self._root):
+                continue
+            if not probe.exists():
+                continue
+            if pattern := self._excluded_by(probe):
+                return pattern
+        return None
 
     def _find_dirs(self: Wiki, root: pathlib.Path) -> list[pathlib.Path]:
         """Return all non-excluded directories under ``root``, depth-first."""
@@ -2969,20 +3128,31 @@ class Wiki:
         )
         links = self._sort_links(links)
         # collect broken/new link notices (emitted by the writer, not here); a
-        # target still on disk as a symlinked file is not missing, so name the
-        # exclusion as the cause instead of the generic broken link (alongside
-        # the prune notice, which still names the removal)
+        # target still on disk as a symlinked or pattern-excluded file is not
+        # missing, so name the exclusion as the cause instead of the generic
+        # broken link (alongside the prune notice, which still names the
+        # removal) -- the symlink cause wins when both apply
         for target, label, _desc in broken:
             symlinked = self._is_symlink_skipped(target)
+            excluded = None if symlinked else self._target_excluded_by(target)
             if symlinked:
                 notices.append(
                     SymlinkSkipEvent(path=str(relpath), target=target, label=label)
+                )
+            elif excluded:
+                notices.append(
+                    ExcludeSkipEvent(
+                        path=str(relpath),
+                        target=target,
+                        label=label,
+                        pattern=excluded,
+                    )
                 )
             if prune:
                 notices.append(
                     LinkPruneEvent(path=str(relpath), target=target, label=label)
                 )
-            elif not symlinked:
+            elif not (symlinked or excluded):
                 notices.append(
                     LinkBreakEvent(path=str(relpath), target=target, label=label)
                 )
@@ -3837,6 +4007,24 @@ class SymlinkSkipEvent(Event):
         )
 
 
+class ExcludeSkipEvent(Event):
+    """Emitted when an index link targets an excluded path the walk skips."""
+
+    path: str
+    target: str
+    label: str
+    pattern: str
+
+    @property
+    def description(self: ExcludeSkipEvent) -> str:
+        """Return the excluded-target skip notice line."""
+        return (
+            f'Link targets an excluded path: [[{self.target}|{self.label}]] in'
+            f' {self.path} (excluded by exclude.patterns {self.pattern!r};'
+            ' excluded paths are not indexed)'
+        )
+
+
 class WriteSkipEvent(Event):
     """Emitted when apply skips a file edited concurrently with the plan."""
 
@@ -3981,6 +4169,7 @@ _NOTICE_HOOKS = {
     DescOverwriteEvent: 'on_desc_overwrite',
     NameSkipEvent: 'on_name_skip',
     SymlinkSkipEvent: 'on_symlink_skip',
+    ExcludeSkipEvent: 'on_exclude_skip',
     WriteSkipEvent: 'on_write_skip',
     FrontmatterMalformedEvent: 'on_frontmatter_malformed',
     IndexTruncatedEvent: 'on_index_truncated',

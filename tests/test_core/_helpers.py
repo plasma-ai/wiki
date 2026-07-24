@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
 from typing import Any, Optional
 
@@ -16,6 +17,7 @@ __all__ = [
     'CategorizedWiki',
     '_make_wiki',
     '_make_category_folder',
+    '_set_exclude_patterns',
 ]
 
 page_index = pytest.mark.parametrize('kind', ['page', 'index'])
@@ -98,3 +100,15 @@ def _make_category_folder(
     frontmatter += 'tags: []\n---\n\n# x\n\n***\n\nOverview.\n'
     (folder / '_index.md').write_text(frontmatter, encoding='utf-8')
     return folder
+
+
+def _set_exclude_patterns(path: pathlib.Path, patterns: list[str]) -> None:
+    """Write ``exclude.patterns`` into an existing wiki's ``settings.json``.
+
+    Policies are cached per instance, so construct a fresh ``Wiki``
+    after calling this.
+    """
+    settings = path / '.wiki' / 'settings.json'
+    data = json.loads(settings.read_text(encoding='utf-8'))
+    data['exclude'] = {'patterns': patterns}
+    settings.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')

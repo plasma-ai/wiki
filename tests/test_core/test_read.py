@@ -13,7 +13,7 @@ import pytest
 
 from wiki.core.wiki import Wiki
 
-from ._helpers import _make_wiki
+from ._helpers import _make_wiki, _set_exclude_patterns
 
 __all__ = [
     'test_read_resolution',
@@ -22,6 +22,8 @@ __all__ = [
     'test_read_root_without_index_never_escapes',
     'test_read_slice_units',
     'test_read_suggests_unique_leaf_match',
+    'test_read_suggestion_skips_excluded_leaf',
+    'test_read_serves_excluded_page',
     'test_read_resolves_a_page_beside_a_broken_symlink',
 ]
 
@@ -170,6 +172,47 @@ def test_read_suggests_unique_leaf_match(tmp_path: pathlib.Path) -> None:
     # the bare leaf misses, but the error names the path-joined key that resolves
     with pytest.raises(FileNotFoundError, match=r'did you mean team/eng/oncall'):
         wiki.read('oncall')
+
+
+def test_read_suggestion_skips_excluded_leaf(tmp_path: pathlib.Path) -> None:
+    """The unique-leaf suggestion never names an excluded page.
+
+    The suggestion walks the same tree update indexes, so an excluded
+    page with a colliding leaf neither hijacks the hint nor makes the
+    indexed match ambiguous.
+    """
+    _make_wiki(tmp_path, folders={'team/eng': ['oncall']})
+    # an excluded page with the same leaf would make the match ambiguous
+    vendor = tmp_path / 'vendor'
+    vendor.mkdir()
+    (vendor / 'oncall.md').write_text(
+        '---\nname: oncall\ndesc: A page.\n---\n\n# oncall\n\nBody.\n',
+        encoding='utf-8',
+    )
+    _set_exclude_patterns(tmp_path, ['vendor'])
+
+    # the indexed page stays the unique match, so the hint still names it
+    with pytest.raises(FileNotFoundError, match=r'did you mean team/eng/oncall'):
+        Wiki(tmp_path).read('oncall')
+
+
+def test_read_serves_excluded_page(tmp_path: pathlib.Path) -> None:
+    """``read`` serves excluded content -- exclusion is not access control.
+
+    Excluded paths are indexing policy, and ``read`` is how one inspects
+    deliberately unindexed content, the same way dot-paths read today.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    vendor = tmp_path / 'vendor'
+    vendor.mkdir()
+    lib = vendor / 'lib.md'
+    lib.write_text(
+        '---\nname: lib\ndesc: A vendored page.\n---\n\n# lib\n\nBody.\n',
+        encoding='utf-8',
+    )
+    _set_exclude_patterns(tmp_path, ['vendor'])
+
+    assert Wiki(tmp_path).read('vendor/lib') == lib.read_text(encoding='utf-8')
 
 
 def test_read_resolves_a_page_beside_a_broken_symlink(
