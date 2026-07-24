@@ -20,6 +20,14 @@ wiki.util.filesystem module
    :show-inheritance:
    :undoc-members:
 
+wiki.util.glob module
+---------------------
+
+.. automodule:: wiki.util.glob
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
 wiki.util.markdown module
 -------------------------
 
