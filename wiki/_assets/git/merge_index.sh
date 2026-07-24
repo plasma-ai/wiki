@@ -103,7 +103,9 @@ split_frontmatter() {
             # rebuild the opener from the BOM-stripped line -- the merged
             # output carries exactly one clean block, no BOM residue
             printf '%s\n' "$FIRST" >"$FM"
-            tail -n +2 "$FILE" | head -n "$FM_END" >>"$FM"
+            # no pipeline: under pipefail, tail | head SIGPIPEs on files
+            # larger than the pipe buffer once head exits (exit 141 race)
+            sed -n "2,$((FM_END + 1))p" "$FILE" >>"$FM"
             tail -n +"$((FM_END + 2))" "$FILE" >"$LINKS"
             return
         fi
