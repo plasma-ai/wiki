@@ -54,6 +54,7 @@ __all__ = [
     'test_quoted_placeholder_desc_is_soft',
     'test_long_desc_is_note_only',
     'test_lint_stale_body_link_names_canonical',
+    'test_lint_stale_directory_link_suggests_index_form',
     'test_lint_stale_link_to_unindexed_folder_suggests_bare_form',
     'test_lint_directory_link_is_issue_naming_index_form',
     'test_lint_index_form_link_is_clean',
@@ -1134,6 +1135,36 @@ def test_lint_stale_body_link_names_canonical(
     ]
     assert stale
     assert all(f'(use [[overview{anchor}]])' in note for note in stale)
+
+
+def test_lint_stale_directory_link_suggests_index_form(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A folder-relative link to a folder suggests its ``_index`` page.
+
+    Suggesting the bare folder would steer the author straight into the
+    directory-link hard issue; the canonical fix is the index page.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design'], 'notes': ['meeting']})
+    meeting = tmp_path / 'notes' / 'meeting.md'
+    meeting.write_text(
+        meeting.read_text(encoding='utf-8').replace(
+            'Content for meeting.',
+            'See [[../core]] for context.',
+        ),
+        encoding='utf-8',
+    )
+    wiki.update()
+    # the stale note names the folder's index page as the fix
+    notices = _capture_notices(wiki)
+    assert wiki.lint() == []
+    stale = [
+        event.description
+        for event in notices
+        if 'Stale link [[../core]]' in event.description
+    ]
+    assert stale
+    assert all('(use [[core/_index]])' in note for note in stale)
 
 
 def test_lint_stale_link_to_unindexed_folder_suggests_bare_form(

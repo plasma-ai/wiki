@@ -3846,8 +3846,10 @@ class Wiki:
 
         Resolves ``target`` (e.g. ``../overview``) from ``path``'s folder and
         expresses it relative to the wiki root, the form wikilinks use. Returns
-        the canonical target when it resolves to a page or folder inside the root,
-        else ``None`` (an unresolvable target has no fix to suggest).
+        the canonical target when it resolves inside the root -- a page, the
+        ``_index`` page of an indexed folder that has one, or any other
+        folder's bare form -- else ``None`` (an unresolvable target has no fix
+        to suggest).
         """
         # resolve the folder-relative target without touching the filesystem
         joined = os.path.normpath(path.parent / target)
@@ -3855,7 +3857,15 @@ class Wiki:
         if not resolved.is_relative_to(self._root):
             return None
         # only suggest a target that actually exists (as a page or folder)
-        if resolved.with_name(resolved.name + '.md').exists() or resolved.is_dir():
+        if resolved.with_name(resolved.name + '.md').exists():
+            return resolved.relative_to(self._root).as_posix()
+        # a folder the walk indexes canonicalizes to its index page -- the
+        # bare folder form is the directory-link hard issue -- while an
+        # unindexed folder keeps the bare form, the shape lint leaves live
+        if (resolved / WIKI_INDEX).is_file() and self._is_indexed_dir(resolved):
+            index_target = resolved / WIKI_INDEX
+            return index_target.relative_to(self._root).with_suffix('').as_posix()
+        if resolved.is_dir():
             return resolved.relative_to(self._root).as_posix()
         return None
 
