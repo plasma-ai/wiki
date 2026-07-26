@@ -338,6 +338,14 @@ its meaning:
    still exists as a symlink reports as ``Link [[target|label]] targets a
    symlink; symlinked files are not indexed`` instead.
 
+``Link [[target]] targets a folder, not a page (use [[target/_index]])``
+   A prose wikilink naming a folder rather than the folder's index page.
+   The link renders but does not resolve when followed; append ``/_index``
+   (an anchor suffix rides along, and a target reports once per file).
+   Only a folder the walk reaches is flagged — a dot-prefixed, symlinked,
+   or ``exclude.patterns`` segment keeps its whole subtree out of the
+   index, leaving nothing to name.
+
 ``Nested '<!-- start: no-lint -->' (line N)`` / ``Dangling '<!-- end: no-lint -->' (line N)``
    A malformed region directive pair (below); it suppresses nothing.
 
@@ -372,6 +380,7 @@ notes is clean — lint exits 0.
        page, the note suggests the root-relative form: ``(use
        [[canonical]])``. Prose links are soft because pages come and go —
        the generated link block's broken-link check is the hard surface.
+       A target notes once per file, however often the prose repeats it.
 
 Suppressing positional checks: ``no-lint`` regions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -387,8 +396,8 @@ wrapped lines:
    <!-- end: no-lint -->
 
 Each marker stands alone on its line. The region suppresses the positional
-rules — conflict markers, escaped wikilinks, wrap mangles, stale-link notes —
-for the wrapped lines only; file-level checks are
+rules — conflict markers, escaped wikilinks, wrap mangles, stale-link notes,
+directory-link issues — for the wrapped lines only; file-level checks are
 unaffected. Content inside fenced or inline code is already masked, so code
 samples never need a region. A nested or dangling marker is itself a hard
 issue, and a malformed pair suppresses nothing. Conflict markers in

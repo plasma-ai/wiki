@@ -459,8 +459,9 @@ shadowed by same-named folders, merge conflict markers, malformed frontmatter
 formatter-damage signatures (escaped wikilinks, a missing ``***`` delimiter),
 hand-wrap mangles, authored descriptions missing their trailing period,
 unparseable ``created:``/``updated:`` stamps, broken links in the generated
-index block, dangling or nested region markers, and — when the
-``titles.required`` setting is on — missing titles.
+index block, prose wikilinks naming a folder rather than its ``_index`` page,
+dangling or nested region markers, and — when the ``titles.required`` setting
+is on — missing titles.
 
 **Notes** (soft, stderr) flag placeholder (``...``) descriptions,
 descriptions over 500 characters, empty index content sections, CRLF line
@@ -469,8 +470,8 @@ canonical target when one resolves).
 
 A ``<!-- start: no-lint -->`` … ``<!-- end: no-lint -->`` region suppresses
 the position-based rules (conflict markers, escaped wikilinks, wrap mangles,
-stale-link notes) for the lines it wraps; a malformed pair is itself an issue
-and suppresses nothing.
+stale-link notes, directory-link issues) for the lines it wraps; a malformed
+pair is itself an issue and suppresses nothing.
 
 .. list-table::
    :header-rows: 1

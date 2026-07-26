@@ -122,7 +122,9 @@ rather than authoring or auditing page by page yourself:
 - **Stale wikilinks are soft notes.** A `[[...]]` in index or page prose whose
   target no longer exists draws a stderr note from `wiki lint` without failing
   the run. Broken links in the generated index link block — the rows
-  `wiki update` maintains — stay hard issues (`--prune` removes them).
+  `wiki update` maintains — stay hard issues (`--prune` removes them), as does a
+  prose wikilink naming a folder rather than the folder's index page: link
+  `[[folder/_index]]`, never `[[folder]]`.
 - **Descriptions end in a period.** `wiki lint` fails a `desc` (or an authored
   link description) that lacks a trailing period; the seeded `...` placeholder
   only draws a soft note. Author the desc in the child page's frontmatter —

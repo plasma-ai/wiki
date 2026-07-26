@@ -54,10 +54,14 @@ __all__ = [
     'test_quoted_placeholder_desc_is_soft',
     'test_long_desc_is_note_only',
     'test_lint_stale_body_link_names_canonical',
+    'test_lint_stale_link_to_unindexed_folder_suggests_bare_form',
+    'test_lint_directory_link_is_issue_naming_index_form',
+    'test_lint_index_form_link_is_clean',
     'test_index_broken_link_is_issue_but_body_link_is_note',
     'test_lint_names_excluded_link_target',
     'test_lint_silent_inside_excluded_subtree',
     'test_lint_stale_link_into_excluded_subtree_is_live',
+    'test_lint_directory_link_to_unindexed_folder_is_live',
     'test_lint_flags_folder_shadowing_page',
     'test_lint_accepts_anchor_links',
 ]
@@ -908,9 +912,9 @@ def test_lint_conflict_markers_scan_raw(
 def test_no_lint_region_scopes_positional_rules(tmp_path: pathlib.Path) -> None:
     """A ``no-lint`` region suppresses exactly the positional rules inside it.
 
-    Conflict markers, formatter-escaped wikilinks, and stale links are
-    attributable to lines, so a region silences them there; file-level
-    checks ignore regions entirely.
+    Conflict markers, formatter-escaped wikilinks, and stale and
+    directory links are attributable to lines, so a region silences them
+    there; file-level checks ignore regions entirely.
     """
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
     page = tmp_path / 'core' / 'design.md'
@@ -918,6 +922,7 @@ def test_no_lint_region_scopes_positional_rules(tmp_path: pathlib.Path) -> None:
         '<!-- start: no-lint -->\n'
         '<<<<<<< HEAD\n'
         'sample \\[[escaped]] and [[missing_inside]] links\n'
+        'a sample [[core]] directory link\n'
         '>>>>>>> branch\n'
         '<!-- end: no-lint -->\n'
         '\n'
@@ -936,6 +941,7 @@ def test_no_lint_region_scopes_positional_rules(tmp_path: pathlib.Path) -> None:
     assert not any('Merge conflict markers' in issue for issue in issues)
     assert not any('Escaped wikilinks' in issue for issue in issues)
     assert not any('missing_inside' in issue for issue in issues)
+    assert not any('targets a folder' in issue for issue in issues)
     assert 'missing_inside' not in notes
     assert 'Stale link [[missing_outside]]' in notes
 
@@ -1130,6 +1136,109 @@ def test_lint_stale_body_link_names_canonical(
     assert all(f'(use [[overview{anchor}]])' in note for note in stale)
 
 
+def test_lint_stale_link_to_unindexed_folder_suggests_bare_form(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A folder-relative link to an unindexed folder suggests the bare form.
+
+    A pattern-excluded folder is never walked, so an index it carries on
+    disk is not maintained -- steering prose at it would contradict the
+    index block's own report that the path is not indexed. The bare
+    folder form is the shape lint leaves live for an unindexed target.
+    """
+    _make_wiki(tmp_path, folders={'notes': ['meeting']})
+    # a folder carrying an index on disk that the walk will not enter
+    vendor = tmp_path / 'vendor'
+    vendor.mkdir()
+    (vendor / '_index.md').write_text(
+        '---\nname: vendored\ndesc: A vendored index.\n---\n\n# vendored\n\n***\n',
+        encoding='utf-8',
+    )
+    # reference the excluded folder with a folder-relative link
+    meeting = tmp_path / 'notes' / 'meeting.md'
+    meeting.write_text(
+        meeting.read_text(encoding='utf-8').replace(
+            'Content for meeting.',
+            'See [[../vendor]] for context.',
+        ),
+        encoding='utf-8',
+    )
+    _set_exclude_patterns(tmp_path, ['vendor'])
+    wiki = Wiki(tmp_path)
+    # the stale note names the bare folder, not its unmaintained index
+    notices = _capture_notices(wiki)
+    assert wiki.lint() == []
+    stale = [
+        event.description
+        for event in notices
+        if 'Stale link [[../vendor]]' in event.description
+    ]
+    assert stale
+    assert all('(use [[vendor]])' in note for note in stale)
+
+
+@page_index
+@pytest.mark.parametrize('anchor', ['', '#context'], ids=['bare', 'anchored'])
+def test_lint_directory_link_is_issue_naming_index_form(
+    tmp_path: pathlib.Path,
+    anchor: str,
+    kind: str,
+) -> None:
+    """A body link naming a folder is a hard issue naming the ``/_index`` fix.
+
+    The folder is not a page -- following the link resolves to nothing
+    -- so lint fails it and names the exact repair, with an anchor
+    suffix riding along like the stale-note suggestion. Repeats of a
+    target collapse to one line: the scan is content-local, so there is
+    no file line number to tell the occurrences apart.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design'], 'notes': ['meeting']})
+    name = 'meeting.md' if kind == 'page' else '_index.md'
+    path = tmp_path / 'notes' / name
+    path.write_text(
+        path.read_text(encoding='utf-8')
+        + f'\nSee [[core{anchor}]] for context.\nAnd [[core{anchor}]] again.\n',
+        encoding='utf-8',
+    )
+    wiki.update()
+    # the directory link is an issue (never a note), naming the fix once
+    notices = _capture_notices(wiki)
+    issues = wiki.lint()
+    flagged = [issue for issue in issues if f'Link [[core{anchor}]]' in issue]
+    assert flagged == [
+        f'notes/{name}: Link [[core{anchor}]] targets a folder,'
+        f' not a page (use [[core/_index{anchor}]])'
+    ]
+    assert not any('Stale link' in event.description for event in notices)
+
+
+def test_lint_index_form_link_is_clean(tmp_path: pathlib.Path) -> None:
+    """A ``/_index`` body link is clean; a dangling target notes once.
+
+    The explicit ``[[core/_index]]`` form resolves to the folder's index
+    page, so it draws neither issue nor note, while a target resolving
+    to no page and no folder keeps its stale note -- one note however
+    often the prose repeats it, since the notes are indistinguishable.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design'], 'notes': ['meeting']})
+    meeting = tmp_path / 'notes' / 'meeting.md'
+    meeting.write_text(
+        meeting.read_text(encoding='utf-8').replace(
+            'Content for meeting.',
+            'See [[core/_index]] and [[missing]], then [[missing]] again.',
+        ),
+        encoding='utf-8',
+    )
+    wiki.update()
+    # no issues; the dangling target draws one stale note for both mentions
+    notices = _capture_notices(wiki)
+    assert wiki.lint() == []
+    stale = [
+        event.description for event in notices if 'Stale link' in event.description
+    ]
+    assert stale == ['notes/meeting.md: Stale link [[missing]]']
+
+
 def test_index_broken_link_is_issue_but_body_link_is_note(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -1231,6 +1340,62 @@ def test_lint_stale_link_into_excluded_subtree_is_live(
         encoding='utf-8',
     )
     _set_exclude_patterns(tmp_path, ['vendor'])
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+
+    assert wiki.lint() == []
+    assert not any('Stale link' in event.description for event in notices)
+
+
+@pytest.mark.parametrize(
+    argnames=('skip', 'target'),
+    argvalues=[
+        # a folder an exclude.patterns glob keeps out of the walk
+        ('excluded', 'vendor'),
+        # a symlinked folder -- the walk never follows one
+        ('symlinked', 'vendor'),
+        # a real folder sitting under a symlinked ancestor, which keeps
+        # the whole subtree out however deep the target reaches
+        ('under-symlink', 'vendor/sub'),
+    ],
+)
+def test_lint_directory_link_to_unindexed_folder_is_live(
+    tmp_path: pathlib.Path,
+    skip: str,
+    target: str,
+) -> None:
+    """A prose link naming a folder the walk skips draws neither issue nor note.
+
+    The directory-link rule steers prose at ``folder/_index``, so it
+    fires only for a folder whose index the tool maintains. A pattern-
+    excluded or symlinked folder is never walked -- naming its index
+    would contradict the index block's own report that the path is not
+    indexed -- so the link stays live, like a link into any excluded
+    subtree.
+    """
+    _make_wiki(tmp_path, folders={'notes': ['meeting']})
+    # a folder carrying an index on disk that the walk will not enter
+    folder = tmp_path / 'vendor' if skip == 'excluded' else tmp_path / '.store'
+    if skip == 'under-symlink':
+        folder = folder / 'sub'
+    folder.mkdir(parents=True)
+    (folder / '_index.md').write_text(
+        '---\nname: vendored\ndesc: A vendored index.\n---\n\n# vendored\n\n***\n',
+        encoding='utf-8',
+    )
+    if skip != 'excluded':
+        (tmp_path / 'vendor').symlink_to(tmp_path / '.store', target_is_directory=True)
+    # reference the skipped folder from an indexed page's prose
+    meeting = tmp_path / 'notes' / 'meeting.md'
+    meeting.write_text(
+        meeting.read_text(encoding='utf-8').replace(
+            'Content for meeting.',
+            f'See [[{target}]] for details.',
+        ),
+        encoding='utf-8',
+    )
+    if skip == 'excluded':
+        _set_exclude_patterns(tmp_path, ['vendor'])
     wiki = Wiki(tmp_path)
     notices = _capture_notices(wiki)
 

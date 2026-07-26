@@ -876,18 +876,20 @@ class Wiki:
           these without ``--prune``, a target still on disk as a
           symlinked file is named as such -- symlinked files are not
           indexed -- and a target still on disk under an
-          ``exclude.patterns`` glob is named with its pattern), and
-          -- under ``titles.required``
-          -- a missing or unfilled ``title:``.
+          ``exclude.patterns`` glob is named with its pattern),
+          directory links in user content (a wikilink target naming a
+          folder rather than the folder's ``_index`` page, flagged
+          with the ``/_index`` form as the fix), and -- under
+          ``titles.required`` -- a missing or unfilled ``title:``.
 
         Every line begins with the relevant path; an out-of-date file's
         diff follows its ``Requires update`` header, indented.
 
         A ``<!-- start: no-lint -->`` ... ``<!-- end: no-lint -->`` region
         suppresses the positional rules (conflict markers, escaped
-        wikilinks, wrap mangles, stale links) for the lines it wraps;
-        file-level checks ignore regions, and a nested or dangling
-        region marker is itself a hard issue.
+        wikilinks, wrap mangles, stale and directory links) for the lines
+        it wraps; file-level checks ignore regions, and a nested or
+        dangling region marker is itself a hard issue.
 
         Placeholder and oversized descriptions, empty content sections,
         stale links in user content (index bodies and pages -- the
@@ -1093,8 +1095,9 @@ class Wiki:
                             frontmatter=frontmatter,
                         )
                     )
-                    # stale links in user content and empty content are soft notes
-                    self._lint_stale_links(index_path, user_content)
+                    # stale links in user content and empty content are soft
+                    # notes; directory links in user content are hard issues
+                    result.extend(self._lint_stale_links(index_path, user_content))
                     if not user_content.strip():
                         self.on_content_empty(path=str(index_relpath))
             # check pages (always, even when the index is missing)
@@ -1166,8 +1169,9 @@ class Wiki:
                 result.extend(
                     self._lint_wrap_mangles(page, text, masked, suppressed, frontmatter)
                 )
-                # stale links in page content are soft notes
-                self._lint_stale_links(page, content)
+                # stale links in page content are soft notes; directory
+                # links in page content are hard issues
+                result.extend(self._lint_stale_links(page, content))
         return result
 
     def read(
@@ -2269,6 +2273,24 @@ class Wiki:
         if path.name.startswith('.') or path.is_symlink():
             return True
         return self._excluded_by(path) is not None
+
+    def _is_indexed_dir(self: Wiki, path: pathlib.Path) -> bool:
+        """Return ``True`` if the walk reaches directory ``path``.
+
+        :meth:`_find_dirs` descends top-down, so a directory is indexed
+        only when every segment below the root clears
+        :meth:`_is_excluded_dir` -- a dot-prefixed or symlinked ancestor
+        keeps its whole subtree out, and those two are leaf-local checks
+        (``exclude.patterns`` already matches ancestors). Callers that
+        resolve an arbitrary target rather than a walked path -- page
+        prose -- need the chain, not the leaf.
+        """
+        current = self._root
+        for part in path.relative_to(self._root).parts:
+            current = current / part
+            if self._is_excluded_dir(current):
+                return False
+        return True
 
     def _is_symlink_skipped(self: Wiki, target: str) -> bool:
         """Return ``True`` if link ``target`` names a symlinked file on disk.
@@ -3841,22 +3863,33 @@ class Wiki:
         self: Wiki,
         path: pathlib.Path,
         content: str,
-    ) -> None:
-        """Note wikilinks in content that resolve to no existing file.
+    ) -> list[str]:
+        """Check wikilinks in content; return the hard issues.
 
-        A stale link in user content is a soft note (``on_link_stale``),
-        not an issue: prose references pages that come and go, and the
-        generated index link block's broken-link check is the hard
-        surface. Lines inside a well-formed ``no-lint`` region are
-        exempt; the region is parsed from the scanned content itself,
-        so the region must wrap the link lines.
+        A directory link -- a target naming a folder rather than the
+        folder's index page -- renders but resolves to nothing when
+        followed, so it is a hard issue naming the ``/_index`` form as
+        the fix; only a folder the walk reaches qualifies, since a
+        dot-prefixed, symlinked, or ``exclude.patterns`` segment keeps
+        its whole subtree out of the index. A stale link in user content
+        is a soft note (``on_link_stale``), not an issue: prose
+        references pages that come and go, and the generated index link
+        block's broken-link check is the hard surface. Either way a
+        target reports once per file. Lines inside a well-formed
+        ``no-lint`` region are exempt; the region is parsed from the
+        scanned content itself, so the region must wrap the link lines.
         """
+        # initialize issues and the targets already reported for this file:
+        # the scan is content-local, so a repeat of a target carries no line
+        # number to tell it apart from the first -- report each target once
+        result = []
+        reported = set()
         # alias relative path
         relpath = path.relative_to(self._root)
         # strip fenced code blocks and inline code spans before scanning;
         # the region parse below shares this content-local mask
         stripped = wiki.util.markdown.mask_code(content)
-        # no-lint regions suppress the stale-link note line by line
+        # no-lint regions suppress the link rules line by line
         suppressed = format.no_lint_lines(stripped)
         for match in re.finditer(r'\[\[([^\]|]+)', stripped):
             # the masked scan preserves line structure, so the match
@@ -3879,8 +3912,27 @@ class Wiki:
             if joined.is_relative_to(self._root):
                 if (self._root / (page_target + '.md')).exists():
                     continue
+                # a directory link names the folder, not the folder's index
+                # page a follow would need -- a hard issue naming the fix,
+                # scoped to folders the walk reaches: an unindexed subtree
+                # has no maintained index to steer prose at
+                index_path = joined / WIKI_INDEX
+                if index_path.is_file() and self._is_indexed_dir(joined):
+                    if target in reported:
+                        continue
+                    reported.add(target)
+                    index_target = index_path.relative_to(self._root)
+                    index_target = index_target.with_suffix('').as_posix()
+                    result.append(
+                        f'{relpath}: Link [[{target}]] targets a folder,'
+                        f' not a page (use [[{index_target}{anchor}]])'
+                    )
+                    continue
                 if (self._root / page_target).exists():
                     continue
+            if target in reported:
+                continue
+            reported.add(target)
             # a folder-relative link (e.g. [[../overview]]) is stale because
             # wiki targets are root-relative; when it resolves to a real page
             # from this file's folder, name the canonical form as the fix
@@ -3893,6 +3945,7 @@ class Wiki:
                 )
             else:
                 self.on_link_stale(path=str(relpath), target=target)
+        return result
 
 
 # ------ events

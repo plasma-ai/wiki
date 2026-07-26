@@ -265,7 +265,8 @@ indexes (fill in each new ``desc:``) and repairs a mangled ``***`` delimiter.
 Everything else needs a human: names that violate the naming policy, pages
 shadowed by a same-named folder, merge conflict markers, malformed
 frontmatter, truncated indexes, escaped wikilinks in page prose (formatter
-damage), broken links in generated index blocks, and unparseable
+damage), broken links in generated index blocks, prose wikilinks naming a
+folder rather than its ``_index`` page, and unparseable
 ``created:``/``updated:`` stamps.
 
 Notes flag soft hygiene: placeholder (``...``) and oversized descriptions,

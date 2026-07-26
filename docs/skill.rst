@@ -180,8 +180,9 @@ document each area in full:
   ``wiki update`` propagates them onto parent index rows, and placeholder
   ``desc: ...`` values get filled in promptly.
 - **Wikilinks stay inside the wiki.** Files outside it are referenced by name,
-  never linked. Stale prose links are soft lint notes; broken generated-index
-  links are hard issues.
+  never linked, and a folder is linked as ``folder/_index``, never ``folder``.
+  Stale prose links are soft lint notes; broken generated-index links and
+  prose links naming a folder are hard issues.
 - **Markdown formatters need the wiki plugin.** Generic formatters corrupt the
   ``***`` delimiter and ``[[wikilinks]]``; the sanctioned fixes are the
   ``mdformat-wiki`` plugin or excluding the wiki root (see the formatter
