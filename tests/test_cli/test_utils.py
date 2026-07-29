@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import concurrent.futures as cf
 import json
 import os
 import pathlib
+import threading
 from typing import Optional
 
 import pytest
@@ -35,6 +37,9 @@ __all__ = [
     'test_load_wiki_class',
     'test_load_wiki_class_refuses_untrusted_hook',
     'test_trust_root_records_resolved_root',
+    'test_trust_root_skips_rewrite_when_already_trusted',
+    'test_trust_root_concurrent_writes_keep_every_entry',
+    'test_trust_root_tightens_store_permissions',
     'test_is_trusted_ignores_malformed_store',
     'test_reused_command_honors_resolve_override',
     'test_resolve_wiki_default_class',
@@ -330,6 +335,92 @@ def test_trust_root_records_resolved_root(tmp_path: pathlib.Path) -> None:
     alias = tmp_path / 'alias'
     alias.symlink_to(root)
     assert is_trusted(alias)
+
+
+def test_trust_root_skips_rewrite_when_already_trusted(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Re-trusting an already-trusted root does not rewrite its record.
+
+    Trust is idempotent: the second call skips the write, so a fleet that
+    trusts a root per node at spawn incurs no churn. A deliberately
+    backdated timestamp seeded into the store proves it -- any rewrite
+    would refresh it to now, so its survival is what a same-second
+    re-run's byte-identical output cannot show.
+    """
+    root = tmp_path / 'wiki'
+    root.mkdir()
+    trust_root(root)
+    store = pathlib.Path(os.environ['WIKI_CONFIG_DIR']) / 'settings.json'
+    # backdate the recorded timestamp; a rewrite would bump it to now
+    data = json.loads(store.read_text(encoding='utf-8'))
+    data['trusted'][str(root.resolve())] = '2000-01-01T00:00:00Z'
+    store.write_text(
+        json.dumps(data, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+    )
+    recorded = trust_root(root)
+    assert recorded == root.resolve()
+    reread = json.loads(store.read_text(encoding='utf-8'))['trusted']
+    assert reread[str(root.resolve())] == '2000-01-01T00:00:00Z'
+    assert is_trusted(root)
+
+
+def test_trust_root_concurrent_writes_keep_every_entry(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Parallel ``trust_root`` calls never lose each other's entries.
+
+    The store is a read-modify-write of one JSON file, so without mutual
+    exclusion concurrent trusters clobber each other; a fleet trusts one
+    root per node at spawn, so the file lock is what makes that safe. The
+    workers cross a barrier before writing to force the writes to contend,
+    then the store must still hold every distinct root.
+    """
+    workers = 24
+    roots = []
+    for i in range(workers):
+        root = tmp_path / f'w{i}'
+        root.mkdir()
+        roots.append(root)
+    barrier = threading.Barrier(workers)
+
+    def trust(root: pathlib.Path) -> None:
+        # release all workers into the critical section together
+        barrier.wait()
+        trust_root(root)
+
+    with cf.ThreadPoolExecutor(max_workers=workers) as pool:
+        list(pool.map(trust, roots))
+
+    store = pathlib.Path(os.environ['WIKI_CONFIG_DIR']) / 'settings.json'
+    recorded = json.loads(store.read_text(encoding='utf-8'))['trusted']
+    assert set(recorded) == {str(root.resolve()) for root in roots}
+
+
+def test_trust_root_tightens_store_permissions(tmp_path: pathlib.Path) -> None:
+    """The trust store and its home are owner-only, and stay that way.
+
+    The store decides which wikis may run code, so a group- or
+    world-readable one leaks the list and a writable one is an outright
+    authorization bypass. Modes loosened out-of-band (a backup restore, a
+    stray chmod, a permissive umask) are repaired on the next call --
+    including the idempotent path, where an already-trusted root returns
+    before the write, so the repair cannot ride along with it.
+    """
+    root = tmp_path / 'wiki'
+    root.mkdir()
+    trust_root(root)
+    home = pathlib.Path(os.environ['WIKI_CONFIG_DIR'])
+    store = home / 'settings.json'
+    assert store.stat().st_mode & 0o777 == 0o600
+    assert home.stat().st_mode & 0o777 == 0o700
+    # loosen both, then re-trust the same root: the early return skips the
+    # rewrite, so only the self-heal can restore these modes
+    os.chmod(store, 0o644)
+    os.chmod(home, 0o755)  # noqa: S103
+    trust_root(root)
+    assert store.stat().st_mode & 0o777 == 0o600
+    assert home.stat().st_mode & 0o777 == 0o700
 
 
 def test_is_trusted_ignores_malformed_store(tmp_path: pathlib.Path) -> None:

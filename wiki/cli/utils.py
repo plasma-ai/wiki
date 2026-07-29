@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import fcntl
 import functools
 import importlib.util
 import json
@@ -124,16 +125,37 @@ def trust_root(root: pathlib.Path) -> pathlib.Path:
     home = _config_home()
     home.mkdir(parents=True, exist_ok=True)
     os.chmod(home, 0o700)
-    settings = _read_global_settings()
-    trusted = settings.get('trusted')
-    if not isinstance(trusted, dict):
-        trusted = {}
-    trusted[str(resolved)] = dt.datetime.now(dt.UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
-    settings['trusted'] = trusted
     path = _settings_path()
-    content = json.dumps(settings, indent=2, sort_keys=True)
-    wiki.util.fs.write_atomic(path, content + '\n')
-    os.chmod(path, 0o600)
+    # re-tighten the store on every call, so perms loosened out-of-band (a
+    # backup restore, a stray chmod, a loose umask) are repaired even when the
+    # idempotent early return below skips the rewrite
+    if path.exists():
+        os.chmod(path, 0o600)
+    # an already-trusted root skips the rewrite -- re-trusting is idempotent,
+    # and not touching the store keeps fleet-wide spawn-time trust calls cheap
+    if is_trusted(resolved):
+        return resolved
+    # the read-modify-write below loses concurrent entries without mutual
+    # exclusion; the lock is a separate file because write_atomic replaces
+    # settings.json by rename, so a lock on the settings inode would not survive
+    # the write. O_NOFOLLOW refuses a pre-planted symlink, so a shared
+    # WIKI_CONFIG_DIR cannot redirect the open onto a file outside the store
+    lock_fd = os.open(
+        path=home / '.settings.lock',
+        flags=os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+        mode=0o600,
+    )
+    with os.fdopen(lock_fd, 'rb') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        settings = _read_global_settings()
+        trusted = settings.get('trusted')
+        if not isinstance(trusted, dict):
+            trusted = {}
+        trusted[str(resolved)] = dt.datetime.now(dt.UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
+        settings['trusted'] = trusted
+        content = json.dumps(settings, indent=2, sort_keys=True)
+        wiki.util.fs.write_atomic(path, content + '\n')
+        os.chmod(path, 0o600)
     return resolved
 
 
