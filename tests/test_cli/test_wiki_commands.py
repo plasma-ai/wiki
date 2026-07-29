@@ -27,6 +27,7 @@ __all__ = [
     'test_init_guards_existing_wiki',
     'test_init_seeds_settings',
     'test_init_refuses_nested_wiki',
+    'test_home_directory_is_never_a_wiki',
     'test_init_quiet_suppresses_chatter',
     'test_install_copies_skill_into_home',
     'test_install_project_targets_cwd',
@@ -215,6 +216,42 @@ def test_init_refuses_nested_wiki(tmp_path: pathlib.Path) -> None:
     assert result.returncode == 1
     assert str(outer) in result.stdout + result.stderr
     assert not (outer / 'newsub').exists()
+
+
+def test_home_directory_is_never_a_wiki(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A trust store at ``~/.wiki`` never makes ``$HOME`` a wiki root.
+
+    The store shares its path with a declared root's marker, so a home
+    directory holding one would enclose every wiki beneath it and refuse
+    every command. Pointing ``WIKI_CONFIG_DIR`` elsewhere leaves that
+    store in place -- the fleet-isolation case -- so the exemption
+    cannot key on the active config home alone. Init is refused there
+    too: a wiki at ``$HOME`` would write its policy into the store.
+    """
+    home = tmp_path / 'home'
+    (home / '.wiki').mkdir(parents=True)
+    store = home / '.wiki' / 'settings.json'
+    store.write_text('{"trusted": {}}\n', encoding='utf-8')
+    root = home / 'project' / 'wiki'
+    root.mkdir(parents=True)
+    assert _wiki(tmp_path, 'init', '--path', str(root), home=home).returncode == 0
+
+    # a wiki below HOME resolves whether the config home is the default
+    # (where the exemption already held) or redirected away from it
+    for config_dir in (home / '.wiki', tmp_path / 'elsewhere'):
+        monkeypatch.setenv('WIKI_CONFIG_DIR', str(config_dir))
+        result = _wiki(root, 'map', home=home)
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    # HOME itself is refused, leaving the store and the tree untouched
+    refused = _wiki(tmp_path, 'init', '--path', str(home), home=home)
+    assert refused.returncode == 1
+    assert 'home directory' in refused.stdout + refused.stderr
+    assert not (home / '_index.md').exists()
+    assert json.loads(store.read_text(encoding='utf-8')) == {'trusted': {}}
 
 
 def test_init_quiet_suppresses_chatter(tmp_path: pathlib.Path) -> None:

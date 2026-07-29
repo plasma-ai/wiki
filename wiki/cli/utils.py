@@ -349,10 +349,22 @@ def enclosing_wiki_root(path: pathlib.Path) -> Optional[pathlib.Path]:
 def refuse_nested_init(path: pathlib.Path) -> None:
     """Refuse to scaffold a wiki at a path enclosed by an existing wiki.
 
+    The home directory is refused outright: its ``.wiki/settings.json``
+    is the user-global trust store, so a wiki there would write its
+    policy into that same file, and :func:`_is_wiki_root` exempts the
+    path anyway -- the wiki would never resolve as a declared root.
+
     Raises:
-        ValueError: If ``path`` sits inside an enclosing wiki.
+        ValueError: If ``path`` is the home directory, or sits inside an
+            enclosing wiki.
 
     """
+    # refuse home directory
+    if path.resolve() == pathlib.Path.home().resolve():
+        raise ValueError(
+            f'Cannot initialize a wiki at the home directory: {path}'
+            f' ({WIKI_SETTINGS} there is the user-global trust store).'
+        )
     # nested wikis have no boundary -- the outer update would rewrite the
     # inner index and absorb its pages -- so refuse to scaffold one
     enclosing = enclosing_wiki_root(path)
@@ -495,13 +507,19 @@ def _wiki_roots(chain: Iterable[pathlib.Path]) -> list[pathlib.Path]:
 def _is_wiki_root(path: pathlib.Path) -> bool:
     """Return ``True`` if ``path`` holds the declared-root settings marker.
 
-    The user-global config home is exempt: its ``settings.json`` is the
-    trust store, not a root marker, so the default ``~/.wiki`` never
-    declares the home directory itself a wiki root.
+    Two directories are exempt, both because a trust store there is
+    indistinguishable from a root marker. The home directory is never a
+    wiki root: ``~/.wiki/settings.json`` is the default store, so a
+    ``$HOME`` that read as a root would enclose every wiki beneath it and
+    refuse every command. The active config home is exempt wherever
+    ``WIKI_CONFIG_DIR`` points it -- and the home exemption stands on its
+    own, since an override leaves the default store in place.
     """
     # compare resolved on both sides: candidates arrive resolved, so an
-    # unresolved config home under a symlinked $HOME would never match
-    # and the trust store would declare the home directory a wiki root
+    # unresolved home or config home under a symlink would never match
+    # and the trust store would declare its parent a wiki root
+    if path.resolve() == pathlib.Path.home().resolve():
+        return False
     if (path / WIKI_DIR).resolve() == _config_home().resolve():
         return False
     return (path / WIKI_SETTINGS).is_file()
