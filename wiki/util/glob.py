@@ -40,6 +40,8 @@ def translate(pattern: str, /) -> str:
     '\\Avendor/.+\\Z'
     >>> translate('a**b')
     '\\A(?:.+/)?a[^/]*b\\Z'
+    >>> translate('**/**/x') == translate('**/x')
+    True
     >>> translate('file?.[ch]')
     '\\A(?:.+/)?file[^/]\\.[ch]\\Z'
     >>> translate('[!a]/[]x]')
@@ -66,6 +68,14 @@ def translate(pattern: str, /) -> str:
     result = '(?:.+/)?' if floating else ''
     pending_sep = False
     segments = pattern.split('/')
+    # collapse a run of '**' segments to one: consecutive directory runs
+    # describe the same language, and leaving N of them adjacent makes the
+    # regex backtrack exponentially on a deep non-matching path
+    segments = [
+        segment
+        for index, segment in enumerate(segments)
+        if segment != '**' or index == 0 or segments[index - 1] != '**'
+    ]
     for index, segment in enumerate(segments):
         if pending_sep:
             result += '/'
