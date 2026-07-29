@@ -1,10 +1,10 @@
 """Behavioral tests for tracked repo config that must stay coherent.
 
-The release version ships as a hand-maintained literal in four places --
-the package ``__init__``, the build metadata, and both plugin manifests
--- and nothing computes one from another, so a bump that misses one
-silently publishes mismatched artifacts; the pin turns that drift into a
-test failure.
+The release version ships as a hand-maintained literal in five places --
+the package ``__init__``, the build metadata, both plugin manifests, and
+the cruft context -- and nothing computes one from another, so a bump
+that misses one silently publishes mismatched artifacts; the pin turns
+that drift into a test failure.
 
 The committed ``.gitignore`` ships to every clone, so an over-broad
 pattern there silently eats tracked config; the ignore test probes a
@@ -43,11 +43,13 @@ def _check_ignore(cwd: pathlib.Path, path: str) -> bool:
 
 
 def test_version_strings_agree() -> None:
-    """The four version literals ship in lockstep.
+    """The five version literals ship in lockstep.
 
     ``wiki.__version__`` and the pyproject version are the CI-parsed
-    pair, and each plugin manifest repeats the literal for its
-    marketplace listing.
+    pair, each plugin manifest repeats the literal for its marketplace
+    listing, and the cruft context carries it for template renders. The
+    tag-time build gate checks all five together, so a literal this test
+    leaves unguarded fails only once the tag is already pushed.
     """
     # the build metadata must carry the package literal
     pyproject = tomllib.loads(
@@ -66,6 +68,13 @@ def test_version_strings_agree() -> None:
             f'{folder}/plugin.json version must match wiki.__version__ '
             '(plugin releases ship the same literal as the package)'
         )
+    # the cruft context carries the literal into template renders
+    cruft = json.loads((_REPO_ROOT / '.cruft.json').read_text(encoding='utf-8'))
+    recorded = cruft['context']['cookiecutter']['project']['version']
+    assert recorded == wiki.__version__, (
+        '.cruft.json project version must match wiki.__version__ '
+        '(the tag-time build gate checks it, so drift fails after the push)'
+    )
 
 
 def test_package_data_ships_in_build() -> None:

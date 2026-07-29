@@ -1,6 +1,6 @@
 [project]
 name = "plasma-wiki"
-version = "1.1.0"
+version = "1.2.0"
 description = "Indexed knowledge bases with command-line tools for agents."
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
@@ -12,6 +12,7 @@ authors = [
 maintainers = [
     { name = "Plasma AI", email = "eng@plasma.ai" },
 ]
+dynamic = ["classifiers"]
 dependencies = [
     "typer>=0.24,<1",
 ]
@@ -21,13 +22,18 @@ Homepage = "https://github.com/plasma-ai/wiki"
 Repository = "https://github.com/plasma-ai/wiki"
 Issues = "https://github.com/plasma-ai/wiki/issues"
 Documentation = "https://docs.plasma.ai/wiki"
+Changelog = "https://github.com/plasma-ai/wiki/blob/main/CHANGELOG.md"
 
 [project.scripts]
 wiki = "wiki.cli.main:cli"
 
 [tool.poetry]
+classifiers = [
+    "Operating System :: POSIX",
+]
 packages = [{include = "wiki"}]
 include = [
+    { path = "CHANGELOG.md", format = ["sdist"] },
     { path = "wiki/_assets/**/*", format = ["sdist", "wheel"] },
     { path = "wiki/skills/**/*", format = ["sdist", "wheel"] },
 ]
