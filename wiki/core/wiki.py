@@ -3885,9 +3885,13 @@ class Wiki:
         is a soft note (``on_link_stale``), not an issue: prose
         references pages that come and go, and the generated index link
         block's broken-link check is the hard surface. Either way a
-        target reports once per file. Lines inside a well-formed
-        ``no-lint`` region are exempt; the region is parsed from the
-        scanned content itself, so the region must wrap the link lines.
+        target reports once per file, and a link's display text rides
+        into the suggested fix so the replacement keeps its label.
+        Wikilinks in a code sample -- fenced, inline, or four-space
+        indented -- and in an HTML comment are not links to follow, so
+        neither rule sees them. Lines inside a well-formed ``no-lint``
+        region are exempt too; the region is parsed from the scanned
+        content itself, so the region must wrap the link lines.
         """
         # initialize issues and the targets already reported for this file:
         # the scan is content-local, so a repeat of a target carries no line
@@ -3901,7 +3905,12 @@ class Wiki:
         stripped = wiki.util.markdown.mask_code(content)
         # no-lint regions suppress the link rules line by line
         suppressed = format.no_lint_lines(stripped)
-        for match in re.finditer(r'\[\[([^\]|]+)', stripped):
+        # the link rules alone also spare comment bodies and indented code
+        # samples; both are masked after the region parse above, whose own
+        # directives are comments and would not survive it
+        stripped = wiki.util.markdown.mask_comments(stripped)
+        stripped = wiki.util.markdown.mask_indented_code(stripped)
+        for match in re.finditer(r'\[\[([^\]|]+)(?:\|([^\]]*))?', stripped):
             # the masked scan preserves line structure, so the match
             # offset maps straight to its source line
             lineno = stripped.count('\n', 0, match.start()) + 1
@@ -3909,6 +3918,11 @@ class Wiki:
                 continue
             # strip trailing backslash (escaped pipe in markdown tables)
             target = match.group(1).rstrip('\\')
+            # a link's display text rides into the suggested fix, so the
+            # replacement stays copy-pasteable and keeps its rendered label;
+            # a table's escaped pipe stays escaped or the paste splits the cell
+            escape = '\\' if match.group(1).endswith('\\') else ''
+            alias = '' if match.group(2) is None else f'{escape}|{match.group(2)}'
             # drop an anchor suffix (#heading / #^block) for the existence check:
             # '#' is a denied name character, so the suffix always addresses
             # within the page (a bare [[#anchor]] is same-page, never stale)
@@ -3934,8 +3948,8 @@ class Wiki:
                     index_target = index_path.relative_to(self._root)
                     index_target = index_target.with_suffix('').as_posix()
                     result.append(
-                        f'{relpath}: Link [[{target}]] targets a folder,'
-                        f' not a page (use [[{index_target}{anchor}]])'
+                        f'{relpath}: Link [[{target}{alias}]] targets a folder,'
+                        f' not a page (use [[{index_target}{anchor}{alias}]])'
                     )
                     continue
                 if (self._root / page_target).exists():
@@ -3950,11 +3964,11 @@ class Wiki:
             if (canonical is not None) and (canonical != page_target):
                 self.on_link_stale(
                     path=str(relpath),
-                    target=target,
-                    canonical=canonical + anchor,
+                    target=target + alias,
+                    canonical=canonical + anchor + alias,
                 )
             else:
-                self.on_link_stale(path=str(relpath), target=target)
+                self.on_link_stale(path=str(relpath), target=target + alias)
         return result
 
 

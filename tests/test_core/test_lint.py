@@ -57,6 +57,8 @@ __all__ = [
     'test_lint_stale_directory_link_suggests_index_form',
     'test_lint_stale_link_to_unindexed_folder_suggests_bare_form',
     'test_lint_directory_link_is_issue_naming_index_form',
+    'test_lint_link_rules_spare_samples_not_prose',
+    'test_lint_directory_link_keeps_display_text',
     'test_lint_index_form_link_is_clean',
     'test_index_broken_link_is_issue_but_body_link_is_note',
     'test_lint_names_excluded_link_target',
@@ -1241,6 +1243,91 @@ def test_lint_directory_link_is_issue_naming_index_form(
         f' not a page (use [[core/_index{anchor}]])'
     ]
     assert not any('Stale link' in event.description for event in notices)
+
+
+@pytest.mark.parametrize(
+    ('body', 'flagged'),
+    [
+        ('para:\n\n    see [[core]]\n', False),
+        ('para:\n\n\tsee [[core]]\n', False),
+        ('<!-- todo: link [[core]] later -->\n', False),
+        ('```\nsee [[core]]\n```\n', False),
+        ('- outer\n    - see [[core]]\n', True),
+        ('- outer\n\n    see [[core]]\n', True),
+        ('see [[core]] here\n', True),
+    ],
+    ids=[
+        'indented',
+        'tabbed',
+        'comment',
+        'fenced',
+        'nested-list',
+        'list-body',
+        'prose',
+    ],
+)
+def test_lint_link_rules_spare_samples_not_prose(
+    tmp_path: pathlib.Path,
+    body: str,
+    flagged: bool,
+) -> None:
+    """The link rules read prose, skipping code samples and comments.
+
+    A wikilink in a code sample or an HTML comment is text about a link,
+    not a link to follow, so neither the directory-link issue nor the
+    stale note fires. Indentation alone cannot decide that: a bullet
+    indents its continuation and its nested items four spaces too, so
+    those stay prose and stay checked.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design'], 'notes': ['meeting']})
+    meeting = tmp_path / 'notes' / 'meeting.md'
+    meeting.write_text(
+        meeting.read_text(encoding='utf-8') + f'\n{body}', encoding='utf-8'
+    )
+    wiki.update()
+    issues = [issue for issue in wiki.lint() if 'Link [[core]]' in issue]
+    assert bool(issues) is flagged
+
+
+@pytest.mark.parametrize(
+    argnames=('body', 'link', 'fix'),
+    argvalues=[
+        (
+            'See [[core#context|the core docs]] for background.',
+            '[[core#context|the core docs]]',
+            '[[core/_index#context|the core docs]]',
+        ),
+        (
+            '| docs |\n| --- |\n| [[core\\|the core docs]] |',
+            '[[core\\|the core docs]]',
+            '[[core/_index\\|the core docs]]',
+        ),
+    ],
+    ids=['prose', 'table'],
+)
+def test_lint_directory_link_keeps_display_text(
+    tmp_path: pathlib.Path,
+    body: str,
+    link: str,
+    fix: str,
+) -> None:
+    """A directory link's display text rides into the suggested fix.
+
+    The suggestion is meant to be pasted over the offending link, so
+    dropping the label would silently change what the page renders --
+    and a table cell's escaped pipe stays escaped, since an unescaped
+    pipe in the pasted fix would split the cell.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design'], 'notes': ['meeting']})
+    meeting = tmp_path / 'notes' / 'meeting.md'
+    meeting.write_text(
+        meeting.read_text(encoding='utf-8') + f'\n{body}\n', encoding='utf-8'
+    )
+    wiki.update()
+    issues = [issue for issue in wiki.lint() if 'targets a folder' in issue]
+    assert issues == [
+        f'notes/meeting.md: Link {link} targets a folder, not a page (use {fix})'
+    ]
 
 
 def test_lint_index_form_link_is_clean(tmp_path: pathlib.Path) -> None:
