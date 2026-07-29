@@ -30,13 +30,15 @@ and looks like this:
            └── internals.md
 
 Non-markdown files (a diagram, a ``Makefile``) may live in the tree too — they
-are indexed alongside pages, linked by their full filename. Three things are
+are indexed alongside pages, linked by their full filename. Four things are
 excluded from the tree entirely:
 
 - **Dot-prefixed files and directories** — which is how ``.wiki/``, ``.git/``,
   and ``.obsidian/`` stay out of the indexes by construction.
 - **Symlinked files and directories** — never followed, never indexed.
 - **The name ``_index``** — reserved in every folder for the index itself.
+- **Paths matching ``exclude.patterns``** — opt-in gitignore-style globs in
+  ``.wiki/settings.json`` (see :doc:`/configuration`).
 
 ``wiki map``, ``wiki search``, ``wiki update``, and ``wiki lint`` all accept
 an optional positional argument naming a subtree to work on. It must be a
@@ -88,10 +90,10 @@ delimiter), and run ``wiki update``:
 ``wiki update`` creates the new folder's index, links the children in, and
 rewrites each moved file's ``name:`` and H1 to match its new path; ``--prune``
 drops the parent's now-broken row for the vanished page (without it the row is
-preserved with a warning). Any ``[[topics/example]]`` wikilinks in prose
-still resolve — now to the new folder's index rather than the moved content —
-and ``wiki lint`` does not flag them, because the target still exists (only a
-plain rename, where the old name vanishes, draws a stale-link note per link).
+preserved with a warning). Any ``[[topics/example]]`` wikilinks in prose now
+name a folder rather than a page, which ``wiki lint`` reports as an issue
+naming the ``[[topics/example/_index]]`` form to use instead (a plain rename,
+where the old name vanishes, draws a stale-link note — once per target).
 Wikilinks in prose are authored by hand, so find them (``wiki search``) and
 update them yourself.
 

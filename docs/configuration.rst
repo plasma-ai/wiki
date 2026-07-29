@@ -267,7 +267,9 @@ Any ``_index.md`` files already inside an excluded subtree become inert
 unmanaged bytes — never rewritten, never deleted. A nested wiki (a
 directory carrying its own ``.wiki/settings.json``) under an excluded
 directory no longer trips the nested-wiki sweep refusal, so a vendored or
-checked-out wiki can live inside a host wiki once its subtree is excluded.
+checked-out wiki can sit inside a host wiki once its subtree is excluded. It
+is not operable in place, though — from inside the guest every command reports
+an ambiguous root — so drive it from its own checkout.
 
 To exclude an already-indexed subtree: add the pattern, delete any
 ``_index.md`` inside the subtree, run ``wiki update --prune`` once, and
@@ -301,8 +303,11 @@ wiki you cloned, read its ``.wiki/wiki.py``.
 
 The file is managed by ``wiki trust`` (written with ``0600`` permissions
 under a ``0700`` directory); a missing or corrupt file reads as an empty
-store. The config home is exempt from root resolution, so its
-``settings.json`` never declares your home directory a wiki root.
+store. Both the config home and your home directory are exempt from root
+resolution, so a ``settings.json`` in either never declares a wiki root —
+the home exemption holds even when ``WIKI_CONFIG_DIR`` points the store
+elsewhere and leaves ``~/.wiki`` behind. ``wiki init`` refuses to scaffold
+a wiki at the home directory for the same reason.
 
 Environment variables
 ---------------------

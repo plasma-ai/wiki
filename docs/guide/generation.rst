@@ -197,7 +197,9 @@ These conditions abort the whole sweep (write and ``--check`` alike, exit 1):
   merges are auto-resolved in the first place.
 - **A nested declared wiki**: a scope that sits inside, or sweeps across, a
   directory declaring its own ``.wiki/settings.json``. Nested wikis are
-  unsupported.
+  unsupported, unless the nested root sits under an ``exclude.patterns``
+  subtree — an excluded nested root drops out of the sweep entirely (see
+  :doc:`/configuration`).
 - **A legacy ``_config/settings.json`` layout**, refused with a migration
   message.
 
@@ -398,12 +400,14 @@ wrapped lines:
 Each marker stands alone on its line. The region suppresses the positional
 rules — conflict markers, escaped wikilinks, wrap mangles, stale-link notes,
 directory-link issues — for the wrapped lines only; file-level checks are
-unaffected. Content inside fenced or inline code is already masked, so code
-samples never need a region. A nested or dangling marker is itself a hard
-issue, and a malformed pair suppresses nothing. Conflict markers in
-particular *must* be wrapped: the scan that makes update refuse the sweep
-deliberately looks inside code fences (a real conflict can land there), so
-only a ``no-lint`` region sanctions them.
+unaffected. Content inside fenced or inline code is already masked, so those
+code samples need no region; an indented code block and an HTML comment are
+not masked, so a wikilink in either is scanned and does need wrapping. A
+nested or dangling marker is itself a hard issue, and a malformed pair
+suppresses nothing. Conflict markers in particular *must* be wrapped: the
+scan that makes update refuse the sweep deliberately looks inside code
+fences (a real conflict can land there), so only a ``no-lint`` region
+sanctions them.
 
 Update narration reference
 --------------------------

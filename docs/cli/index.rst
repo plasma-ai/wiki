@@ -43,9 +43,10 @@ Subtree scope
 ``map``, ``search``, ``update``, and ``lint`` take an optional positional
 ``name`` argument restricting the operation to a subtree. The scope must
 resolve to a directory relative to the wiki root — a page name fails with
-``Wiki folder not found: '<name>'``. Scopes outside the root or inside an
-excluded directory (any dot-prefixed directory, e.g. ``.wiki``, ``.git``,
-``.obsidian``) are refused.
+``Wiki folder not found: '<name>'``. A scope outside the root is refused, as
+is one inside an excluded directory — dot-prefixed (``.wiki``, ``.git``,
+``.obsidian``), symlinked, or matched by ``exclude.patterns``, the last
+refused with a message naming the matching pattern.
 
 Errors and exit codes
 ~~~~~~~~~~~~~~~~~~~~~
