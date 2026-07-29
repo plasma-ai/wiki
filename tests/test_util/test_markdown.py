@@ -6,10 +6,17 @@ from typing import Optional
 
 import pytest
 
-from wiki.util.markdown import find_heading, mask_code
+from wiki.util.markdown import (
+    find_heading,
+    mask_code,
+    mask_comments,
+    mask_indented_code,
+)
 
 __all__ = [
     'test_mask_code',
+    'test_mask_comments',
+    'test_mask_indented_code',
     'test_find_heading',
 ]
 
@@ -60,6 +67,79 @@ def test_mask_code(text: str, expected: str) -> None:
     survive, so a masked scan attributes findings to source lines.
     """
     assert mask_code(text) == expected
+
+
+@pytest.mark.parametrize(
+    argnames=('text', 'expected'),
+    argvalues=[
+        ('keep <!-- hide [[x]] --> keep', 'keep  keep'),
+        ('a\n<!--\nhidden [[x]]\n-->\nb', 'a\n\n\n\nb'),
+        ('a <!--x--> b <!--y--> c', 'a  b  c'),
+        ('<!-- start: no-lint -->', ''),
+        ('<!-- never closed [[x]]', '<!-- never closed [[x]]'),
+    ],
+    ids=[
+        'inline-comment',
+        'multiline-comment',
+        'two-comments-one-line',
+        'region-directive-masked-too',
+        'unterminated-stays',
+    ],
+)
+def test_mask_comments(text: str, expected: str) -> None:
+    """``mask_comments`` blanks comment bodies, preserving line structure.
+
+    Region directives are comments themselves and blank with the rest,
+    so a caller parsing regions must do so before masking.
+    """
+    assert mask_comments(text) == expected
+
+
+@pytest.mark.parametrize(
+    argnames=('text', 'expected'),
+    argvalues=[
+        ('para:\n\n    code [[x]]\n', 'para:\n\n\n'),
+        ('para:\n\n\tcode [[x]]\n', 'para:\n\n\n'),
+        ('    code [[x]] at start\n', '\n'),
+        ('para:\n\n    a [[x]]\n\n    b [[x]]\n', 'para:\n\n\n\n\n'),
+        (
+            'para:\n\n    code [[x]]\nback to prose [[x]]\n',
+            'para:\n\n\nback to prose [[x]]\n',
+        ),
+        (
+            'para\n    lazy [[x]] continuation\n',
+            'para\n    lazy [[x]] continuation\n',
+        ),
+        (
+            '- item\n\n    still the list [[x]]\n',
+            '- item\n\n    still the list [[x]]\n',
+        ),
+        ('- item\n    nested [[x]]\n', '- item\n    nested [[x]]\n'),
+        (
+            '1. item\n\n    still the list [[x]]\n',
+            '1. item\n\n    still the list [[x]]\n',
+        ),
+    ],
+    ids=[
+        'indented-block',
+        'tab-indented',
+        'block-at-start',
+        'blank-line-inside-block',
+        'block-ends-at-unindented',
+        'lazy-continuation-not-code',
+        'bullet-continuation-not-code',
+        'nested-bullet-not-code',
+        'ordered-continuation-not-code',
+    ],
+)
+def test_mask_indented_code(text: str, expected: str) -> None:
+    """``mask_indented_code`` blanks indented blocks, sparing list bodies.
+
+    A block needs a preceding blank line and no open list marker: a
+    bullet indents its continuation and its nested items four spaces
+    too, so indentation alone would blank real prose.
+    """
+    assert mask_indented_code(text) == expected
 
 
 @pytest.mark.parametrize(

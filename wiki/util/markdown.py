@@ -54,6 +54,63 @@ def mask_code(text: str, /) -> str:
     )
 
 
+def mask_comments(text: str, /) -> str:
+    """Blank HTML comment bodies, preserving line structure.
+
+    A comment's interior newlines survive so positional checks stay
+    aligned to source lines. Region-directive comments are blanked with
+    the rest, so a caller that also parses regions must parse them first,
+    off the :func:`mask_code` output.
+
+    >>> mask_comments('keep <!-- hide [[x]] --> keep')
+    'keep  keep'
+    """
+    return re.sub(
+        pattern=r'<!--.*?-->',
+        repl=lambda match: '\n' * match.group(0).count('\n'),
+        string=text,
+        flags=re.DOTALL,
+    )
+
+
+def mask_indented_code(text: str, /) -> str:
+    r"""Blank four-space indented code blocks, preserving line structure.
+
+    A block opens on a four-space-indented line that follows a blank line
+    (or opens the text) and runs to the next non-blank line indented
+    less. List context is exempt: a bullet indents its continuation and
+    its nested items just as far, so masking on indentation alone would
+    blank real prose -- an indented chunk is code only when no list
+    marker is open above it.
+
+    >>> mask_indented_code('para\n\n    code [[x]]\n')
+    'para\n\n\n'
+    >>> mask_indented_code('- item\n\n    still the list [[x]]\n')
+    '- item\n\n    still the list [[x]]\n'
+    """
+    lines = []
+    in_list = False
+    in_code = False
+    after_blank = True
+    for line in text.split('\n'):
+        if not line.strip():
+            lines.append(line)
+            after_blank = True
+            continue
+        # a tab indents like four spaces, so measure the expanded line
+        expanded = line.expandtabs(4)
+        indent = len(expanded) - len(expanded.lstrip(' '))
+        # an unindented line closes any block and re-reads list context
+        if indent < 4:
+            in_code = False
+            in_list = bool(re.match(r' {0,3}(?:[-*+]|\d{1,9}[.)])(?:\s|$)', expanded))
+        elif after_blank and not in_list:
+            in_code = True
+        lines.append('' if in_code else line)
+        after_blank = False
+    return '\n'.join(lines)
+
+
 def find_heading(text: str, /) -> Optional[tuple[int, str]]:
     r"""Find the first ``# heading`` outside fenced code blocks.
 
