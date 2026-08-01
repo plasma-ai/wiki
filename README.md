@@ -82,16 +82,16 @@ their work in project-specific knowledge.
 
 Every wiki root carries a `.wiki/` directory — the tool's namespace, holding
 `settings.json` (the file that declares the root; `wiki init` writes it and
-`wiki update` restores a missing one), the derived word counts cache, and the
-staged Obsidian config. Page, folder, and wiki names are lenient by default:
-spaces, dashes, mixed case, and unicode are all fine. Only characters that would
-break the wiki's structure — its path, link, and index syntax — are rejected,
-along with leading dots (hidden files) and the reserved `_index` name. A wiki
-can opt into stricter rules, such as ASCII-only or identifier-style names,
-through the `naming` block in `.wiki/settings.json`; `wiki lint` flags any name
-that violates the policy. Whole subtrees can be excluded from indexing with
-gitignore-style globs in `exclude.patterns` — excluded paths are never walked or
-linted, though `wiki read` still serves them.
+`wiki update` restores a missing one), the derived word counts and ranked
+full-text recall caches, and the staged Obsidian config. Page, folder, and wiki
+names are lenient by default: spaces, dashes, mixed case, and unicode are all
+fine. Only characters that would break the wiki's structure — its path, link,
+and index syntax — are rejected, along with leading dots (hidden files) and the
+reserved `_index` name. A wiki can opt into stricter rules, such as ASCII-only
+or identifier-style names, through the `naming` block in `.wiki/settings.json`;
+`wiki lint` flags any name that violates the policy. Whole subtrees can be
+excluded from indexing with gitignore-style globs in `exclude.patterns` —
+excluded paths are never walked or linted, though `wiki read` still serves them.
 
 Frontmatter timestamps default to UTC in ISO-8601. To change them, set a
 timezone (any IANA name) and format (a strftime string) under `timestamp` in
@@ -119,6 +119,13 @@ past a thousand. Descriptions print in full by default — `--desc-limit` (or th
 truncation — while `wiki map --stat` sizes the dump (lines, chars, words)
 without printing it. The map's indent unit and truncation marker are
 configurable via `map.indent` and `map.ellipsis` in `.wiki/settings.json`.
+
+Ranked recall uses the same self-ignored cache directory. `wiki recall` builds
+an SQLite FTS5 index on first use and refreshes added, changed, and removed
+Markdown pages before each query. BM25 ranking weights titles, headings, and
+frontmatter tags above body prose; the default query form safely combines terms
+with AND, while `--prefix`, `--tag`, `--raw`, and `--json` cover agent
+workflows.
 
 ### CLI
 
@@ -161,6 +168,7 @@ the positional rules, notes included, for just that span.
 Browse structure, search across content, and read entries:
 
 - `wiki map` — print an indented tree overview
+- `wiki recall` — rank relevant pages with SQLite FTS5
 - `wiki search` — search content with regex
 - `wiki read` — read a named entry
 
@@ -169,8 +177,8 @@ one (the root is the ancestor declaring itself with `.wiki/settings.json`; an
 undeclared index tree resolves to its outermost `_index.md`, unless the tree
 encloses a declared root — then resolution refuses and directs you to that
 root), or else on the `wiki/` folder under the current directory; pass `--path`
-to target another wiki. `map`, `search`, `update`, and `lint` accept an optional
-name argument to restrict scope to a subtree. Run `wiki --help` and
+to target another wiki. `map`, `recall`, `search`, `update`, and `lint` accept
+an optional name argument to restrict scope to a subtree. Run `wiki --help` and
 `wiki <command> --help` for full option descriptions.
 
 ### Formatters

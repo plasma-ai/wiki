@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.resources
+import json
 import pathlib
 import shutil
 import subprocess
@@ -48,6 +49,7 @@ __all__ = [
     'trust',
     'read',
     'search',
+    'recall',
     'update',
     'lint',
     'map',
@@ -552,6 +554,88 @@ def search(
                 if relpath not in seen:
                     seen.add(relpath)
                     typer.echo(relpath)
+
+    return app
+
+
+def recall(
+    app: typer.Typer,
+    *,
+    resolve: Callable[[Optional[str]], Wiki] = resolve_wiki,
+) -> typer.Typer:
+    """Register the ``recall`` command."""
+    # search query argument
+    query_help = 'Terms to recall, combined with AND by default.'
+    query = typer.Argument(..., help=query_help)
+    # folder name argument
+    name_help = 'Restrict scope to named subtree (relative path).'
+    name = typer.Argument(None, help=name_help)
+    # wiki root option
+    path_help = (
+        'Wiki root directory. Defaults to the enclosing wiki root (the'
+        ' ancestor declaring .wiki/settings.json, else the outermost'
+        ' _index.md chain), else {cwd}/wiki/.'
+    )
+    path = typer.Option(None, '--path', help=path_help)
+    # result limit option
+    limit_help = 'Maximum number of ranked pages to return.'
+    limit = typer.Option(10, '--limit', help=limit_help)
+    # prefix flag
+    prefix_help = 'Treat the final query term as a prefix.'
+    prefix = typer.Option(False, '--prefix', help=prefix_help)
+    # tag filter option
+    tag_help = 'Require a frontmatter tag token.'
+    tag = typer.Option('', '--tag', help=tag_help)
+    # raw query flag
+    raw_help = 'Interpret the query as raw FTS5 syntax.'
+    raw = typer.Option(False, '--raw', help=raw_help)
+    # JSON output flag
+    json_help = 'Emit structured JSON results.'
+    as_json = typer.Option(False, '--json', help=json_help)
+
+    @command(app, 'recall')
+    def _recall(
+        query: str = query,
+        name: Optional[str] = name,
+        path: Optional[str] = path,
+        limit: int = limit,
+        prefix: bool = prefix,
+        tag: str = tag,
+        raw: bool = raw,
+        as_json: bool = as_json,
+    ) -> None:
+        """Recall relevant wiki pages through ranked full-text search.
+
+        The derived FTS5 index refreshes incrementally before each query.
+        A match exits 0, no match exits 1, and an invalid query or unresolved
+        wiki exits 2.
+        """
+        try:
+            wiki = resolve(path)
+            matches = wiki.recall(
+                query,
+                name=name,
+                limit=limit,
+                prefix=prefix,
+                tag=tag,
+                raw=raw,
+            )
+        except Exception as e:
+            typer.echo(f'Error: {e}', err=True)
+            raise typer.Exit(code=2) from e
+        if not matches:
+            typer.echo('No matches found.', err=True)
+            raise SystemExit(1)
+        elif as_json:
+            results = [
+                {'path': path, 'snippet': snippet, 'score': score}
+                for path, snippet, score in matches
+            ]
+            output = json.dumps(results, ensure_ascii=False, indent=2)
+            typer.echo(output)
+        else:
+            for path, snippet, score in matches:
+                typer.echo(f'{score:>7.3f}  {path}\n         {snippet}')
 
     return app
 

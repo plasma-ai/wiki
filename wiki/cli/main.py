@@ -25,6 +25,7 @@ def cli(**kwargs: Any) -> None:
     cmd.trust(app)
     cmd.read(app)
     cmd.search(app)
+    cmd.recall(app)
     cmd.update(app)
     cmd.lint(app)
     cmd.map(app)

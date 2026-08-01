@@ -29,7 +29,7 @@ from wiki.constants import (
 )
 from wiki.typing import Link, PathLike
 
-from . import _obsidian, format
+from . import _memory, _obsidian, format
 from .event import Event
 
 __all__ = ['Wiki']
@@ -1311,6 +1311,51 @@ class Wiki:
                     if regex.search(line):
                         result.append((relpath, lineno, line))
         return result
+
+    def recall(
+        self: Wiki,
+        query: str,
+        *,
+        name: Optional[str] = None,
+        limit: int = 10,
+        prefix: bool = False,
+        tag: str = '',
+        raw: bool = False,
+    ) -> list[tuple[str, str, float]]:
+        """Return ranked full-text matches from an incremental FTS5 index.
+
+        The derived index lives under ``.wiki/cache`` and refreshes changed,
+        added, and removed Markdown pages before each query. Title, headings,
+        and frontmatter tags receive more BM25 weight than body prose.
+
+        Args:
+            query: Search terms, or an FTS5 expression when ``raw`` is set.
+            name: Restrict scope to a named subtree. ``None`` means the whole
+                wiki.
+            limit: Maximum number of matching pages.
+            prefix: Treat the final safe-query term as a prefix.
+            tag: Require this frontmatter tag token.
+            raw: Pass ``query`` through as FTS5 syntax.
+
+        Returns:
+            ``(relative_path, snippet, score)`` tuples ordered by relevance.
+
+        """
+        if name:
+            folder = self._resolve_folder(name)
+        else:
+            folder = self._root
+        files = self._search_files(self._root)
+        return _memory.recall(
+            self._root,
+            files,
+            query,
+            folder=folder,
+            limit=limit,
+            prefix=prefix,
+            tag=tag,
+            raw=raw,
+        )
 
     def map(
         self: Wiki,

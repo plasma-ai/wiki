@@ -115,13 +115,15 @@ guesses they might.
 The workflow it drives
 ----------------------
 
-Navigating: map, search, read
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Navigating: map, recall, search, read
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For consuming a wiki, the skill directs the agent to the read commands:
 
 - ``wiki map`` for an indented tree overview — the agent's first move when
   orienting in an unfamiliar wiki, scoped and filtered as needed.
+- ``wiki recall`` for ranked lexical retrieval when the agent needs the most
+  relevant pages and snippets rather than exact matching lines.
 - ``wiki search`` for regex search over page content (or frontmatter fields
   with ``--field``).
 - ``wiki read`` to print a named entry, optionally sliced by lines, words, or

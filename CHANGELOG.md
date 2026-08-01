@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Ranked full-text recall through `wiki recall`. A zero-dependency SQLite FTS5
+  index under `.wiki/cache/` refreshes incrementally before each query, weights
+  titles, headings, and tags above body prose, and supports subtree, tag,
+  prefix, raw-FTS5, limit, and JSON controls.
+
 ## [1.2.0] - 2026-07-28
 
 ### Added
