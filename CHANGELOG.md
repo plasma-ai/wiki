@@ -16,6 +16,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Lint's wrapped-list-marker rule no longer false-flags a legal bullet that
+  follows a multi-line item whose continuation line is only a code span (for
+  example a bare backticked path): such a line masks to blank but the list is
+  still open, so list state now closes only at a raw blank line.
 - `import wiki.cli.utils` works in a fresh interpreter: the top-level package no
   longer star-exports the Typer app runner over the `wiki.cli` subpackage
   attribute. The `wiki.cli(...)` callable was an accidental top-level alias --

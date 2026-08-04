@@ -44,6 +44,7 @@ __all__ = [
     'test_lint_wrapped_list_marker',
     'test_lint_blank_led_list_is_clean',
     'test_lint_code_span_lead_is_not_marker',
+    'test_lint_code_span_continuation_keeps_list_open',
     'test_lint_ignores_code_blocks',
     'test_lint_ignores_multiline_code_span',
     'test_lint_conflict_markers_scan_raw',
@@ -827,6 +828,31 @@ def test_lint_code_span_lead_is_not_marker(tmp_path: pathlib.Path) -> None:
     page = tmp_path / 'core' / 'design.md'
     page.write_text(
         page.read_text(encoding='utf-8').replace('Content for design.', body),
+        encoding='utf-8',
+    )
+    assert wiki.lint() == []
+
+
+def test_lint_code_span_continuation_keeps_list_open(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A continuation line that is only a code span never closes its list.
+
+    Masking a bare backticked path leaves a blank line, but the list is
+    still open on the rendered surface: with further continuation prose
+    between it and the next legal bullet, that bullet must not flag as a
+    wrapped marker.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    body = (
+        '- evidence lives at\n'
+        '  `spine/L001/evidence/main.py`\n'
+        '  and re-runs on demand\n'
+        '- next item\n'
+    )
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        page.read_text(encoding='utf-8').replace('Content for design.\n', body),
         encoding='utf-8',
     )
     assert wiki.lint() == []

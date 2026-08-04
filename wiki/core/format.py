@@ -1123,7 +1123,10 @@ def wrapped_marker_lines(masked: str, text: str) -> list[int]:
     paragraph. ``masked`` is pre-masked text (per :func:`parse_regions`)
     and ``text`` the raw text it was masked from: a marker counts only
     when it opens the raw line too, since masking a leading code span
-    leaves a marker-shaped remainder that never renders as a bullet.
+    leaves a marker-shaped remainder that never renders as a bullet, and
+    a list closes only at a raw blank line, since a continuation that is
+    nothing but a code span (a bare backticked path) masks to blank while
+    the list stays open on the rendered surface.
     """
     result = []
     lines = masked.split('\n')
@@ -1132,7 +1135,10 @@ def wrapped_marker_lines(masked: str, text: str) -> list[int]:
     open_items: list[int] = []
     for lineno, line in enumerate(lines, 1):
         if not line.strip():
-            open_items = []
+            # only a raw blank closes the list: a masked-blank continuation
+            # would otherwise phantom-flag the next legal bullet
+            if not raw[lineno - 1].strip():
+                open_items = []
             continue
         stripped = line.lstrip()
         indent = len(line) - len(stripped)
