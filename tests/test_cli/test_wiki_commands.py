@@ -77,6 +77,7 @@ __all__ = [
     'test_merge_driver_no_op_without_git',
     'test_init_writes_gitattributes_without_committing',
     'test_merge_driver_merges_authored_frontmatter',
+    'test_merge_unions_link_rows',
     'test_merge_keeps_frontmatter_when_side_is_mangled',
     'test_merge_dispatches_on_pathname',
     'test_merge_driver_skips_non_wiki_index_files',
@@ -1525,6 +1526,75 @@ def test_merge_driver_merges_authored_frontmatter(tmp_path: pathlib.Path) -> Non
     assert 'desc: Theirs again.' in text
     assert 'title: Ours retitled' in text
     assert 'title: Theirs retitled' in text
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_merge_unions_link_rows(tmp_path: pathlib.Path) -> None:
+    """Concurrent index merges keep the union of both sides' link rows.
+
+    A one-side resolution silently drops the rows only the other side
+    added -- each drop resurfacing as a hand-restored row or a
+    post-merge regeneration commit. The union keeps both sides' rows,
+    desc continuations included; a row deleted on one side rides back
+    in, and the next update prunes it against the filesystem -- deletion
+    custody lives with update, never with the merge.
+    """
+    root = tmp_path / 'wiki'
+    # a real repo whose wiki has the driver registered by init
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'core' / '_index.md', _index('Core', 'Core concepts.', 'Text.'))
+    _write(root / 'core' / 'design.md', _page('design', 'The design page.', 'Body.'))
+    _write(root / 'core' / 'shared.md', _page('shared', 'The shared page.', 'Body.'))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # theirs adds a page whose block-scalar desc rides its row as a
+    # continuation line after update
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    _write(
+        root / 'core' / 'api.md',
+        '---\nname: api\ndesc: |\n  The api page, opening line.\n'
+        '  Second continuation line.\n---\n\n# api\n\nBody.\n',
+    )
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'theirs adds api')
+
+    # ours adds a different page and deletes shared (custodian deletion)
+    _git(tmp_path, 'checkout', '-q', 'main')
+    _write(root / 'core' / 'extra.md', _page('extra', 'The extra page.', 'Body.'))
+    (root / 'core' / 'shared.md').unlink()
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'ours adds extra, deletes shared')
+
+    # the merge is clean and keeps the union of both sides' rows,
+    # theirs-only continuations included
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    merged = (root / 'core' / '_index.md').read_text(encoding='utf-8')
+    assert '<<<<<<<' not in merged
+    assert '[[core/design|design]]' in merged
+    assert '[[core/extra|extra]]' in merged
+    assert '[[core/api|api]]' in merged
+    assert 'Second continuation line.' in merged
+    # the deleted side's row rides back in: union, never one-side custody
+    assert '[[core/shared|shared]]' in merged
+
+    # the post-merge update prunes the stale row against the filesystem
+    result = _wiki(root, 'update', '--path', str(root))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'Pruned 1 broken link' in result.stderr
+    converged = (root / 'core' / '_index.md').read_text(encoding='utf-8')
+    assert '[[core/shared|shared]]' not in converged
+    assert '[[core/api|api]]' in converged
+    assert 'Second continuation line.' in converged
+    lint = _wiki(root, 'lint', '--path', str(root))
+    assert lint.returncode == 0, lint.stdout + lint.stderr
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')

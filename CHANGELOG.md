@@ -28,6 +28,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`N broken links (run wiki lint to list them)`) is gone with the
   `LinkBreakEvent`/`on_link_break` hook pair. `wiki lint` still reds on every
   dangling row until the sweep runs.
+- The `_index.md` merge driver resolves the generated link block to the union of
+  both sides' rows instead of taking the current branch's copy wholesale: ours'
+  layout wins, and rows present only in theirs (desc continuations included) are
+  appended above the closing `***`, so a merge never silently drops rows one
+  side added. A row deleted on one side rides back in and the next `wiki update`
+  prunes it against the filesystem -- deletion custody lives with update, never
+  with the merge -- and lint stays red on any carried row whose target is gone
+  until that sweep runs.
 - The enclosing git repository's ignore rules now fence indexing, beside
   `exclude.patterns`: a gitignored path is never walked, adopted, minted an
   `_index.md`, or linked, so battery residue can no longer turn lint red and get

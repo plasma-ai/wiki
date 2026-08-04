@@ -62,9 +62,12 @@ Frontmatter
 
 Link block
    The H1 heading and the generated link rows, up to and including the
-   ``***`` line, are taken wholesale from the current branch. ``wiki update``
-   owns this region and regenerates it from the filesystem after the merge,
-   so nothing is lost by discarding the other side's copy.
+   ``***`` line, resolve to the union of both sides' rows: the current
+   branch's layout wins, and each row present only on the other side rides
+   over — desc continuations included — appended above the closing ``***``.
+   No row is silently dropped; ``wiki update`` owns this region, and the
+   post-merge run re-sorts the block and prunes whatever carried rows have
+   no target on the merged filesystem.
 
 Below ``***``
    Authored index prose gets a normal three-way merge that can conflict, like
@@ -132,10 +135,11 @@ After the merge
 ---------------
 
 Run ``wiki update`` after every merge. It regenerates the link blocks from
-the merged filesystem: pages merged in from the other branch get their rows
-added, labels and descriptions refresh, and a merged-in ``title:`` finally
-shows in the H1 — during the merge the H1 rides the taken-ours link block, so
-it lags the merged frontmatter until this update.
+the merged filesystem: carried-over rows sort into place (and any whose
+target a branch deleted are pruned), labels and descriptions refresh, and a
+merged-in ``title:`` finally shows in the H1 — during the merge the H1 rides
+the current branch's link-block layout, so it lags the merged frontmatter
+until this update.
 
 Plumbing: the hidden ``_merge`` command
 ---------------------------------------
