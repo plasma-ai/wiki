@@ -29,7 +29,7 @@ from wiki.constants import (
 )
 from wiki.typing import Link, PathLike
 
-from . import _memory, _obsidian, format
+from . import _obsidian, _recall, format
 from .event import Event
 
 __all__ = ['Wiki']
@@ -1346,7 +1346,7 @@ class Wiki:
         else:
             folder = self._root
         files = self._search_files(self._root)
-        return _memory.recall(
+        return _recall.recall(
             self._root,
             files,
             query,

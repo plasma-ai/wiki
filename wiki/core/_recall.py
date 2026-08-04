@@ -8,8 +8,8 @@ import sqlite3
 import unicodedata
 from collections.abc import Iterable
 
+import wiki.util
 from wiki.constants import WIKI_CACHE
-from wiki.util.filesystem import write_atomic
 
 from . import format
 
@@ -80,11 +80,15 @@ def recall(
         parameters: list[object] = [expression]
         if folder != root:
             relative = _relative(folder, root)
-            sql += ' AND (folder = ? OR folder LIKE ?)'
-            parameters.extend((relative, relative.rstrip('/') + '/%'))
+            prefix_path = relative.rstrip('/') + '/'
+            sql += ' AND (folder = ? OR substr(folder, 1, ?) = ?)'
+            parameters.extend((relative, len(prefix_path), prefix_path))
         sql += ' ORDER BY bm25(notes_fts, 10.0, 4.0, 6.0, 1.0) LIMIT ?'
         parameters.append(limit)
-        rows = connection.execute(sql, parameters).fetchall()
+        try:
+            rows = connection.execute(sql, parameters).fetchall()
+        except sqlite3.OperationalError as e:
+            raise ValueError(str(e)) from e
     finally:
         connection.close()
 
@@ -100,7 +104,7 @@ def _open(root: pathlib.Path) -> sqlite3.Connection:
     cache.mkdir(parents=True, exist_ok=True)
     gitignore = cache / '.gitignore'
     if not gitignore.exists():
-        write_atomic(gitignore, '*\n')
+        wiki.util.fs.write_atomic(gitignore, '*\n')
     connection = sqlite3.connect(cache / _CACHE_NAME)
     connection.execute('PRAGMA journal_mode=WAL')
     connection.execute('PRAGMA busy_timeout=5000')
@@ -142,25 +146,23 @@ def _refresh(
             connection.execute('DELETE FROM files WHERE path = ?', (relative,))
         for relative in changed:
             path, mtime_ns, size = present[relative]
-            try:
-                text = path.read_text(encoding='utf-8')
-            except (OSError, UnicodeDecodeError):
-                connection.execute('DELETE FROM notes_fts WHERE path = ?', (relative,))
-                connection.execute('DELETE FROM files WHERE path = ?', (relative,))
-                continue
-            title, headings, tags, body = _fields(path, text)
-            folder = str(pathlib.PurePath(relative).parent)
             connection.execute('DELETE FROM notes_fts WHERE path = ?', (relative,))
-            connection.execute(
-                'INSERT INTO notes_fts(title, headings, tags, body, path, folder) '
-                'VALUES (?, ?, ?, ?, ?, ?)',
-                (title, headings, tags, body, relative, folder),
-            )
             connection.execute(
                 'INSERT INTO files(path, mtime_ns, size) VALUES (?, ?, ?) '
                 'ON CONFLICT(path) DO UPDATE SET '
                 'mtime_ns=excluded.mtime_ns, size=excluded.size',
                 (relative, mtime_ns, size),
+            )
+            try:
+                text = path.read_text(encoding='utf-8')
+            except (OSError, UnicodeDecodeError):
+                continue
+            title, headings, tags, body = _fields(path, text)
+            folder = str(pathlib.PurePath(relative).parent)
+            connection.execute(
+                'INSERT INTO notes_fts(title, headings, tags, body, path, folder) '
+                'VALUES (?, ?, ?, ?, ?, ?)',
+                (title, headings, tags, body, relative, folder),
             )
 
 

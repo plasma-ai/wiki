@@ -1156,6 +1156,32 @@ def test_recall_exit_codes(wiki: pathlib.Path) -> None:
     assert invalid.returncode == 2
     assert 'Error:' in invalid.stderr
 
+    conflict = _wiki(
+        wiki,
+        'recall',
+        'widget',
+        '--prefix',
+        '--raw',
+        '--path',
+        str(wiki),
+    )
+    assert conflict.returncode == 2
+    assert 'Usage:' in (conflict.stdout + conflict.stderr)
+    assert 'mutually exclusive' in (conflict.stdout + conflict.stderr).lower()
+
+    invalid_limit = _wiki(
+        wiki,
+        'recall',
+        'widget',
+        '--limit',
+        '0',
+        '--path',
+        str(wiki),
+    )
+    assert invalid_limit.returncode == 2
+    assert 'Usage:' in (invalid_limit.stdout + invalid_limit.stderr)
+    assert '--limit must be >= 1' in (invalid_limit.stdout + invalid_limit.stderr)
+
 
 # ------ read
 

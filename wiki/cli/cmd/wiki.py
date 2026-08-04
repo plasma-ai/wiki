@@ -610,6 +610,14 @@ def recall(
         A match exits 0, no match exits 1, and an invalid query or unresolved
         wiki exits 2.
         """
+        if prefix and raw:
+            raise typer.BadParameter('--prefix and --raw are mutually exclusive.')
+        if limit < 1:
+            raise typer.BadParameter('--limit must be >= 1.')
+        # every failure here -- invalid FTS input, an unresolvable wiki or
+        # subtree, a refused or broken hook -- is the triple's error leg,
+        # so the catch is total: a per-type list would leak new failure
+        # modes to the wrapper's exit 1, aliasing them with a no-match
         try:
             wiki = resolve(path)
             matches = wiki.recall(
@@ -621,8 +629,12 @@ def recall(
                 raw=raw,
             )
         except Exception as e:
+            # grep triple: runtime errors exit 2 (the wrapper's exception
+            # path exits 1), so the body renders in the wrapper's grammar
             typer.echo(f'Error: {e}', err=True)
             raise typer.Exit(code=2) from e
+        # grep convention: no-match exits 1 with the notice on stderr, so
+        # scripts can distinguish no-match from match by exit code alone
         if not matches:
             typer.echo('No matches found.', err=True)
             raise SystemExit(1)

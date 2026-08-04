@@ -40,9 +40,9 @@ run and points at ``wiki trust``. There is no silent fallback.
 Subtree scope
 ~~~~~~~~~~~~~
 
-``map``, ``recall``, ``search``, ``update``, and ``lint`` take an optional positional
-``name`` argument restricting the operation to a subtree. The scope must
-resolve to a directory relative to the wiki root — a page name fails with
+``map``, ``recall``, ``search``, ``update``, and ``lint`` take an optional
+positional ``name`` argument restricting the operation to a subtree. The scope
+must resolve to a directory relative to the wiki root — a page name fails with
 ``Wiki folder not found: '<name>'``. A scope outside the root is refused, as
 is one inside an excluded directory — dot-prefixed (``.wiki``, ``.git``,
 ``.obsidian``), symlinked, or matched by ``exclude.patterns``, the last
@@ -57,8 +57,8 @@ slice/``--depth``/``--desc-limit`` value, or malformed ``--settings`` JSON —
 prints a usage message and exits 2 instead; a closed downstream pipe exits 0
 silently. Some commands carry their own exit-code conventions, documented in
 their sections: ``search`` and ``recall`` follow the grep convention (0 match,
-1 no match, 2 error), ``update --check`` exits 1 when changes are pending, and ``lint``
-exits 1 when issues are found.
+1 no match, 2 error), ``update --check`` exits 1 when changes are pending, and
+``lint`` exits 1 when issues are found.
 
 ``wiki install``
 ----------------
