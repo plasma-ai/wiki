@@ -19,6 +19,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `wiki update` prunes broken links: an index row whose target no longer
+  resolves to an indexed entry is removed, each removal announced
+  (`Pruned N broken links`), so a deleted target takes its row with it instead
+  of leaving a dangle for the next merge to trip on -- git carries the history.
+  The `--prune` flag and the `Wiki.update(prune=...)` parameter are removed
+  (pruning is the behavior, not a mode), and the preserved-broken-link narration
+  (`N broken links (run wiki lint to list them)`) is gone with the
+  `LinkBreakEvent`/`on_link_break` hook pair. `wiki lint` still reds on every
+  dangling row until the sweep runs.
+- The enclosing git repository's ignore rules now fence indexing, beside
+  `exclude.patterns`: a gitignored path is never walked, adopted, minted an
+  `_index.md`, or linked, so battery residue can no longer turn lint red and get
+  committed by the approved repair (`wiki update` writing frontmatter into
+  driver files and minting index cards). Matching is pattern-pure
+  (`git check-ignore --no-index`), so a force-tracked file matching a fence is
+  fenced all the same; a wiki whose own root is ignored is exempt, and a pruned
+  row whose target is fenced gets a cause line
+  (`GitignoreSkipEvent`/`on_gitignore_skip`) naming the fence.
 - A `--path` (or cwd resolution) landing inside an existing wiki resolves upward
   to the enclosing root -- declared, or the topmost index of a bare chain --
   with a stderr notice naming it, instead of aborting with "Path is inside the

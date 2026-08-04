@@ -1197,22 +1197,30 @@ def test_update_preserves_prose_below_delimiter_above_h1(
 
 
 def test_update_broken_links(tmp_path: pathlib.Path) -> None:
-    """Update preserves broken links by default, prunes when asked."""
+    """Update prunes a broken link, announcing the removal.
+
+    The filesystem is the source of truth: a deleted target takes its
+    row with it (git carries the history), so a custodian deletion never
+    leaves a dangle for the next merge to trip on.
+    """
     # build a populated wiki with one folder and page
     wiki = _make_wiki(tmp_path, folders={'data': ['report']})
 
     # delete the page to create a broken link
     (tmp_path / 'data' / 'report.md').unlink()
 
-    # update preserves broken link
+    # update prunes the row, naming the removal
+    notices = _capture_notices(wiki)
     wiki.update()
     index = (tmp_path / 'data' / '_index.md').read_text(encoding='utf-8')
-    assert 'report' in index
-
-    # update with prune removes broken link
-    wiki.update(prune=True)
-    index = (tmp_path / 'data' / '_index.md').read_text(encoding='utf-8')
     assert 'report' not in index
+    err = '\n'.join(event.description for event in notices)
+    assert 'Pruned link: [[data/report|report]]' in err
+
+    # the converged tree has nothing left to prune
+    notices.clear()
+    assert wiki.update() == []
+    assert not any('Pruned link:' in event.description for event in notices)
 
 
 def test_update_emits_every_notice(tmp_path: pathlib.Path) -> None:
@@ -1228,16 +1236,14 @@ def test_update_emits_every_notice(tmp_path: pathlib.Path) -> None:
         (tmp_path / 'core' / f'{page}.md').unlink()
     notices = _capture_notices(wiki)
 
-    # every preserved broken link is warned, run over run (stateless)
-    for _ in range(2):
-        notices.clear()
-        wiki.update()
-        detailed = [
-            event.description
-            for event in notices
-            if event.description.startswith('Broken link:')
-        ]
-        assert len(detailed) == 8
+    # every pruned link is announced individually, no caps or thresholds
+    wiki.update()
+    detailed = [
+        event.description
+        for event in notices
+        if event.description.startswith('Pruned link:')
+    ]
+    assert len(detailed) == 8
 
 
 def test_update_announces_created_index(tmp_path: pathlib.Path) -> None:
@@ -2716,8 +2722,8 @@ def test_update_names_symlinked_link_target(
     Symlinked files are dropped from the walk, so the link is no longer
     backed by an indexed entry -- but its target is still on disk, and a
     generic broken-link warning would send the user hunting for a deleted
-    file. Update and lint name the symlink as the cause instead, and
-    prune names the removal alongside it.
+    file. Update and lint name the symlink as the cause instead, the
+    prune notice naming the removal beside it.
     """
     root = tmp_path / 'wiki'
     root.mkdir()
@@ -2734,35 +2740,32 @@ def test_update_names_symlinked_link_target(
     secret.write_text('outside\n', encoding='utf-8')
     page.unlink()
     page.symlink_to(secret)
-    notices = _capture_notices(wiki)
 
-    # the symlink is named as the cause, not a generic broken link
-    wiki.update()
-    err = '\n'.join(event.description for event in notices)
-    assert 'Link targets a symlink:' in err
-    assert 'symlinked files are not indexed' in err
-    assert 'Broken link:' not in err
-    # lint names the same cause, still as a hard issue
+    # lint names the cause pre-update, still as a hard issue
     issues = wiki.lint()
     joined = '\n'.join(issues)
     assert 'targets a symlink; symlinked files are not indexed' in joined
     assert 'Broken link' not in joined
-    # prune still removes the row, naming both the removal and the cause
-    notices.clear()
-    wiki.update(prune=True)
+    # update prunes the row, naming the symlink as the cause beside the
+    # removal, never a generic broken link
+    notices = _capture_notices(wiki)
+    wiki.update()
     err = '\n'.join(event.description for event in notices)
-    assert 'Pruned link:' in err
     assert 'Link targets a symlink:' in err
+    assert 'symlinked files are not indexed' in err
+    assert 'Pruned link:' in err
+    index = (root / 'data' / '_index.md').read_text(encoding='utf-8')
+    assert '[[data/report' not in index
 
 
 def test_update_skips_out_of_root_desc_propagation(tmp_path: pathlib.Path) -> None:
-    """Desc propagation never dereferences a link target outside the root.
+    """A link target outside the root is pruned, never dereferenced.
 
     A hand-authored (or merged) index link whose target escapes the wiki
-    via ``..`` is preserved as a broken link, but the desc-propagation
-    pass must not resolve it and copy the out-of-root file's ``desc:``
-    into the generated link block -- that would exfiltrate a foreign
-    file's content into a tracked wiki artifact.
+    via ``..`` is a broken row -- pruned like any other -- and the
+    desc-propagation pass must never resolve it and copy the out-of-root
+    file's ``desc:`` into the generated link block: that would
+    exfiltrate a foreign file's content into a tracked wiki artifact.
     """
     root = tmp_path / 'wiki'
     root.mkdir()
@@ -2785,9 +2788,9 @@ def test_update_skips_out_of_root_desc_propagation(tmp_path: pathlib.Path) -> No
 
     wiki.update()
     updated = sub_index.read_text(encoding='utf-8')
-    # the link is preserved (propagation ran) but the out-of-root desc is
-    # never read, so the secret never lands in the index
-    assert '../secret' in updated
+    # the traversal row is pruned and the out-of-root desc is never read,
+    # so the secret never lands in the index
+    assert '../secret' not in updated
     assert 'LEAKED SECRET' not in updated
 
 

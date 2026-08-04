@@ -34,7 +34,6 @@ from wiki.core.wiki import (
     IndexCreateEvent,
     IndexTruncatedEvent,
     LinkAddEvent,
-    LinkBreakEvent,
     LinkPruneEvent,
     NameSkipEvent,
     PageAdoptEvent,
@@ -86,13 +85,6 @@ _UPDATE_CATEGORIES = [
         'Added {n} new links',
         'Would add 1 new link',
         'Would add {n} new links',
-    ),
-    (
-        LinkBreakEvent,
-        '1 broken link (run `wiki lint` to list it)',
-        '{n} broken links (run `wiki lint` to list them)',
-        '1 broken link (run `wiki lint` to list it)',
-        '{n} broken links (run `wiki lint` to list them)',
     ),
     (
         LinkPruneEvent,
@@ -574,9 +566,6 @@ def update(
         ' _index.md chain), else {cwd}/wiki/.'
     )
     path = typer.Option(None, '--path', help=path_help)
-    # prune flag
-    prune_help = 'Remove broken links instead of preserving them.'
-    prune = typer.Option(False, '--prune', help=prune_help)
     # check flag
     check_help = 'Report files that would change without writing them.'
     check = typer.Option(False, '--check', help=check_help)
@@ -591,7 +580,6 @@ def update(
     def _update(
         name: Optional[str] = name,
         path: Optional[str] = path,
-        prune: bool = prune,
         check: bool = check,
         full: bool = full,
         count: bool = count,
@@ -600,8 +588,8 @@ def update(
 
         Rewrites whatever drifted from the generated form: index links,
         frontmatter fields, and CRLF line endings. Restores a missing
-        .wiki/settings.json ({}) and preserves broken links (--prune
-        removes them). Narrations condense to one count line per category
+        .wiki/settings.json ({}) and prunes broken links, announcing
+        each removal. Narrations condense to one count line per category
         by default; --full prints every line. Exits 0 after a successful
         run; with --check, writes nothing and exits 1 when changes are
         pending.
@@ -625,7 +613,7 @@ def update(
         # (a restored marker) describe mutations that already happened and
         # must never be swallowed by the error path
         try:
-            updated = wiki.update(name=name, prune=prune, check=check)
+            updated = wiki.update(name=name, check=check)
         finally:
             if not full:
                 for line in _condense(notices, check):

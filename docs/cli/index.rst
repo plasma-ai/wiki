@@ -362,7 +362,7 @@ body search.
 
 .. code-block:: text
 
-   wiki update [name] [--path <dir>] [--prune] [--check] [--full | --count]
+   wiki update [name] [--path <dir>] [--check] [--full | --count]
 
 Rewrites whatever drifted from the generated form — the maintenance sweep that
 keeps the tool-owned surfaces in sync with the filesystem (see
@@ -371,8 +371,10 @@ keeps the tool-owned surfaces in sync with the filesystem (see
 - **Syncs index link blocks** — adds links for new entries (with a ``...``
   placeholder description), refreshes labels and ``[category]`` prefixes from
   child frontmatter, sorts rows, and creates missing ``_index.md`` files.
-  Links whose targets are gone from disk are preserved with a warning;
-  ``--prune`` removes them instead.
+  Links whose targets no longer resolve to an indexed entry are pruned, each
+  removal announced (with a cause line when the target is still on disk as a
+  symlink, under an ``exclude.patterns`` glob, or behind the enclosing
+  repo's gitignore fence).
 - **Propagates descriptions** — a page's frontmatter ``desc`` is the source of
   truth for its parent index's link row; a diverged index-side description is
   overwritten with a warning naming the page as the place to edit.
@@ -416,9 +418,6 @@ outside a ``no-lint`` region — resolve the conflicts and re-run.
    * - ``--path``
      - the enclosing wiki root
      - Wiki root directory (see `Wiki root resolution`_).
-   * - ``--prune``
-     - off
-     - Remove broken links instead of preserving them.
    * - ``--check``
      - off
      - Dry run: writes nothing, lists ``Would update: <path>`` lines, and

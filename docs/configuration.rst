@@ -254,10 +254,10 @@ excluded, and are checked first. A pattern matching only an ``_index.md``
 path has no effect — indexes are tool-owned per folder, so the unit of
 exclusion is the folder or the page.
 
-A parent index row pointing into a newly excluded target is preserved by
-default: ``wiki update`` warns per row, naming the matching pattern, and
-``wiki lint`` reports the row as a hard issue naming the pattern;
-``wiki update --prune`` removes the row with the normal prune notice. Prose
+A parent index row pointing into a newly excluded target is pruned by the
+next ``wiki update``, which names the matching pattern as the cause beside
+the prune notice; until then ``wiki lint`` reports the row as a hard issue
+naming the pattern. Prose
 wikilinks into excluded-but-present files stay live — the generated index
 link block is the hard surface, body prose is not. Scoping ``update``,
 ``lint``, ``map``, or ``search`` at or under an excluded directory is
@@ -272,11 +272,21 @@ is not operable in place, though — from inside the guest every command reports
 an ambiguous root — so drive it from its own checkout.
 
 To exclude an already-indexed subtree: add the pattern, delete any
-``_index.md`` inside the subtree, run ``wiki update --prune`` once, and
+``_index.md`` inside the subtree, run ``wiki update`` once, and
 ``wiki lint`` to confirm. Older plasma-wiki versions ignore unknown
 settings blocks, so a wiki carrying ``exclude`` silently re-indexes the
 subtree when driven by an old version — upgrade, delete the stray
-``_index.md`` files, and run ``wiki update --prune`` to recover.
+``_index.md`` files, and run ``wiki update`` to recover.
+
+The enclosing git repository's ignore rules are a second exclusion source
+needing no configuration: a path the repo's gitignore fences is excluded
+from indexing exactly like a pattern match — never walked, adopted, or
+linked — so a driver's stray output beside tracked content cannot be swept
+into the corpus by the next update. Matching is pattern-pure (a
+force-tracked file matching a fence is still fenced), and a wiki whose own
+root is ignored is exempt, so a deliberately unindexed wiki inside a repo
+keeps working. Outside a git repository — or with git unavailable — no
+fence applies.
 
 The trust store: ``~/.wiki/settings.json``
 ------------------------------------------

@@ -209,7 +209,7 @@ def test_update_survives_page_deleted_mid_plan(
     In ``_read_child_labels``, reading pages without the ``None`` guard
     its folder branch has would let a page vanishing between enumeration
     and read raise ``AttributeError`` instead of degrading to the
-    broken-link warning the next run reports.
+    broken-link prune the next run reports.
     """
     wiki = _make_wiki(tmp_path, folders={'notes': ['doomed', 'readme']})
     doomed = tmp_path / 'notes' / 'doomed.md'
@@ -229,11 +229,11 @@ def test_update_survives_page_deleted_mid_plan(
     monkeypatch.setattr(Wiki, '_current_text', racy)
     wiki.update()
 
-    # the next run degrades to the ordinary broken-link warning
+    # the next run prunes the vanished page's row with the ordinary notice
     notices = _capture_notices(wiki)
     wiki.update()
     err = '\n'.join(event.description for event in notices)
-    assert 'Broken link' in err
+    assert 'Pruned link' in err
     assert 'doomed' in err
 
 

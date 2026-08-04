@@ -610,21 +610,29 @@ def test_map_category_shows_matches_beyond_depth(tmp_path: pathlib.Path) -> None
 
 
 def test_map_marks_copied_subtree_links_broken(tmp_path: pathlib.Path) -> None:
-    """Map resolves entries by target, annotating preserved broken links.
+    """Map resolves entries by target, annotating broken rows.
 
-    Copying a subtree keeps its root-relative links; update preserves
-    them as broken beside the regenerated ones. Resolving entries by
-    display label would render each broken link as its healthy same-named
-    sibling, with no brokenness hint.
+    A dangling row -- hand-carried, or resurrected by a merge before the
+    next update prunes it -- renders as broken beside its healthy
+    same-labeled sibling. Resolving entries by display label would
+    render the broken row as that sibling, with no brokenness hint.
     """
     wiki = _make_wiki(tmp_path, folders={'src': ['doc']})
-    shutil.copytree(tmp_path / 'src', tmp_path / 'dup')
-    wiki.update()
+    # plant a same-labeled row whose target does not exist (the shape a
+    # subtree copy or a union merge leaves until the next update)
+    index = tmp_path / 'src' / '_index.md'
+    text = index.read_text(encoding='utf-8')
+    text = text.replace(
+        '[[src/doc|doc]]',
+        '[[dup/doc|doc]]: Gone.\n\n[[src/doc|doc]]',
+        1,
+    )
+    index.write_text(text, encoding='utf-8')
 
-    # the two healthy entries render with real counts; the preserved
-    # broken link is annotated instead of impersonating its sibling
+    # the healthy entry renders with a real count; the broken row is
+    # annotated instead of impersonating its sibling
     output = wiki.map()
-    assert len(re.findall(r'^\s*doc \(\d', output, re.M)) == 2
+    assert len(re.findall(r'^\s*doc \(\d', output, re.M)) == 1
     assert len(re.findall(r'^\s*doc \(broken\)', output, re.M)) == 1
 
 
@@ -632,27 +640,30 @@ def test_map_marks_case_renamed_target_broken(tmp_path: pathlib.Path) -> None:
     """A case-only rename breaks the old row everywhere, map included.
 
     Update and lint match links by exact string identity, so after
-    ``store.md`` becomes ``Store.md`` the preserved ``[[store|store]]``
+    ``store.md`` becomes ``Store.md`` the stale ``[[store|store]]``
     row is broken; map must agree rather than pass the stale target
     through a case-insensitive filesystem probe and render it live.
     """
     wiki = _make_wiki(tmp_path, folders={'core': ['store']})
     core = tmp_path / 'core'
     (core / 'store.md').rename(core / 'Store.md')
-    wiki.update()
 
-    # the renamed page renders live; the preserved old row is broken
+    # the stale row renders broken until update prunes it and links the
+    # renamed page
+    output = wiki.map()
+    assert re.search(r'^\s*store \(broken\)', output, re.M)
+    wiki.update()
     output = wiki.map()
     assert re.search(r'^\s*Store \(\d', output, re.M)
-    assert re.search(r'^\s*store \(broken\)', output, re.M)
+    assert not re.search(r'^\s*store \(', output, re.M)
 
 
 def test_map_drops_excluded_entries(tmp_path: pathlib.Path) -> None:
     """Excluded entries leave the map render and its word counts.
 
-    Map renders from index links, so a preserved row into a freshly
+    Map renders from index links, so a stale row into a freshly
     excluded folder shows the existing broken marker (never recursed);
-    ``--prune`` drops the row, and the walk-driven counts cache sheds
+    update prunes the row, and the walk-driven counts cache sheds
     the excluded entries on its own.
     """
     wiki = _make_wiki(tmp_path, folders={'core': ['design'], 'vendor': ['lib']})
@@ -660,12 +671,12 @@ def test_map_drops_excluded_entries(tmp_path: pathlib.Path) -> None:
     _set_exclude_patterns(tmp_path, ['vendor'])
     wiki = Wiki(tmp_path)
 
-    # the preserved row shows the existing broken marker, never recursed
+    # the stale row shows the existing broken marker, never recursed
     rendered = wiki.map()
     assert 'vendor/ (broken)' in rendered
     assert 'lib' not in rendered
-    # prune drops the row; the sibling and its counts stay
-    wiki.update(prune=True)
+    # update prunes the row; the sibling and its counts stay
+    wiki.update()
     rendered = wiki.map()
     assert 'vendor' not in rendered
     assert re.search(r'^\s*design \(\d', rendered, re.M)

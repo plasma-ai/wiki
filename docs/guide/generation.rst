@@ -90,7 +90,7 @@ Running update
 
 The summary line (``Updated N file(s).`` or ``Nothing to update.``) prints to
 stdout; all narration prints to stderr. Update exits 0 after a successful run
-— warnings such as preserved broken links do not change the exit code.
+— warnings such as skipped names or files do not change the exit code.
 
 .. list-table::
    :header-rows: 1
@@ -108,9 +108,6 @@ stdout; all narration prints to stderr. Update exits 0 after a successful run
      - Wiki root directory. Defaults to the enclosing wiki root (the ancestor
        declaring ``.wiki/settings.json``, else the outermost ``_index.md``
        chain), else ``{cwd}/wiki/``.
-   * - ``--prune``
-     - off
-     - Remove broken links instead of preserving them.
    * - ``--check``
      - off
      - Dry run: report the files that would change without writing them.
@@ -129,16 +126,23 @@ parent folder sits outside the scope. A whole-wiki run picks it up.
 Broken links
 ~~~~~~~~~~~~
 
-When an index row's target no longer exists on disk, update **preserves** the
-row and warns — deleting a file does not silently erase its history from the
-index. ``wiki map`` renders such rows as ``(broken)``, and ``wiki lint``
-reports each one. Removal is opt-in:
+When an index row's target no longer resolves to an indexed entry, update
+**prunes** the row, announcing each removal — the filesystem is the source of
+truth, so a deleted target takes its row with it (git carries the history,
+and a dangling row would otherwise trip every later merge). Until the sweep
+runs, ``wiki map`` renders such rows as ``(broken)`` and ``wiki lint``
+reports each one:
 
 .. code-block:: console
 
-   $ wiki update --prune
+   $ wiki update
    Pruned 2 broken links
    Updated 1 file.
+
+A pruned row whose target is still on disk — as a symlink, under an
+``exclude.patterns`` glob, or behind the enclosing repo's gitignore fence —
+gets a cause line naming the exclusion beside the prune notice, so nobody
+hunts for a deleted file that is not deleted.
 
 Checking without writing
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -158,11 +162,11 @@ file:
 Like a formatter's check mode, it **exits 1 when changes are pending** and 0
 (``Nothing to update.``) when the wiki is clean — a nonzero exit is not an
 error. Pending-action narration (create, adopt, add, prune, overwrite) uses
-``Would ...`` wording; the state-report categories — broken links, skipped
-names and files, malformed frontmatter, truncated indexes — keep their normal
-wording. A dry run performs no housekeeping either: it neither restores a
-missing ``.wiki/settings.json`` nor reports it (the resolver's stderr
-diagnostic covers the gap).
+``Would ...`` wording; the state-report categories — skipped names and files,
+malformed frontmatter, truncated indexes — keep their normal wording. A dry
+run performs no housekeeping either: it neither restores a missing
+``.wiki/settings.json`` nor reports it (the resolver's stderr diagnostic
+covers the gap).
 
 What update leaves alone
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -180,7 +184,13 @@ would destroy authored content or race a concurrent editor:
   parent index (see :doc:`/configuration` for the ``naming`` settings).
 - **Symlinked files and directories** are excluded from the walk entirely; an
   index row targeting one is named as a symlink skip rather than a broken
-  link.
+  link when its prune is announced.
+- **Paths the enclosing git repository ignores** are excluded from the walk
+  the same way ``exclude.patterns`` paths are: what the repo fences out of
+  version control is not wiki content, so a driver's stray output is never
+  adopted, never gains a minted ``_index.md``, and never draws a parent link
+  row. A wiki that is itself gitignored is exempt — the fence never empties
+  a deliberately unindexed wiki.
 - **Files edited between plan and write** are skipped — writing the staged
   content would silently revert the concurrent edit. The next run converges.
 
@@ -341,10 +351,11 @@ its meaning:
    fields are tool-owned.
 
 ``Broken link [[target|label]]``
-   A generated-index row whose target no longer exists. Run
-   ``wiki update --prune`` to remove it, or restore the target. A target that
-   still exists as a symlink reports as ``Link [[target|label]] targets a
-   symlink; symlinked files are not indexed`` instead.
+   A generated-index row whose target no longer exists. Run ``wiki update``
+   to prune it, or restore the target. A target that still exists as a
+   symlink reports as ``Link [[target|label]] targets a symlink; symlinked
+   files are not indexed`` instead; one under an ``exclude.patterns`` glob or
+   the enclosing repo's gitignore fence is likewise named with its cause.
 
 ``Link [[target]] targets a folder, not a page (use [[target/_index]])``
    A prose wikilink naming a folder rather than the folder's index page.
@@ -438,10 +449,9 @@ topics/_index.md``). The condensed lines and what they mean:
    * - ``Added N new links``
      - New entries were linked into their parent indexes with ``...``
        placeholder descriptions.
-   * - ``N broken links (run `wiki lint` to list them)``
-     - Rows with vanished targets were preserved; lint lists each one.
    * - ``Pruned N broken links``
-     - Rows with vanished targets were removed (``--prune``).
+     - Rows whose targets no longer resolve to an indexed entry were
+       removed.
    * - ``Overwrote N link descs (page frontmatter descs win)``
      - Diverged index-side descriptions were replaced by the child pages'
        ``desc:`` values; edit the page, not the index.
@@ -456,12 +466,13 @@ topics/_index.md``). The condensed lines and what they mean:
 
 Under ``--check`` the pending-action categories read ``Would create ...``,
 ``Would add ...``, ``Would prune ...``, and so on; the state-report categories
-(broken links, skipped names and files, malformed frontmatter, truncated
-indexes) keep their normal wording. A few notices have no category and always
-print verbatim, even in condensed mode:
+(skipped names and files, malformed frontmatter, truncated indexes) keep
+their normal wording. A few notices have no category and always print
+verbatim, even in condensed mode:
 
 - ``Link targets a symlink: [[target|label]] in <path> (symlinked files are
-  not indexed)``
+  not indexed)`` — likewise the excluded-path and gitignored-path cause
+  lines beside a prune
 - ``Restored missing .wiki/settings.json ({} -- all defaults)``
 - ``Recreated .wiki/cache/ (derived counts cache)``
 
@@ -482,10 +493,11 @@ Both commands are safe to run at any time, as often as you like:
 - **Authored content is never regenerated away.** User content below ``***``,
   authored frontmatter values, and unrecognized frontmatter keys are
   preserved; damaged files (unclosed frontmatter, truncated indexes) are
-  skipped with a notice rather than rebuilt; broken links are preserved
-  unless you opt into ``--prune``. The one authored surface that update does
-  overwrite — a diverged index-side link description — is announced, and the
-  message names the page whose ``desc:`` is the place to edit.
+  skipped with a notice rather than rebuilt. The two authored surfaces
+  update does remove or overwrite — a broken row's description goes with its
+  pruned row (git carries it), and a diverged index-side link description is
+  replaced — are each announced, the latter naming the page whose ``desc:``
+  is the place to edit.
 - **Lint writes nothing**, and ``update --check`` writes nothing — not even
   the settings-marker restore.
 - **The cache is disposable.** ``.wiki/cache/`` holds derived word counts

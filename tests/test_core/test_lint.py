@@ -142,6 +142,7 @@ def test_lint_names_the_failing_naming_rule(tmp_path: pathlib.Path) -> None:
         'missing_page_frontmatter',
         'misplaced_title',
         'null_title',
+        'deleted_page_row',
     ],
 )
 def test_lint_flags_what_update_fixes(tmp_path: pathlib.Path, perturb: str) -> None:
@@ -192,6 +193,9 @@ def test_lint_flags_what_update_fixes(tmp_path: pathlib.Path, perturb: str) -> N
             text.replace('name: core\n', 'name: core\ntitle: null\n'),
             encoding='utf-8',
         )
+    elif perturb == 'deleted_page_row':
+        # a deleted target's row is drift too: update prunes it
+        page.unlink()
 
     # lint flags the drift; one update fixes it; lint is then clean
     assert wiki.lint() != []
@@ -246,7 +250,6 @@ def test_lint_names_nested_wiki_root(tmp_path: pathlib.Path) -> None:
         ('invalid_folder', 'Invalid folder name'),
         ('invalid_page', 'Invalid page name'),
         ('invalid_nonmd', 'Invalid page name'),
-        ('broken_link', 'Broken link'),
         ('missing_period', 'Missing period'),
         ('escaped_wikilink', 'Escaped wikilinks'),
         ('unclosed_frontmatter', 'Malformed frontmatter'),
@@ -277,8 +280,6 @@ def test_lint_flags_human_only_issues(
         )
     elif perturb == 'invalid_nonmd':
         (tmp_path / 'core' / 'bad#data.csv').write_text('raw,data\n', encoding='utf-8')
-    elif perturb == 'broken_link':
-        page.unlink()
     elif perturb == 'missing_period':
         page.write_text(
             page.read_text(encoding='utf-8').replace(
@@ -1411,10 +1412,12 @@ def test_index_broken_link_is_issue_but_body_link_is_note(
     assert not any('Stale link' in issue for issue in issues)
     assert 'core/_index.md: Stale link [[core/ghost]]' in notes
 
-    # update keeps both (no prune), so the issue and the note persist
+    # update prunes the row (the hard issue clears); the body note
+    # persists, since update never edits prose
     wiki.update()
     notices.clear()
-    assert any('Broken link [[core/ghost|ghost]]' in issue for issue in wiki.lint())
+    issues = wiki.lint()
+    assert not any('Broken link' in issue for issue in issues)
     notes = '\n'.join(event.description for event in notices)
     assert 'core/_index.md: Stale link [[core/ghost]]' in notes
 

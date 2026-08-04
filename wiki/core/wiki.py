@@ -13,6 +13,7 @@ import os
 import pathlib
 import re
 import shutil
+import subprocess
 import tempfile
 import unicodedata
 import urllib.request
@@ -402,6 +403,59 @@ class Wiki:
             result.append((pattern, re.compile(wiki.util.glob.translate(pattern))))
         return result
 
+    @functools.cached_property
+    def _gitignore_fence(self: Wiki) -> frozenset[str]:
+        """Return the root-relative POSIX paths the repo's gitignore fences.
+
+        The enclosing git repository's ignore rules are an exclusion
+        source beside ``exclude.patterns``: what the repo fences out of
+        version control is not wiki content, so indexing must not adopt
+        it -- a driver's stray output beside its evidence would
+        otherwise gain frontmatter, a minted ``_index.md``, and a parent
+        link row from the very update run for a red lint. Matching is
+        pattern-pure (``--no-index``), so a fenced file that was
+        force-tracked reads as fenced all the same and the fence and the
+        tool agree about what is content. Empty -- no fencing -- outside
+        a git repository, when git is unavailable, and when the root
+        itself is ignored (a deliberately unindexed wiki inside a repo
+        must keep working).
+        """
+        # enumerate the candidates one batch probe covers: the root itself
+        # ('.', probing the fence-disable case) and every non-dot entry
+        # below it (dot paths and symlinked dirs are excluded either way)
+        candidates = ['.']
+        for dirpath, dirnames, filenames in os.walk(self._root):
+            dirnames[:] = [d for d in dirnames if not d.startswith('.')]
+            folder = pathlib.Path(dirpath)
+            for name in (*dirnames, *filenames):
+                if name.startswith('.'):
+                    continue
+                relative = (folder / name).relative_to(self._root)
+                candidates.append(relative.as_posix())
+        # one batch query; -z framing survives any filename, and --no-index
+        # keeps the match pattern-pure (check-ignore consults the index by
+        # default, so a force-tracked junk file would read as unfenced)
+        payload = b'\0'.join(os.fsencode(entry) for entry in candidates) + b'\0'
+        try:
+            result = subprocess.run(
+                ['git', 'check-ignore', '-z', '--stdin', '--no-index'],
+                cwd=self._root,
+                input=payload,
+                capture_output=True,
+            )
+        except FileNotFoundError:
+            return frozenset()
+        # 0 = some matched, 1 = none matched; anything else (128 outside a
+        # repo) means no fence applies here
+        if result.returncode not in (0, 1):
+            return frozenset()
+        matched = {os.fsdecode(entry) for entry in result.stdout.split(b'\0') if entry}
+        # a fenced root would fence the whole wiki out of itself: leave a
+        # deliberately ignored wiki unfenced instead
+        if '.' in matched:
+            return frozenset()
+        return frozenset(matched)
+
     def _name_violation(self: Wiki, name: str) -> Optional[str]:
         """Return the naming rule ``name`` breaks, or ``None`` if it is valid.
 
@@ -713,7 +767,6 @@ class Wiki:
         self: Wiki,
         name: Optional[str] = None,
         *,
-        prune: bool = False,
         check: bool = False,
     ) -> list[str]:
         """Update wiki files.
@@ -737,18 +790,20 @@ class Wiki:
         instead seeded as a ``title: null`` placeholder, kept for lint
         to fail until a value is authored.
 
-        When broken links are found (targets in the existing index
-        that no longer exist on the filesystem), they are preserved
-        and a warning is logged per link. Set ``prune=True`` to
-        remove them instead. A link whose target still exists on
-        disk as a symlinked file is warned about as a symlink skip
-        instead of a broken link -- symlinked files are excluded
-        from the walk. A link whose target still exists on disk
-        under an ``exclude.patterns`` glob (``.wiki/settings.json``)
-        is likewise warned about as an exclusion skip naming the
-        pattern -- excluded paths are not indexed. A file whose
-        only drift is CRLF line endings is rewritten, normalizing
-        it to LF. Every notice is emitted
+        Broken links (targets in the existing index that no longer
+        resolve to an indexed entry) are pruned, each removal
+        announced per link -- the filesystem is the source of truth,
+        so a deleted target takes its row with it (git carries the
+        history). A pruned link whose target still exists on disk as
+        a symlinked file is additionally warned about as a symlink
+        skip -- symlinked files are excluded from the walk. One whose
+        target still exists on disk under an ``exclude.patterns``
+        glob (``.wiki/settings.json``) is likewise warned about as an
+        exclusion skip naming the pattern, and one the enclosing git
+        repository's ignore rules fence is warned about as a
+        gitignore skip -- excluded paths are not indexed. A file
+        whose only drift is CRLF line endings is rewritten,
+        normalizing it to LF. Every notice is emitted
         individually -- output modes (the CLI's condensed default)
         are the caller's concern.
 
@@ -766,7 +821,6 @@ class Wiki:
         Args:
             name: Restrict scope to named subtree (relative
                 path). ``None`` means the entire wiki.
-            prune: Remove broken links instead of preserving them.
             check: Report the files that would change without writing
                 them (a dry run).
 
@@ -817,7 +871,7 @@ class Wiki:
                 self._dispatch_notice(event)
         # compute corrected content for the scope (single timestamp)
         now = self._utc_now()
-        overlay, baseline, notices = self._plan(folder, prune=prune, now=now)
+        overlay, baseline, notices = self._plan(folder, now=now)
         # refuse to write over merge conflict markers: the write and the
         # dry run refuse alike, naming every marked file
         self._refuse_conflicted(baseline)
@@ -872,15 +926,17 @@ class Wiki:
           paragraph), missing trailing periods, unparseable
           ``created:``/``updated:`` stamps (the fields are
           tool-owned, so a parseable value is never judged), broken
-          index links (targets that no longer exist; ``update`` keeps
-          these without ``--prune``, a target still on disk as a
-          symlinked file is named as such -- symlinked files are not
-          indexed -- and a target still on disk under an
-          ``exclude.patterns`` glob is named with its pattern),
-          directory links in user content (a wikilink target naming a
-          folder rather than the folder's ``_index`` page, flagged
-          with the ``/_index`` form as the fix), and -- under
-          ``titles.required`` -- a missing or unfilled ``title:``.
+          index links (targets that no longer exist; ``update`` prunes
+          these, so the row is also part of the file's pending diff --
+          a target still on disk as a symlinked file is named as such,
+          symlinked files are not indexed, a target still on disk
+          under an ``exclude.patterns`` glob is named with its
+          pattern, and one the enclosing repo's gitignore fences is
+          named as gitignored), directory links in user content (a
+          wikilink target naming a folder rather than the folder's
+          ``_index`` page, flagged with the ``/_index`` form as the
+          fix), and -- under ``titles.required`` -- a missing or
+          unfilled ``title:``.
 
         Every line begins with the relevant path; an out-of-date file's
         diff follows its ``Requires update`` header, indented.
@@ -1053,6 +1109,12 @@ class Wiki:
                                     ' targets an excluded path; excluded paths'
                                     ' are not indexed (exclude.patterns:'
                                     f' {pattern!r})'
+                                )
+                            elif self._target_gitignored(target):
+                                result.append(
+                                    f'{index_relpath}: Link [[{target}|{label}]]'
+                                    ' targets a gitignored path; gitignored'
+                                    ' paths are not indexed'
                                 )
                             else:
                                 result.append(
@@ -1488,26 +1550,6 @@ class Wiki:
             event = LinkAddEvent(message, **kwargs)
         return self.on_notice(event, logging_level=logging_level)
 
-    def on_link_break(
-        self: Wiki,
-        message: Optional[str] = None,
-        *,
-        logging_level: int = logging.WARNING,
-        event: Optional[LinkBreakEvent] = None,
-        **kwargs: Any,
-    ) -> Event:
-        """Handle a broken-link notice event.
-
-        Constructs a ``LinkBreakEvent`` from ``message`` and the payload
-        kwargs unless a pre-built plan-phase ``event`` is passed
-        through, then delegates to ``on_notice``. Override in subclasses
-        to intercept this notice kind alone; override ``on_notice`` to
-        intercept every notice.
-        """
-        if event is None:
-            event = LinkBreakEvent(message, **kwargs)
-        return self.on_notice(event, logging_level=logging_level)
-
     def on_link_prune(
         self: Wiki,
         message: Optional[str] = None,
@@ -1606,6 +1648,26 @@ class Wiki:
         """
         if event is None:
             event = ExcludeSkipEvent(message, **kwargs)
+        return self.on_notice(event, logging_level=logging_level)
+
+    def on_gitignore_skip(
+        self: Wiki,
+        message: Optional[str] = None,
+        *,
+        logging_level: int = logging.WARNING,
+        event: Optional[GitignoreSkipEvent] = None,
+        **kwargs: Any,
+    ) -> Event:
+        """Handle a gitignored-target skip notice event.
+
+        Constructs a ``GitignoreSkipEvent`` from ``message`` and the
+        payload kwargs unless a pre-built plan-phase ``event`` is passed
+        through, then delegates to ``on_notice``. Override in subclasses
+        to intercept this notice kind alone; override ``on_notice`` to
+        intercept every notice.
+        """
+        if event is None:
+            event = GitignoreSkipEvent(message, **kwargs)
         return self.on_notice(event, logging_level=logging_level)
 
     def on_write_skip(
@@ -2245,6 +2307,22 @@ class Wiki:
                     return pattern
         return None
 
+    def _is_gitignored(self: Wiki, path: pathlib.Path) -> bool:
+        """Return ``True`` if the enclosing repo's gitignore fences ``path``.
+
+        Membership in the batch-probed fence set
+        (:attr:`_gitignore_fence`), tested like :meth:`_excluded_by` on
+        the path and every strict in-root ancestor -- fencing a
+        directory fences its whole subtree.
+        """
+        if not self._gitignore_fence:
+            return False
+        relative = path.relative_to(self._root)
+        candidates = (
+            part.as_posix() for part in (relative, *relative.parents) if part.parts
+        )
+        return any(candidate in self._gitignore_fence for candidate in candidates)
+
     def _is_excluded_file(self: Wiki, path: pathlib.Path) -> bool:
         """Return ``True`` if file should be excluded from index links.
 
@@ -2253,12 +2331,15 @@ class Wiki:
         rewriting a page through a symlink would copy the symlink target's
         content -- possibly from outside the wiki root -- into a tracked
         file, the file-level analogue of the ``_is_excluded_dir`` guard),
-        and files an ``exclude.patterns`` glob matches
-        (:meth:`_excluded_by`).
+        files an ``exclude.patterns`` glob matches (:meth:`_excluded_by`),
+        and files the enclosing repo's gitignore fences
+        (:meth:`_is_gitignored`).
         """
         if path.name == WIKI_INDEX or path.name.startswith('.') or path.is_symlink():
             return True
-        return self._excluded_by(path) is not None
+        if self._excluded_by(path) is not None:
+            return True
+        return self._is_gitignored(path)
 
     def _is_excluded_dir(self: Wiki, path: pathlib.Path) -> bool:
         """Return ``True`` if directory should be excluded from index links.
@@ -2266,13 +2347,16 @@ class Wiki:
         Excludes directories with ``.`` prefix (which keeps the ``.wiki``
         tool directory out of the walk by construction), symlinked
         directories (following a symlink re-walks the same inode, producing
-        duplicate/conflicting index writes and risking loops), and
-        directories an ``exclude.patterns`` glob matches
-        (:meth:`_excluded_by`).
+        duplicate/conflicting index writes and risking loops), directories
+        an ``exclude.patterns`` glob matches (:meth:`_excluded_by`), and
+        directories the enclosing repo's gitignore fences
+        (:meth:`_is_gitignored`).
         """
         if path.name.startswith('.') or path.is_symlink():
             return True
-        return self._excluded_by(path) is not None
+        if self._excluded_by(path) is not None:
+            return True
+        return self._is_gitignored(path)
 
     def _is_indexed_dir(self: Wiki, path: pathlib.Path) -> bool:
         """Return ``True`` if the walk reaches directory ``path``.
@@ -2337,6 +2421,30 @@ class Wiki:
             if pattern := self._excluded_by(probe):
                 return pattern
         return None
+
+    def _target_gitignored(self: Wiki, target: str) -> bool:
+        """Return ``True`` if link ``target`` names a gitignored path on disk.
+
+        A pruned index link whose target still exists under the
+        enclosing repo's gitignore fence is not missing --
+        :meth:`_is_gitignored` drops fenced paths from the walk -- so
+        callers can name the fence as the cause instead of a generic
+        broken-link report. Probes the target's byte form and the
+        ``.md`` form the wikilink grammar strips.
+        """
+        for name in (target, target + '.md'):
+            # a preserved target may carry '..' or an absolute path, so
+            # contain the probe to the root lexically (never resolved --
+            # a symlinked segment may point outside the root)
+            joined = os.path.normpath(self._root / name)
+            probe = pathlib.Path(joined)
+            if not probe.is_relative_to(self._root):
+                continue
+            if not probe.exists():
+                continue
+            if self._is_gitignored(probe):
+                return True
+        return False
 
     def _find_dirs(self: Wiki, root: pathlib.Path) -> list[pathlib.Path]:
         """Return all non-excluded directories under ``root``, depth-first."""
@@ -2698,7 +2806,6 @@ class Wiki:
         expected: list[tuple[str, str]],
         *,
         labels: Optional[dict[str, str]] = None,
-        prune: bool = False,
     ) -> tuple[list[Link], list[Link], list[Link]]:
         """Merge existing links with expected, refreshing labels and preserving descs.
 
@@ -2716,9 +2823,10 @@ class Wiki:
         never breaks -- or churns -- the composed rows a sibling
         platform wrote.
 
-        When ``prune`` is ``False`` (default), broken links (existing targets
-        no longer on the filesystem) are preserved in the merged result.
-        When ``True``, they are excluded.
+        Broken links (existing targets no longer on the filesystem) are
+        pruned: the merged result carries expected rows only, so a
+        deleted target takes its row with it instead of leaving a
+        dangle for the next merge to trip on.
 
         Returns:
             Tuple of ``(merged, broken, new)`` where each is a list
@@ -2761,9 +2869,6 @@ class Wiki:
                 result.append((target, label, desc))
                 if base_label != '..':
                     new.append((target, label, desc))
-        # preserve broken links when not pruning
-        if not prune:
-            result.extend(broken)
         # return merged links, broken links, and new links
         return result, broken, new
 
@@ -2886,7 +2991,6 @@ class Wiki:
         self: Wiki,
         folder: pathlib.Path,
         *,
-        prune: bool = False,
         now: str,
     ) -> tuple[
         dict[pathlib.Path, str],
@@ -2904,7 +3008,6 @@ class Wiki:
 
         Args:
             folder: Root folder to plan under.
-            prune: Remove broken links instead of preserving them.
             now: Single timestamp threaded through every pass (seeds
                 missing fields; :meth:`_apply_plan` reuses it to
                 re-stamp ``updated:``).
@@ -2937,7 +3040,6 @@ class Wiki:
                 folder=folder,
                 now=now,
                 text=baseline[index_path],
-                prune=prune,
                 overlay=overlay,
             )
             overlay[index_path] = content
@@ -3049,7 +3151,6 @@ class Wiki:
         now: str,
         *,
         text: Optional[str],
-        prune: bool = False,
         overlay: dict[pathlib.Path, str],
     ) -> tuple[str, list[Event]]:
         """Compute the corrected ``_index.md`` content for a folder.
@@ -3071,14 +3172,13 @@ class Wiki:
                 file does not exist) -- the caller's baseline snapshot,
                 so plan input and the writer's concurrent-edit compare
                 are the same read.
-            prune: Remove broken links instead of preserving them.
             overlay: Staged ``{path: content}`` from earlier passes.
 
         Returns:
             Tuple of ``(content, notices)`` where ``notices`` are the
-            created-index, broken/new/pruned-link, desc-overwrite,
-            name-skip, symlink-skip, and truncated-index notice events
-            (emitted by the writer, not here).
+            created-index, new/pruned-link, desc-overwrite, name-skip,
+            symlink/exclude/gitignore-skip, and truncated-index notice
+            events (emitted by the writer, not here).
 
         """
         # alias index path
@@ -3146,14 +3246,12 @@ class Wiki:
             existing=existing,
             expected=expected,
             labels=labels,
-            prune=prune,
         )
         links = self._sort_links(links)
-        # collect broken/new link notices (emitted by the writer, not here); a
-        # target still on disk as a symlinked or pattern-excluded file is not
-        # missing, so name the exclusion as the cause instead of the generic
-        # broken link (alongside the prune notice, which still names the
-        # removal) -- the symlink cause wins when both apply
+        # collect pruned/new link notices (emitted by the writer, not here);
+        # a pruned target still on disk as a symlinked, pattern-excluded, or
+        # gitignored file is not missing, so name the exclusion as the cause
+        # beside the prune notice -- the symlink cause wins when several apply
         for target, label, _desc in broken:
             symlinked = self._is_symlink_skipped(target)
             excluded = None if symlinked else self._target_excluded_by(target)
@@ -3170,14 +3268,13 @@ class Wiki:
                         pattern=excluded,
                     )
                 )
-            if prune:
+            elif self._target_gitignored(target):
                 notices.append(
-                    LinkPruneEvent(path=str(relpath), target=target, label=label)
+                    GitignoreSkipEvent(path=str(relpath), target=target, label=label)
                 )
-            elif not (symlinked or excluded):
-                notices.append(
-                    LinkBreakEvent(path=str(relpath), target=target, label=label)
-                )
+            notices.append(
+                LinkPruneEvent(path=str(relpath), target=target, label=label)
+            )
         for target, label, _desc in new:
             notices.append(LinkAddEvent(path=str(relpath), target=target, label=label))
         # propagate child desc frontmatter to link descriptions
@@ -4014,19 +4111,6 @@ class LinkAddEvent(Event):
         return f'New link: [[{self.target}|{self.label}]] in {self.path}'
 
 
-class LinkBreakEvent(Event):
-    """Emitted when update preserves a broken index link."""
-
-    path: str
-    target: str
-    label: str
-
-    @property
-    def description(self: LinkBreakEvent) -> str:
-        """Return the broken-link notice line."""
-        return f'Broken link: [[{self.target}|{self.label}]] in {self.path}'
-
-
 class LinkPruneEvent(Event):
     """Emitted when update prunes a broken index link."""
 
@@ -4099,6 +4183,22 @@ class ExcludeSkipEvent(Event):
             f'Link targets an excluded path: [[{self.target}|{self.label}]] in'
             f' {self.path} (excluded by exclude.patterns {self.pattern!r};'
             ' excluded paths are not indexed)'
+        )
+
+
+class GitignoreSkipEvent(Event):
+    """Emitted when an index link targets a gitignored path the walk skips."""
+
+    path: str
+    target: str
+    label: str
+
+    @property
+    def description(self: GitignoreSkipEvent) -> str:
+        """Return the gitignored-target skip notice line."""
+        return (
+            f'Link targets a gitignored path: [[{self.target}|{self.label}]] in'
+            f' {self.path} (gitignored paths are not indexed)'
         )
 
 
@@ -4241,12 +4341,12 @@ _NOTICE_HOOKS = {
     IndexCreateEvent: 'on_index_create',
     PageAdoptEvent: 'on_page_adopt',
     LinkAddEvent: 'on_link_add',
-    LinkBreakEvent: 'on_link_break',
     LinkPruneEvent: 'on_link_prune',
     DescOverwriteEvent: 'on_desc_overwrite',
     NameSkipEvent: 'on_name_skip',
     SymlinkSkipEvent: 'on_symlink_skip',
     ExcludeSkipEvent: 'on_exclude_skip',
+    GitignoreSkipEvent: 'on_gitignore_skip',
     WriteSkipEvent: 'on_write_skip',
     FrontmatterMalformedEvent: 'on_frontmatter_malformed',
     IndexTruncatedEvent: 'on_index_truncated',

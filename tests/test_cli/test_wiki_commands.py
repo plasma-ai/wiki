@@ -33,7 +33,7 @@ __all__ = [
     'test_install_project_targets_cwd',
     'test_install_link_swaps_copy_and_symlink',
     'test_update_generates_child_links',
-    'test_update_prune_removes_broken_link',
+    'test_update_prunes_broken_link',
     'test_update_check_reports_changes_without_writing',
     'test_update_noop_reports_nothing_to_update',
     'test_update_failed_entry_mutates_nothing',
@@ -350,8 +350,8 @@ def test_update_generates_child_links(wiki: pathlib.Path) -> None:
     assert '[[core/design|design]]' in core_index
 
 
-def test_update_prune_removes_broken_link(tmp_path: pathlib.Path) -> None:
-    """A plain update preserves a stale link, but ``--prune`` removes it."""
+def test_update_prunes_broken_link(tmp_path: pathlib.Path) -> None:
+    """Update prunes a stale link while keeping the live ones."""
     root = tmp_path / 'wiki'
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     _write(root / 'core' / '_index.md', _index('Core', 'Core concepts.', 'Text.'))
@@ -362,14 +362,15 @@ def test_update_prune_removes_broken_link(tmp_path: pathlib.Path) -> None:
     (root / 'core' / 'gone.md').unlink()
     index = root / 'core' / '_index.md'
     assert '[[core/gone|gone]]' in index.read_text(encoding='utf-8')
-    # a plain update keeps the broken link
-    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
-    assert '[[core/gone|gone]]' in index.read_text(encoding='utf-8')
-    # --prune drops it while keeping the live link
-    assert _wiki(root, 'update', '--path', str(root), '--prune').returncode == 0
+    # update drops the dangle while keeping the live link
+    result = _wiki(root, 'update', '--path', str(root))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'Pruned 1 broken link' in result.stderr
     after = index.read_text(encoding='utf-8')
     assert '[[core/gone|gone]]' not in after
     assert '[[core/keep|keep]]' in after
+    # a --prune flag does not exist: pruning is the behavior, not a mode
+    assert _wiki(root, 'update', '--path', str(root), '--prune').returncode == 2
 
 
 def test_update_check_reports_changes_without_writing(tmp_path: pathlib.Path) -> None:
@@ -457,21 +458,22 @@ def test_update_narrations_condense_by_default(tmp_path: pathlib.Path) -> None:
     assert 'Created 1 new index (fill in its desc)' in condensed.stderr
     assert 'Added 3 new links' in condensed.stderr
 
-    # a broken link condenses to a count with a pointer at lint
+    # a pruned link condenses to a count line
     (root / 'core' / 'api.md').unlink()
     broken = _wiki(root, 'update', '--path', str(root))
-    assert 'Broken link:' not in broken.stderr
-    assert '1 broken link (run `wiki lint` to list it)' in broken.stderr
+    assert 'Pruned link:' not in broken.stderr
+    assert 'Pruned 1 broken link' in broken.stderr
 
     # --full restores the per-line narration
     (root / 'core' / 'extra.md').write_text(
         _page('Extra', 'An extra page.', 'Body.'),
         encoding='utf-8',
     )
+    (root / 'core' / 'design.md').unlink()
     full = _wiki(root, 'update', '--path', str(root), '--full')
     assert full.returncode == 0, full.stdout + full.stderr
     assert 'New link: [[core/extra|extra]] in core/_index.md' in full.stderr
-    assert 'Broken link: [[core/api|api]] in core/_index.md' in full.stderr
+    assert 'Pruned link: [[core/design|design]] from core/_index.md' in full.stderr
 
     # --count is the explicit default; combining the modes is a usage error
     default = _wiki(root, 'update', '--path', str(root))
@@ -708,9 +710,9 @@ def test_exclude_patterns_end_to_end(tmp_path: pathlib.Path) -> None:
     """``exclude.patterns`` flows through init, update, and lint.
 
     An init-seeded pattern keeps its subtree unindexed from the first
-    sweep; extending the exclusion to an already-indexed page preserves
-    its row with the verbatim cause line (no condensed category), and
-    lint reports the row as a hard issue naming the pattern.
+    sweep; extending the exclusion to an already-indexed page prunes
+    its row with the verbatim cause line (no condensed category), so
+    the fence and the tree agree and lint has nothing left to flag.
     """
     root = tmp_path / 'wiki'
     settings = '{"exclude": {"patterns": ["vendor"]}}'
@@ -729,18 +731,15 @@ def test_exclude_patterns_end_to_end(tmp_path: pathlib.Path) -> None:
     data = json.loads(config.read_text(encoding='utf-8'))
     data['exclude']['patterns'].append('core/gone.md')
     config.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
-    # the second sweep preserves the row, naming the cause verbatim
+    # the second sweep prunes the row, naming the cause verbatim
     result = _wiki(root, 'update', '--path', str(root))
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'Link targets an excluded path:' in result.stderr
     assert "excluded by exclude.patterns 'core/gone.md'" in result.stderr
-    assert '[[core/gone|gone]]' in index.read_text(encoding='utf-8')
-    # lint reports the preserved row as a hard issue naming the pattern
+    assert '[[core/gone|gone]]' not in index.read_text(encoding='utf-8')
+    # nothing is left to flag: the fence and the tree agree
     lint = _wiki(root, 'lint', '--path', str(root))
-    combined = lint.stdout + lint.stderr
-    assert lint.returncode == 1
-    assert 'targets an excluded path' in combined
-    assert "exclude.patterns: 'core/gone.md'" in combined
+    assert lint.returncode == 0, lint.stdout + lint.stderr
 
 
 def test_update_cli_refuses_conflict_markers(tmp_path: pathlib.Path) -> None:
@@ -874,22 +873,21 @@ def test_lint_details_issues_and_count_condenses(
     for page in pages:
         _write(root / 'core' / f'{page}.md', _page(page, f'The {page} page.', 'Body.'))
     assert _wiki(root, 'update', '--path', str(root)).returncode == 0
-    # delete every page, then converge so only the broken links remain
+    # delete every page: eight dangling rows plus the pending prune diff
     for page in pages:
         (root / 'core' / f'{page}.md').unlink()
-    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
 
     # the default (detailed) view lists every broken link plus the summary
     default = _wiki(root, 'lint', '--path', str(root))
     assert default.returncode == 1
     assert default.stdout.count('Broken link [[') == 8
-    assert '8 issues' in default.stdout
+    assert '9 issues' in default.stdout
 
     # --count condenses to the summary; the notes leave stderr too
     count = _wiki(root, 'lint', '--path', str(root), '--count')
     assert count.returncode == 1
     assert count.stdout.count('Broken link [[') == 0
-    assert '8 issues' in count.stdout
+    assert '9 issues' in count.stdout
     assert 'Needs desc' not in count.stderr
 
     # --full is the explicit default; combining the modes is a usage error

@@ -1,17 +1,21 @@
-"""Behavioral tests for ``exclude.patterns`` (``.wiki/settings.json``).
+"""Behavioral tests for the indexing exclusions.
 
-Policy validation, the gitignore-style matching semantics, the
-walk-wide invisibility of excluded subtrees, the preserved-row /
-``--prune`` contract naming the pattern as the cause, symlink
-precedence, the nested-wiki lift, and the scope refusal. The lint,
-map, search, and read surfaces are covered beside their precedent
-tests in their own modules.
+``exclude.patterns`` (``.wiki/settings.json``): policy validation, the
+gitignore-style matching semantics, the walk-wide invisibility of
+excluded subtrees, the pruned-row notices naming the pattern as the
+cause, symlink precedence, the nested-wiki lift, and the scope refusal.
+The enclosing repo's gitignore fences: adoption/minting refusal for
+fenced strays, pattern-pure matching, the ignored-root lift, and the
+fence-named prune cause. The lint, map, search, and read surfaces are
+covered beside their precedent tests in their own modules.
 """
 
 from __future__ import annotations
 
 import json
 import pathlib
+import shutil
+import subprocess
 
 import pytest
 
@@ -28,7 +32,22 @@ __all__ = [
     'test_update_symlink_precedence',
     'test_exclude_lifts_nested_wiki_refusal',
     'test_scope_inside_excluded_dir_refused',
+    'test_gitignored_residue_is_never_adopted',
+    'test_gitignore_fence_is_pattern_pure',
+    'test_gitignore_fence_reaches_a_nested_wiki_root',
+    'test_ignored_wiki_root_stays_unfenced',
+    'test_gitignored_link_target_names_the_cause',
 ]
+
+# the gitignore-fence tests drive a real repository
+_needs_git = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
+
+
+def _git_repo(path: pathlib.Path, *ignores: str) -> None:
+    """Initialize a git repository at ``path`` with ``ignores`` fence lines."""
+    subprocess.run(['git', 'init', '-q', str(path)], check=True)
+    if ignores:
+        (path / '.gitignore').write_text('\n'.join(ignores) + '\n', encoding='utf-8')
 
 
 # ------ policy validation
@@ -302,8 +321,7 @@ def test_update_names_excluded_link_target(tmp_path: pathlib.Path) -> None:
     backed by an indexed entry -- but its target is still on disk, and
     a generic broken-link warning would send the user hunting for a
     deleted file. Update names the exclusion (and its pattern) as the
-    cause instead, preserving the row; prune removes it, naming the
-    removal alongside the cause.
+    cause beside the prune notice naming the removal.
     """
     _make_wiki(tmp_path, folders={'data': ['child', 'report']})
     # index the page first, then exclude it
@@ -311,21 +329,13 @@ def test_update_names_excluded_link_target(tmp_path: pathlib.Path) -> None:
     wiki = Wiki(tmp_path)
     notices = _capture_notices(wiki)
 
-    # the exclusion is named as the cause, not a generic broken link
+    # the exclusion is named as the cause beside the removal
     wiki.update()
     err = '\n'.join(event.description for event in notices)
     assert 'Link targets an excluded path:' in err
     assert "exclude.patterns 'data/report.md'" in err
-    assert 'Broken link:' not in err
-    # the row is preserved by default
-    index = tmp_path / 'data' / '_index.md'
-    assert '[[data/report|report]]' in index.read_text(encoding='utf-8')
-    # prune removes the row, naming both the removal and the cause
-    notices.clear()
-    wiki.update(prune=True)
-    err = '\n'.join(event.description for event in notices)
     assert 'Pruned link:' in err
-    assert 'Link targets an excluded path:' in err
+    index = tmp_path / 'data' / '_index.md'
     assert '[[data/report|report]]' not in index.read_text(encoding='utf-8')
 
 
@@ -408,3 +418,144 @@ def test_scope_inside_excluded_dir_refused(
     with pytest.raises(ValueError, match='excluded directory') as excinfo:
         calls[operation]()
     assert "exclude.patterns 'vendor'" in str(excinfo.value)
+
+
+# ------ gitignore fences
+
+
+@_needs_git
+def test_gitignored_residue_is_never_adopted(tmp_path: pathlib.Path) -> None:
+    """A gitignore-fenced stray is invisible: no adoption, no rows, no red.
+
+    The battery-residue trap: a driver writes stray outputs beside its
+    evidence, lint reds on the bare files, and the approved repair --
+    ``wiki update`` -- is what adopts them (frontmatter written into
+    driver files, ``_index.md`` cards minted, parent rows added). With
+    the repo's fences extended to indexing, the residue draws no issue
+    and update writes none of it into the corpus; dropping the fence
+    line re-admits it.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    _git_repo(tmp_path, 'out/', 'TABLES.md')
+    # driver residue: a bare page and a stray output directory
+    residue = '# t\n\nraw rows\n'
+    (tmp_path / 'core' / 'TABLES.md').write_text(residue, encoding='utf-8')
+    out = tmp_path / 'core' / 'out'
+    out.mkdir()
+    (out / 'dump.md').write_text('# dump\n\nraw\n', encoding='utf-8')
+
+    # lint stays clean: the residue is not corpus (fresh instance -- the
+    # fence, like every policy, is cached per instance)
+    wiki = Wiki(tmp_path)
+    assert wiki.lint() == []
+    # update adopts nothing and mints nothing
+    notices = _capture_notices(wiki)
+    wiki.update()
+    assert (tmp_path / 'core' / 'TABLES.md').read_text(encoding='utf-8') == residue
+    assert not (out / '_index.md').exists()
+    index = (tmp_path / 'core' / '_index.md').read_text(encoding='utf-8')
+    assert 'TABLES' not in index
+    assert '[[core/out' not in index
+    assert not any('Adopted' in event.description for event in notices)
+
+    # dropping the fence re-admits the residue on the next sweep
+    (tmp_path / '.gitignore').unlink()
+    issues = Wiki(tmp_path).lint()
+    assert any('Bare page' in issue for issue in issues)
+
+
+@_needs_git
+def test_gitignore_fence_is_pattern_pure(tmp_path: pathlib.Path) -> None:
+    """A force-tracked file matching the fence is fenced all the same.
+
+    ``git check-ignore`` consults the index by default, so junk already
+    swept into version control would read as unfenced exactly where the
+    repair matters; the fence matches patterns alone (``--no-index``),
+    so the fence and the tool agree about what is corpus.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    _git_repo(tmp_path, 'TABLES.md')
+    junk = tmp_path / 'core' / 'TABLES.md'
+    junk.write_text('# t\n\nrows\n', encoding='utf-8')
+    subprocess.run(
+        ['git', '-C', str(tmp_path), 'add', '-f', str(junk)],
+        check=True,
+    )
+
+    wiki = Wiki(tmp_path)
+    assert wiki.lint() == []
+    wiki.update()
+    index = (tmp_path / 'core' / '_index.md').read_text(encoding='utf-8')
+    assert 'TABLES' not in index
+
+
+@_needs_git
+def test_gitignore_fence_reaches_a_nested_wiki_root(tmp_path: pathlib.Path) -> None:
+    """Repo-root fences apply inside a wiki nested below the repo root.
+
+    The corpus shape: the repository root carries the fence lines and
+    the wiki lives in a subdirectory, so the fence must resolve through
+    the enclosing repo rather than the wiki root alone.
+    """
+    _git_repo(tmp_path, 'out/')
+    root = tmp_path / 'math'
+    _make_wiki(root, folders={'core': ['design']})
+    out = root / 'core' / 'out'
+    out.mkdir()
+    (out / 'dump.md').write_text('# dump\n\nraw\n', encoding='utf-8')
+
+    wiki = Wiki(root)
+    assert wiki.lint() == []
+    wiki.update()
+    assert not (out / '_index.md').exists()
+    index = (root / 'core' / '_index.md').read_text(encoding='utf-8')
+    assert '[[core/out' not in index
+
+
+@_needs_git
+def test_ignored_wiki_root_stays_unfenced(tmp_path: pathlib.Path) -> None:
+    """A wiki that is itself gitignored keeps indexing normally.
+
+    The fence keeps non-corpus out of a tracked wiki; a wiki
+    deliberately fenced out of its repo (a scratch tree) has no corpus
+    boundary to defend, and fencing it would empty it of itself.
+    """
+    _git_repo(tmp_path, 'notes/')
+    root = tmp_path / 'notes'
+    wiki = _make_wiki(root, folders={'core': ['design']})
+    assert wiki.lint() == []
+    # a bare page inside is adopted as usual
+    (root / 'core' / 'extra.md').write_text('# Extra\n\nBody.\n', encoding='utf-8')
+    wiki = Wiki(root)
+    wiki.update()
+    index = (root / 'core' / '_index.md').read_text(encoding='utf-8')
+    assert '[[core/extra|extra]]' in index
+
+
+@_needs_git
+def test_gitignored_link_target_names_the_cause(tmp_path: pathlib.Path) -> None:
+    """A row whose target became gitignored prunes, naming the fence.
+
+    The target is still on disk, so a generic broken-link report would
+    send the user hunting for a deleted file; lint and the prune notice
+    name the gitignore fence as the cause instead.
+    """
+    _make_wiki(tmp_path, folders={'data': ['child', 'report']})
+    # index the page first, then fence it
+    _git_repo(tmp_path, 'report.md')
+
+    # lint names the cause pre-update, still as a hard issue
+    wiki = Wiki(tmp_path)
+    issues = wiki.lint()
+    joined = '\n'.join(issues)
+    assert 'targets a gitignored path; gitignored paths are not indexed' in joined
+    assert 'Broken link' not in joined
+    # update prunes the row, naming the fence as the cause beside the removal
+    notices = _capture_notices(wiki)
+    wiki.update()
+    err = '\n'.join(event.description for event in notices)
+    assert 'Link targets a gitignored path:' in err
+    assert 'gitignored paths are not indexed' in err
+    assert 'Pruned link:' in err
+    index = tmp_path / 'data' / '_index.md'
+    assert '[[data/report|report]]' not in index.read_text(encoding='utf-8')

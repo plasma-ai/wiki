@@ -178,30 +178,29 @@ frontmatter and rewrites the H1 to match the path. Renaming therefore means
 Rename a page
 ~~~~~~~~~~~~~
 
-Move the file, then update. The old link row in the parent index is now broken;
-``update`` preserves broken rows by default (so an accidental deletion never
-silently drops a row) — pass ``--prune`` to remove it as part of the rename:
+Move the file, then update. The old link row in the parent index is now
+broken; ``update`` prunes it as part of the rename (git carries the history,
+so an accidental deletion is a revert away):
 
 .. code-block:: console
 
    $ git mv topics/example.md topics/sample.md
-   $ wiki update --prune
+   $ wiki update
    Added 1 new link
    Pruned 1 broken link
    Updated 2 files.
 
-The moved page's ``name:`` and H1 are rewritten to the new path, and the parent
-index gets a fresh row carrying the page's ``desc``. Without ``--prune``, the
-stale row stays behind: ``wiki map`` renders it ``(broken)`` and ``wiki lint``
-reports ``Broken link [[topics/example|example]]`` until you prune or restore
-the target.
+The moved page's ``name:`` and H1 are rewritten to the new path, and the
+parent index gets a fresh row carrying the page's ``desc``. Until the sweep
+runs, the stale row shows up everywhere: ``wiki map`` renders it ``(broken)``
+and ``wiki lint`` reports ``Broken link [[topics/example|example]]``.
 
 Move folders
 ~~~~~~~~~~~~
 
 The same flow restructures whole subtrees — move the directory (its
-``_index.md`` moves with it) and run ``wiki update --prune`` from the wiki
-root, so every affected index on both ends of the move is swept. Any brand-new
+``_index.md`` moves with it) and run ``wiki update`` from the wiki root, so
+every affected index on both ends of the move is swept. Any brand-new
 folder gains an ``_index.md`` with a ``desc: ...`` placeholder to fill in.
 
 Fix prose cross-links
@@ -228,7 +227,7 @@ move and the real sweep to preview the rename:
 
 .. code-block:: console
 
-   $ wiki update --check --prune
+   $ wiki update --check
    Would add 1 new link
    Would prune 1 broken link
    Would update: topics/sample.md

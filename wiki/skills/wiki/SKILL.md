@@ -73,7 +73,12 @@ rather than authoring or auditing page by page yourself:
 - **Exclusions are configurable.** Beyond the built-ins (dot-paths, symlinks,
   `_index.md`), gitignore-style globs in `exclude.patterns` in
   `.wiki/settings.json` exclude whole subtrees from indexing — never walked,
-  scaffolded, or linted, though `wiki read` still serves them.
+  scaffolded, or linted, though `wiki read` still serves them. The enclosing git
+  repository's ignore rules fence the same way, with no configuration: what the
+  repo ignores is not wiki content, so a stray driver output beside tracked
+  pages is never adopted, minted an `_index.md`, or linked — delete or fence
+  residue rather than letting update sweep it in. A wiki whose own root is
+  gitignored is exempt.
 - **Name validation is configurable.** By default the wiki rejects only
   structural characters (`/`, `\`, `*`, `[`, `]`, `|`, `#`), a leading dot, and
   the reserved `_index` stem — spaces, dashes, and unicode all pass. Stricter
@@ -128,9 +133,10 @@ rather than authoring or auditing page by page yourself:
 - **Stale wikilinks are soft notes.** A `[[...]]` in index or page prose whose
   target no longer exists draws a stderr note from `wiki lint` without failing
   the run. Broken links in the generated index link block — the rows
-  `wiki update` maintains — stay hard issues (`--prune` removes them), as does a
-  prose wikilink naming a folder rather than the folder's index page: link
-  `[[folder/_index]]`, never `[[folder]]`.
+  `wiki update` maintains — are hard issues until the next update prunes them
+  (each removal announced, with the cause named when the target is merely
+  excluded rather than deleted), as is a prose wikilink naming a folder rather
+  than the folder's index page: link `[[folder/_index]]`, never `[[folder]]`.
 - **Descriptions end in a period.** `wiki lint` fails a `desc` (or an authored
   link description) that lacks a trailing period; the seeded `...` placeholder
   only draws a soft note. Author the desc in the child page's frontmatter —

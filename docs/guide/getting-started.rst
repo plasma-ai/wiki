@@ -264,9 +264,6 @@ rhythm of working with a wiki: add or move markdown files, run
        (default: the whole wiki).
    * - ``--path``
      - Wiki root directory (default: the enclosing wiki root).
-   * - ``--prune``
-     - Remove index links whose targets are gone from disk (default: off —
-       broken links are preserved with a warning).
    * - ``--check``
      - Dry run: write nothing, list ``Would update: <path>`` lines, and exit 1
        when changes are pending, 0 when clean (default: off). Like a
