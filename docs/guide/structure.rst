@@ -85,12 +85,12 @@ delimiter), and run ``wiki update``:
 
    $ mkdir topics/example
    $ mv topics/example.md topics/example/basics.md
-   $ wiki update --prune
+   $ wiki update
 
-``wiki update`` creates the new folder's index, links the children in, and
-rewrites each moved file's ``name:`` and H1 to match its new path; ``--prune``
-drops the parent's now-broken row for the vanished page (without it the row is
-preserved with a warning). Any ``[[topics/example]]`` wikilinks in prose now
+``wiki update`` creates the new folder's index, links the children in,
+rewrites each moved file's ``name:`` and H1 to match its new path, and prunes
+the parent's now-broken row for the vanished page (announcing the removal).
+Any ``[[topics/example]]`` wikilinks in prose now
 name a folder rather than a page, which ``wiki lint`` reports as an issue
 naming the ``[[topics/example/_index]]`` form to use instead (a plain rename,
 where the old name vanishes, draws a stale-link note — once per target).
@@ -104,7 +104,7 @@ and the page becomes unreachable by its bare name. ``wiki lint`` flags this as
 ``Shadowed by folder``.
 
 Converting a folder back into a page is the inverse: collapse its content into
-a single ``.md`` file, delete the folder, and run ``wiki update --prune``.
+a single ``.md`` file, delete the folder, and run ``wiki update``.
 
 The wiki root
 -------------

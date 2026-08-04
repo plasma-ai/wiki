@@ -228,8 +228,8 @@ Each row has the shape ``[[target|label]]: description``:
 
 Rows are ordered: the parent link first, then categorized entries (sorted by
 category, then name), then uncategorized entries alphabetically. A row whose
-target has vanished from disk is preserved — with a warning — until
-``wiki update --prune`` removes it.
+target has vanished from disk is pruned by the next ``wiki update`` — the
+removal announced — and reported by ``wiki lint`` until that sweep runs.
 
 The ``***`` delimiter
 ~~~~~~~~~~~~~~~~~~~~~

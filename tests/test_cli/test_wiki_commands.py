@@ -2,8 +2,8 @@
 
 Drives the real ``wiki`` console script as a subprocess against a throwaway
 wiki built with two folders (``core``, ``guides``) and a handful of pages.
-The suite covers every sub-command -- init, install, update (+ ``--prune``),
-lint, map, search, read, config, trust, and the hidden ``_merge`` driver --
+The suite covers every sub-command -- init, install, update, new, lint,
+map, search, read, config, trust, and the hidden ``_merge`` driver --
 plus ``--version``, exercising option behavior, exit codes, and error
 reporting as observable output rather than internal state.
 """
@@ -339,7 +339,7 @@ def test_install_link_swaps_copy_and_symlink(tmp_path: pathlib.Path) -> None:
     assert (skill / 'SKILL.md').is_file()
 
 
-# ------ update (+ --prune)
+# ------ update
 
 
 def test_update_generates_child_links(wiki: pathlib.Path) -> None:
