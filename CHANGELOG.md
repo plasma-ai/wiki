@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- The trust store's permission self-heal opens `~/.wiki/settings.json` with
+  `O_NOFOLLOW` and tightens the opened descriptor (`fchmod`), mirroring the lock
+  file; a `settings.json` symlinked out of the config home is now refused
+  outright, so a pre-planted symlink can never retarget the repair -- or the
+  rewrite behind it -- onto a file outside the store.
+
 ### Fixed
 
 - `import wiki.cli.utils` works in a fresh interpreter: the top-level package no

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import errno
 import fcntl
 import functools
 import importlib.util
@@ -128,9 +129,23 @@ def trust_root(root: pathlib.Path) -> pathlib.Path:
     path = _settings_path()
     # re-tighten the store on every call, so perms loosened out-of-band (a
     # backup restore, a stray chmod, a loose umask) are repaired even when the
-    # idempotent early return below skips the rewrite
-    if path.exists():
-        os.chmod(path, 0o600)
+    # idempotent early return below skips the rewrite. O_NOFOLLOW + fchmod on
+    # the opened descriptor (like the lock open below) refuse a pre-planted
+    # symlink, so a shared WIKI_CONFIG_DIR can never retarget the repair --
+    # or the rewrite behind it -- onto a file outside the store
+    try:
+        store_fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise PermissionError(f'Refusing symlinked trust store: {path}') from e
+        raise
+    else:
+        try:
+            os.fchmod(store_fd, 0o600)
+        finally:
+            os.close(store_fd)
     # an already-trusted root skips the rewrite -- re-trusting is idempotent,
     # and not touching the store keeps fleet-wide spawn-time trust calls cheap
     if is_trusted(resolved):

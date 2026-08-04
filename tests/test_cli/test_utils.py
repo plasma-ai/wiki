@@ -40,6 +40,7 @@ __all__ = [
     'test_trust_root_skips_rewrite_when_already_trusted',
     'test_trust_root_concurrent_writes_keep_every_entry',
     'test_trust_root_tightens_store_permissions',
+    'test_trust_root_refuses_symlinked_store',
     'test_is_trusted_ignores_malformed_store',
     'test_reused_command_honors_resolve_override',
     'test_resolve_wiki_default_class',
@@ -421,6 +422,41 @@ def test_trust_root_tightens_store_permissions(tmp_path: pathlib.Path) -> None:
     trust_root(root)
     assert store.stat().st_mode & 0o777 == 0o600
     assert home.stat().st_mode & 0o777 == 0o700
+
+
+def test_trust_root_refuses_symlinked_store(tmp_path: pathlib.Path) -> None:
+    """A store symlinked out of the config home is refused, target untouched.
+
+    The self-heal chmod and the rewrite behind it address the store by
+    path, so a pre-planted symlink could retarget them onto an arbitrary
+    file. The ``O_NOFOLLOW`` open refuses it up front -- on the rewrite
+    (not-yet-trusted) path and the early-return (store claims trusted)
+    path alike -- and the symlink's target keeps its bytes and mode.
+    """
+    root = tmp_path / 'wiki'
+    root.mkdir()
+    victim = tmp_path / 'victim'
+    victim.write_text('victim bytes\n', encoding='utf-8')
+    os.chmod(victim, 0o644)
+    home = pathlib.Path(os.environ['WIKI_CONFIG_DIR'])
+    home.mkdir(parents=True, exist_ok=True)
+    store = home / 'settings.json'
+    store.symlink_to(victim)
+    # rewrite path: the root is not yet trusted
+    with pytest.raises(PermissionError, match='symlinked trust store'):
+        trust_root(root)
+    assert victim.read_text(encoding='utf-8') == 'victim bytes\n'
+    assert victim.stat().st_mode & 0o777 == 0o644
+    assert store.is_symlink()
+    # early-return path: the symlink's target claims the root is trusted
+    victim.write_text(
+        json.dumps({'trusted': {str(root.resolve()): '2000-01-01T00:00:00Z'}}),
+        encoding='utf-8',
+    )
+    with pytest.raises(PermissionError, match='symlinked trust store'):
+        trust_root(root)
+    assert victim.stat().st_mode & 0o777 == 0o644
+    assert store.is_symlink()
 
 
 def test_is_trusted_ignores_malformed_store(tmp_path: pathlib.Path) -> None:
