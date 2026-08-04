@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `import wiki.cli.utils` works in a fresh interpreter: the top-level package no
+  longer star-exports the Typer app runner over the `wiki.cli` subpackage
+  attribute. The `wiki.cli(...)` callable was an accidental top-level alias --
+  the CLI is the `wiki` console script (an entry point), not library API.
+
 ## [1.2.0] - 2026-07-28
 
 ### Added
