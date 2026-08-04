@@ -40,8 +40,8 @@ __all__ = [
     'test_update_narrations_condense_by_default',
     'test_update_condenses_batch_adoption',
     'test_read_only_commands_are_deterministic',
-    'test_path_inside_wiki_is_refused',
-    'test_path_inside_undeclared_wiki_is_refused',
+    'test_path_inside_wiki_resolves_upward',
+    'test_path_inside_undeclared_wiki_resolves_upward',
     'test_parent_enclosing_declared_wiki_is_refused',
     'test_update_cli_refuses_nested_wiki',
     'test_update_refuses_a_scope_inside_a_nested_wiki',
@@ -530,25 +530,26 @@ def test_read_only_commands_are_deterministic(wiki: pathlib.Path) -> None:
 @pytest.mark.parametrize(
     argnames=('args', 'code'),
     argvalues=[
-        (['update'], 1),
-        (['lint'], 1),
-        (['map'], 1),
-        # search's grep triple reserves exit 1 for a clean no-match, so
-        # its resolution failure lands on the error leg
-        (['search', 'widget'], 2),
+        (['update'], 0),
+        (['lint'], 0),
+        (['map'], 0),
+        # search's grep triple: the probe word appears nowhere, so the
+        # resolved run lands on the clean no-match leg
+        (['search', 'widget'], 1),
     ],
     ids=['update', 'lint', 'map', 'search'],
 )
-def test_path_inside_wiki_is_refused(
+def test_path_inside_wiki_resolves_upward(
     tmp_path: pathlib.Path,
     args: list[str],
     code: int,
 ) -> None:
-    """``--path`` at a folder inside a wiki aborts, naming the enclosing root.
+    """``--path`` at a folder inside a wiki resolves to the enclosing root.
 
-    Treating a subfolder as a wiki root grows a second marker/root index
-    and rewrites ``name:`` paths relative to the wrong root; the command must
-    refuse and point at the entry argument for scoped work instead.
+    Treating a subfolder as a wiki root would grow a second marker/root
+    index and rewrite ``name:`` paths relative to the wrong root; the
+    command runs against the enclosing root instead, naming it on stderr,
+    so the habitual root-relative invocation works from inside the wiki.
     """
     root = tmp_path / 'wiki'
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
@@ -556,42 +557,38 @@ def test_path_inside_wiki_is_refused(
     assert _wiki(root, 'update', '--path', str(root)).returncode == 0
     before = (root / 'core' / '_index.md').read_text(encoding='utf-8')
 
-    # the inside path is refused, naming the enclosing root and the fix
+    # the inside path resolves upward, naming the enclosing root
     result = _wiki(root, *args, '--path', str(root / 'core'))
-    combined = result.stdout + result.stderr
     assert result.returncode == code
-    assert 'inside the wiki' in combined
-    assert str(root) in combined
-    assert '<entry>' in combined
+    assert f'inside the wiki at {root}' in result.stderr
     # the subfolder was not mangled into a second wiki root
     assert not (root / 'core' / '.wiki').exists()
     assert (root / 'core' / '_index.md').read_text(encoding='utf-8') == before
 
 
-def test_path_inside_undeclared_wiki_is_refused(tmp_path: pathlib.Path) -> None:
-    """The inside-a-wiki refusal holds when the root marker is missing.
+def test_path_inside_undeclared_wiki_resolves_upward(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The upward resolution holds when the root marker is missing.
 
     An undeclared wiki (a lost ``.wiki/``) leaves no settings marker for
     the enclosure probe, but the ancestor index chain still names the
-    real root; ``--path`` at a subfolder must refuse the same way instead
-    of planting a second marker there and rewriting its index as a root.
+    real root; ``--path`` at a subfolder resolves there the same way
+    instead of planting a second marker and rewriting its index as a root.
     """
     root = tmp_path / 'wiki'
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     _write(root / 'core' / '_index.md', _index('Core', 'Core concepts.', 'Text.'))
     assert _wiki(root, 'update', '--path', str(root)).returncode == 0
     shutil.rmtree(root / '.wiki')
-    before = (root / 'core' / '_index.md').read_text(encoding='utf-8')
 
-    # the subfolder is refused, naming the chain's topmost index as root
+    # the subfolder resolves to the chain's topmost index as the root
     result = _wiki(root, 'update', '--path', str(root / 'core'))
-    combined = result.stdout + result.stderr
-    assert result.returncode == 1
-    assert f'inside the wiki at: {root};' in combined
-    assert '<entry>' in combined
-    # no marker planted, no index rewritten against the wrong root
+    assert result.returncode == 0
+    assert f'inside the wiki at {root}' in result.stderr
+    # no marker planted in the subfolder; update restores the root's own
     assert not (root / 'core' / '.wiki').exists()
-    assert (root / 'core' / '_index.md').read_text(encoding='utf-8') == before
+    assert (root / '.wiki' / 'settings.json').is_file()
 
 
 @pytest.mark.parametrize(

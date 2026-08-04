@@ -224,37 +224,48 @@ def resolve_wiki(
     """Resolve a ``Wiki`` instance from a path or cwd.
 
     A resolved root is valid when it is declared (``.wiki/settings.json``)
-    or at least indexed (``_index.md``), not inside an enclosing wiki
-    (declared, or implied by a parent ``_index.md`` chain), and -- when
-    undeclared -- not enclosing a declared root of its own; corroboration
-    diagnostics ride the resolution -- an undeclared tree (at its topmost
-    index), a declared root missing its index, and an index chain
-    extending above the declared root are each named on stderr rather
-    than failing. ``fallbacks`` nominate embedder roots (see
-    :func:`resolve_wiki_root`); ``default`` is the ``Wiki`` class when no
-    ``.wiki/wiki.py`` hook names one.
+    or at least indexed (``_index.md``) and -- when undeclared -- not
+    enclosing a declared root of its own; a path inside an existing wiki
+    (declared, or implied by a parent ``_index.md`` chain) resolves
+    upward to the enclosing root with a notice, so the habitual
+    root-relative ``--path`` works from inside the wiki too.
+    Corroboration diagnostics ride the resolution -- an undeclared tree
+    (at its topmost index), a declared root missing its index, and an
+    index chain extending above the declared root are each named on
+    stderr rather than failing. ``fallbacks`` nominate embedder roots
+    (see :func:`resolve_wiki_root`); ``default`` is the ``Wiki`` class
+    when no ``.wiki/wiki.py`` hook names one.
     """
     wiki_root = resolve_wiki_root(path, fallbacks=fallbacks)
-    # never treat a path inside an existing wiki as a wiki root: the command
+    # a path inside an existing wiki is never itself a root: the command
     # would grow a second root index and rewrite name: paths relative to the
-    # wrong root -- scoped work goes through the entry argument instead
+    # wrong root -- resolve upward to the enclosing root instead (scoped
+    # work still goes through the entry argument)
     enclosing = enclosing_wiki_root(wiki_root)
     if enclosing is not None:
-        raise _inside_wiki_error(enclosing)
+        typer.echo(
+            f'{wiki_root}: inside the wiki at {enclosing}; using that root',
+            err=True,
+        )
+        wiki_root = enclosing
     # the root is declared by its settings marker; a bare index tree is
     # tolerated with a notice, and anything less is not a wiki
     declared = (wiki_root / WIKI_SETTINGS).is_file()
     has_index = (wiki_root / WIKI_INDEX).is_file()
     if not (declared or has_index):
         raise _no_wiki_error(wiki_root)
-    # an undeclared enclosing wiki leaves no marker for the guard above: a
-    # parent index means the path sits inside an index chain, so refuse it
-    # the same way, naming the chain's topmost index as the enclosing root
+    # an undeclared enclosing wiki leaves no marker for the resolution
+    # above: a parent index means the path sits inside an index chain, so
+    # resolve upward the same way, to the chain's topmost index
     if not declared and (wiki_root.parent / WIKI_INDEX).is_file():
         enclosing = wiki_root.parent
         while (enclosing.parent / WIKI_INDEX).is_file():
             enclosing = enclosing.parent
-        raise _inside_wiki_error(enclosing)
+        typer.echo(
+            f'{wiki_root}: inside the wiki at {enclosing}; using that root',
+            err=True,
+        )
+        wiki_root = enclosing
     # never treat a path enclosing a declared wiki as an undeclared root:
     # the command would absorb the nested wiki, rewriting its name: paths
     # relative to the wrong root and planting a second settings marker
@@ -538,14 +549,6 @@ def _is_wiki_root(path: pathlib.Path) -> bool:
     if (path / WIKI_DIR).resolve() == _config_home().resolve():
         return False
     return (path / WIKI_SETTINGS).is_file()
-
-
-def _inside_wiki_error(enclosing: pathlib.Path) -> ValueError:
-    """Build the inside-an-enclosing-wiki error, naming the enclosing root."""
-    return ValueError(
-        f'Path is inside the wiki at: {enclosing};'
-        f' use the <entry> argument for scoped work.'
-    )
 
 
 def _no_wiki_error(root: pathlib.Path) -> NotADirectoryError:

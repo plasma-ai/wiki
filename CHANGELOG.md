@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- A `--path` (or cwd resolution) landing inside an existing wiki resolves upward
+  to the enclosing root -- declared, or the topmost index of a bare chain --
+  with a stderr notice naming it, instead of aborting with "Path is inside the
+  wiki". The habitual root-relative invocation (e.g. `wiki update --path math`
+  from inside `math/`) now works from anywhere in the tree; scoped work still
+  goes through the entry argument.
+
 ### Security
 
 - The trust store's permission self-heal opens `~/.wiki/settings.json` with
