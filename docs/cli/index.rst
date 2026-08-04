@@ -445,12 +445,21 @@ outside a ``no-lint`` region — resolve the conflicts and re-run.
 
 .. code-block:: text
 
-   wiki lint [name] [--path <dir>] [--full | --count]
+   wiki lint [name] [--path <dir>] [--full | --count | --json]
 
-Checks wiki health. The command exits 1 when issues are found and 0 when the
-wiki is clean; soft notes never affect the exit code. Issues print to stdout,
-notes to stderr; the output is prose for humans — scripts branch on the exit
-code.
+Checks wiki health. Two severities ride two streams:
+
+- **Issues print to stdout** and gate the exit code: the command exits 1 when
+  any are found, 0 when the wiki is clean.
+- **Notes print to stderr** and never affect the exit code.
+
+The prose report is for humans — a script must branch on the exit code or
+read ``--json``, never classify findings by scraping either stream (a
+stderr note is not a blocking issue). ``--json`` replaces the prose report
+with one JSON document on stdout carrying every finding under an explicit
+``severity`` (``issue``/``note``), each note typed with its event ``kind``
+and payload fields, plus a ``summary`` with both counts; the exit-code
+contract is unchanged.
 
 **Issues** (hard, exit 1) cover everything ``wiki update`` would rewrite —
 each shown as ``<path>: Requires update`` with an indented unified diff — plus
@@ -493,6 +502,10 @@ pair is itself an issue and suppresses nothing.
    * - ``--count``
      - off
      - Print only the closing summary (mutually exclusive with ``--full``).
+   * - ``--json``
+     - off
+     - Emit one JSON document on stdout instead of the prose report
+       (mutually exclusive with ``--full``/``--count``).
 
 .. code-block:: console
 
@@ -501,6 +514,24 @@ pair is itself an issue and suppresses nothing.
    topics/drafts/: Missing index
 
    1 issue, 1 note.
+
+.. code-block:: console
+
+   $ wiki lint --json
+   {
+     "issues": [
+       {"severity": "issue", "text": "topics/drafts/: Missing index"}
+     ],
+     "notes": [
+       {
+         "severity": "note",
+         "kind": "desc_missing",
+         "path": "topics/example.md",
+         "text": "topics/example.md: Needs desc"
+       }
+     ],
+     "summary": {"issues": 1, "notes": 1}
+   }
 
 ``wiki map``
 ------------

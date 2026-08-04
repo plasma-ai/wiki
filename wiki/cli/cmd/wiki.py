@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import importlib.resources
+import json
 import pathlib
 import shutil
 import subprocess
 import sys
+import typing
 from collections.abc import Callable
 from typing import Any, Optional
 
@@ -672,6 +674,12 @@ def lint(
     # count flag
     count_help = 'Print only the closing issue/note summary.'
     count = typer.Option(False, '--count', help=count_help)
+    # json flag
+    as_json_help = (
+        'Emit one JSON document on stdout (typed findings with severities)'
+        ' instead of the prose report; the exit-code contract is unchanged.'
+    )
+    as_json = typer.Option(False, '--json', help=as_json_help)
 
     @command(app, 'lint')
     def _lint(
@@ -679,31 +687,45 @@ def lint(
         path: Optional[str] = path,
         full: bool = full,
         count: bool = count,
+        as_json: bool = as_json,
     ) -> None:
         """Check wiki health.
 
-        Exits 1 when issues are found and 0 when the wiki is clean; notes
-        (stderr) never affect the exit code. Issues are lint's product, so
-        every line prints by default; --count condenses the run to the
-        closing summary. The prose output is for humans -- scripts should
-        branch on the exit code rather than parse it.
+        Two severities on two streams: issues print to STDOUT and gate
+        the exit code (1 when any are found, 0 when the wiki is clean);
+        notes print to STDERR and NEVER affect the exit code. Issues are
+        lint's product, so every line prints by default; --count
+        condenses the run to the closing summary. The prose report is
+        for humans -- a script must branch on the exit code or read
+        --json (one document on stdout carrying every finding with an
+        explicit severity), never parse the prose streams.
         """
         if full and count:
             raise typer.BadParameter('--full and --count are mutually exclusive.')
+        if as_json and (full or count):
+            raise typer.BadParameter('--json cannot combine with --full/--count.')
         wiki = resolve(path)
         # count the soft notes lint sends to stderr, so the closing summary
         # reflects them instead of contradicting the notes still on screen
         notices: list[Event] = []
 
         def _capture(event: Event, **kwargs: Any) -> Event:
-            """Capture a notice; stream it unless --count condenses the run."""
+            """Capture a notice; stream it unless --count/--json condense."""
             notices.append(event)
-            if not count:
+            if not (count or as_json):
                 typer.echo(event.description, err=True)
             return event
 
         wiki.on_notice = _capture
         issues = wiki.lint(name=name)
+        # --json: the whole report is one machine-readable document on
+        # stdout; only the exit code is shared with the prose modes
+        if as_json:
+            document = json.dumps(_lint_document(issues, notices), indent=2)
+            typer.echo(document)
+            if issues:
+                raise SystemExit(1)
+            return
         note_count = len(notices)
         note_s = 's' if note_count != 1 else ''
         if issues:
@@ -905,6 +927,47 @@ def merge(app: typer.Typer) -> typer.Typer:
 
 
 # ------ helper functions
+
+
+def _lint_document(issues: list[str], notices: list[Event]) -> dict:
+    """Build the ``lint --json`` document from issues and captured notes.
+
+    Every finding carries an explicit ``severity`` -- ``issue`` gates the
+    exit code, ``note`` never does -- so a scripted consumer branches on
+    typed fields instead of re-deriving the split from output streams.
+    A note adds its event ``kind`` (the event class, snake-cased) and
+    payload fields beside the rendered ``text``.
+
+    Args:
+        issues: Issue lines from ``Wiki.lint``, in report order.
+        notices: Captured note events, in emission order.
+
+    Returns:
+        The document as a JSON-ready dict: ``issues``, ``notes``, and a
+        ``summary`` with both counts.
+
+    """
+    notes = []
+    for event in notices:
+        row: dict[str, Any] = {
+            'severity': 'note',
+            'kind': event.name.removesuffix('_EVENT').lower(),
+        }
+        # payload fields are the event's class annotations; an unset
+        # optional field (and the funnel severity) stays out of the row
+        for field in typing.get_type_hints(type(event)):
+            if field == 'logging_level':
+                continue
+            value = getattr(event, field, None)
+            if value is not None:
+                row[field] = value
+        row['text'] = event.description
+        notes.append(row)
+    return {
+        'issues': [{'severity': 'issue', 'text': issue} for issue in issues],
+        'notes': notes,
+        'summary': {'issues': len(issues), 'notes': len(notes)},
+    }
 
 
 def _condense(notices: list[Event], check: bool) -> list[str]:

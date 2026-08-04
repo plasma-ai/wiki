@@ -50,6 +50,7 @@ __all__ = [
     'test_update_cli_refuses_conflict_markers',
     'test_lint_reports_issue_taxonomy_and_exits_nonzero',
     'test_lint_summary_counts_notes',
+    'test_lint_json_reports_typed_findings',
     'test_lint_details_issues_and_count_condenses',
     'test_map_respects_view_options',
     'test_map_filters_by_category',
@@ -819,6 +820,42 @@ def test_lint_summary_counts_notes(tmp_path: pathlib.Path) -> None:
     dirty = _wiki(root, 'lint', '--path', str(root))
     assert dirty.returncode == 1
     assert '2 issues, 2 notes.' in dirty.stdout
+
+
+def test_lint_json_reports_typed_findings(tmp_path: pathlib.Path) -> None:
+    """``--json`` emits one severity-tagged document on stdout.
+
+    A scripted consumer reads one stream and branches on typed fields --
+    a note can never be mis-triaged as a blocking issue -- while the
+    exit-code contract matches the prose mode: 1 on issues, 0 on notes
+    alone.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # a fresh wiki carries soft notes only (placeholder desc, empty content)
+    clean = _wiki(root, 'lint', '--path', str(root), '--json')
+    assert clean.returncode == 0
+    document = json.loads(clean.stdout)
+    assert document['issues'] == []
+    assert all(note['severity'] == 'note' for note in document['notes'])
+    assert all(note['path'] and note['text'] for note in document['notes'])
+    kinds = {note['kind'] for note in document['notes']}
+    assert 'desc_missing' in kinds
+    assert document['summary'] == {'issues': 0, 'notes': len(document['notes'])}
+    # the whole report is the document: nothing rides stderr
+    assert clean.stderr == ''
+    # with a hard issue on top, the document carries it and the exit flips
+    (root / 'Bad#Folder').mkdir()
+    dirty = _wiki(root, 'lint', '--path', str(root), '--json')
+    assert dirty.returncode == 1
+    document = json.loads(dirty.stdout)
+    assert all(issue['severity'] == 'issue' for issue in document['issues'])
+    texts = [issue['text'] for issue in document['issues']]
+    assert any('Invalid folder name' in text for text in texts)
+    assert document['summary']['issues'] == len(document['issues'])
+    # --json owns the report shape; the prose modes cannot combine with it
+    both = _wiki(root, 'lint', '--path', str(root), '--json', '--count')
+    assert both.returncode == 2
 
 
 def test_lint_details_issues_and_count_condenses(

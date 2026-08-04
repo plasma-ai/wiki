@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `wiki lint --json`: one machine-readable JSON document on stdout carrying
+  every finding with an explicit `issue`/`note` severity (notes typed with their
+  event kind and payload fields) plus a summary with both counts; the exit-code
+  contract is unchanged (1 on issues, 0 otherwise). The prose report's stream
+  split -- issues on stdout, notes on stderr, exit 1 on issues only -- is now
+  documented prominently in the command help, the CLI reference, the guide, and
+  the skill: scripts branch on the exit code or read `--json`, never scrape the
+  prose streams.
+
 ### Changed
 
 - A `--path` (or cwd resolution) landing inside an existing wiki resolves upward

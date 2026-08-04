@@ -231,8 +231,10 @@ Notes stream to stderr as the walk encounters them; issues print to stdout
 once the walk completes.
 
 Every issue line begins with the root-relative path. The output is prose for
-humans; scripts should branch on the exit code (0 clean, 1 issues found)
-rather than parse it.
+humans; a script must branch on the exit code (0 clean, 1 issues found) or
+read ``wiki lint --json`` — one JSON document on stdout with every finding
+severity-tagged — never classify findings by scraping the streams: a stderr
+note is not a blocking issue.
 
 .. list-table::
    :header-rows: 1
@@ -254,6 +256,10 @@ rather than parse it.
      - off
      - Print only the closing summary (``N issue(s), M note(s).``). Mutually
        exclusive with ``--full``.
+   * - ``--json``
+     - off
+     - Emit one machine-readable JSON document on stdout instead of the prose
+       report; same exit codes. Mutually exclusive with ``--full``/``--count``.
 
 Note the opposite defaults: update condenses its narration unless you pass
 ``--full``, while lint prints every line unless you pass ``--count`` — issues
