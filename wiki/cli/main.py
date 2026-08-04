@@ -26,6 +26,7 @@ def cli(**kwargs: Any) -> None:
     cmd.read(app)
     cmd.search(app)
     cmd.update(app)
+    cmd.new(app)
     cmd.lint(app)
     cmd.map(app)
     cmd.merge(app)

@@ -21,6 +21,7 @@ Maintain indexes as files are added and removed:
 
 - `wiki lint` — validate structure and flag issues
 - `wiki update` — sync index links with the filesystem
+- `wiki new` — create an indexed folder with an authored desc and content
 
 Browse structure, search across content, and read entries:
 
@@ -150,7 +151,12 @@ rather than authoring or auditing page by page yourself:
   announces the batch in its condensed summary
   (`Created N new indexes (fill in their descs)`; run with `--full` for the
   per-path `New index:` lines). Fill in the desc right after the update — lint
-  soft-notes the placeholder until you do.
+  soft-notes the placeholder until you do. For a deliberate creation (an
+  adoption ceremony's mechanical step), prefer
+  `wiki new <folder> --desc ... --content ...`: it requires both authored inputs
+  — refusing blanks and placeholders outright, descs are never auto-stubbed —
+  and wires the folder's rows and the parent's new row in the same pass, so the
+  adoption lands lint-complete.
 - **Bare pages are adopted loudly.** A page with no frontmatter gains it on the
   next `wiki update` — with `title:` seeded from its authored H1, while a page
   with no H1 gains the path-joined heading in its body, never a seeded title —

@@ -39,6 +39,7 @@ __all__ = [
     'test_update_failed_entry_mutates_nothing',
     'test_update_narrations_condense_by_default',
     'test_update_condenses_batch_adoption',
+    'test_new_requires_authored_desc_and_content',
     'test_read_only_commands_are_deterministic',
     'test_path_inside_wiki_resolves_upward',
     'test_path_inside_undeclared_wiki_resolves_upward',
@@ -509,6 +510,95 @@ def test_update_condenses_batch_adoption(tmp_path: pathlib.Path) -> None:
     assert applied.returncode == 0, applied.stdout + applied.stderr
     assert 'Adopted 2 bare pages (frontmatter added)' in applied.stderr
     assert 'Adopted bare page:' not in applied.stderr
+
+
+def test_new_requires_authored_desc_and_content(tmp_path: pathlib.Path) -> None:
+    """``wiki new`` emits only with authored inputs, and lands converged.
+
+    The generator refuses to run without --desc and --content (usage
+    error, nothing written) and refuses placeholder values; with both,
+    the index and its parent row land in one pass and lint has nothing
+    to say about the new page.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'evidence' / '_index.md', _index('Evidence', 'The legs.', 'Text.'))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    (root / 'evidence' / 'verify').mkdir()
+    (root / 'evidence' / 'verify' / 'main.py').write_text('print(0)\n')
+
+    # both inputs are required options: omitting either is a usage error
+    missing_desc = _wiki(
+        root,
+        'new',
+        'evidence/verify',
+        '--path',
+        str(root),
+        '--content',
+        'Adopted at grading.',
+    )
+    assert missing_desc.returncode == 2
+    missing_content = _wiki(
+        root,
+        'new',
+        'evidence/verify',
+        '--path',
+        str(root),
+        '--desc',
+        'The verify record.',
+    )
+    assert missing_content.returncode == 2
+    placeholder = _wiki(
+        root,
+        'new',
+        'evidence/verify',
+        '--path',
+        str(root),
+        '--desc',
+        '...',
+        '--content',
+        'Adopted at grading.',
+    )
+    assert placeholder.returncode == 1
+    assert 'never stubbed' in placeholder.stderr
+    assert not (root / 'evidence' / 'verify' / '_index.md').exists()
+
+    # with both inputs the adoption lands converged in one command
+    created = _wiki(
+        root,
+        'new',
+        'evidence/verify',
+        '--path',
+        str(root),
+        '--desc',
+        'The verify record.',
+        '--content',
+        'Keeper legs.',
+    )
+    assert created.returncode == 0, created.stdout + created.stderr
+    assert 'Created evidence/verify/_index.md.' in created.stdout
+    index = (root / 'evidence' / 'verify' / '_index.md').read_text(encoding='utf-8')
+    assert 'desc: The verify record.' in index
+    assert 'Keeper legs.' in index
+    parent = (root / 'evidence' / '_index.md').read_text(encoding='utf-8')
+    assert '[[evidence/verify/_index|verify/]]: The verify record.' in parent
+    check = _wiki(root, 'update', '--check', '--path', str(root))
+    assert check.returncode == 0, check.stdout + check.stderr
+
+    # re-generating an owned index is refused
+    again = _wiki(
+        root,
+        'new',
+        'evidence/verify',
+        '--path',
+        str(root),
+        '--desc',
+        'Another.',
+        '--content',
+        'More.',
+    )
+    assert again.returncode == 1
+    assert 'Index already exists' in again.stderr
 
 
 def test_read_only_commands_are_deterministic(wiki: pathlib.Path) -> None:

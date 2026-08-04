@@ -898,6 +898,119 @@ class Wiki:
             self.on_cache_restore(path=WIKI_CACHE)
         return result
 
+    def new(
+        self: Wiki,
+        name: str,
+        *,
+        desc: str,
+        content: str,
+    ) -> str:
+        """Create an indexed folder with an authored desc and content.
+
+        The generator for deliberate index creation -- the mechanical
+        step of an adoption ceremony -- and it refuses to emit without
+        its authored inputs: descriptions and content are judgment,
+        never auto-stubbed, so a missing one is a loud refusal here
+        rather than a placeholder for a later lint to nag about.
+        Creates the folder when missing (an existing folder of raw
+        files is the expected shape), writes its ``_index.md`` carrying
+        ``desc`` and ``content``, and runs a scoped update on the
+        parent folder so the folder's own rows and the parent's new row
+        -- desc propagated -- wire in the same pass.
+
+        Args:
+            name: Folder to create and index (relative path below the
+                wiki root); its parent must already exist, since every
+                level carries its own authored index.
+            desc: Authored frontmatter description (a multi-line value
+                writes as a block scalar).
+            content: Authored content for the section below ``***``.
+
+        Returns:
+            Root-relative path of the created index file.
+
+        Raises:
+            ValueError: If ``desc`` or ``content`` is blank (or ``desc``
+                the ``...`` placeholder), the target is the wiki root,
+                outside it, missing its parent, excluded from indexing,
+                already a file or an indexed folder, or named against
+                the naming policy.
+
+        """
+        # the authored inputs are the point: refuse placeholders outright,
+        # never stub them
+        desc = desc.strip()
+        content = content.strip()
+        if (not desc) or (desc == '...'):
+            raise ValueError(
+                'A desc is required (descriptions are authored, never stubbed).'
+            )
+        if not content:
+            raise ValueError('Content is required (the section below *** is authored).')
+        # contain the target to the root lexically (user input)
+        joined = os.path.normpath(self._root / name)
+        folder = pathlib.Path(joined)
+        if folder == self._root:
+            raise ValueError('The root index belongs to `wiki init`.')
+        if not folder.is_relative_to(self._root):
+            raise self._outside_root(name)
+        self._refuse_enclosing_wiki(folder)
+        # refuse names the policy rejects and paths indexing cannot reach --
+        # an index written there would be junk no later walk sees or repairs
+        for part in folder.relative_to(self._root).parts:
+            violation = self._name_violation(part)
+            if violation is not None:
+                raise ValueError(f'Invalid folder name {part!r}: {violation}')
+        if pattern := self._excluded_by(folder):
+            raise ValueError(
+                f'Folder is excluded from indexing (exclude.patterns {pattern!r}).'
+            )
+        if self._is_gitignored(folder):
+            raise ValueError('Folder is gitignored; gitignored paths are not indexed.')
+        if folder.is_file():
+            raise ValueError(f'A file already stands at: {name!r}')
+        # each level carries its own authored index, so the parent must
+        # exist -- creating it here would mint placeholder ancestors
+        if not folder.parent.is_dir():
+            parent_name = folder.parent.relative_to(self._root).as_posix()
+            raise ValueError(
+                f'Parent folder does not exist: {parent_name!r};'
+                f' create it first (each level carries its own index).'
+            )
+        index_path = folder / WIKI_INDEX
+        if index_path.exists():
+            relpath = index_path.relative_to(self._root)
+            raise ValueError(
+                f'Index already exists: {relpath} (edit it;'
+                f' the generator never overwrites).'
+            )
+        # write the index, links left to the sweep below
+        folder.mkdir(exist_ok=True)
+        now = self._utc_now()
+        display = self._path_to_name(folder)
+        frontmatter = format.build_frontmatter(
+            name=display,
+            created=now,
+            updated=now,
+            desc=desc,
+        )
+        text = format.render_index(
+            heading=display,
+            frontmatter=frontmatter,
+            links=[],
+            user_content=content,
+            delimiter=self.index_delimiter,
+        )
+        wiki.util.fs.write_atomic(index_path, text)
+        # the scoped sweep adds the folder's own rows and the parent's new
+        # row, propagating the desc, so the adoption lands converged
+        parent = folder.parent
+        scope = None
+        if parent != self._root:
+            scope = parent.relative_to(self._root).as_posix()
+        self.update(name=scope)
+        return str(index_path.relative_to(self._root))
+
     def lint(
         self: Wiki,
         name: Optional[str] = None,

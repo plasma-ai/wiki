@@ -28,7 +28,9 @@ rewrites only the files that differ. It owns:
    prefixes read from child frontmatter), and rows are sorted — parent link
    first, then categorized entries, then uncategorized entries alphabetically.
    A folder with no ``_index.md`` gets one created, with a placeholder
-   description for you to fill in.
+   description for you to fill in — or create the folder deliberately with
+   ``wiki new``, whose required ``--desc``/``--content`` land it
+   lint-complete in one pass (see :doc:`/cli/index`).
 
 **Description propagation.**
    A page's frontmatter ``desc:`` is the source of truth for its link row in

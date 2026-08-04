@@ -439,6 +439,57 @@ outside a ``no-lint`` region — resolve the conflicts and re-run.
    Added 1 new link
    Updated 2 files.
 
+``wiki new``
+------------
+
+.. code-block:: text
+
+   wiki new <name> --desc <text> --content <text> [--path <dir>]
+
+Creates an indexed folder with an authored description and content — the
+generator for deliberate index creation, e.g. the mechanical step of an
+adoption ceremony. Both inputs are required and refused when blank or the
+``...`` placeholder: descriptions and content are authored, never
+auto-stubbed, so a mechanically generated adoption lands lint-complete
+instead of hiding a hand-fill step. The command creates the folder when
+missing (an existing folder of raw files is the expected shape; the parent
+must already exist), writes its ``_index.md`` carrying the desc and content,
+and runs a scoped update on the parent folder, so the folder's own rows and
+the parent's new row — desc propagated — wire in the same pass.
+
+The command refuses (exit 1, nothing written) a blank or placeholder input,
+the wiki root itself (``wiki init`` owns it), a target outside the root or
+without an existing parent, a path segment violating the naming policy, a
+target excluded from indexing (``exclude.patterns`` or the enclosing repo's
+gitignore, naming the cause), and a folder whose ``_index.md`` already
+exists — the generator never overwrites.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 18 60
+
+   * - Argument / option
+     - Default
+     - Behavior
+   * - ``name`` (positional)
+     - required
+     - Folder to create and index, relative to the wiki root.
+   * - ``--desc``
+     - required
+     - Authored frontmatter description (multi-line values write as a block
+       scalar).
+   * - ``--content``
+     - required
+     - Authored content for the section below the ``***`` delimiter.
+   * - ``--path``
+     - the enclosing wiki root
+     - Wiki root directory (see `Wiki root resolution`_).
+
+.. code-block:: console
+
+   $ wiki new evidence/verify --desc 'The verify record.' --content 'Keeper legs.'
+   Created evidence/verify/_index.md.
+
 ``wiki lint``
 -------------
 

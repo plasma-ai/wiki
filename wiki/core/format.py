@@ -299,22 +299,36 @@ def parse_page(text: str) -> tuple[str, str]:
     return '', text
 
 
-def build_frontmatter(*, name: str, created: str, updated: str) -> str:
+def build_frontmatter(
+    *,
+    name: str,
+    created: str,
+    updated: str,
+    desc: str = '...',
+) -> str:
     """Build YAML frontmatter string.
 
     Args:
         name: Display name for the index.
         created: ISO 8601 timestamp.
         updated: ISO 8601 timestamp.
+        desc: Description value; the default is the ``...`` placeholder
+            lint holds open until a value is authored. A multi-line
+            value writes as a literal block scalar.
 
     Returns:
         Complete frontmatter block including ``---`` delimiters.
 
     """
+    if '\n' in desc:
+        body = '\n'.join(f'  {line}'.rstrip() for line in desc.split('\n'))
+        desc_lines = ['desc: |', *body.split('\n')]
+    else:
+        desc_lines = [f'desc: {quote(desc)}']
     lines = [
         '---',
         f'name: {quote(name)}',
-        'desc: ...',
+        *desc_lines,
         'tags: []',
         'sources: []',
         f'created: {created}',

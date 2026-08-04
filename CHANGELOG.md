@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `wiki new <folder> --desc <text> --content <text>` (and `Wiki.new`): the
+  generator for deliberate index creation. Both inputs are required -- blanks
+  and the `...` placeholder are refused outright, since descriptions and content
+  are authored, never auto-stubbed -- and the command writes the folder's
+  `_index.md` and wires its rows plus the parent's new row (desc propagated) in
+  one pass, so a mechanically generated adoption lands lint-complete instead of
+  hiding a hand-fill step.
 - `wiki lint --json`: one machine-readable JSON document on stdout carrying
   every finding with an explicit `issue`/`note` severity (notes typed with their
   event kind and payload fields) plus a summary with both counts; the exit-code

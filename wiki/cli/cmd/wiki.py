@@ -50,6 +50,7 @@ __all__ = [
     'read',
     'search',
     'update',
+    'new',
     'lint',
     'map',
     'merge',
@@ -636,6 +637,70 @@ def update(
             typer.echo(f'Updated {file_count} file{s}.')
         else:
             typer.echo('Nothing to update.')
+
+    return app
+
+
+def new(
+    app: typer.Typer,
+    *,
+    resolve: Callable[[Optional[str]], Wiki] = resolve_wiki,
+) -> typer.Typer:
+    """Register the ``new`` command."""
+    # folder name argument
+    name_help = 'Folder to create and index (relative path below the wiki root).'
+    name = typer.Argument(..., help=name_help)
+    # wiki root option
+    path_help = (
+        'Wiki root directory. Defaults to the enclosing wiki root (the'
+        ' ancestor declaring .wiki/settings.json, else the outermost'
+        ' _index.md chain), else {cwd}/wiki/.'
+    )
+    path = typer.Option(None, '--path', help=path_help)
+    # desc option
+    desc_help = 'Authored description for the index frontmatter (required).'
+    desc = typer.Option(..., '--desc', help=desc_help)
+    # content option
+    content_help = (
+        'Authored content for the section below the *** delimiter (required).'
+    )
+    content = typer.Option(..., '--content', help=content_help)
+
+    @command(app, 'new')
+    def _new(
+        name: str = name,
+        path: Optional[str] = path,
+        desc: str = desc,
+        content: str = content,
+    ) -> None:
+        """Create an indexed folder with an authored desc and content.
+
+        The generator for deliberate index creation: it refuses to emit
+        without both inputs, since descriptions and content are
+        authored, never auto-stubbed -- a mechanically generated
+        adoption lands lint-complete instead of hiding a hand-fill
+        step. Creates the folder when missing (an existing folder of
+        raw files is the expected shape; the parent must already
+        exist), writes its _index.md carrying the desc and content, and
+        runs a scoped update on the parent folder so the new row --
+        desc included -- wires in the same pass.
+        """
+        wiki = resolve(path)
+        # the scoped sweep narrates like update: condensed count lines
+        notices: list[Event] = []
+
+        def _capture(event: Event, **kwargs: Any) -> Event:
+            """Capture a notice for the condensed report."""
+            notices.append(event)
+            return event
+
+        wiki.on_notice = _capture
+        try:
+            created = wiki.new(name, desc=desc, content=content)
+        finally:
+            for line in _condense(notices, False):
+                typer.echo(line, err=True)
+        typer.echo(f'Created {created}.')
 
     return app
 
