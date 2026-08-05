@@ -214,11 +214,12 @@ def test_new_refuses_unauthored_inputs(
 def test_new_refuses_unreachable_targets(tmp_path: pathlib.Path) -> None:
     """The generator refuses targets indexing cannot reach or already owns.
 
-    An index written outside the root, at the root, under a missing
-    parent, through a symlinked segment (which every walk excludes, and
-    which may point outside the root), into an excluded subtree, or
-    against the naming policy would be junk no later walk sees or
-    repairs -- each is refused naming its cause, with nothing written.
+    An index written outside the root, at the root, under a missing or
+    unindexed parent, through a symlinked segment (which every walk
+    excludes, and which may point outside the root), into an excluded
+    subtree, or against the naming policy would be junk no later walk
+    sees or repairs -- each is refused naming its cause, with nothing
+    written.
     """
     wiki = _make_wiki(tmp_path, folders={'evidence': ['report']})
     cases = [
@@ -231,6 +232,14 @@ def test_new_refuses_unreachable_targets(tmp_path: pathlib.Path) -> None:
     for name, match in cases:
         with pytest.raises(ValueError, match=match):
             wiki.new(name, desc='A real desc.', content='Real content.')
+    # an existing-but-unindexed parent is refused too: the wiring sweep
+    # would mint its index as a placeholder, and the root chain would
+    # never gain its row
+    (tmp_path / 'rawparent').mkdir()
+    with pytest.raises(ValueError, match='Parent folder is not indexed'):
+        wiki.new('rawparent/child', desc='A real desc.', content='Real content.')
+    assert not (tmp_path / 'rawparent' / '_index.md').exists()
+    assert not (tmp_path / 'rawparent' / 'child').exists()
     # a symlinked segment is refused -- writing through it would land the
     # index outside the root, invisibly to every walk
     outside = tmp_path.parent / 'outside'

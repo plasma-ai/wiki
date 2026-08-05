@@ -680,8 +680,8 @@ def new(
         authored, never auto-stubbed -- a mechanically generated
         adoption lands lint-complete instead of hiding a hand-fill
         step. Creates the folder when missing (an existing folder of
-        raw files is the expected shape; the parent must already
-        exist), writes its _index.md carrying the desc and content, and
+        raw files is the expected shape; the parent must already be
+        indexed), writes its _index.md carrying the desc and content, and
         runs a scoped update on the parent folder so the new row --
         desc included -- wires in the same pass.
         """

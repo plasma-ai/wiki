@@ -455,13 +455,15 @@ adoption ceremony. Both inputs are required and refused when blank or the
 auto-stubbed, so a mechanically generated adoption lands lint-complete
 instead of hiding a hand-fill step. The command creates the folder when
 missing (an existing folder of raw files is the expected shape; the parent
-must already exist), writes its ``_index.md`` carrying the desc and content,
-and runs a scoped update on the parent folder, so the folder's own rows and
-the parent's new row — desc propagated — wire in the same pass.
+must already be indexed), writes its ``_index.md`` carrying the desc and
+content, and runs a scoped update on the parent folder, so the folder's own
+rows and the parent's new row — desc propagated — wire in the same pass.
 
 The command refuses (exit 1, nothing written) a blank or placeholder input,
 the wiki root itself (``wiki init`` owns it), a target outside the root,
-without an existing parent, or reached through a symlinked segment, a path
+without an existing indexed parent (an unindexed parent would be minted a
+placeholder index, dangling from the root chain), or reached through a
+symlinked segment, a path
 segment violating the naming policy, a target excluded from indexing
 (``exclude.patterns`` or the enclosing repo's gitignore, naming the cause),
 and a folder whose ``_index.md`` already exists — the generator never

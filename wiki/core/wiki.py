@@ -960,8 +960,9 @@ class Wiki:
 
         Args:
             name: Folder to create and index (relative path below the
-                wiki root); its parent must already exist, since every
-                level carries its own authored index.
+                wiki root); its parent must already exist and be
+                indexed, since every level carries its own authored
+                index.
             desc: Authored frontmatter description (a multi-line value
                 writes as a block scalar).
             content: Authored content for the section below ``***``.
@@ -972,7 +973,7 @@ class Wiki:
         Raises:
             ValueError: If ``desc`` or ``content`` is blank or the
                 ``...`` placeholder, or the target is the wiki root,
-                outside it, missing its parent, reached through a
+                outside it, missing its indexed parent, reached through a
                 symlinked segment, excluded from indexing (a pattern or
                 the repo's gitignore fence), already a file or an
                 indexed folder, or named against the naming policy.
@@ -1036,6 +1037,16 @@ class Wiki:
             raise ValueError(
                 f'Parent folder does not exist: {parent_name!r};'
                 f' create it first (each level carries its own index).'
+            )
+        # an unindexed non-root parent is refused the same way: the scoped
+        # sweep below would mint its index as a placeholder and never
+        # replans above its scope, so the chain would dangle from the root
+        if (folder.parent != self._root) and not (folder.parent / WIKI_INDEX).is_file():
+            parent_name = folder.parent.relative_to(self._root).as_posix()
+            raise ValueError(
+                f'Parent folder is not indexed: {parent_name!r};'
+                f' run `wiki new` on it first (each level carries its'
+                f' own authored index).'
             )
         index_path = folder / WIKI_INDEX
         if index_path.exists():
