@@ -432,29 +432,69 @@ class Wiki:
                     continue
                 relative = (folder / name).relative_to(self._root)
                 candidates.append(relative.as_posix())
-        # one batch query; -z framing survives any filename, and --no-index
-        # keeps the match pattern-pure (check-ignore consults the index by
-        # default, so a force-tracked junk file would read as unfenced)
-        payload = b'\0'.join(os.fsencode(entry) for entry in candidates) + b'\0'
-        try:
-            result = subprocess.run(
-                ['git', 'check-ignore', '-z', '--stdin', '--no-index'],
-                cwd=self._root,
-                input=payload,
-                capture_output=True,
-            )
-        except FileNotFoundError:
+        matched = self._check_ignore(candidates)
+        if matched is None:
             return frozenset()
-        # 0 = some matched, 1 = none matched; anything else (128 outside a
-        # repo) means no fence applies here
-        if result.returncode not in (0, 1):
-            return frozenset()
-        matched = {os.fsdecode(entry) for entry in result.stdout.split(b'\0') if entry}
         # a fenced root would fence the whole wiki out of itself: leave a
         # deliberately ignored wiki unfenced instead
         if '.' in matched:
             return frozenset()
         return frozenset(matched)
+
+    def _check_ignore(self: Wiki, candidates: list[str]) -> Optional[set[str]]:
+        """Batch-probe ``candidates`` against the repo's gitignore fences.
+
+        One ``git check-ignore`` call: ``--no-index`` keeps the match
+        pattern-pure (the default consults the index, so a force-tracked
+        junk file would read as unfenced exactly where the repair
+        matters), ``-z`` framing survives any filename, and the
+        user-global ``core.excludesFile`` is pinned out so the fence is
+        the repository's own -- committed ``.gitignore`` files plus
+        ``.git/info/exclude`` -- and reads the same on every clone (a
+        personal global pattern would otherwise fence content on one
+        machine only, churning rows against every other). Returns the
+        matched subset, or ``None`` when no fence applies (outside a
+        repository, or git unavailable).
+        """
+        payload = b'\0'.join(os.fsencode(entry) for entry in candidates) + b'\0'
+        try:
+            result = subprocess.run(
+                [
+                    'git',
+                    '-c',
+                    f'core.excludesFile={os.devnull}',
+                    'check-ignore',
+                    '-z',
+                    '--stdin',
+                    '--no-index',
+                ],
+                cwd=self._root,
+                input=payload,
+                capture_output=True,
+            )
+        except FileNotFoundError:
+            return None
+        # 0 = some matched, 1 = none matched; anything else (128 outside a
+        # repo) means no fence applies here
+        if result.returncode not in (0, 1):
+            return None
+        return {os.fsdecode(entry) for entry in result.stdout.split(b'\0') if entry}
+
+    def _probe_gitignore_fence(self: Wiki, relative: str) -> bool:
+        """Return ``True`` if the repo's gitignore fences folder ``relative``.
+
+        The direct probe for a folder that may not exist yet -- the
+        cached fence set (:attr:`_gitignore_fence`) enumerates existing
+        paths only -- with the same exemptions: no repository, no git,
+        and an ignored root all read as unfenced. The trailing-slash
+        form probes beside the bare one, since a dir-only pattern
+        (``scratch/``) cannot match a bare pathname git has no inode
+        for.
+        """
+        matched = self._check_ignore(['.', relative, relative + '/'])
+        if (matched is None) or ('.' in matched):
+            return False
+        return bool(matched)
 
     def _name_violation(self: Wiki, name: str) -> Optional[str]:
         """Return the naming rule ``name`` breaks, or ``None`` if it is valid.
@@ -930,11 +970,12 @@ class Wiki:
             Root-relative path of the created index file.
 
         Raises:
-            ValueError: If ``desc`` or ``content`` is blank (or ``desc``
-                the ``...`` placeholder), the target is the wiki root,
-                outside it, missing its parent, excluded from indexing,
-                already a file or an indexed folder, or named against
-                the naming policy.
+            ValueError: If ``desc`` or ``content`` is blank or the
+                ``...`` placeholder, or the target is the wiki root,
+                outside it, missing its parent, reached through a
+                symlinked segment, excluded from indexing (a pattern or
+                the repo's gitignore fence), already a file or an
+                indexed folder, or named against the naming policy.
 
         """
         # the authored inputs are the point: refuse placeholders outright,
@@ -945,8 +986,11 @@ class Wiki:
             raise ValueError(
                 'A desc is required (descriptions are authored, never stubbed).'
             )
-        if not content:
-            raise ValueError('Content is required (the section below *** is authored).')
+        if (not content) or (content == '...'):
+            raise ValueError(
+                'Content is required (the section below *** is authored,'
+                ' never stubbed).'
+            )
         # contain the target to the root lexically (user input)
         joined = os.path.normpath(self._root / name)
         folder = pathlib.Path(joined)
@@ -961,11 +1005,27 @@ class Wiki:
             violation = self._name_violation(part)
             if violation is not None:
                 raise ValueError(f'Invalid folder name {part!r}: {violation}')
+        # a symlinked segment is excluded from every walk and may point
+        # outside the root, so writing through one would land an invisible
+        # index -- or an out-of-root file the lexical containment above
+        # cannot see
+        current = self._root
+        for part in folder.relative_to(self._root).parts:
+            current = current / part
+            if current.is_symlink():
+                crossed = current.relative_to(self._root).as_posix()
+                raise ValueError(
+                    f'Path crosses a symlink at: {crossed!r};'
+                    ' symlinked directories are not indexed.'
+                )
         if pattern := self._excluded_by(folder):
             raise ValueError(
                 f'Folder is excluded from indexing (exclude.patterns {pattern!r}).'
             )
-        if self._is_gitignored(folder):
+        # probe the fence directly: the cached fence set enumerates existing
+        # paths only, and the target may not exist yet
+        relative = folder.relative_to(self._root).as_posix()
+        if self._probe_gitignore_fence(relative):
             raise ValueError('Folder is gitignored; gitignored paths are not indexed.')
         if folder.is_file():
             raise ValueError(f'A file already stands at: {name!r}')

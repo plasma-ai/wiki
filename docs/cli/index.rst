@@ -29,9 +29,11 @@ existing wiki and accepts ``--path <dir>`` to name its root directly. Without
 
 When none of these produce a wiki, the command fails with
 ``Could not locate .wiki/settings.json, _index.md, or wiki/_index.md from the
-current directory.`` Nested wikis are unsupported: resolution refuses a path
-inside an enclosing wiki and an undeclared root that encloses a declared one.
-See :doc:`/guide/structure` for the root and index model.
+current directory.`` A path inside an existing wiki resolves upward to the
+enclosing root with a stderr notice naming it, so the habitual root-relative
+``--path`` works from anywhere in the tree. Nested wikis are unsupported:
+resolution refuses an undeclared root that encloses a declared one. See
+:doc:`/guide/structure` for the root and index model.
 
 If the resolved wiki carries a ``.wiki/wiki.py`` hook that has not been
 trusted, every command that resolves the wiki — reads included — refuses to
@@ -458,11 +460,14 @@ and runs a scoped update on the parent folder, so the folder's own rows and
 the parent's new row — desc propagated — wire in the same pass.
 
 The command refuses (exit 1, nothing written) a blank or placeholder input,
-the wiki root itself (``wiki init`` owns it), a target outside the root or
-without an existing parent, a path segment violating the naming policy, a
-target excluded from indexing (``exclude.patterns`` or the enclosing repo's
-gitignore, naming the cause), and a folder whose ``_index.md`` already
-exists — the generator never overwrites.
+the wiki root itself (``wiki init`` owns it), a target outside the root,
+without an existing parent, or reached through a symlinked segment, a path
+segment violating the naming policy, a target excluded from indexing
+(``exclude.patterns`` or the enclosing repo's gitignore, naming the cause),
+and a folder whose ``_index.md`` already exists — the generator never
+overwrites. A failure in the wiring sweep itself (merge conflict markers or
+a nested wiki in the parent scope) surfaces after the index is written;
+repair the scope and run ``wiki update`` to finish the wiring.
 
 .. list-table::
    :header-rows: 1

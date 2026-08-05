@@ -51,7 +51,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`git check-ignore --no-index`), so a force-tracked file matching a fence is
   fenced all the same; a wiki whose own root is ignored is exempt, and a pruned
   row whose target is fenced gets a cause line
-  (`GitignoreSkipEvent`/`on_gitignore_skip`) naming the fence.
+  (`GitignoreSkipEvent`/`on_gitignore_skip`) naming the fence. The fence reads
+  the repository's own rules only -- the user-global `core.excludesFile` is
+  pinned out of the probe, so fencing is identical on every clone instead of one
+  machine's personal patterns pruning rows every other machine re-adds.
 - A `--path` (or cwd resolution) landing inside an existing wiki resolves upward
   to the enclosing root -- declared, or the topmost index of a bare chain --
   with a stderr notice naming it, instead of aborting with "Path is inside the

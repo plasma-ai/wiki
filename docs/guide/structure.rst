@@ -129,12 +129,13 @@ If none match, the command fails, naming what it looked for. See
 :doc:`/cli/index` for the ``--path`` option on each command.
 
 Nested wikis are unsupported in every direction: ``wiki init`` refuses to
-scaffold inside an existing wiki; resolution refuses a path inside an
-enclosing wiki (use the subtree argument for scoped work) or one that encloses
-a declared wiki; two ``.wiki/settings.json`` markers on one ancestor chain are
-an ambiguous-root error; and ``wiki update`` refuses to sweep across a nested
-declared root (``wiki lint`` completes the sweep and reports the nested root
-as a hard issue).
+scaffold inside an existing wiki; a ``--path`` inside an enclosing wiki
+resolves upward to that wiki's root with a notice (use the subtree argument
+for scoped work), while a path enclosing a declared wiki is refused; two
+``.wiki/settings.json`` markers on one ancestor chain are an ambiguous-root
+error; and ``wiki update`` refuses to sweep across a nested declared root
+(``wiki lint`` completes the sweep and reports the nested root as a hard
+issue).
 
 The ``.wiki/`` directory
 ------------------------

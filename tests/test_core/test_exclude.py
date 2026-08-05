@@ -34,9 +34,11 @@ __all__ = [
     'test_scope_inside_excluded_dir_refused',
     'test_gitignored_residue_is_never_adopted',
     'test_gitignore_fence_is_pattern_pure',
+    'test_gitignore_fence_ignores_machine_local_excludes',
     'test_gitignore_fence_reaches_a_nested_wiki_root',
     'test_ignored_wiki_root_stays_unfenced',
     'test_gitignored_link_target_names_the_cause',
+    'test_new_refuses_a_fenced_target',
 ]
 
 # the gitignore-fence tests drive a real repository
@@ -490,6 +492,35 @@ def test_gitignore_fence_is_pattern_pure(tmp_path: pathlib.Path) -> None:
 
 
 @_needs_git
+def test_gitignore_fence_ignores_machine_local_excludes(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A user-global ``core.excludesFile`` never feeds the fence.
+
+    The fence must read the same on every clone -- the repository's own
+    committed ``.gitignore`` files -- or one machine's personal patterns
+    would fence corpus content there alone, and its auto-pruned rows
+    would churn against every other machine's updates.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    _git_repo(tmp_path)
+    # a personal global config fencing the corpus folder
+    excludes = tmp_path.parent / 'personal_ignore'
+    excludes.write_text('core/\n', encoding='utf-8')
+    gitconfig = tmp_path.parent / 'personal_gitconfig'
+    gitconfig.write_text(f'[core]\n\texcludesFile = {excludes}\n', encoding='utf-8')
+    monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(gitconfig))
+
+    # the corpus folder stays indexed: no prune, no invisibility
+    wiki = Wiki(tmp_path)
+    assert wiki.lint() == []
+    wiki.update()
+    root_index = (tmp_path / '_index.md').read_text(encoding='utf-8')
+    assert '[[core/_index|core/]]' in root_index
+
+
+@_needs_git
 def test_gitignore_fence_reaches_a_nested_wiki_root(tmp_path: pathlib.Path) -> None:
     """Repo-root fences apply inside a wiki nested below the repo root.
 
@@ -530,6 +561,28 @@ def test_ignored_wiki_root_stays_unfenced(tmp_path: pathlib.Path) -> None:
     wiki.update()
     index = (root / 'core' / '_index.md').read_text(encoding='utf-8')
     assert '[[core/extra|extra]]' in index
+    # the generator stays exempt too: a fenced root never fences new work
+    created = Wiki(root).new('plans', desc='A real desc.', content='Real content.')
+    assert created == 'plans/_index.md'
+
+
+@_needs_git
+def test_new_refuses_a_fenced_target(tmp_path: pathlib.Path) -> None:
+    """``wiki new`` refuses a gitignore-fenced target, existing or not.
+
+    The cached fence set enumerates existing paths only, so the
+    not-yet-existing folder takes a direct probe: without it the
+    generator would mint an index the very next walk cannot see, plus a
+    parent row for the following update to prune.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    _git_repo(tmp_path, 'scratch/')
+    wiki = Wiki(tmp_path)
+    with pytest.raises(ValueError, match='gitignored'):
+        wiki.new('scratch', desc='A real desc.', content='Real content.')
+    assert not (tmp_path / 'scratch').exists()
+    root_index = (tmp_path / '_index.md').read_text(encoding='utf-8')
+    assert 'scratch' not in root_index
 
 
 @_needs_git

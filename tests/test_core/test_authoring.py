@@ -182,6 +182,7 @@ def test_new_generates_a_converged_index(tmp_path: pathlib.Path) -> None:
         ('...', 'Real content.', 'desc is required'),
         ('A real desc.', '', 'Content is required'),
         ('A real desc.', '  \n ', 'Content is required'),
+        ('A real desc.', '...', 'Content is required'),
     ],
     ids=[
         'empty-desc',
@@ -189,6 +190,7 @@ def test_new_generates_a_converged_index(tmp_path: pathlib.Path) -> None:
         'placeholder-desc',
         'empty-content',
         'blank-content',
+        'placeholder-content',
     ],
 )
 def test_new_refuses_unauthored_inputs(
@@ -213,9 +215,10 @@ def test_new_refuses_unreachable_targets(tmp_path: pathlib.Path) -> None:
     """The generator refuses targets indexing cannot reach or already owns.
 
     An index written outside the root, at the root, under a missing
-    parent, into an excluded subtree, or against the naming policy
-    would be junk no later walk sees or repairs -- each is refused
-    naming its cause, with nothing written.
+    parent, through a symlinked segment (which every walk excludes, and
+    which may point outside the root), into an excluded subtree, or
+    against the naming policy would be junk no later walk sees or
+    repairs -- each is refused naming its cause, with nothing written.
     """
     wiki = _make_wiki(tmp_path, folders={'evidence': ['report']})
     cases = [
@@ -228,6 +231,15 @@ def test_new_refuses_unreachable_targets(tmp_path: pathlib.Path) -> None:
     for name, match in cases:
         with pytest.raises(ValueError, match=match):
             wiki.new(name, desc='A real desc.', content='Real content.')
+    # a symlinked segment is refused -- writing through it would land the
+    # index outside the root, invisibly to every walk
+    outside = tmp_path.parent / 'outside'
+    outside.mkdir()
+    (tmp_path / 'evil').symlink_to(outside)
+    for name in ('evil', 'evil/sub'):
+        with pytest.raises(ValueError, match='crosses a symlink'):
+            wiki.new(name, desc='A real desc.', content='Real content.')
+    assert list(outside.iterdir()) == []
     # an excluded target is refused naming the pattern
     _set_exclude_patterns(tmp_path, ['vendor'])
     with pytest.raises(ValueError, match=r"exclude\.patterns 'vendor'"):
