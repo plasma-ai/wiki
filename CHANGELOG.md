@@ -94,6 +94,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   vendored wiki inside an excluding host is a sovereign tree, never silently
   retargeted to the host.
 
+- The merge-driver wiring (`wiki init`/`wiki config`) drops git's repo-discovery
+  environment the way the gitignore fence does: an inherited `GIT_DIR` can no
+  longer land `merge.wiki.driver` in an unrelated repository's config while
+  dropping `.gitattributes` inside the wiki itself (`GIT_DIR` defaults the work
+  tree to the probe's cwd). The wiring pins to the repository enclosing the
+  wiki.
+
 ### Security
 
 - The trust store's permission self-heal opens `~/.wiki/settings.json` with

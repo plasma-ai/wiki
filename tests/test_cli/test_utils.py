@@ -51,6 +51,7 @@ __all__ = [
     'test_reused_command_honors_resolve_override',
     'test_resolve_wiki_default_class',
     'test_configure_git_merge_driver',
+    'test_merge_driver_wiring_ignores_ambient_git_dir',
     'test_merge_driver_skips_dirty_gitattributes',
     'test_merge_driver_tolerates_undecodable_git_output',
 ]
@@ -720,6 +721,42 @@ def test_resolve_wiki_default_class(tmp_path: pathlib.Path) -> None:
 
 
 # ------ configure_git_merge_driver
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_merge_driver_wiring_ignores_ambient_git_dir(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An inherited ``GIT_DIR`` never retargets the driver wiring.
+
+    A git hook exports ``GIT_DIR`` (relative, resolving against the
+    probe's cwd) and a caller may export one naming another repository;
+    either would land ``merge.wiki.driver`` in the foreign repo's config
+    and drop ``.gitattributes`` beside the wrong toplevel -- inside the
+    wiki itself, since ``GIT_DIR`` defaults the work tree to the cwd.
+    Discovery pins to the repository enclosing the wiki.
+    """
+    # the repo that must receive the wiring, and a foreign one
+    repo = tmp_path / 'repo'
+    (repo / 'wiki').mkdir(parents=True)
+    _git(repo, 'init', '-q', '-b', 'main')
+    foreign = tmp_path / 'foreign'
+    foreign.mkdir()
+    _git(foreign, 'init', '-q', '-b', 'main')
+    monkeypatch.setenv('GIT_DIR', str(foreign / '.git'))
+    configure_git_merge_driver(repo / 'wiki')
+    monkeypatch.delenv('GIT_DIR')
+    # the enclosing repo got both halves of the wiring
+    driver = _git(repo, 'config', '--get', 'merge.wiki.driver')
+    assert driver.stdout.strip() == 'wiki _merge %O %A %B %L %P'
+    attributes = (repo / '.gitattributes').read_text(encoding='utf-8')
+    assert '**/_index.md merge=wiki' in attributes.splitlines()
+    # the foreign repo got neither, and none landed inside the wiki
+    foreign_driver = _git(foreign, 'config', '--get', 'merge.wiki.driver')
+    assert foreign_driver.returncode != 0
+    assert not (foreign / '.gitattributes').exists()
+    assert not (repo / 'wiki' / '.gitattributes').exists()
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')

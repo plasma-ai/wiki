@@ -726,12 +726,21 @@ def _git(
     if cwd:
         full_cmd.extend(['-C', f'{cwd}'])
     full_cmd.extend(cmd)
+    # the repository is the one enclosing the given cwd, so the command never
+    # inherits git's repo-discovery environment (mirroring the gitignore
+    # fence): a git hook exports GIT_DIR (relative, resolving against this
+    # cwd) and a caller may export one pointing at another repo -- either
+    # would wire the merge-driver config into a foreign repository and drop
+    # .gitattributes beside the wrong toplevel
+    env = {
+        name: value for name, value in os.environ.items() if not name.startswith('GIT_')
+    }
     # a missing git binary is treated like a failed command, so callers that
     # pass check=False (e.g. the leading rev-parse) degrade to a clean no-op;
     # output is captured as bytes and fsdecoded -- text mode would decode with
     # the locale codec and raise on an undecodable repo path
     try:
-        result = subprocess.run(full_cmd, capture_output=True)
+        result = subprocess.run(full_cmd, capture_output=True, env=env)
     except FileNotFoundError as e:
         if check:
             cmd_string = ' '.join(cmd)
