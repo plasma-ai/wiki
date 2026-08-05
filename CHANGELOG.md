@@ -115,6 +115,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   where the hint parses as an authored key -- so a resolution that dropped the
   markers but forgot the hint kept it in every later rewrite with both
   instruments blind to it.
+- The description-propagation docs state the `...` placeholder exemption: a
+  child carrying the placeholder propagates nothing, so its parent row keeps the
+  description it has -- no overwrite, no warning, nothing pending -- rather than
+  the unconditional overwrite the guide described.
 - Lint's wrapped-list-marker rule no longer false-flags a legal bullet that
   follows a multi-line item whose continuation line is only a code span (for
   example a bare backticked path): such a line masks to blank but the list is

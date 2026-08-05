@@ -41,7 +41,11 @@ rewrites only the files that differ. It owns:
    description directly in a parent ``_index.md`` is therefore futile whenever
    the child page carries a real ``desc:`` — the next update puts the page's
    value back. Whitespace-only differences (wrapping) are tolerated and never
-   rewritten.
+   rewritten. The one exception is the ``...`` placeholder: a child carrying
+   it propagates nothing, so the row keeps whatever it has (a description the
+   deleted-and-reminted page used to carry, say) and update reports nothing
+   pending — the child's own ``Needs desc`` note is the signal, and filling
+   the page's ``desc:`` in resumes propagation.
 
 **Frontmatter repair.**
    On every page and index, update refreshes the tool-owned ``name:`` field

@@ -70,6 +70,7 @@ __all__ = [
     'test_update_announces_created_index',
     'test_update_announces_adoption',
     'test_update_announces_desc_overwrite',
+    'test_placeholder_child_desc_never_propagates',
     'test_update_trailing_whitespace_desc_converges_quietly',
     'test_update_rewrapped_desc_converges_quietly',
     'test_update_blank_line_in_desc_row_converges_quietly',
@@ -1345,6 +1346,43 @@ def test_update_announces_desc_overwrite(tmp_path: pathlib.Path) -> None:
     notices.clear()
     wiki.update()
     assert 'Overwrote desc:' not in '\n'.join(event.description for event in notices)
+
+
+def test_placeholder_child_desc_never_propagates(tmp_path: pathlib.Path) -> None:
+    """A child carrying the ``...`` placeholder propagates nothing.
+
+    Propagation is what makes the child's ``desc`` the source of truth,
+    but the placeholder is the absence of one: porting it would erase
+    the parent's row description on every reminted index. The row keeps
+    what it has instead, with nothing pending, until the child's own
+    ``desc`` is authored -- the child's ``Needs desc`` note is the
+    signal in the meantime.
+    """
+    wiki = _make_wiki(tmp_path, folders={'notes': ['readme']})
+    root_index = tmp_path / '_index.md'
+    notes_index = tmp_path / 'notes' / '_index.md'
+
+    # delete the folder index: the reminted one carries the placeholder
+    notes_index.unlink()
+    wiki.update()
+    assert 'desc: ...' in notes_index.read_text(encoding='utf-8')
+
+    # the parent row keeps the description it had, and the tree is converged
+    assert '[[notes/_index|notes/]]: The notes section.' in root_index.read_text(
+        encoding='utf-8'
+    )
+    assert Wiki(tmp_path).update(check=True) == []
+
+    # an authored child desc resumes propagation
+    reminted = notes_index.read_text(encoding='utf-8')
+    notes_index.write_text(
+        reminted.replace('desc: ...', 'desc: The reminted section.'),
+        encoding='utf-8',
+    )
+    Wiki(tmp_path).update()
+    assert '[[notes/_index|notes/]]: The reminted section.' in root_index.read_text(
+        encoding='utf-8'
+    )
 
 
 # ------ convergence and scoping

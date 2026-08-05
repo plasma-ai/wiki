@@ -143,7 +143,9 @@ parent index: ``wiki update`` copies each child's frontmatter ``desc`` onto
 the parent's link row. Editing the description directly in the parent
 ``_index.md`` is futile — the next update overwrites it with the page's own
 ``desc`` (and says so, naming the page to edit). Only whitespace and wrapping
-differences are tolerated.
+differences are tolerated, and a child still carrying the ``...`` placeholder
+propagates nothing at all: its row keeps what it has until the page's own
+``desc`` is authored.
 
 Authored descriptions must end in a period (``wiki lint`` fails one that does
 not); the seeded ``...`` placeholder only draws a soft note until it is filled
