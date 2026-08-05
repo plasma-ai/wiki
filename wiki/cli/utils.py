@@ -13,6 +13,7 @@ import pathlib
 import stat
 import subprocess
 import sys
+import time
 import typing
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any, Literal, Optional
@@ -43,6 +44,14 @@ __all__ = [
     'refuse_nested_init',
     'configure_git_merge_driver',
 ]
+
+# bounds the wait for the trust-store lock in trust_root; long enough to
+# outlast a fleet's spawn-time contention, short enough that one wedged
+# holder refuses in plain language instead of hanging every node forever
+_LOCK_TIMEOUT = 10.0
+
+# how often the bounded wait retries the non-blocking lock acquisition
+_LOCK_POLL = 0.05
 
 
 def command(
@@ -134,19 +143,17 @@ def trust_root(root: pathlib.Path) -> pathlib.Path:
     """
     resolved = root.expanduser().resolve()
     home = _config_home()
-    home.mkdir(parents=True, exist_ok=True)
-    # tighten the home through a guarded descriptor, like the store file:
+    # create only what is missing: mkdir(exist_ok=True) reports a symlinked
+    # home pointing at a non-directory (a dotfiles target not yet
+    # materialized, a link into an unmounted volume) as a bare
+    # FileExistsError, which names neither WIKI_CONFIG_DIR nor the fix --
+    # leave any existing name for the guarded open below to judge
+    if not home.is_symlink():
+        home.mkdir(parents=True, exist_ok=True)
+    # tighten the home through its guarded descriptor, like the store file:
     # a plain chmod follows a pre-planted symlink and re-modes a directory
     # outside the store's custody -- with the store then written inside it
-    try:
-        home_fd = os.open(home, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY)
-    except OSError as e:
-        if e.errno in (errno.ELOOP, errno.ENOTDIR):
-            raise PermissionError(
-                f'Refusing symlinked config home: {home}'
-                f' (point {WIKI_CONFIG_DIR} at the real directory).'
-            ) from e
-        raise
+    home_fd = _open_config_home()
     try:
         os.fchmod(home_fd, 0o700)
     finally:
@@ -171,32 +178,34 @@ def trust_root(root: pathlib.Path) -> pathlib.Path:
     # the read-modify-write below loses concurrent entries without mutual
     # exclusion; the lock is a separate file because write_atomic replaces
     # settings.json by rename, so a lock on the settings inode would not survive
-    # the write. O_NOFOLLOW refuses a pre-planted symlink, so a shared
-    # WIKI_CONFIG_DIR cannot redirect the open onto a file outside the store
+    # the write
     lock_path = home / '.settings.lock'
-    try:
-        lock_fd = os.open(
-            path=lock_path,
-            flags=os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
-            mode=0o600,
-        )
-    except OSError as e:
-        if e.errno == errno.ELOOP:
-            raise PermissionError(
-                f'Refusing symlinked trust-store lock: {lock_path}'
-            ) from e
-        raise
+    lock_fd = _open_lock(lock_path)
     with os.fdopen(lock_fd, 'rb') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        # a plain blocking LOCK_EX wedges every fleet-wide spawn-time trust
+        # call behind one stopped holder, silently and forever: poll instead,
+        # and refuse naming the lock once the wait budget is spent
+        deadline = time.monotonic() + _LOCK_TIMEOUT
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f'Timed out waiting for the trust-store lock:'
+                        f' {lock_path} (another `wiki trust` holds it;'
+                        f' remove the lock if none does).'
+                    ) from None
+                time.sleep(_LOCK_POLL)
         # O_CREAT applies the mode at creation only (umask-masked): re-tighten
         # the surviving lock inode on every call, like the store and the home
         os.fchmod(lock_fd, 0o600)
         # strict: rewriting over a corrupt store would fold it into an empty
         # one and silently drop every trusted root -- refuse instead
         settings = _read_global_settings(strict=True)
-        trusted = settings.get('trusted')
-        if not isinstance(trusted, dict):
-            trusted = {}
+        # strict admits a dict or no 'trusted' key at all, never another shape
+        trusted = settings.get('trusted', {})
         trusted[str(resolved)] = dt.datetime.now(dt.UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
         settings['trusted'] = trusted
         content = json.dumps(settings, indent=2, sort_keys=True)
@@ -570,27 +579,73 @@ def _settings_path() -> pathlib.Path:
     return _config_home() / pathlib.Path(WIKI_SETTINGS).name
 
 
+def _open_config_home() -> int:
+    """Open the config home as a directory, through its symlink guard.
+
+    The one open the read path and the write path share, so both agree
+    about what counts as the home: ``O_NOFOLLOW`` refuses a pre-planted
+    symlink, which is the store attack one level up -- the home
+    tightening would chmod its target, and ``O_NOFOLLOW`` on the store
+    itself covers only the final component, so a redirected home would
+    otherwise decide trust from a ``settings.json`` outside the store.
+    The caller owns the returned descriptor.
+
+    Raises:
+        FileNotFoundError: If the config home does not exist.
+        PermissionError: If the config home is not a real directory.
+
+    """
+    home = _config_home()
+    try:
+        return os.open(home, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY)
+    except OSError as e:
+        if e.errno in (errno.ELOOP, errno.ENOTDIR):
+            raise PermissionError(
+                f'Refusing symlinked config home: {home}'
+                f' (point {WIKI_CONFIG_DIR} at the real directory).'
+            ) from e
+        raise
+
+
 def _open_store(path: pathlib.Path) -> Optional[int]:
     """Open the trust store through its tamper guards; ``None`` when absent.
 
     The one open the read path and the permission self-heal share, so
-    both agree about what counts as the store: ``O_NOFOLLOW`` refuses a
-    pre-planted symlink (a shared ``WIKI_CONFIG_DIR`` can never redirect
-    a trust decision onto a file outside the store), the ``st_nlink``
-    probe a second name for the store's inode (a name the ``0700`` home
-    does not cover), and the ``S_ISREG`` probe any non-regular file --
-    opened ``O_NONBLOCK``, so a planted FIFO is refused outright instead
-    of blocking every invocation on a writer that never comes. Each
-    refusal names the path in plain language.
+    both agree about what counts as the store: it is opened relative to
+    the guarded config home (see :func:`_open_config_home`), then
+    ``O_NOFOLLOW`` refuses a pre-planted symlink (a shared
+    ``WIKI_CONFIG_DIR`` can never redirect a trust decision onto a file
+    outside the store), the ``st_nlink`` probe a second name for the
+    store's inode (a name the ``0700`` home does not cover), the
+    ``S_ISREG`` probe any non-regular file -- opened ``O_NONBLOCK``, so a
+    planted FIFO is refused outright instead of blocking every
+    invocation on a writer that never comes -- and the mode probe a
+    store any other local user may write, whose contents decide which
+    wikis run code and so cannot be repaired by re-tightening. Each
+    refusal names the path in plain language, ``EACCES`` included.
     """
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        home_fd = _open_config_home()
+    except FileNotFoundError:
+        return None
+    try:
+        fd = os.open(
+            path=path.name,
+            flags=os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+            dir_fd=home_fd,
+        )
     except FileNotFoundError:
         return None
     except OSError as e:
         if e.errno == errno.ELOOP:
             raise PermissionError(f'Refusing symlinked trust store: {path}') from e
+        if e.errno == errno.EACCES:
+            raise PermissionError(
+                f'Cannot read the trust store: {path} (check its permissions).'
+            ) from e
         raise
+    finally:
+        os.close(home_fd)
     try:
         status = os.fstat(fd)
         if not stat.S_ISREG(status.st_mode):
@@ -600,6 +655,56 @@ def _open_store(path: pathlib.Path) -> Optional[int]:
             )
         if status.st_nlink > 1:
             raise PermissionError(f'Refusing hard-linked trust store: {path}')
+        if status.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise PermissionError(
+                f'Refusing group- or world-writable trust store: {path}'
+                f' (mode {stat.S_IMODE(status.st_mode):04o});'
+                f' remove it and re-run `wiki trust`.'
+            )
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _open_lock(path: pathlib.Path) -> int:
+    """Open the trust-store lock through the store's tamper guards.
+
+    The lock is a real file in the config home, so it gets the store's
+    custody: ``O_NOFOLLOW`` refuses a pre-planted symlink, the
+    ``st_nlink`` probe a second name for the inode -- which the per-call
+    ``fchmod`` would otherwise re-mode outside the store -- and the
+    ``S_ISREG`` probe any non-regular file, opened ``O_NONBLOCK`` so a
+    planted FIFO is refused rather than taken for a lock ``flock`` cannot
+    hold. The mode is not probed: unlike the store the lock carries no
+    content, so re-tightening it is the whole repair. Read-only is
+    enough -- ``flock`` and ``fchmod`` need no write access, and a
+    writable descriptor on a foreign inode is one more thing to lose.
+    """
+    unusable = (
+        f'Trust-store lock is not a regular file: {path};'
+        f' remove it and re-run `wiki trust`.'
+    )
+    try:
+        fd = os.open(
+            path=path,
+            flags=os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
+            mode=0o600,
+        )
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise PermissionError(f'Refusing symlinked trust-store lock: {path}') from e
+        # a directory refuses the O_CREAT open outright on Linux, and opens
+        # for the S_ISREG probe below on macOS: name it the same way on both
+        if e.errno == errno.EISDIR:
+            raise PermissionError(unusable) from e
+        raise
+    try:
+        status = os.fstat(fd)
+        if not stat.S_ISREG(status.st_mode):
+            raise PermissionError(unusable)
+        if status.st_nlink > 1:
+            raise PermissionError(f'Refusing hard-linked trust-store lock: {path}')
     except BaseException:
         os.close(fd)
         raise
@@ -609,38 +714,55 @@ def _open_store(path: pathlib.Path) -> Optional[int]:
 def _read_global_settings(*, strict: bool = False) -> dict:
     """Load the user-global settings, through the store's tamper guards.
 
-    An absent store reads as empty, and corruption tolerantly reads as
-    empty too -- fail-safe, nothing is trusted -- unless ``strict`` is
-    set, which raises on corruption instead: a caller about to rewrite
-    the store (``trust_root``) must never fold a corrupt store into an
-    empty one and silently drop every trusted root. A tampered store (a
-    symlinked, hard-linked, or non-regular file) always raises: the
-    write path refuses it, and a trust decision must never be read
-    through what a trust write would refuse.
+    An absent store reads as empty, and corruption -- unparseable JSON,
+    undecodable bytes, or a shape a rewrite would destroy -- tolerantly
+    reads as empty too -- fail-safe, nothing is trusted -- unless
+    ``strict`` is set, which raises on corruption instead: a caller about
+    to rewrite the store (``trust_root``) must never fold a corrupt store
+    into an empty one and silently drop every trusted root. A blank store
+    is the exception: it holds no roots, so a rewrite drops nothing and
+    strict reads it as absent rather than wedging every trust call behind
+    a manual repair. A tampered store (a symlinked, hard-linked,
+    non-regular, or other-writable file) always raises: the write path
+    refuses it, and a trust decision must never be read through what a
+    trust write would refuse.
     """
     path = _settings_path()
     fd = _open_store(path)
     if fd is None:
         return {}
+    stakes = (
+        ' repair or remove it before re-trusting'
+        ' (a rewrite would drop every trusted root).'
+    )
     with os.fdopen(fd, 'r', encoding='utf-8') as handle:
         try:
-            result = json.loads(handle.read())
-        except json.JSONDecodeError as e:
+            content = handle.read()
+            # an empty (or whitespace-only) store is a zeroed file, not a
+            # loss waiting to happen: a truncated restore or a bootstrap
+            # `touch` must not block every trust call until a human rm's it
+            if not content.strip():
+                return {}
+            result = json.loads(content)
+        # undecodable bytes are corruption too, and escape json's own error
+        except (UnicodeDecodeError, json.JSONDecodeError) as e:
             if strict:
                 raise ValueError(
-                    f'Trust store is corrupt: {path} ({e});'
-                    f' repair or remove it before re-trusting'
-                    f' (a rewrite would drop every trusted root).'
+                    f'Trust store is corrupt: {path} ({e});{stakes}'
                 ) from e
             return {}
     if not isinstance(result, dict):
         if strict:
             raise ValueError(
-                f'Trust store is corrupt: {path} (top level is not an object);'
-                f' repair or remove it before re-trusting'
-                f' (a rewrite would drop every trusted root).'
+                f'Trust store is corrupt: {path} (top level is not an object);{stakes}'
             )
         return {}
+    # a wrong-shaped 'trusted' is the one the rewrite would silently discard,
+    # so strict refuses it exactly as it refuses a wrong-shaped top level
+    if strict and not isinstance(result.get('trusted', {}), dict):
+        raise ValueError(
+            f'Trust store is corrupt: {path} (trusted is not an object);{stakes}'
+        )
     return result
 
 

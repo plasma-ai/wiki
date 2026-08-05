@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import concurrent.futures as cf
+import fcntl
 import json
 import os
 import pathlib
@@ -13,7 +14,7 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from wiki.cli import cmd
+from wiki.cli import cmd, utils
 from wiki.cli.utils import (
     configure_git_merge_driver,
     enclosing_wiki_root,
@@ -43,9 +44,12 @@ __all__ = [
     'test_trust_root_refuses_symlinked_store',
     'test_trust_root_refuses_hard_linked_store',
     'test_trust_reads_refuse_a_tampered_store',
-    'test_trust_root_refuses_symlinked_config_home',
+    'test_trust_store_refuses_unsafe_modes',
+    'test_trust_refuses_a_symlinked_config_home',
     'test_trust_root_tightens_and_guards_the_lock',
+    'test_trust_root_bounds_the_wait_for_a_held_lock',
     'test_trust_root_refuses_a_corrupt_store',
+    'test_trust_root_writes_over_a_blank_store',
     'test_trust_store_refuses_non_regular_files',
     'test_is_trusted_ignores_malformed_store',
     'test_reused_command_honors_resolve_override',
@@ -544,15 +548,55 @@ def test_trust_reads_refuse_a_tampered_store(tmp_path: pathlib.Path) -> None:
         is_trusted(root)
 
 
-def test_trust_root_refuses_symlinked_config_home(
+def test_trust_store_refuses_unsafe_modes(tmp_path: pathlib.Path) -> None:
+    """A store other users may write is refused; an unreadable one says so.
+
+    A group- or world-writable store is the hard-link attack without the
+    hard link -- any local user edits the list that decides which wikis
+    run code -- and re-tightening cannot undo an entry already planted,
+    so both paths refuse instead of self-healing. Loosened *read* bits
+    still self-heal (nothing was forgeable), which is what keeps the
+    repair worth having. An unreadable store fails closed either way,
+    but names the path and the fix rather than leaking ``EACCES``.
+    """
+    root = tmp_path / 'wiki'
+    root.mkdir()
+    home = pathlib.Path(os.environ['WIKI_CONFIG_DIR'])
+    home.mkdir(parents=True, exist_ok=True)
+    store = home / 'settings.json'
+    planted = json.dumps({'trusted': {str(root.resolve()): '2000-01-01T00:00:00Z'}})
+    store.write_text(planted, encoding='utf-8')
+    for mode in (0o666, 0o660, 0o606):
+        os.chmod(store, mode)
+        with pytest.raises(PermissionError, match='world-writable trust store'):
+            is_trusted(root)
+        with pytest.raises(PermissionError, match='world-writable trust store'):
+            trust_root(root)
+        # the refusal is the whole response: the mode is not repaired under it
+        assert store.stat().st_mode & 0o777 == mode
+    # an unreadable store fails closed in plain language, read and write
+    os.chmod(store, 0o000)
+    for consult in (is_trusted, trust_root):
+        with pytest.raises(PermissionError, match='Cannot read the trust store'):
+            consult(root)
+
+
+def test_trust_refuses_a_symlinked_config_home(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A config home symlinked at a foreign directory is refused.
+    """A config home symlinked at a foreign directory is refused, read and write.
 
     The home tightening (``0700``) would otherwise chmod through the
     link -- re-moding a directory outside the store's custody, with the
-    store then written inside it. The refusal names the sanctioned
+    store then written inside it -- and the read path would decide trust
+    from the ``settings.json`` inside the link's target, since
+    ``O_NOFOLLOW`` on the store covers only the final component: a
+    redirected home is the store attack one level up, so it would confer
+    hook execution on a root the user never trusted. A link at a
+    non-directory (a dotfiles target not yet materialized, a link into an
+    unmounted volume) is the same fix, and gets the same message instead
+    of a bare ``File exists``. Every refusal names the sanctioned
     relocation (``WIKI_CONFIG_DIR`` at the real directory), and the
     link's target keeps its mode and contents.
     """
@@ -561,22 +605,49 @@ def test_trust_root_refuses_symlinked_config_home(
     victim = tmp_path / 'victim_home'
     victim.mkdir()
     os.chmod(victim, 0o755)  # noqa: S103
+    # the target vouches for a root the user never trusted
+    (victim / 'settings.json').write_text(
+        json.dumps({'trusted': {str(root.resolve()): '2000-01-01T00:00:00Z'}}),
+        encoding='utf-8',
+    )
     linked = tmp_path / 'linked_home'
     linked.symlink_to(victim)
     monkeypatch.setenv('WIKI_CONFIG_DIR', str(linked))
     with pytest.raises(PermissionError, match='symlinked config home'):
         trust_root(root)
+    with pytest.raises(PermissionError, match='symlinked config home'):
+        is_trusted(root)
+    # the hook gate reads through the same guard, so the hook never runs
+    (root / '.wiki').mkdir()
+    (root / '.wiki' / 'wiki.py').write_text('__all__ = []\n', encoding='utf-8')
+    with pytest.raises(PermissionError, match='symlinked config home'):
+        load_wiki_class(root)
     assert victim.stat().st_mode & 0o777 == 0o755
-    assert list(victim.iterdir()) == []
+    assert [entry.name for entry in victim.iterdir()] == ['settings.json']
+    # a link at a non-directory is named the same way, not `File exists`
+    absent = tmp_path / 'never_materialized'
+    victim_file = tmp_path / 'victim_file'
+    victim_file.write_text('victim bytes\n', encoding='utf-8')
+    for target in (absent, victim_file):
+        link = tmp_path / f'home_at_{target.name}'
+        link.symlink_to(target)
+        monkeypatch.setenv('WIKI_CONFIG_DIR', str(link))
+        with pytest.raises(PermissionError, match='symlinked config home'):
+            trust_root(root)
+    assert not absent.exists()
+    assert victim_file.read_text(encoding='utf-8') == 'victim bytes\n'
 
 
 def test_trust_root_tightens_and_guards_the_lock(tmp_path: pathlib.Path) -> None:
-    """The lock sibling gets the store's custody: re-tightened and unlinked.
+    """The lock sibling gets the store's custody: re-tightened and unaliased.
 
     ``O_CREAT`` applies its mode at creation only (umask-masked), so a
     lock loosened out-of-band would stay loose forever without the
-    per-call re-tighten; and a symlinked lock is refused with the same
-    plain-language message the store gets, never a raw errno.
+    per-call re-tighten. Every shape the store refuses the lock refuses
+    too, in the same plain language and never as a raw errno: the
+    per-call ``fchmod`` addresses whatever inode the name reaches, so a
+    symlinked or hard-linked lock re-modes a file outside the store, and
+    a FIFO or a directory is no lock at all.
     """
     root = tmp_path / 'wiki'
     root.mkdir()
@@ -588,18 +659,60 @@ def test_trust_root_tightens_and_guards_the_lock(tmp_path: pathlib.Path) -> None
     os.chmod(lock, 0o666)  # noqa: S103
     trust_root(root)
     assert lock.stat().st_mode & 0o777 == 0o600
-    # a symlinked lock is refused in plain language, its target untouched
+    # a lock aliasing a file outside the store is refused, its target untouched
     other = tmp_path / 'wiki2'
     other.mkdir()
     victim = tmp_path / 'victim_lock'
     victim.write_text('victim bytes\n', encoding='utf-8')
     os.chmod(victim, 0o644)
+    for alias, refusal in (
+        (lock.symlink_to, 'symlinked trust-store lock'),
+        (lambda target: os.link(target, lock), 'hard-linked trust-store lock'),
+    ):
+        lock.unlink()
+        alias(victim)
+        with pytest.raises(PermissionError, match=refusal):
+            trust_root(other)
+        assert victim.read_text(encoding='utf-8') == 'victim bytes\n'
+        assert victim.stat().st_mode & 0o777 == 0o644
+    # a non-regular lock is named, not blocked on and not left to flock
     lock.unlink()
-    lock.symlink_to(victim)
-    with pytest.raises(PermissionError, match='symlinked trust-store lock'):
+    os.mkfifo(lock)
+    with pytest.raises(PermissionError, match='lock is not a regular file'):
         trust_root(other)
-    assert victim.read_text(encoding='utf-8') == 'victim bytes\n'
-    assert victim.stat().st_mode & 0o777 == 0o644
+    lock.unlink()
+    lock.mkdir()
+    with pytest.raises(PermissionError, match='lock is not a regular file'):
+        trust_root(other)
+
+
+def test_trust_root_bounds_the_wait_for_a_held_lock(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lock held by someone else times out loudly instead of hanging forever.
+
+    A blocking ``LOCK_EX`` wedges every fleet-wide spawn-time trust call
+    behind one stopped holder, with no output to diagnose it by. The wait
+    is bounded and the refusal names the lock; once the holder lets go,
+    the very same call succeeds, so the bound never costs a legitimate
+    waiter its turn.
+    """
+    root = tmp_path / 'wiki'
+    root.mkdir()
+    home = pathlib.Path(os.environ['WIKI_CONFIG_DIR'])
+    home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(utils, '_LOCK_TIMEOUT', 0.2)
+    holder = os.open(home / '.settings.lock', os.O_RDONLY | os.O_CREAT, 0o600)
+    fcntl.flock(holder, fcntl.LOCK_EX)
+    try:
+        with pytest.raises(TimeoutError, match='trust-store lock'):
+            trust_root(root)
+    finally:
+        os.close(holder)
+    assert not is_trusted(root)
+    trust_root(root)
+    assert is_trusted(root)
 
 
 def test_trust_store_refuses_non_regular_files(tmp_path: pathlib.Path) -> None:
@@ -633,7 +746,10 @@ def test_trust_root_refuses_a_corrupt_store(tmp_path: pathlib.Path) -> None:
 
     A tolerant read folds corruption into an empty store -- right for a
     trust decision (nothing is trusted), catastrophic for the rewrite,
-    which would silently drop every trusted root with a clean exit. The
+    which would silently drop every trusted root with a clean exit. That
+    holds for every shape a rewrite cannot preserve: unparseable JSON, a
+    top level that is not an object, a ``trusted`` that is not an object
+    (the one key that matters), and bytes that are not even UTF-8. The
     refusal names the store and the stakes; the corrupt bytes survive
     for repair, and reads keep failing safe.
     """
@@ -642,14 +758,41 @@ def test_trust_root_refuses_a_corrupt_store(tmp_path: pathlib.Path) -> None:
     home = pathlib.Path(os.environ['WIKI_CONFIG_DIR'])
     home.mkdir(parents=True, exist_ok=True)
     store = home / 'settings.json'
-    for corrupt in ('{"trusted": {truncated', '["not", "an", "object"]'):
-        store.write_text(corrupt, encoding='utf-8')
+    corruptions = (
+        b'{"trusted": {truncated',
+        b'["not", "an", "object"]',
+        b'{"trusted": ["/one", "/two"], "other": "keepme"}',
+        b'{"trusted": {"\xff": "2000-01-01T00:00:00Z"}}',
+    )
+    for corrupt in corruptions:
+        store.write_bytes(corrupt)
         # the trust decision fails safe; the rewrite refuses loudly
         assert not is_trusted(root)
         with pytest.raises(ValueError, match='Trust store is corrupt'):
             trust_root(root)
         # the corrupt bytes survive for repair
-        assert store.read_text(encoding='utf-8') == corrupt
+        assert store.read_bytes() == corrupt
+
+
+def test_trust_root_writes_over_a_blank_store(tmp_path: pathlib.Path) -> None:
+    """A blank store is written, not refused as unrepairable corruption.
+
+    An empty file holds no trusted roots, so the strict read's whole
+    justification -- a rewrite would drop every trusted root -- is
+    vacuous, while refusing it wedges every spawn-time trust call on the
+    machine until a human removes the file. A store zeroed by an
+    interrupted copy or a bootstrap ``touch`` reads as absent instead.
+    """
+    root = tmp_path / 'wiki'
+    root.mkdir()
+    home = pathlib.Path(os.environ['WIKI_CONFIG_DIR'])
+    home.mkdir(parents=True, exist_ok=True)
+    store = home / 'settings.json'
+    for blank in ('', '\n  \n'):
+        store.write_text(blank, encoding='utf-8')
+        assert not is_trusted(root)
+        assert trust_root(root) == root.resolve()
+        assert is_trusted(root)
 
 
 def test_is_trusted_ignores_malformed_store(tmp_path: pathlib.Path) -> None:

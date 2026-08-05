@@ -157,9 +157,62 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   trusted, fail-safe), catastrophic for the rewrite, which silently dropped
   every trusted root with a clean exit. The refusal names the store and the
   stakes; the corrupt bytes survive for repair.
+- The config home's symlink guard moved onto the open the read path and the
+  write path share, so a redirected home can no longer decide trust.
+  `O_NOFOLLOW` on `settings.json` covers only its final component, so a
+  `~/.wiki` (or `WIKI_CONFIG_DIR`) symlinked at a foreign directory was refused
+  for `wiki trust` while `wiki map` still read the `settings.json` inside that
+  directory -- and executed the `.wiki/wiki.py` of a wiki the user had never
+  trusted. The store is now opened relative to the guarded home descriptor, so
+  there is no window between the check and the open either.
+- A group- or world-writable trust store is refused, read path and write path
+  alike. It is the hard-link attack without the hard link -- any local user
+  rewrites the list that decides which wikis run code, needing write permission
+  on one file rather than control of a second name -- and re-tightening the mode
+  cannot unplant an entry already written, so the store is refused (naming the
+  mode and the fix) instead of self-healed. Loosened *read* bits still
+  self-heal: nothing behind them was forgeable.
+- The `.settings.lock` sibling gets the store's full custody, not just
+  `O_NOFOLLOW`. The `st_nlink` probe refuses a lock hard-linked to a file
+  outside the config home -- the per-call `fchmod` re-moded that file to `0600`,
+  with the process holding a writable descriptor and an exclusive lock on a
+  foreign inode -- and the `S_ISREG` probe refuses a FIFO or a directory in
+  plain language instead of a raw `ENOTSUP`/`EISDIR` (on Linux, `flock` on a
+  planted FIFO succeeds, silently voiding the mutual exclusion the lock exists
+  to provide). The lock is opened read-only now: `flock` and `fchmod` need no
+  write access.
+- A `trusted` value that is not an object is refused by the rewrite exactly as a
+  corrupt top level is, instead of being discarded and replaced by a fresh
+  single-entry map -- the one key that matters was the one shape the strict read
+  did not cover, so a hand-edit or a version skew that made it a list lost every
+  root on the next spawn-time trust call. A *blank* store is the opposite case
+  and now writes cleanly: an empty file holds no trusted roots, so the "a
+  rewrite would drop every trusted root" refusal was vacuous and served only to
+  wedge every trust call on the machine until a human removed the file.
 
 ### Fixed
 
+- `wiki trust` bounds its wait for the trust-store lock instead of blocking on
+  it forever: one stopped holder (or a stalled network-filesystem write) wedged
+  every fleet-wide spawn-time trust call with no diagnostic at all. The wait
+  polls a non-blocking acquisition and, once the budget is spent, refuses naming
+  the lock path.
+- Undecodable bytes in the trust store read as corruption instead of escaping as
+  a `UnicodeDecodeError`: one bad byte -- a partial write, a truncated restore,
+  an encoding mishap -- turned every `wiki update`/`lint`/`map` on a hooked wiki
+  into a hard failure whose message named no file. Reads fail safe (nothing is
+  trusted) and the rewrite refuses naming the store, as both already did for
+  unparseable JSON.
+- An unreadable trust store is refused in plain language
+  (`Cannot read the trust store: <path> (check its permissions).`) rather than
+  leaking a bare `EACCES` -- the one store state the guarded open never
+  converted, and the one a restrictive umask or a chmod typo reaches by
+  accident.
+- A config home symlinked at a non-directory -- a dotfiles target not yet
+  materialized, a link into an unmounted volume -- reaches the
+  `Refusing symlinked config home` refusal instead of a bare `File exists` about
+  a path that, to the user, does not exist: the named refusal sat downstream of
+  a `mkdir(parents=True, exist_ok=True)` that raised first.
 - `wiki lint` reports a leftover merge repair hint in an `_index.md` as an
   issue. The driver plants its hint above the first conflict marker, which
   normally lands inside the frontmatter (the `updated:` stamps differ first),
