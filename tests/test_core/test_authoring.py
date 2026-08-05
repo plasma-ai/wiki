@@ -26,6 +26,7 @@ __all__ = [
     'test_fresh_wiki_lints_clean',
     'test_update_path_joins_title',
     'test_new_generates_a_converged_index',
+    'test_new_writes_multi_line_desc_as_block_scalar',
     'test_new_refuses_unauthored_inputs',
     'test_new_refuses_unreachable_targets',
     'test_new_preflights_sweep_refusals_before_writing',
@@ -173,6 +174,40 @@ def test_new_generates_a_converged_index(tmp_path: pathlib.Path) -> None:
     with pytest.raises(ValueError, match='Index already exists'):
         wiki.new('evidence/verify', desc='Another.', content='More.')
     assert (verify / '_index.md').read_text(encoding='utf-8') == text
+
+
+def test_new_writes_multi_line_desc_as_block_scalar(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A multi-line desc lands as a block scalar and rides the parent row.
+
+    The authored desc's line breaks are content: the index frontmatter
+    carries them as a literal block scalar, the parent row carries the
+    continuation line, and the tree still converges with a clean lint
+    -- no malformed YAML for a later sweep to trip on.
+    """
+    wiki = _make_wiki(tmp_path, folders={'evidence': ['report']})
+    wiki.new(
+        'evidence/verify',
+        desc='The verify record.\nKeeper legs and the grading quote.',
+        content='Adopted at grading.',
+    )
+    # the index carries the desc as an indented literal block scalar
+    verify = tmp_path / 'evidence' / 'verify'
+    text = (verify / '_index.md').read_text(encoding='utf-8')
+    assert (
+        'desc: |\n  The verify record.\n  Keeper legs and the grading quote.'
+    ) in text
+    # the parent row carries the continuation line, unindented
+    parent = (tmp_path / 'evidence' / '_index.md').read_text(encoding='utf-8')
+    assert (
+        '[[evidence/verify/_index|verify/]]: The verify record.\n'
+        'Keeper legs and the grading quote.'
+    ) in parent
+    # the tree is converged and clean
+    assert wiki.update() == []
+    fresh = Wiki(tmp_path)
+    assert fresh.lint() == []
 
 
 @pytest.mark.parametrize(
