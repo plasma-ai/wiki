@@ -416,9 +416,9 @@ class Wiki:
         pattern-pure (``--no-index``), so a fenced file that was
         force-tracked reads as fenced all the same and the fence and the
         tool agree about what is content. Empty -- no fencing -- outside
-        a git repository, when git is unavailable, and when the root
-        itself is ignored (a deliberately unindexed wiki inside a repo
-        must keep working).
+        a git repository, when git is unavailable (narrated, inside a
+        repository), and when the root itself is ignored (a deliberately
+        unindexed wiki inside a repo must keep working).
         """
         # enumerate the candidates one batch probe covers: the root itself
         # ('.', probing the fence-disable case) and every non-dot entry
@@ -454,7 +454,9 @@ class Wiki:
         personal global pattern would otherwise fence content on one
         machine only, churning rows against every other). Returns the
         matched subset, or ``None`` when no fence applies (outside a
-        repository, or git unavailable).
+        repository, or git unavailable -- the latter narrated where a
+        repository encloses the root, since indexing then adopts what
+        that repository fences).
         """
         payload = b'\0'.join(os.fsencode(entry) for entry in candidates) + b'\0'
         # the repository is the one enclosing the root, so the probe never
@@ -484,10 +486,16 @@ class Wiki:
                 env=env,
             )
         except FileNotFoundError:
-            return None
+            result = None
         # 0 = some matched, 1 = none matched; anything else (128 outside a
         # repo) means no fence applies here
-        if result.returncode not in (0, 1):
+        if (result is None) or (result.returncode not in (0, 1)):
+            # a repository on disk the probe cannot read is a broken fence,
+            # not an unfenced tree: indexing is about to adopt files that
+            # repository keeps untracked, so say so rather than degrade mute
+            enclosing = (self._root, *self._root.parents)
+            if any((folder / '.git').exists() for folder in enclosing):
+                self.on_git_fence_unavailable()
             return None
         return {os.fsdecode(entry) for entry in result.stdout.split(b'\0') if entry}
 
@@ -1995,6 +2003,26 @@ class Wiki:
         """
         if event is None:
             event = GitignoreSkipEvent(message, **kwargs)
+        return self.on_notice(event, logging_level=logging_level)
+
+    def on_git_fence_unavailable(
+        self: Wiki,
+        message: Optional[str] = None,
+        *,
+        logging_level: int = logging.WARNING,
+        event: Optional[GitFenceUnavailableEvent] = None,
+        **kwargs: Any,
+    ) -> Event:
+        """Handle an unavailable-gitignore-fence notice event.
+
+        Constructs a ``GitFenceUnavailableEvent`` from ``message`` and
+        the payload kwargs unless a pre-built ``event`` is passed
+        through, then delegates to ``on_notice``. Override in subclasses
+        to intercept this notice kind alone; override ``on_notice`` to
+        intercept every notice.
+        """
+        if event is None:
+            event = GitFenceUnavailableEvent(message, **kwargs)
         return self.on_notice(event, logging_level=logging_level)
 
     def on_write_skip(
@@ -4611,6 +4639,19 @@ class GitignoreSkipEvent(Event):
         )
 
 
+class GitFenceUnavailableEvent(Event):
+    """Emitted when the gitignore fence probe fails inside a repository."""
+
+    @property
+    def description(self: GitFenceUnavailableEvent) -> str:
+        """Return the unavailable-fence notice line."""
+        return (
+            'Gitignore fence unavailable: `git check-ignore` failed inside the'
+            ' enclosing repository (is git installed?); indexing proceeds'
+            ' unfenced, so paths the repository ignores are adopted'
+        )
+
+
 class WriteSkipEvent(Event):
     """Emitted when apply skips a file edited concurrently with the plan."""
 
@@ -4756,6 +4797,7 @@ _NOTICE_HOOKS = {
     SymlinkSkipEvent: 'on_symlink_skip',
     ExcludeSkipEvent: 'on_exclude_skip',
     GitignoreSkipEvent: 'on_gitignore_skip',
+    GitFenceUnavailableEvent: 'on_git_fence_unavailable',
     WriteSkipEvent: 'on_write_skip',
     FrontmatterMalformedEvent: 'on_frontmatter_malformed',
     IndexTruncatedEvent: 'on_index_truncated',

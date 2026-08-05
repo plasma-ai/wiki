@@ -78,7 +78,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   probe drops the caller's `GIT_*` environment, so an inherited `GIT_DIR` (git
   hooks export one) can neither fence corpus content by another repository's
   rules nor, pointed where no repository is discoverable, drop the fence and
-  adopt the residue it was holding back.
+  adopt the residue it was holding back. A probe that fails inside a repository
+  -- git off `PATH`, a broken install -- narrates the degrade
+  (`GitFenceUnavailableEvent`/`on_git_fence_unavailable`, a `lint --json` note)
+  instead of sweeping unfenced in silence.
 
 - A `--path` (or cwd resolution) landing inside an existing wiki resolves upward
   to the enclosing root -- declared, or the topmost index of a bare chain --

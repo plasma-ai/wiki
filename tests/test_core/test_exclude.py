@@ -36,6 +36,7 @@ __all__ = [
     'test_gitignore_fence_is_pattern_pure',
     'test_gitignore_fence_ignores_machine_local_excludes',
     'test_gitignore_fence_ignores_an_inherited_git_dir',
+    'test_unavailable_fence_is_narrated_inside_a_repository',
     'test_gitignore_fence_reaches_a_nested_wiki_root',
     'test_ignored_wiki_root_stays_unfenced',
     'test_gitignored_link_target_names_the_cause',
@@ -565,6 +566,41 @@ def test_gitignore_fence_ignores_an_inherited_git_dir(
     core_index = (tmp_path / 'core' / '_index.md').read_text(encoding='utf-8')
     assert 'TABLES' not in core_index
     assert (tmp_path / 'core' / 'TABLES.md').read_text(encoding='utf-8') == residue
+
+
+@_needs_git
+@pytest.mark.parametrize(
+    argnames='in_repo',
+    argvalues=[True, False],
+    ids=['in-repo', 'no-repo'],
+)
+def test_unavailable_fence_is_narrated_inside_a_repository(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    in_repo: bool,
+) -> None:
+    """A fence probe that fails inside a repository narrates the degrade.
+
+    With git off PATH the sweep proceeds unfenced, adopting what the
+    repository fences -- frontmatter written into untracked driver
+    files, rows minted -- so the operator gets a line naming the
+    unavailable fence rather than a silent mutation. Outside a
+    repository there is no fence to lose, and the same degrade stays
+    quiet.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    if in_repo:
+        _git_repo(tmp_path, 'TABLES.md')
+    (tmp_path / 'core' / 'TABLES.md').write_text('# t\n\nrows\n', encoding='utf-8')
+    monkeypatch.setenv('PATH', '')
+
+    # unfenced either way: the notice is what separates the two
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+    issues = wiki.lint()
+    assert any('Bare page' in issue for issue in issues)
+    unavailable = [n for n in notices if 'fence unavailable' in n.description]
+    assert bool(unavailable) is in_repo
 
 
 @_needs_git
