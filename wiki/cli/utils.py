@@ -289,20 +289,38 @@ def resolve_wiki(
         wiki_root = enclosing
     declared = (wiki_root / WIKI_SETTINGS).is_file()
     # an undeclared enclosing wiki leaves no marker for the resolution
-    # above: a parent index means the path sits inside an index chain --
-    # whether or not the path carries an index of its own -- so resolve
-    # upward the same way, to the chain's topmost index
-    if not declared and (wiki_root.parent / WIKI_INDEX).is_file():
-        enclosing = wiki_root.parent
-        while (enclosing.parent / WIKI_INDEX).is_file():
-            enclosing = enclosing.parent
-        if inside == 'refuse':
-            raise _inside_wiki_error(enclosing)
-        typer.echo(
-            f'{wiki_root}: inside the wiki at {enclosing}; using that root',
-            err=True,
-        )
-        wiki_root = enclosing
+    # above: an ancestor index means the path sits inside an index chain,
+    # so resolve upward the same way, to the chain's topmost index. An
+    # indexed path climbs only a contiguous parent chain (a standalone
+    # wiki under a stray outer index is its own topmost chain); a raw
+    # path belongs to the nearest indexed ancestor's chain at any depth,
+    # where update would adopt it -- the same climb cwd resolution runs,
+    # so bare invocation and an explicit path agree
+    if not declared:
+        if (wiki_root / WIKI_INDEX).is_file():
+            chain = wiki_root.parent
+            if not (chain / WIKI_INDEX).is_file():
+                chain = None
+        else:
+            chain = next(
+                (
+                    ancestor
+                    for ancestor in wiki_root.parents
+                    if (ancestor / WIKI_INDEX).is_file()
+                ),
+                None,
+            )
+        if chain is not None:
+            enclosing = chain
+            while (enclosing.parent / WIKI_INDEX).is_file():
+                enclosing = enclosing.parent
+            if inside == 'refuse':
+                raise _inside_wiki_error(enclosing)
+            typer.echo(
+                f'{wiki_root}: inside the wiki at {enclosing}; using that root',
+                err=True,
+            )
+            wiki_root = enclosing
     # the root is declared by its settings marker; a bare index tree is
     # tolerated with a notice, and anything less is not a wiki
     has_index = (wiki_root / WIKI_INDEX).is_file()
@@ -348,7 +366,9 @@ def resolve_wiki_root(
     An explicit ``path`` resolves as given. Otherwise the root is the
     ancestor (cwd included) declaring itself with ``.wiki/settings.json``;
     an undeclared index tree falls back to the topmost ``_index.md``
-    chain, then to each ``fallbacks`` nomination in order, and a bare
+    chain above the nearest indexed ancestor (cwd included -- a raw
+    folder of an undeclared wiki resolves like an explicit ``--path .``
+    does), then to each ``fallbacks`` nomination in order, and a bare
     project falls back to ``{cwd}/wiki/``. A nomination wins only when
     declared or at least indexed -- an invalid one declines to the next.
 
@@ -369,12 +389,16 @@ def resolve_wiki_root(
     roots = _wiki_roots((cwd, *cwd.parents))
     if roots:
         return roots[0]
-    # undeclared tree: walk up from cwd to the topmost _index.md
-    if (cwd / WIKI_INDEX).is_file():
-        result = cwd
-        while (result.parent / WIKI_INDEX).is_file():
-            result = result.parent
-        return result
+    # undeclared tree: climb from the nearest indexed ancestor (cwd
+    # included) to the topmost _index.md -- a raw (unindexed) folder of
+    # an undeclared wiki resolves like an explicit `--path .` does,
+    # instead of falling through to a different wiki entirely
+    for candidate in (cwd, *cwd.parents):
+        if (candidate / WIKI_INDEX).is_file():
+            result = candidate
+            while (result.parent / WIKI_INDEX).is_file():
+                result = result.parent
+            return result
     # embedder-nominated roots: a nomination wins only when declared or at
     # least indexed (the same rule as the {cwd}/wiki fallback below), so a
     # stale nominator declines instead of masking a valid fallback

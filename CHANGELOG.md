@@ -94,6 +94,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   vendored wiki inside an excluding host is a sovereign tree, never silently
   retargeted to the host.
 
+- Bare invocation and `--path .` agree from a raw (unindexed) folder of an
+  undeclared wiki: cwd resolution climbs the ancestor index chain from the
+  nearest indexed ancestor at any depth -- exactly the climb an explicit path
+  runs -- instead of erroring or falling through to a different wiki via the
+  `wiki/` fallback. An indexed path still climbs only a contiguous parent chain,
+  so a standalone wiki under a stray outer index stays its own root.
+
 - The merge-driver wiring (`wiki init`/`wiki config`) drops git's repo-discovery
   environment the way the gitignore fence does: an inherited `GIT_DIR` can no
   longer land `merge.wiki.driver` in an unrelated repository's config while

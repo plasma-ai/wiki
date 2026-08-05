@@ -47,6 +47,7 @@ __all__ = [
     'test_path_inside_wiki_resolves_upward',
     'test_path_inside_undeclared_wiki_resolves_upward',
     'test_raw_subfolder_of_undeclared_wiki_resolves_upward',
+    'test_bare_invocation_agrees_with_path_dot',
     'test_path_naming_nested_declared_wiki_resolves_to_itself',
     'test_parent_enclosing_declared_wiki_is_refused',
     'test_update_cli_refuses_nested_wiki',
@@ -794,6 +795,33 @@ def test_raw_subfolder_of_undeclared_wiki_resolves_upward(
     # no marker planted in the subfolder; update restores the root's own
     assert not (root / 'core' / 'raw' / '.wiki').exists()
     assert (root / '.wiki' / 'settings.json').is_file()
+
+
+def test_bare_invocation_agrees_with_path_dot(tmp_path: pathlib.Path) -> None:
+    """From a raw folder, bare invocation and ``--path .`` name one root.
+
+    The two habitual spellings must never disagree: from a raw
+    (unindexed) folder of an undeclared wiki -- any depth -- the bare
+    invocation climbs the same ancestor index chain the explicit
+    ``--path .`` climbs, instead of erroring or falling through to a
+    different wiki via the ``wiki/`` fallback.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'core' / '_index.md', _index('Core', 'Core concepts.', 'Text.'))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    shutil.rmtree(root / '.wiki')
+    deep = root / 'core' / 'raw' / 'deep'
+    deep.mkdir(parents=True)
+
+    # both spellings agree at every depth, on the same root
+    for cwd in (root / 'core' / 'raw', deep):
+        bare = _wiki(cwd, 'map', '--depth', '0')
+        dotted = _wiki(cwd, 'map', '--depth', '0', '--path', '.')
+        assert bare.returncode == 0, bare.stdout + bare.stderr
+        assert dotted.returncode == 0, dotted.stdout + dotted.stderr
+        assert bare.stdout == dotted.stdout
+        assert 'core/' in bare.stdout
 
 
 def test_path_naming_nested_declared_wiki_resolves_to_itself(

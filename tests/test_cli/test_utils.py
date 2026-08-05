@@ -70,14 +70,24 @@ def test_resolve_wiki_root(
     assert result == tmp_path
 
     # walk up from cwd to find topmost _index.md
-    nested = tmp_path / 'a' / 'b'
+    tree = tmp_path / 'tree'
+    nested = tree / 'a' / 'b'
     nested.mkdir(parents=True)
-    (tmp_path / '_index.md').write_text('root\n', encoding='utf-8')
-    (tmp_path / 'a' / '_index.md').write_text('mid\n', encoding='utf-8')
+    (tree / '_index.md').write_text('root\n', encoding='utf-8')
+    (tree / 'a' / '_index.md').write_text('mid\n', encoding='utf-8')
     (nested / '_index.md').write_text('leaf\n', encoding='utf-8')
     monkeypatch.chdir(nested)
     result = resolve_wiki_root(None)
-    assert result == tmp_path
+    assert result == tree
+
+    # a raw (unindexed) folder inside the tree climbs from its nearest
+    # indexed ancestor, like an explicit `--path .` does -- never to a
+    # different wiki via the wiki/ fallback
+    raw = nested / 'raw' / 'deep'
+    raw.mkdir(parents=True)
+    monkeypatch.chdir(raw)
+    result = resolve_wiki_root(None)
+    assert result == tree
 
     # wiki/ subdirectory with _index.md
     clean = tmp_path / 'clean_project'
