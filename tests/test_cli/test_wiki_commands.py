@@ -40,6 +40,7 @@ __all__ = [
     'test_update_narrations_condense_by_default',
     'test_update_condenses_batch_adoption',
     'test_new_requires_authored_desc_and_content',
+    'test_new_refuses_interior_path',
     'test_read_only_commands_are_deterministic',
     'test_path_inside_wiki_resolves_upward',
     'test_path_inside_undeclared_wiki_resolves_upward',
@@ -599,6 +600,37 @@ def test_new_requires_authored_desc_and_content(tmp_path: pathlib.Path) -> None:
     )
     assert again.returncode == 1
     assert 'Index already exists' in again.stderr
+
+
+def test_new_refuses_interior_path(tmp_path: pathlib.Path) -> None:
+    """``new`` refuses a ``--path`` inside the wiki instead of rebasing it.
+
+    Whole-tree commands resolve an interior ``--path`` upward, but new's
+    name argument is a write target relative to the resolved root -- a
+    silent rebase would land the folder at a sibling location the user
+    never named. The refusal names the enclosing root to pass instead,
+    and nothing is created at either location.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'topic' / '_index.md', _index('Topic', 'Topic text.', 'Text.'))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+
+    result = _wiki(
+        root,
+        'new',
+        'notes',
+        '--path',
+        str(root / 'topic'),
+        '--desc',
+        'A desc.',
+        '--content',
+        'Body.',
+    )
+    assert result.returncode == 1
+    assert f'inside the wiki at: {root}' in result.stderr
+    assert not (root / 'notes').exists()
+    assert not (root / 'topic' / 'notes').exists()
 
 
 def test_read_only_commands_are_deterministic(wiki: pathlib.Path) -> None:

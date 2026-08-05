@@ -220,6 +220,7 @@ def resolve_wiki(
     *,
     fallbacks: Sequence[Callable[[], Optional[pathlib.Path]]] = (),
     default: type[Wiki] = Wiki,
+    inside: Literal['resolve', 'refuse'] = 'resolve',
 ) -> Wiki:
     """Resolve a ``Wiki`` instance from a path or cwd.
 
@@ -228,7 +229,9 @@ def resolve_wiki(
     enclosing a declared root of its own; a path inside an existing wiki
     (declared, or implied by a parent ``_index.md`` chain) resolves
     upward to the enclosing root with a notice, so the habitual
-    root-relative ``--path`` works from inside the wiki too.
+    root-relative ``--path`` works from inside the wiki too --
+    ``inside='refuse'`` raises there instead, for a command whose entry
+    argument is a write target a rebased root would silently relocate.
     Corroboration diagnostics ride the resolution -- an undeclared tree
     (at its topmost index), a declared root missing its index, and an
     index chain extending above the declared root are each named on
@@ -243,6 +246,8 @@ def resolve_wiki(
     # work still goes through the entry argument)
     enclosing = enclosing_wiki_root(wiki_root)
     if enclosing is not None:
+        if inside == 'refuse':
+            raise _inside_wiki_error(enclosing)
         typer.echo(
             f'{wiki_root}: inside the wiki at {enclosing}; using that root',
             err=True,
@@ -261,6 +266,8 @@ def resolve_wiki(
         enclosing = wiki_root.parent
         while (enclosing.parent / WIKI_INDEX).is_file():
             enclosing = enclosing.parent
+        if inside == 'refuse':
+            raise _inside_wiki_error(enclosing)
         typer.echo(
             f'{wiki_root}: inside the wiki at {enclosing}; using that root',
             err=True,
@@ -549,6 +556,14 @@ def _is_wiki_root(path: pathlib.Path) -> bool:
     if (path / WIKI_DIR).resolve() == _config_home().resolve():
         return False
     return (path / WIKI_SETTINGS).is_file()
+
+
+def _inside_wiki_error(enclosing: pathlib.Path) -> ValueError:
+    """Build the inside-an-enclosing-wiki error, naming the enclosing root."""
+    return ValueError(
+        f'Path is inside the wiki at: {enclosing};'
+        f' pass --path {enclosing} and the root-relative name.'
+    )
 
 
 def _no_wiki_error(root: pathlib.Path) -> NotADirectoryError:

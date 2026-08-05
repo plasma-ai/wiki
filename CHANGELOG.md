@@ -64,7 +64,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with a stderr notice naming it, instead of aborting with "Path is inside the
   wiki". The habitual root-relative invocation (e.g. `wiki update --path math`
   from inside `math/`) now works from anywhere in the tree; scoped work still
-  goes through the entry argument.
+  goes through the entry argument. `wiki new` keeps the refusal: its name
+  argument is a write target, so a rebased root would silently relocate the
+  write.
 
 ### Security
 

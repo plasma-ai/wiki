@@ -31,7 +31,10 @@ When none of these produce a wiki, the command fails with
 ``Could not locate .wiki/settings.json, _index.md, or wiki/_index.md from the
 current directory.`` A path inside an existing wiki resolves upward to the
 enclosing root with a stderr notice naming it, so the habitual root-relative
-``--path`` works from anywhere in the tree. Nested wikis are unsupported:
+``--path`` works from anywhere in the tree. ``wiki new`` is the exception:
+its name argument is a write target an upward-rebased root would silently
+relocate, so an interior ``--path`` is refused there, naming the enclosing
+root to pass instead. Nested wikis are unsupported:
 resolution refuses an undeclared root that encloses a declared one. See
 :doc:`/guide/structure` for the root and index model.
 

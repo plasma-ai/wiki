@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import importlib.resources
 import json
 import pathlib
@@ -55,6 +56,11 @@ __all__ = [
     'map',
     'merge',
 ]
+
+# resolver for the new command: its name argument is a write target, not a
+# scope, so an interior --path refuses rather than silently rebasing the
+# target onto the enclosing root
+_resolve_refusing_inside = functools.partial(resolve_wiki, inside='refuse')
 
 # manual step: Obsidian gates community plugins behind "Restricted Mode"
 _OBSIDIAN_SETUP_HINT = (
@@ -644,7 +650,7 @@ def update(
 def new(
     app: typer.Typer,
     *,
-    resolve: Callable[[Optional[str]], Wiki] = resolve_wiki,
+    resolve: Callable[[Optional[str]], Wiki] = _resolve_refusing_inside,
 ) -> typer.Typer:
     """Register the ``new`` command."""
     # folder name argument
