@@ -113,7 +113,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   nearest indexed ancestor at any depth -- exactly the climb an explicit path
   runs -- instead of erroring or falling through to a different wiki via the
   `wiki/` fallback. An indexed path still climbs only a contiguous parent chain,
-  so a standalone wiki under a stray outer index stays its own root.
+  so a standalone wiki under a stray outer index stays its own root. The climb
+  declines from a raw folder that holds a wiki of its own -- that folder is a
+  project directory, not a folder of the outer tree -- so the `wiki/` fallback
+  still answers there and the standalone wiki is never handed to an outer chain
+  to absorb. An undeclared root that would sweep up a wiki islanded below it by
+  an unindexed folder refuses instead, naming the island and both ways out (run
+  against it, or index the folder between them).
 
 - The merge-driver wiring (`wiki init`/`wiki config`) drops git's repo-discovery
   environment the way the gitignore fence does: an inherited `GIT_DIR` can no

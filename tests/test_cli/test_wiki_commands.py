@@ -49,6 +49,8 @@ __all__ = [
     'test_path_inside_undeclared_wiki_resolves_upward',
     'test_raw_subfolder_of_undeclared_wiki_resolves_upward',
     'test_bare_invocation_agrees_with_path_dot',
+    'test_standalone_wiki_is_never_absorbed_from_above',
+    'test_islanded_wiki_refusal_names_both_fixes',
     'test_path_naming_nested_declared_wiki_resolves_to_itself',
     'test_parent_enclosing_declared_wiki_is_refused',
     'test_update_cli_refuses_nested_wiki',
@@ -841,6 +843,73 @@ def test_bare_invocation_agrees_with_path_dot(tmp_path: pathlib.Path) -> None:
         assert dotted.returncode == 0, dotted.stdout + dotted.stderr
         assert bare.stdout == dotted.stdout
         assert 'core/' in bare.stdout
+
+
+def test_standalone_wiki_is_never_absorbed_from_above(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An outer index chain never sweeps up a wiki islanded below it.
+
+    A project directory holding its own wiki sits inside a foreign index
+    tree (a docs site, a dropped ``_index.md``). Climbing from that raw
+    directory to the outer tree would hand the standalone wiki over to
+    be absorbed -- every ``name:`` rewritten against the wrong root, a
+    settings marker planted above it -- so the climb declines to it, and
+    an outer root named explicitly refuses rather than absorbing.
+    """
+    outer = tmp_path / 'tree'
+    project = outer / 'project'
+    standalone = project / 'wiki'
+    standalone.mkdir(parents=True)
+    _write(outer / '_index.md', _index('tree', 'The outer tree.', 'Body.'))
+    _write(standalone / '_index.md', _index('wiki', 'The standalone.', 'Body.'))
+    _write(standalone / 'page.md', _page('page', 'A page.', 'Body.'))
+
+    # the bare climb resolves to the standalone wiki, never the outer tree
+    bare = _wiki(project, 'update')
+    assert bare.returncode == 0, bare.stdout + bare.stderr
+    text = (standalone / '_index.md').read_text(encoding='utf-8')
+    assert 'name: wiki\n' in text
+    assert '[[page|page]]' in text
+    # the outer tree was neither swept nor marked
+    assert not (outer / '.wiki').exists()
+    assert not (project / '_index.md').exists()
+    assert 'project' not in (outer / '_index.md').read_text(encoding='utf-8')
+
+    # naming the outer root explicitly refuses too, naming the island
+    # (the sweep restored the standalone's own marker, so the declared
+    # guard answers first -- either refusal keeps the wiki intact)
+    explicit = _wiki(tmp_path, 'update', '--path', str(outer))
+    assert explicit.returncode == 2
+    assert f'encloses the wiki at: {standalone}' in explicit.stderr
+    assert (standalone / '_index.md').read_text(encoding='utf-8') == text
+
+
+def test_islanded_wiki_refusal_names_both_fixes(tmp_path: pathlib.Path) -> None:
+    """A never-swept island refuses on the index gap alone.
+
+    An undeclared wiki carries no marker for the nested-root guard to
+    see, so the gap in the index chain is the whole signal: the refusal
+    names the island and both ways out -- run against it, or index the
+    folder between them to make it part of this tree.
+    """
+    outer = tmp_path / 'tree'
+    island = outer / 'vendor' / 'kb'
+    island.mkdir(parents=True)
+    _write(outer / '_index.md', _index('tree', 'The outer tree.', 'Body.'))
+    _write(island / '_index.md', _index('kb', 'A vendored wiki.', 'Body.'))
+
+    result = _wiki(tmp_path, 'update', '--path', str(outer))
+    assert result.returncode == 2
+    assert f'encloses the wiki at: {island}' in result.stderr
+    assert 'islanded from this tree by an unindexed folder' in result.stderr
+    assert f'--path {island}' in result.stderr
+    # the bare climb from its raw parent never hands it to the outer tree
+    bare = _wiki(outer / 'vendor', 'update')
+    assert bare.returncode == 2
+    assert 'Could not locate' in bare.stderr
+    assert not (outer / 'vendor' / '_index.md').exists()
+    assert not (outer / '.wiki').exists()
 
 
 def test_path_naming_nested_declared_wiki_resolves_to_itself(

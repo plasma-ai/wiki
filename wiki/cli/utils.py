@@ -347,6 +347,12 @@ def resolve_wiki(
         nested = _nested_wiki_root(wiki_root)
         if nested is not None:
             raise _encloses_wiki_error(nested)
+        # an undeclared wiki below an unindexed folder is islanded from
+        # this tree -- its own root, not a subtree of one -- and only a
+        # guessed root would sweep it up, so refuse rather than absorb
+        island = _island_wiki_root(wiki_root)
+        if island is not None:
+            raise _islands_wiki_error(island)
     # corroboration diagnostics: name what resolution tolerated
     if not declared:
         _say(f'{wiki_root}: {WIKI_SETTINGS} missing; `wiki update` will restore it')
@@ -379,9 +385,11 @@ def resolve_wiki_root(
     an undeclared index tree falls back to the topmost ``_index.md``
     chain above the nearest indexed ancestor (cwd included -- a raw
     folder of an undeclared wiki resolves like an explicit ``--path .``
-    does), then to each ``fallbacks`` nomination in order, and a bare
-    project falls back to ``{cwd}/wiki/``. A nomination wins only when
-    declared or at least indexed -- an invalid one declines to the next.
+    does, unless it holds a wiki of its own, which the climb must not
+    hand to an outer tree), then to each ``fallbacks`` nomination in
+    order, and a bare project falls back to ``{cwd}/wiki/``. A
+    nomination wins only when declared or at least indexed -- an invalid
+    one declines to the next.
 
     Raises:
         ValueError: If the cwd's ancestor chain declares two wiki roots.
@@ -403,13 +411,24 @@ def resolve_wiki_root(
     # undeclared tree: climb from the nearest indexed ancestor (cwd
     # included) to the topmost _index.md -- a raw (unindexed) folder of
     # an undeclared wiki resolves like an explicit `--path .` does,
-    # instead of falling through to a different wiki entirely
-    for candidate in (cwd, *cwd.parents):
-        if (candidate / WIKI_INDEX).is_file():
-            result = candidate
-            while (result.parent / WIKI_INDEX).is_file():
-                result = result.parent
-            return result
+    # instead of falling through to a different wiki entirely. A raw cwd
+    # holding a wiki of its own is the one case the climb must decline:
+    # it is a project directory, not a folder of the outer tree, and
+    # climbing would hand its standalone wiki to that tree to absorb
+    if not ((cwd / WIKI_INDEX).is_file() or _indexed_dir_below(cwd)):
+        climb_from = next(
+            (ancestor for ancestor in cwd.parents if (ancestor / WIKI_INDEX).is_file()),
+            None,
+        )
+    elif (cwd / WIKI_INDEX).is_file():
+        climb_from = cwd
+    else:
+        climb_from = None
+    if climb_from is not None:
+        result = climb_from
+        while (result.parent / WIKI_INDEX).is_file():
+            result = result.parent
+        return result
     # embedder-nominated roots: a nomination wins only when declared or at
     # least indexed (the same rule as the {cwd}/wiki fallback below), so a
     # stale nominator declines instead of masking a valid fallback
@@ -832,11 +851,65 @@ def _inside_wiki_error(enclosing: pathlib.Path) -> ValueError:
     )
 
 
+def _islands_wiki_error(island: pathlib.Path) -> ValueError:
+    """Build the encloses-an-islanded-wiki error, naming the island."""
+    return ValueError(
+        f'Path encloses the wiki at: {island}, islanded from this tree by an'
+        f' unindexed folder; run the command with --path {island}, or index'
+        f' the folder between them to make it part of this wiki.'
+    )
+
+
 def _no_wiki_error(root: pathlib.Path) -> NotADirectoryError:
     """Build the no-wiki-at-root error, naming the missing markers."""
     return NotADirectoryError(
         f'No wiki at: {root} (missing {WIKI_SETTINGS} and {WIKI_INDEX}).'
     )
+
+
+def _indexed_dir_below(path: pathlib.Path) -> Optional[pathlib.Path]:
+    """Return the first indexed directory strictly below ``path``, if any.
+
+    A raw folder holding one is a project directory rather than a folder
+    of an outer tree, so cwd resolution declines to climb past it (see
+    :func:`resolve_wiki_root`). Dot directories are pruned and symlinked
+    directories are never followed, matching the walk.
+    """
+    for dirpath, dirnames, _ in os.walk(path):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith('.'))
+        for dirname in dirnames:
+            result = pathlib.Path(dirpath) / dirname
+            if (result / WIKI_INDEX).is_file():
+                return result
+    return None
+
+
+def _island_wiki_root(root: pathlib.Path) -> Optional[pathlib.Path]:
+    """Return the first wiki islanded below ``root`` by an index gap.
+
+    ``root``'s own tree is the contiguously indexed one: every folder of
+    a healthy wiki carries an ``_index.md``, so an indexed directory
+    reached only through an unindexed one is a separate wiki that
+    happens to live inside this path -- a vendored or nested checkout.
+    Sweeping it would rewrite its ``name:`` paths against the wrong
+    root, so a resolution that only guessed this root refuses instead. A
+    brand-new raw folder with nothing indexed below it opens no island,
+    which is the ordinary pre-update state.
+    """
+    stack = [(root, True)]
+    while stack:
+        folder, attached = stack.pop()
+        for child in sorted(folder.iterdir()):
+            if child.name.startswith('.') or child.is_symlink():
+                continue
+            if not child.is_dir():
+                continue
+            indexed = (child / WIKI_INDEX).is_file()
+            # an indexed directory under a gap is another wiki's root
+            if indexed and not attached:
+                return child
+            stack.append((child, attached and indexed))
+    return None
 
 
 def _nested_wiki_root(path: pathlib.Path) -> Optional[pathlib.Path]:
