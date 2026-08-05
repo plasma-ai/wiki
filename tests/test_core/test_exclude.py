@@ -41,6 +41,7 @@ __all__ = [
     'test_ignored_wiki_root_stays_unfenced',
     'test_gitignored_link_target_names_the_cause',
     'test_new_refuses_a_fenced_target',
+    'test_fenced_directory_is_invisible_to_every_check',
 ]
 
 # the gitignore-fence tests drive a real repository
@@ -466,6 +467,51 @@ def test_gitignored_residue_is_never_adopted(tmp_path: pathlib.Path) -> None:
     (tmp_path / '.gitignore').unlink()
     issues = Wiki(tmp_path).lint()
     assert any('Bare page' in issue for issue in issues)
+
+
+@_needs_git
+def test_fenced_directory_is_invisible_to_every_check(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A fenced directory is invisible to the directory-level checks too.
+
+    The fence hides files from adoption, and it must hide their folder
+    just as completely: no ``Missing index`` for the fenced directory,
+    no row minted into it from its parent, and no rewrite of an
+    ``_index.md`` already tracked inside it -- the corpus shape where a
+    glob (``**/evidence/*/output/``) fences directories whose contents
+    were committed before the fence existed, so the match must stay
+    pattern-pure rather than reading those tracked files as content.
+    """
+    _git_repo(tmp_path, '**/evidence/*/output/')
+    root = tmp_path / 'math'
+    fenced = root / 'claim' / 'evidence' / 'depth_free' / 'output'
+    fenced.mkdir(parents=True)
+    _make_wiki(
+        root,
+        folders={
+            'claim': [],
+            'claim/evidence': [],
+            'claim/evidence/depth_free': [],
+        },
+    )
+    # residue committed before the fence existed: tracked, and fenced
+    stale = '---\nname: output\ndesc: Stale.\n---\n\n# output\n\n***\n\nBody.\n'
+    (fenced / '_index.md').write_text(stale, encoding='utf-8')
+    (fenced / 'base_table.log').write_text('rows\n', encoding='utf-8')
+    subprocess.run(
+        ['git', '-C', str(tmp_path), 'add', '-f', str(root), '.gitignore'],
+        check=True,
+        capture_output=True,
+    )
+
+    # every check is silent about the fenced directory, and it stays put
+    wiki = Wiki(root)
+    assert wiki.lint() == []
+    assert wiki.update() == []
+    parent = (fenced.parent / '_index.md').read_text(encoding='utf-8')
+    assert 'output' not in parent
+    assert (fenced / '_index.md').read_text(encoding='utf-8') == stale
 
 
 @_needs_git
