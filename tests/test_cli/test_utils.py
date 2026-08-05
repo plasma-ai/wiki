@@ -43,6 +43,7 @@ __all__ = [
     'test_trust_root_refuses_symlinked_store',
     'test_trust_root_refuses_hard_linked_store',
     'test_trust_reads_refuse_a_tampered_store',
+    'test_trust_root_refuses_symlinked_config_home',
     'test_trust_store_refuses_non_regular_files',
     'test_is_trusted_ignores_malformed_store',
     'test_reused_command_honors_resolve_override',
@@ -528,6 +529,32 @@ def test_trust_reads_refuse_a_tampered_store(tmp_path: pathlib.Path) -> None:
     os.link(outside, store)
     with pytest.raises(PermissionError, match='hard-linked trust store'):
         is_trusted(root)
+
+
+def test_trust_root_refuses_symlinked_config_home(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A config home symlinked at a foreign directory is refused.
+
+    The home tightening (``0700``) would otherwise chmod through the
+    link -- re-moding a directory outside the store's custody, with the
+    store then written inside it. The refusal names the sanctioned
+    relocation (``WIKI_CONFIG_DIR`` at the real directory), and the
+    link's target keeps its mode and contents.
+    """
+    root = tmp_path / 'wiki'
+    root.mkdir()
+    victim = tmp_path / 'victim_home'
+    victim.mkdir()
+    os.chmod(victim, 0o755)  # noqa: S103
+    linked = tmp_path / 'linked_home'
+    linked.symlink_to(victim)
+    monkeypatch.setenv('WIKI_CONFIG_DIR', str(linked))
+    with pytest.raises(PermissionError, match='symlinked config home'):
+        trust_root(root)
+    assert victim.stat().st_mode & 0o777 == 0o755
+    assert list(victim.iterdir()) == []
 
 
 def test_trust_store_refuses_non_regular_files(tmp_path: pathlib.Path) -> None:

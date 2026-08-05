@@ -114,6 +114,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   refused up front with a plain message naming the path -- a FIFO no longer
   blocks every trust-consulting invocation on a writer that never comes, and a
   directory no longer fails deep in the rewrite with a cryptic error.
+- The config home directory gets the same custody: `wiki trust` tightens it
+  through an `O_NOFOLLOW`/`O_DIRECTORY` descriptor and refuses a symlinked home
+  outright -- a planted link can no longer have the `0700` repair chmod a
+  foreign directory (and the store then written inside it). The refusal names
+  the sanctioned relocation: point `WIKI_CONFIG_DIR` at the real directory.
 
 ### Fixed
 

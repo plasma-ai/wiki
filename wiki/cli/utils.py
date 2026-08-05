@@ -134,7 +134,22 @@ def trust_root(root: pathlib.Path) -> pathlib.Path:
     resolved = root.expanduser().resolve()
     home = _config_home()
     home.mkdir(parents=True, exist_ok=True)
-    os.chmod(home, 0o700)
+    # tighten the home through a guarded descriptor, like the store file:
+    # a plain chmod follows a pre-planted symlink and re-modes a directory
+    # outside the store's custody -- with the store then written inside it
+    try:
+        home_fd = os.open(home, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY)
+    except OSError as e:
+        if e.errno in (errno.ELOOP, errno.ENOTDIR):
+            raise PermissionError(
+                f'Refusing symlinked config home: {home}'
+                f' (point {WIKI_CONFIG_DIR} at the real directory).'
+            ) from e
+        raise
+    try:
+        os.fchmod(home_fd, 0o700)
+    finally:
+        os.close(home_fd)
     path = _settings_path()
     # re-tighten the store on every call, so perms loosened out-of-band (a
     # backup restore, a stray chmod, a loose umask) are repaired even when
