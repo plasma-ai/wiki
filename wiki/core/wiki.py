@@ -956,7 +956,9 @@ class Wiki:
         files is the expected shape), writes its ``_index.md`` carrying
         ``desc`` and ``content``, and runs a scoped update on the
         parent folder so the folder's own rows and the parent's new row
-        -- desc propagated -- wire in the same pass.
+        -- desc propagated -- wire in the same pass. The sweep's own
+        refusals are pre-flighted before the write, so a refusal never
+        strands a half-written adoption.
 
         Args:
             name: Folder to create and index (relative path below the
@@ -977,6 +979,10 @@ class Wiki:
                 symlinked segment, excluded from indexing (a pattern or
                 the repo's gitignore fence), already a file or an
                 indexed folder, or named against the naming policy.
+            ValueError: If the wiring sweep would refuse -- merge
+                conflict markers in the authored input or the parent
+                scope, or a nested declared wiki within it -- each
+                checked before the write, with nothing created.
 
         """
         # the authored inputs are the point: refuse placeholders outright,
@@ -1055,8 +1061,9 @@ class Wiki:
                 f'Index already exists: {relpath} (edit it;'
                 f' the generator never overwrites).'
             )
-        # write the index, links left to the sweep below
-        folder.mkdir(exist_ok=True)
+        # render the index up front: authored input whose marker-shaped
+        # lines would refuse the sweep is caught at the boundary, before
+        # anything lands on disk
         now = self._utc_now()
         display = self._path_to_name(folder)
         frontmatter = format.build_frontmatter(
@@ -1072,13 +1079,30 @@ class Wiki:
             user_content=content,
             delimiter=self.index_delimiter,
         )
-        wiki.util.fs.write_atomic(index_path, text)
-        # the scoped sweep adds the folder's own rows and the parent's new
-        # row, propagating the desc, so the adoption lands converged
+        if _conflict_marker_lines(text):
+            raise ValueError(
+                'Merge conflict markers in the authored input; resolve them and rerun.'
+            )
+        # pre-flight the wiring sweep's refusals against the parent scope
+        # (a discarded dry plan): a refusal after the write would strand a
+        # half-adoption whose retry dead-ends on the never-overwrites
+        # guard above
         parent = folder.parent
         scope = None
         if parent != self._root:
             scope = parent.relative_to(self._root).as_posix()
+        # TODO: remove back-compat in future version
+        self._refuse_legacy_layout()
+        for nested in self._find_dirs(parent):
+            if (nested != self._root) and (nested / WIKI_SETTINGS).is_file():
+                raise _encloses_wiki_error(nested)
+        _, baseline, _ = self._plan(parent, now=now)
+        self._refuse_conflicted(baseline)
+        # write the index, links left to the sweep below
+        folder.mkdir(exist_ok=True)
+        wiki.util.fs.write_atomic(index_path, text)
+        # the scoped sweep adds the folder's own rows and the parent's new
+        # row, propagating the desc, so the adoption lands converged
         self.update(name=scope)
         return str(index_path.relative_to(self._root))
 

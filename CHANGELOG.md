@@ -16,7 +16,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   one pass, so a mechanically generated adoption lands lint-complete instead of
   hiding a hand-fill step. The parent must already exist and be indexed -- each
   level carries its own authored index, so an unindexed parent is refused rather
-  than minted a placeholder dangling from the root chain.
+  than minted a placeholder dangling from the root chain. Every refusal -- the
+  wiring sweep's own included -- lands before the write, so a refused adoption
+  leaves nothing on disk.
 - `wiki lint --json`: one machine-readable JSON document on stdout carrying
   every finding with an explicit `issue`/`note` severity (notes typed with their
   event kind and payload fields) plus a summary with both counts; the exit-code

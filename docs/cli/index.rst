@@ -467,9 +467,10 @@ symlinked segment, a path
 segment violating the naming policy, a target excluded from indexing
 (``exclude.patterns`` or the enclosing repo's gitignore, naming the cause),
 and a folder whose ``_index.md`` already exists — the generator never
-overwrites. A failure in the wiring sweep itself (merge conflict markers or
-a nested wiki in the parent scope) surfaces after the index is written;
-repair the scope and run ``wiki update`` to finish the wiring.
+overwrites. The wiring sweep's own refusals (merge conflict markers or a
+nested wiki in the parent scope) are checked before the index is written —
+marker-shaped lines in the authored inputs are refused the same way — so a
+refused adoption leaves nothing on disk.
 
 .. list-table::
    :header-rows: 1

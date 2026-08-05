@@ -28,6 +28,7 @@ __all__ = [
     'test_new_generates_a_converged_index',
     'test_new_refuses_unauthored_inputs',
     'test_new_refuses_unreachable_targets',
+    'test_new_preflights_sweep_refusals_before_writing',
 ]
 
 
@@ -254,6 +255,40 @@ def test_new_refuses_unreachable_targets(tmp_path: pathlib.Path) -> None:
     with pytest.raises(ValueError, match=r"exclude\.patterns 'vendor'"):
         Wiki(tmp_path).new('vendor', desc='A real desc.', content='Real content.')
     assert not (tmp_path / 'vendor').exists()
+
+
+def test_new_preflights_sweep_refusals_before_writing(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The wiring sweep's refusals fire before the index is written.
+
+    A refusal after the write would strand a half-adoption -- the index
+    on disk, the parent row never wired -- whose retry dead-ends on the
+    never-overwrites guard. The sweep's refusals are pre-flighted and
+    marker-shaped authored input is refused at the boundary, so a
+    refused adoption leaves nothing on disk.
+    """
+    wiki = _make_wiki(tmp_path, folders={'evidence': ['report']})
+    conflict = '\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\n'
+    # a conflicted sibling in the parent scope refuses with nothing created
+    sibling = tmp_path / 'evidence' / 'report.md'
+    clean = sibling.read_text(encoding='utf-8')
+    sibling.write_text(clean + conflict, encoding='utf-8')
+    with pytest.raises(ValueError, match='Merge conflict markers'):
+        wiki.new('evidence/verify', desc='A real desc.', content='Real content.')
+    assert not (tmp_path / 'evidence' / 'verify').exists()
+    # marker-shaped authored content is refused at the boundary too
+    sibling.write_text(clean, encoding='utf-8')
+    with pytest.raises(ValueError, match='Merge conflict markers'):
+        wiki.new('evidence/verify', desc='A real desc.', content=conflict.strip())
+    assert not (tmp_path / 'evidence' / 'verify').exists()
+    # a nested declared wiki in the parent scope refuses pre-write alike
+    guest = tmp_path / 'evidence' / 'guest'
+    (guest / '.wiki').mkdir(parents=True)
+    (guest / '.wiki' / 'settings.json').write_text('{}\n', encoding='utf-8')
+    with pytest.raises(ValueError, match='encloses the wiki at'):
+        wiki.new('evidence/verify', desc='A real desc.', content='Real content.')
+    assert not (tmp_path / 'evidence' / 'verify').exists()
 
 
 # ------ helpers
