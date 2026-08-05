@@ -42,6 +42,8 @@ __all__ = [
     'test_trust_root_tightens_store_permissions',
     'test_trust_root_refuses_symlinked_store',
     'test_trust_root_refuses_hard_linked_store',
+    'test_trust_reads_refuse_a_tampered_store',
+    'test_trust_store_refuses_non_regular_files',
     'test_is_trusted_ignores_malformed_store',
     'test_reused_command_honors_resolve_override',
     'test_resolve_wiki_default_class',
@@ -491,6 +493,67 @@ def test_trust_root_refuses_hard_linked_store(tmp_path: pathlib.Path) -> None:
         trust_root(root)
     assert victim.read_text(encoding='utf-8') == '{}\n'
     assert victim.stat().st_mode & 0o777 == 0o644
+
+
+def test_trust_reads_refuse_a_tampered_store(tmp_path: pathlib.Path) -> None:
+    """The read path refuses the tampered stores the write path refuses.
+
+    A trust decision must never be read through what a trust write would
+    refuse: a store symlinked (or hard-linked) to a file outside the
+    config home would let that file confer hook-execution trust, so
+    ``is_trusted`` -- and the hook gate behind it -- raises the same
+    plain refusal instead of following the link.
+    """
+    root = tmp_path / 'wiki'
+    root.mkdir()
+    # a file outside the config home claiming the root is trusted
+    outside = tmp_path / 'outside'
+    outside.write_text(
+        json.dumps({'trusted': {str(root.resolve()): '2000-01-01T00:00:00Z'}}),
+        encoding='utf-8',
+    )
+    home = pathlib.Path(os.environ['WIKI_CONFIG_DIR'])
+    home.mkdir(parents=True, exist_ok=True)
+    store = home / 'settings.json'
+    store.symlink_to(outside)
+    with pytest.raises(PermissionError, match='symlinked trust store'):
+        is_trusted(root)
+    # the hook gate reads through the same guard
+    (root / '.wiki').mkdir()
+    (root / '.wiki' / 'wiki.py').write_text('__all__ = []\n', encoding='utf-8')
+    with pytest.raises(PermissionError, match='symlinked trust store'):
+        load_wiki_class(root)
+    # a hard link is the same attack without the symlink
+    store.unlink()
+    os.link(outside, store)
+    with pytest.raises(PermissionError, match='hard-linked trust store'):
+        is_trusted(root)
+
+
+def test_trust_store_refuses_non_regular_files(tmp_path: pathlib.Path) -> None:
+    """A non-regular file planted as the store is refused, never blocked on.
+
+    A FIFO would block the open until a writer appears -- hanging every
+    invocation that consults trust -- and a directory would fail deep in
+    the rewrite with a cryptic error; both are refused up front, read
+    and write alike, with a message naming the path and the fix.
+    """
+    root = tmp_path / 'wiki'
+    root.mkdir()
+    home = pathlib.Path(os.environ['WIKI_CONFIG_DIR'])
+    home.mkdir(parents=True, exist_ok=True)
+    store = home / 'settings.json'
+    # a FIFO with no writer: the guarded open must not block
+    os.mkfifo(store)
+    with pytest.raises(PermissionError, match='not a regular file'):
+        is_trusted(root)
+    with pytest.raises(PermissionError, match='not a regular file'):
+        trust_root(root)
+    # a directory in the store's place is refused the same way
+    store.unlink()
+    store.mkdir()
+    with pytest.raises(PermissionError, match='not a regular file'):
+        trust_root(root)
 
 
 def test_is_trusted_ignores_malformed_store(tmp_path: pathlib.Path) -> None:

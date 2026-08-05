@@ -10,6 +10,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import stat
 import subprocess
 import sys
 import typing
@@ -136,27 +137,14 @@ def trust_root(root: pathlib.Path) -> pathlib.Path:
     os.chmod(home, 0o700)
     path = _settings_path()
     # re-tighten the store on every call, so perms loosened out-of-band (a
-    # backup restore, a stray chmod, a loose umask) are repaired even when the
-    # idempotent early return below skips the rewrite. O_NOFOLLOW + fchmod on
-    # the opened descriptor (like the lock open below) refuse a pre-planted
-    # symlink, so a shared WIKI_CONFIG_DIR can never retarget the repair --
-    # or the rewrite behind it -- onto a file outside the store
-    try:
-        store_fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    except FileNotFoundError:
-        pass
-    except OSError as e:
-        if e.errno == errno.ELOOP:
-            raise PermissionError(f'Refusing symlinked trust store: {path}') from e
-        raise
-    else:
+    # backup restore, a stray chmod, a loose umask) are repaired even when
+    # the idempotent early return below skips the rewrite; the shared
+    # guarded open (see _open_store) refuses a tampered store, so the
+    # repair -- or the rewrite behind it -- can never retarget a file
+    # outside the store
+    store_fd = _open_store(path)
+    if store_fd is not None:
         try:
-            # a second link is a second name for the store's own inode, and
-            # O_NOFOLLOW cannot see it: the repair would re-mode a file
-            # outside the store, and every entry written afterwards would be
-            # editable through a name the 0700 home does not cover
-            if os.fstat(store_fd).st_nlink > 1:
-                raise PermissionError(f'Refusing hard-linked trust store: {path}')
             os.fchmod(store_fd, 0o600)
         finally:
             os.close(store_fd)
@@ -528,12 +516,59 @@ def _settings_path() -> pathlib.Path:
     return _config_home() / pathlib.Path(WIKI_SETTINGS).name
 
 
-def _read_global_settings() -> dict:
-    """Load the user-global settings, tolerating absence or corruption."""
+def _open_store(path: pathlib.Path) -> Optional[int]:
+    """Open the trust store through its tamper guards; ``None`` when absent.
+
+    The one open the read path and the permission self-heal share, so
+    both agree about what counts as the store: ``O_NOFOLLOW`` refuses a
+    pre-planted symlink (a shared ``WIKI_CONFIG_DIR`` can never redirect
+    a trust decision onto a file outside the store), the ``st_nlink``
+    probe a second name for the store's inode (a name the ``0700`` home
+    does not cover), and the ``S_ISREG`` probe any non-regular file --
+    opened ``O_NONBLOCK``, so a planted FIFO is refused outright instead
+    of blocking every invocation on a writer that never comes. Each
+    refusal names the path in plain language.
+    """
     try:
-        result = json.loads(_settings_path().read_text(encoding='utf-8'))
-    except (OSError, json.JSONDecodeError):
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise PermissionError(f'Refusing symlinked trust store: {path}') from e
+        raise
+    try:
+        status = os.fstat(fd)
+        if not stat.S_ISREG(status.st_mode):
+            raise PermissionError(
+                f'Trust store is not a regular file: {path};'
+                f' remove it and re-run `wiki trust`.'
+            )
+        if status.st_nlink > 1:
+            raise PermissionError(f'Refusing hard-linked trust store: {path}')
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _read_global_settings() -> dict:
+    """Load the user-global settings, through the store's tamper guards.
+
+    An absent store reads as empty, and corruption tolerantly reads as
+    empty too -- fail-safe, nothing is trusted. A tampered store (a
+    symlinked, hard-linked, or non-regular file) raises instead: the
+    write path refuses it, and a trust decision must never be read
+    through what a trust write would refuse.
+    """
+    fd = _open_store(_settings_path())
+    if fd is None:
         return {}
+    with os.fdopen(fd, 'r', encoding='utf-8') as handle:
+        try:
+            result = json.loads(handle.read())
+        except json.JSONDecodeError:
+            return {}
     return result if isinstance(result, dict) else {}
 
 

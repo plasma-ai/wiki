@@ -106,6 +106,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   attacker's inode, so the repair would re-mode their file and every trusted
   root written afterwards would be editable through a name the `0700` home does
   not cover.
+- The trust store's READ path now opens through the same tamper guards as the
+  write path: a symlinked or hard-linked `settings.json` is refused when
+  `is_trusted` (and the hook gate behind it) consults the store, so a file
+  outside the config home can never confer hook-execution trust that the write
+  path would refuse to record. A non-regular file planted as the store is
+  refused up front with a plain message naming the path -- a FIFO no longer
+  blocks every trust-consulting invocation on a writer that never comes, and a
+  directory no longer fails deep in the rewrite with a cryptic error.
 
 ### Fixed
 
