@@ -460,7 +460,10 @@ instead of hiding a hand-fill step. The command creates the folder when
 missing (an existing folder of raw files is the expected shape; the parent
 must already be indexed), writes its ``_index.md`` carrying the desc and
 content, and runs a scoped update on the parent folder, so the folder's own
-rows and the parent's new row — desc propagated — wire in the same pass.
+rows and the parent's new row — desc propagated — wire in the same pass. The
+sweep covers the parent's whole subtree — the entire wiki for a top-level
+folder — so pending maintenance in that scope (adoptions, prunes) lands in
+the same run.
 
 The command refuses (exit 1, nothing written) a blank or placeholder input,
 the wiki root itself (``wiki init`` owns it), a target outside the root,

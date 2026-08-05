@@ -156,7 +156,9 @@ rather than authoring or auditing page by page yourself:
   `wiki new <folder> --desc ... --content ...`: it requires both authored inputs
   — refusing blanks and placeholders outright, descs are never auto-stubbed —
   and wires the folder's rows and the parent's new row in the same pass, so the
-  adoption lands lint-complete.
+  adoption lands lint-complete. The wiring is a scoped `wiki update` of the
+  parent subtree (the whole wiki for a top-level folder), so pending maintenance
+  in that scope — adoptions, prunes — lands in the same run.
 - **Bare pages are adopted loudly.** A page with no frontmatter gains it on the
   next `wiki update` — with `title:` seeded from its authored H1, while a page
   with no H1 gains the path-joined heading in its body, never a seeded title —

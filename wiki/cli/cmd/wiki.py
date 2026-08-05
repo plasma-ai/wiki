@@ -689,7 +689,10 @@ def new(
         raw files is the expected shape; the parent must already be
         indexed), writes its _index.md carrying the desc and content, and
         runs a scoped update on the parent folder so the new row --
-        desc included -- wires in the same pass.
+        desc included -- wires in the same pass. The sweep covers the
+        parent's whole subtree (the entire wiki for a top-level
+        folder), so pending maintenance in that scope -- adoptions,
+        prunes -- lands in the same run.
         """
         wiki = resolve(path)
         # the scoped sweep narrates like update: condensed count lines

@@ -956,9 +956,12 @@ class Wiki:
         files is the expected shape), writes its ``_index.md`` carrying
         ``desc`` and ``content``, and runs a scoped update on the
         parent folder so the folder's own rows and the parent's new row
-        -- desc propagated -- wire in the same pass. The sweep's own
-        refusals are pre-flighted before the write, so a refusal never
-        strands a half-written adoption.
+        -- desc propagated -- wire in the same pass. The sweep covers
+        the parent's whole subtree -- the entire wiki for a top-level
+        folder -- so pending maintenance in that scope (adoptions,
+        prunes) lands in the same run; the sweep's own refusals are
+        pre-flighted before the write, so a refusal never strands a
+        half-written adoption.
 
         Args:
             name: Folder to create and index (relative path below the
