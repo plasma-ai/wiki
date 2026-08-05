@@ -521,22 +521,15 @@ def search(
             raise typer.BadParameter('--lines and --lineno are mutually exclusive.')
         # every failure here -- a bad pattern, an unresolvable wiki or
         # subtree, a refused or broken hook -- is the triple's error leg,
-        # so the catch is total: a per-type list would leak new failure
-        # modes to the wrapper's exit 1, aliasing them with a no-match
-        try:
-            wiki = resolve(path)
-            matches = wiki.search(
-                pattern,
-                name=name,
-                field=field,
-                ignore_case=ignore_case,
-                all_files=all_files,
-            )
-        except Exception as e:
-            # grep triple: runtime errors exit 2 (the wrapper's exception
-            # path exits 1), so the body renders in the wrapper's grammar
-            typer.echo(f'Error: {e}', err=True)
-            raise typer.Exit(code=2) from e
+        # which the command wrapper renders and exits 2 on
+        wiki = resolve(path)
+        matches = wiki.search(
+            pattern,
+            name=name,
+            field=field,
+            ignore_case=ignore_case,
+            all_files=all_files,
+        )
         # grep convention: no-match exits 1 with the notice on stderr, so
         # scripts can distinguish no-match from match by exit code alone
         if not matches:
@@ -600,7 +593,8 @@ def update(
         each removal. Narrations condense to one count line per category
         by default; --full prints every line. Exits 0 after a successful
         run; with --check, writes nothing and exits 1 when changes are
-        pending.
+        pending, and a command error exits 2 -- so a gate reading
+        --check's 1 as pending drift never reads a failed run as one.
         """
         if full and count:
             raise typer.BadParameter('--full and --count are mutually exclusive.')
@@ -781,16 +775,11 @@ def lint(
             return event
 
         # every failure here -- an unresolvable wiki or subtree, a refused
-        # or broken hook, malformed settings -- must stay distinguishable
-        # from issues-found, so errors exit 2 and leave 1 meaning exactly
-        # "issues found" (the wrapper's exception path exits 1)
-        try:
-            wiki = resolve(path)
-            wiki.on_notice = _capture
-            issues = wiki.lint(name=name)
-        except Exception as e:
-            typer.echo(f'Error: {e}', err=True)
-            raise typer.Exit(code=2) from e
+        # or broken hook, malformed settings -- is a command error the
+        # wrapper exits 2 on, leaving 1 to mean exactly "issues found"
+        wiki = resolve(path)
+        wiki.on_notice = _capture
+        issues = wiki.lint(name=name)
         # --json: the whole report is one machine-readable document on
         # stdout; only the exit code is shared with the prose modes
         if as_json:

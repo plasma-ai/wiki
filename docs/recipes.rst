@@ -303,7 +303,9 @@ drift, then on structural issues:
 
 Both commands signal by exit code: ``update --check`` exits 1 while a sweep is
 pending (like a formatter's check mode — nonzero is not an error), and ``lint``
-exits 1 on issues, with notes never tipping the result.
+exits 1 on issues, with notes never tipping the result. A command error — a
+typo'd ``--path``, a bad subtree, a refused hook — exits 2 in both, so the gate
+reports a broken configuration as itself rather than as pending drift.
 
 Search and navigate from the terminal
 -------------------------------------

@@ -165,7 +165,8 @@ file:
 
 Like a formatter's check mode, it **exits 1 when changes are pending** and 0
 (``Nothing to update.``) when the wiki is clean — a nonzero exit is not an
-error. Pending-action narration (create, adopt, add, prune, overwrite) uses
+error, and a real error (an unresolvable wiki, a bad subtree) exits 2, so a
+gate reading 1 as pending drift never mistakes a typo'd path for one. Pending-action narration (create, adopt, add, prune, overwrite) uses
 ``Would ...`` wording; the state-report categories — skipped names and files,
 malformed frontmatter, truncated indexes — keep their normal wording. A dry
 run performs no housekeeping either: it neither restores a missing
@@ -201,7 +202,8 @@ would destroy authored content or race a concurrent editor:
 When update refuses to run
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-These conditions abort the whole sweep (write and ``--check`` alike, exit 1):
+These conditions abort the whole sweep (write and ``--check`` alike, exit 2 —
+the error code, never ``--check``'s pending-changes 1):
 
 - **Merge conflict markers** in any in-scope file: the plan would read the
   markers as authored content and bake one conflict side into the rewrite.

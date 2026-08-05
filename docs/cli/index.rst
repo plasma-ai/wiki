@@ -57,14 +57,14 @@ Errors and exit codes
 ~~~~~~~~~~~~~~~~~~~~~
 
 Commands exit 0 on success. An error prints ``Error: <message>`` to stderr and
-exits 1; invalid option usage — mutually exclusive flags, a bad
-slice/``--depth``/``--desc-limit`` value, or malformed ``--settings`` JSON —
-prints a usage message and exits 2 instead; a closed downstream pipe exits 0
-silently. Some commands carry their own exit-code conventions, documented in
-their sections: ``search`` follows the grep convention (0 match, 1 no match,
-2 error), ``update --check`` exits 1 when changes are pending, and ``lint``
-reserves exit 1 for issues found -- its errors exit 2, so a script can never
-read a failed run as a red corpus.
+exits 2, as does invalid option usage — mutually exclusive flags, a bad
+slice/``--depth``/``--desc-limit`` value, or malformed ``--settings`` JSON,
+which prints a usage message; a closed downstream pipe exits 0 silently. Exit 1
+is left to each command's own nonzero outcome, documented in its section:
+``search`` follows the grep convention (0 match, 1 no match, 2 error),
+``update --check`` exits 1 when changes are pending, and ``lint`` exits 1 when
+issues are found — so a script gating on one can never read a failed run as
+the other.
 
 ``wiki install``
 ----------------
@@ -180,7 +180,7 @@ per clone.
 
 The command exits 0 even when a plugin download fails — download failures
 (network, ``OFFLINE_MODE=true``, a digest mismatch) are stderr warnings, never
-the exit code; re-run online to finish setup. It fails (exit 1) on an
+the exit code; re-run online to finish setup. It fails (exit 2) on an
 unresolvable wiki, malformed ``.obsidian/*.json``, or an untrusted
 ``.wiki/wiki.py`` hook. Obsidian's Restricted Mode step is manual; the
 reminder prints on stderr only when attached to a terminal.
@@ -407,7 +407,7 @@ default (e.g. ``Created 1 new index (fill in its desc)``, ``Added 2 new
 links``); ``--full`` prints every line instead. The stdout summary is
 ``Updated N file(s).`` or ``Nothing to update.``
 
-The sweep refuses (exit 1, dry run included) when the scope crosses a nested
+The sweep refuses (exit 2, dry run included) when the scope crosses a nested
 declared wiki or when any in-scope file carries git merge conflict markers
 outside a ``no-lint`` region — resolve the conflicts and re-run.
 
@@ -466,7 +466,7 @@ sweep covers the parent's whole subtree — the entire wiki for a top-level
 folder — so pending maintenance in that scope (adoptions, prunes) lands in
 the same run.
 
-The command refuses (exit 1, nothing written) a blank or placeholder input,
+The command refuses (exit 2, nothing written) a blank or placeholder input,
 the wiki root itself (``wiki init`` owns it), a target outside the root,
 without an existing indexed parent (an unindexed parent would be minted a
 placeholder index, dangling from the root chain), or reached through a

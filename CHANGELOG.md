@@ -37,10 +37,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- `wiki lint` reserves exit 1 for issues found: a command error (an unresolvable
-  wiki, a bad subtree entry, a refused hook) exits 2 with an `Error:` line on
-  stderr, so a script gating on lint can never read a failed run as a red
-  corpus.
+- Every command reserves exit 1 for its own nonzero outcome -- `lint`'s issues
+  found, `search`'s no match, `update --check`'s pending changes: a command
+  error (an unresolvable wiki, a bad subtree entry, a refused hook) exits 2 with
+  an `Error:` line on stderr, beside typer's usage errors. A script gating on
+  `lint` can never read a failed run as a red corpus, and one gating on
+  `update --check` can never read a typo'd `--path` as pending drift.
 
 - `wiki update` prunes broken links: an index row whose target no longer
   resolves to an indexed entry is removed, each removal announced

@@ -23,6 +23,8 @@ from wiki.cli.utils import configure_git_merge_driver
 from .conftest import GIT, WIKI, _git, _wiki
 
 __all__ = [
+    'test_command_errors_exit_two',
+    'test_update_check_separates_pending_from_error',
     'test_init_creates_root_index',
     'test_init_guards_existing_wiki',
     'test_init_seeds_settings',
@@ -140,6 +142,54 @@ def wiki(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
     return root
 
 
+# ------ exit codes
+
+
+@pytest.mark.parametrize(
+    'args',
+    [
+        ('update',),
+        ('update', '--check'),
+        ('lint',),
+        ('map',),
+        ('search', 'widget'),
+        ('read', 'design'),
+        ('new', 'orphan', '--desc', 'A folder.', '--content', 'Body.'),
+    ],
+    ids=lambda args: args[0],
+)
+def test_command_errors_exit_two(tmp_path: pathlib.Path, args: tuple[str, ...]) -> None:
+    """An unresolvable wiki is exit 2 in every command, never exit 1.
+
+    Exit 1 belongs to each command's own nonzero outcome -- pending
+    changes, issues found, no match -- so a gate branching on one can
+    never read a typo'd ``--path`` as that outcome.
+    """
+    result = _wiki(tmp_path, *args, '--path', str(tmp_path / 'nowhere'))
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert 'Error:' in result.stderr
+
+
+def test_update_check_separates_pending_from_error(tmp_path: pathlib.Path) -> None:
+    """``update --check`` exits 1 for pending changes and 2 for an error.
+
+    The pair is the ambiguity a CI gate turns on: pending drift is a
+    result to rerun without ``--check``, while a bad subtree is a
+    broken invocation to fix.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'core' / 'design.md', _page('Design', 'A design.', 'Body.'))
+    # pending drift: the sweep is the fix
+    pending = _wiki(root, 'update', '--check', '--path', str(root))
+    assert pending.returncode == 1, pending.stdout + pending.stderr
+    assert 'would change' in pending.stdout
+    # a bad subtree entry: the invocation is the fix
+    entry = _wiki(root, 'update', '--check', 'nowhere', '--path', str(root))
+    assert entry.returncode == 2, entry.stdout + entry.stderr
+    assert 'Error:' in entry.stderr
+
+
 # ------ init
 
 
@@ -198,13 +248,13 @@ def test_init_refuses_nested_wiki(tmp_path: pathlib.Path) -> None:
 
     # an explicit --path inside the outer wiki is refused and creates nothing
     result = _wiki(tmp_path, 'init', 'Inner', '--path', str(outer / 'inner'))
-    assert result.returncode == 1
+    assert result.returncode == 2
     assert str(outer) in result.stdout + result.stderr
     assert not (outer / 'inner').exists()
 
     # the default {cwd}/wiki path is refused the same way from inside a wiki
     result = _wiki(outer, 'init')
-    assert result.returncode == 1
+    assert result.returncode == 2
     assert str(outer) in result.stdout + result.stderr
     assert not (outer / 'wiki').exists()
 
@@ -212,7 +262,7 @@ def test_init_refuses_nested_wiki(tmp_path: pathlib.Path) -> None:
     _write(outer / 'topics' / '_index.md', _index('Topics', 'Topic guides.', 'Text.'))
     result = _wiki(tmp_path, 'init', '--path', str(outer / 'topics'))
     combined = result.stdout + result.stderr
-    assert result.returncode == 1
+    assert result.returncode == 2
     assert str(outer) in combined
     assert 'already initialized' not in combined.lower()
 
@@ -220,7 +270,7 @@ def test_init_refuses_nested_wiki(tmp_path: pathlib.Path) -> None:
     # enclosing wiki and the refusal holds
     shutil.rmtree(outer / '.wiki')
     result = _wiki(tmp_path, 'init', '--path', str(outer / 'newsub'))
-    assert result.returncode == 1
+    assert result.returncode == 2
     assert str(outer) in result.stdout + result.stderr
     assert not (outer / 'newsub').exists()
 
@@ -255,7 +305,7 @@ def test_home_directory_is_never_a_wiki(
 
     # HOME itself is refused, leaving the store and the tree untouched
     refused = _wiki(tmp_path, 'init', '--path', str(home), home=home)
-    assert refused.returncode == 1
+    assert refused.returncode == 2
     assert 'home directory' in refused.stdout + refused.stderr
     assert not (home / '_index.md').exists()
     assert json.loads(store.read_text(encoding='utf-8')) == {'trusted': {}}
@@ -438,7 +488,7 @@ def test_update_failed_entry_mutates_nothing(tmp_path: pathlib.Path) -> None:
 
     # the bad entry is named and the missing marker stays missing
     result = _wiki(root, 'update', 'no_such_entry', '--path', str(root))
-    assert result.returncode == 1
+    assert result.returncode == 2
     assert "Wiki folder not found: 'no_such_entry'" in result.stderr
     assert not (root / '.wiki' / 'settings.json').exists()
 
@@ -563,7 +613,7 @@ def test_new_requires_authored_desc_and_content(tmp_path: pathlib.Path) -> None:
         '--content',
         'Adopted at grading.',
     )
-    assert placeholder.returncode == 1
+    assert placeholder.returncode == 2
     assert 'never stubbed' in placeholder.stderr
     assert not (root / 'evidence' / 'verify' / '_index.md').exists()
 
@@ -601,7 +651,7 @@ def test_new_requires_authored_desc_and_content(tmp_path: pathlib.Path) -> None:
         '--content',
         'More.',
     )
-    assert again.returncode == 1
+    assert again.returncode == 2
     assert 'Index already exists' in again.stderr
 
 
@@ -630,7 +680,7 @@ def test_new_refuses_interior_path(tmp_path: pathlib.Path) -> None:
         '--content',
         'Body.',
     )
-    assert result.returncode == 1
+    assert result.returncode == 2
     assert f'inside the wiki at: {root}' in result.stderr
     assert not (root / 'notes').exists()
     assert not (root / 'topic' / 'notes').exists()
@@ -779,20 +829,13 @@ def test_path_naming_nested_declared_wiki_resolves_to_itself(
 
 
 @pytest.mark.parametrize(
-    argnames=('args', 'code'),
-    argvalues=[
-        (['update'], 1),
-        # lint reserves exit 1 for issues found, so its resolution
-        # failure lands on the error leg
-        (['lint'], 2),
-        (['map'], 1),
-    ],
+    argnames='args',
+    argvalues=[['update'], ['lint'], ['map']],
     ids=['update', 'lint', 'map'],
 )
 def test_parent_enclosing_declared_wiki_is_refused(
     tmp_path: pathlib.Path,
     args: list[str],
-    code: int,
 ) -> None:
     """A stray index above a declared wiki never re-roots resolution there.
 
@@ -812,7 +855,7 @@ def test_parent_enclosing_declared_wiki_is_refused(
     # cwd resolution from the parent refuses, naming the nested root
     result = _wiki(tmp_path, *args)
     combined = result.stdout + result.stderr
-    assert result.returncode == code
+    assert result.returncode == 2
     assert f'encloses the wiki at: {root};' in combined
     assert 'declared root' in combined
     # nothing was absorbed: no marker planted, no name: rewritten
@@ -841,7 +884,7 @@ def test_update_cli_refuses_nested_wiki(tmp_path: pathlib.Path) -> None:
     # the sweep is refused with the enclosure message, naming the root
     result = _wiki(root, 'update', '--path', str(root))
     combined = result.stdout + result.stderr
-    assert result.returncode == 1
+    assert result.returncode == 2
     assert f'encloses the wiki at: {nested};' in combined
     assert 'declared root' in combined
     assert (root / 'note.md').read_text(encoding='utf-8') == before
@@ -868,7 +911,7 @@ def test_update_refuses_a_scope_inside_a_nested_wiki(tmp_path: pathlib.Path) -> 
     # updating a subfolder of the inner wiki from the outer root refuses
     result = _wiki(root, 'update', 'backup/sub', '--path', str(root))
     combined = result.stdout + result.stderr
-    assert result.returncode == 1
+    assert result.returncode == 2
     assert f'inside the wiki at: {nested};' in combined
     assert (nested / 'sub' / 'page.md').read_text(encoding='utf-8') == before
     # lint of the same scope refuses the same way (no misleading diff);
@@ -892,7 +935,7 @@ def test_update_refuses_an_excluded_dot_directory_scope(
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     result = _wiki(root, 'update', '.wiki', '--path', str(root))
     combined = result.stdout + result.stderr
-    assert result.returncode == 1
+    assert result.returncode == 2
     assert 'excluded directory' in combined
     # nothing scaffolded inside the tool directory
     assert not (root / '.wiki' / '_index.md').exists()
@@ -955,7 +998,7 @@ def test_update_cli_refuses_conflict_markers(tmp_path: pathlib.Path) -> None:
     # the sweep is refused, naming the marked file, and nothing is rewritten
     result = _wiki(root, 'update', '--path', str(root))
     combined = result.stdout + result.stderr
-    assert result.returncode == 1
+    assert result.returncode == 2
     assert 'Merge conflict markers in: note.md;' in combined
     assert note.read_text(encoding='utf-8') == conflicted
 
@@ -1439,11 +1482,11 @@ def test_read_resolves_dotted_page_name(wiki: pathlib.Path) -> None:
         # a slice with non-integer bounds is a usage error
         ('core/design', ['--words', 'a:b'], 2, 'slice format'),
         # a missing entry is a clean runtime error, not a traceback
-        ('core/missing_entry', [], 1, 'not found'),
+        ('core/missing_entry', [], 2, 'not found'),
         # a name escaping the wiki root is refused, not resolved
-        ('../escape', [], 1, 'outside wiki root'),
+        ('../escape', [], 2, 'outside wiki root'),
         # a blank name is not found (it must not resolve to the root index)
-        (' ', [], 1, 'not found'),
+        (' ', [], 2, 'not found'),
     ],
     ids=[
         'non-colon-slice',
@@ -2192,7 +2235,7 @@ def test_trust_refuses_non_wiki_path(tmp_path: pathlib.Path) -> None:
     being silently added to the store.
     """
     result = _wiki(tmp_path, 'trust', '--path', str(tmp_path / 'nope'))
-    assert result.returncode == 1
+    assert result.returncode == 2
     assert 'No wiki at' in result.stderr
 
 

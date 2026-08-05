@@ -48,7 +48,15 @@ def command(
     name: str,
     **kwargs: Any,
 ) -> Callable:
-    """Register a CLI command on ``app`` with error wrapping."""
+    """Register a CLI command on ``app`` with error wrapping.
+
+    A command error -- an unresolvable wiki, a bad subtree entry, a
+    refused hook -- prints ``Error: <message>`` on stderr and exits 2,
+    beside typer's own usage errors, so exit 1 is left to mean exactly
+    the command's own nonzero outcome (``lint``'s issues found,
+    ``search``'s no match, ``update --check``'s pending changes) and a
+    script gating on one can never read a failed run as the other.
+    """
 
     def decorator(f: Callable, /) -> Callable:
         if private := name.startswith('_'):
@@ -70,7 +78,7 @@ def command(
             except Exception as e:
                 error = type(e).__name__ if private else 'Error'
                 typer.echo(f'{error}: {e}', err=True)
-                raise SystemExit(1) from None
+                raise SystemExit(2) from None
 
         return app.command(name, **kwargs)(wrapper)
 
