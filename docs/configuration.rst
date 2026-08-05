@@ -293,6 +293,15 @@ applies; inside one, an unreadable fence (git off ``PATH``, a broken install)
 is narrated as a note, since the sweep is about to adopt what the repository
 ignores.
 
+Because the fence reads the repository's own rules alone, a personal
+``core.excludesFile`` never changes what is indexed — but it still decides
+what your ``git add`` accepts. A file only you ignore is indexed here and
+gets a generated row that ships while the file cannot, so every other clone
+reds on a broken link your own ``wiki lint`` never shows. Both the sweep that
+mints such a row and the lint that audits it emit a note naming the path and
+the excluding source; the row is still minted, since refusing it would make
+indexing depend on the machine.
+
 The trust store: ``~/.wiki/settings.json``
 ------------------------------------------
 

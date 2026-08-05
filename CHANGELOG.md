@@ -94,6 +94,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   vendored wiki inside an excluding host is a sovereign tree, never silently
   retargeted to the host.
 
+- `wiki update` and `wiki lint` note an indexed path the running machine's git
+  ignores -- a personal `core.excludesFile` rule the repository does not carry.
+  The fence stays pinned to the repository's own rules, so what gets indexed
+  never varies by machine; but the row that ships for such a file points at
+  content the author's `git add` refuses, reddening every other clone while
+  their own lint stays green. The note (`UntrackablePathEvent`, a typed
+  `untrackable_path` row in `lint --json`) names the path, the excluding source
+  and line, and the pattern. The row is still minted: refusing it would make
+  indexing machine-dependent, the non-determinism the pinned fence exists to
+  prevent.
+
 - `wiki lint` folds resolver diagnostics into its notes: the upward resolution
   notice, a missing settings marker or root index, and an outer index above the
   declared root are counted in the closing summary and land typed in

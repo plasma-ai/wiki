@@ -546,7 +546,10 @@ is on — missing titles.
 **Notes** (soft, stderr) flag placeholder (``...``) descriptions,
 descriptions over 500 characters, empty index content sections, CRLF line
 endings, stale ``[[wikilinks]]`` in authored prose (suggesting the
-canonical target when one resolves), and a ``.gitattributes`` mapping
+canonical target when one resolves), an indexed path this machine's git
+ignores (a personal ``core.excludesFile`` rule — the row ships where the
+file cannot, so every other clone reds on a broken link), and a
+``.gitattributes`` mapping
 ``merge=wiki`` with no ``merge.wiki.driver`` configured — the fresh-clone
 state where index merges silently fall back to a plain text merge until
 ``wiki config`` registers the driver. Resolver diagnostics (an upward

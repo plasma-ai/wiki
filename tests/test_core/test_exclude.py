@@ -42,6 +42,7 @@ __all__ = [
     'test_gitignored_link_target_names_the_cause',
     'test_new_refuses_a_fenced_target',
     'test_fenced_directory_is_invisible_to_every_check',
+    'test_personally_ignored_row_draws_a_note',
 ]
 
 # the gitignore-fence tests drive a real repository
@@ -647,6 +648,62 @@ def test_unavailable_fence_is_narrated_inside_a_repository(
     assert any('Bare page' in issue for issue in issues)
     unavailable = [n for n in notices if 'fence unavailable' in n.description]
     assert bool(unavailable) is in_repo
+
+
+@_needs_git
+def test_personally_ignored_row_draws_a_note(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A row for a path only this machine ignores is named, not silent.
+
+    The fence reads the repository's rules alone, so indexing never
+    varies by machine -- but the author's ``core.excludesFile`` still
+    decides what their ``git add`` accepts. Indexing a file only they
+    ignore ships a row the file cannot follow, and every other clone
+    reds on the broken link while the author's lint stays green. Both
+    the sweep that mints the row and the lint that audits it name the
+    divergence and its source; the row is still minted, since refusing
+    would make indexing machine-dependent.
+    """
+    _make_wiki(tmp_path, folders={'notes': ['keep']})
+    _git_repo(tmp_path)
+    # a personal global ignore, in force for this repo only on this machine
+    excludes = tmp_path.parent / 'personal_ignore'
+    excludes.write_text('*.draft.md\n', encoding='utf-8')
+    subprocess.run(
+        ['git', '-C', str(tmp_path), 'config', 'core.excludesFile', str(excludes)],
+        check=True,
+    )
+    (tmp_path / 'notes' / 'plan.draft.md').write_text(
+        '---\nname: plan\ndesc: A draft.\n---\n\n# plan\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # the sweep mints the row (indexing stays machine-independent) and
+    # names the divergence as it happens
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+    wiki.update()
+    index = (tmp_path / 'notes' / '_index.md').read_text(encoding='utf-8')
+    assert '[[notes/plan.draft|plan.draft]]' in index
+    flagged = [
+        event for event in notices if type(event).__name__ == 'UntrackablePathEvent'
+    ]
+    assert [event.path for event in flagged] == ['notes/plan.draft.md']
+    assert flagged[0].pattern == '*.draft.md'
+    assert flagged[0].source == str(excludes)
+    assert 'every other clone reds' in flagged[0].description
+
+    # lint repeats it as a soft note: the corpus is not red on this
+    # machine, and gating on it would gate differently per machine
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+    assert wiki.lint() == []
+    assert any(type(event).__name__ == 'UntrackablePathEvent' for event in notices)
+
+    # a file the repository itself tracks draws nothing
+    assert not any(getattr(event, 'path', None) == 'notes/keep.md' for event in notices)
 
 
 @_needs_git

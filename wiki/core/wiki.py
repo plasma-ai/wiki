@@ -467,16 +467,7 @@ class Wiki:
         that repository fences).
         """
         payload = b'\0'.join(os.fsencode(entry) for entry in candidates) + b'\0'
-        # the repository is the one enclosing the root, so the probe never
-        # inherits git's environment: a git hook exports GIT_DIR (relative,
-        # resolving against this cwd) and a caller may export one pointing
-        # at another repo -- either would answer with a foreign repo's rules
-        # or, on a path git cannot discover, drop the fence silently
-        env = {
-            name: value
-            for name, value in os.environ.items()
-            if not name.startswith('GIT_')
-        }
+        env = _git_env()
         try:
             result = subprocess.run(
                 [
@@ -523,6 +514,59 @@ class Wiki:
             return False
         return bool(matched)
 
+    def _warn_untrackable_rows(self: Wiki, folder: pathlib.Path) -> None:
+        """Note indexed paths the caller's full ignore stack excludes.
+
+        The fence reads the repository's own rules alone, so indexing is
+        identical on every clone -- but the author's personal ignores
+        (``core.excludesFile``) still decide what their ``git add``
+        accepts. A file only they ignore is indexed here, gets a
+        generated row, and the row ships while the file cannot: every
+        other clone then reds on a broken link the author's lint never
+        shows. The note names the excluding source so the divergence is
+        visible where it is created; the fence itself stays pinned, so
+        what gets indexed never varies by machine.
+        """
+        # no repository, no divergence to warn about
+        enclosing = (self._root, *self._root.parents)
+        if not any((ancestor / '.git').exists() for ancestor in enclosing):
+            return
+        # the paths this wiki writes or links: each folder's index, plus
+        # every page indexed under it
+        candidates = []
+        for indexed in self._find_dirs(folder):
+            index_path = indexed / WIKI_INDEX
+            candidates.append(index_path.relative_to(self._root).as_posix())
+            for page in self._find_pages(indexed):
+                candidates.append(page.relative_to(self._root).as_posix())
+        if not candidates:
+            return
+        # index-aware and unpinned: the question is whether THIS machine's
+        # git would refuse the file, so a tracked file reads as safe and
+        # the personal global counts
+        payload = b'\0'.join(os.fsencode(entry) for entry in candidates) + b'\0'
+        try:
+            result = subprocess.run(
+                ['git', 'check-ignore', '-z', '-v', '--stdin'],
+                cwd=self._root,
+                input=payload,
+                capture_output=True,
+                env=_git_env(),
+            )
+        except FileNotFoundError:
+            return
+        if result.returncode not in (0, 1):
+            return
+        # -v -z frames each hit as source, line, pattern, pathname
+        fields = [os.fsdecode(entry) for entry in result.stdout.split(b'\0') if entry]
+        for source, line, pattern, path in zip(*[iter(fields)] * 4, strict=False):
+            self.on_untrackable_path(
+                path=path,
+                source=source,
+                line=int(line),
+                pattern=pattern,
+            )
+
     def _git_read(self: Wiki, cmd: list[str]) -> Optional[str]:
         """Run a read-only git command at the root; ``None`` on any failure.
 
@@ -530,11 +574,7 @@ class Wiki:
         repo-discovery variables are dropped, so the answering
         repository is always the one enclosing the root.
         """
-        env = {
-            name: value
-            for name, value in os.environ.items()
-            if not name.startswith('GIT_')
-        }
+        env = _git_env()
         try:
             result = subprocess.run(
                 ['git', *cmd],
@@ -967,6 +1007,9 @@ class Wiki:
         self._refuse_enclosing_wiki(folder)
         # TODO: remove back-compat in future version
         self._refuse_legacy_layout()
+        # the sweep is where a row for an untrackable path gets minted, so
+        # the divergence is named as it happens, not only at the next lint
+        self._warn_untrackable_rows(folder)
         # refuse to sweep across a nested declared wiki: absorbing it would
         # rewrite its name: paths against the wrong root, and a dry run
         # would preview that same absorption, so both refuse alike
@@ -1259,6 +1302,7 @@ class Wiki:
         # text-merges indexes silently: note the gap (soft) before the
         # clone's first merge pays for it
         self._warn_unconfigured_merge_driver()
+        self._warn_untrackable_rows(folder)
         # compute what update would write (the source of truth for drift)
         now = self._utc_now()
         overlay, _, _ = self._plan(folder, now=now)
@@ -2090,6 +2134,26 @@ class Wiki:
         """
         if event is None:
             event = GitFenceUnavailableEvent(message, **kwargs)
+        return self.on_notice(event, logging_level=logging_level)
+
+    def on_untrackable_path(
+        self: Wiki,
+        message: Optional[str] = None,
+        *,
+        logging_level: int = logging.WARNING,
+        event: Optional[UntrackablePathEvent] = None,
+        **kwargs: Any,
+    ) -> Event:
+        """Handle an untrackable-indexed-path notice event.
+
+        Constructs an ``UntrackablePathEvent`` from ``message`` and the
+        payload kwargs unless a pre-built ``event`` is passed through,
+        then delegates to ``on_notice``. Override in subclasses to
+        intercept this notice kind alone; override ``on_notice`` to
+        intercept every notice.
+        """
+        if event is None:
+            event = UntrackablePathEvent(message, **kwargs)
         return self.on_notice(event, logging_level=logging_level)
 
     def on_merge_driver_unconfigured(
@@ -4739,6 +4803,25 @@ class GitFenceUnavailableEvent(Event):
         )
 
 
+class UntrackablePathEvent(Event):
+    """Emitted when an indexed path the caller's git refuses to track."""
+
+    path: str
+    source: str
+    line: int
+    pattern: str
+
+    @property
+    def description(self: UntrackablePathEvent) -> str:
+        """Return the untrackable-path notice line."""
+        return (
+            f"{self.path}: indexed, but this machine's git ignores it"
+            f' ({self.source}:{self.line} {self.pattern!r}); its generated row'
+            ' ships where the file cannot, so every other clone reds on a'
+            ' broken link'
+        )
+
+
 class MergeDriverUnconfiguredEvent(Event):
     """Emitted when ``merge=wiki`` is mapped but no driver is configured."""
 
@@ -4899,6 +4982,7 @@ _NOTICE_HOOKS = {
     GitignoreSkipEvent: 'on_gitignore_skip',
     GitFenceUnavailableEvent: 'on_git_fence_unavailable',
     MergeDriverUnconfiguredEvent: 'on_merge_driver_unconfigured',
+    UntrackablePathEvent: 'on_untrackable_path',
     WriteSkipEvent: 'on_write_skip',
     FrontmatterMalformedEvent: 'on_frontmatter_malformed',
     IndexTruncatedEvent: 'on_index_truncated',
@@ -4914,6 +4998,20 @@ _NOTICE_HOOKS = {
 
 
 # ------ helper functions
+
+
+def _git_env() -> dict[str, str]:
+    """Return the environment for a git probe, minus repo discovery.
+
+    The repository a probe answers from is the one enclosing the wiki
+    root, never one the caller's environment names: a git hook exports
+    ``GIT_DIR`` (relative, resolving against the probe's cwd) and a
+    caller may export one pointing at another repo -- either would
+    answer with a foreign repository's rules, or none at all.
+    """
+    return {
+        name: value for name, value in os.environ.items() if not name.startswith('GIT_')
+    }
 
 
 def _conflict_marker_lines(text: str) -> list[int]:
