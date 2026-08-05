@@ -35,6 +35,7 @@ __all__ = [
     'test_gitignored_residue_is_never_adopted',
     'test_gitignore_fence_is_pattern_pure',
     'test_gitignore_fence_ignores_machine_local_excludes',
+    'test_gitignore_fence_ignores_an_inherited_git_dir',
     'test_gitignore_fence_reaches_a_nested_wiki_root',
     'test_ignored_wiki_root_stays_unfenced',
     'test_gitignored_link_target_names_the_cause',
@@ -518,6 +519,52 @@ def test_gitignore_fence_ignores_machine_local_excludes(
     wiki.update()
     root_index = (tmp_path / '_index.md').read_text(encoding='utf-8')
     assert '[[core/_index|core/]]' in root_index
+
+
+@_needs_git
+@pytest.mark.parametrize(
+    argnames='inherited',
+    argvalues=['foreign-repo', 'dangling'],
+)
+def test_gitignore_fence_ignores_an_inherited_git_dir(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    inherited: str,
+) -> None:
+    """An inherited ``GIT_DIR`` never redirects or disables the fence.
+
+    The fence is the enclosing repository's own rules, whatever git
+    environment the caller carries -- a hook runs its commands with
+    ``GIT_DIR`` exported. Pointed at another repository it would fence
+    corpus content by foreign rules (pruning live rows, churning lint);
+    pointed anywhere git cannot discover a repository it would drop the
+    fence and adopt fenced residue, writing frontmatter into files the
+    repo keeps out of version control.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    _git_repo(tmp_path, 'TABLES.md')
+    residue = '# t\n\nraw rows\n'
+    (tmp_path / 'core' / 'TABLES.md').write_text(residue, encoding='utf-8')
+    # a second repository whose rules fence the corpus folder instead
+    foreign = tmp_path.parent / f'{tmp_path.name}_foreign'
+    foreign.mkdir()
+    _git_repo(foreign)
+    (foreign / '.git' / 'info' / 'exclude').write_text('core/\n', encoding='utf-8')
+    # the git environment the caller carries in: another repository's, or
+    # one no repository lives at
+    git_dir = {'foreign-repo': foreign / '.git', 'dangling': foreign / 'gone' / '.git'}
+    monkeypatch.setenv('GIT_DIR', str(git_dir[inherited]))
+
+    # the verdict is the one the enclosing repo's rules give: corpus
+    # indexed, residue fenced (fresh instance -- the fence is cached)
+    wiki = Wiki(tmp_path)
+    assert wiki.lint() == []
+    wiki.update()
+    root_index = (tmp_path / '_index.md').read_text(encoding='utf-8')
+    assert '[[core/_index|core/]]' in root_index
+    core_index = (tmp_path / 'core' / '_index.md').read_text(encoding='utf-8')
+    assert 'TABLES' not in core_index
+    assert (tmp_path / 'core' / 'TABLES.md').read_text(encoding='utf-8') == residue
 
 
 @_needs_git

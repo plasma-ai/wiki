@@ -457,6 +457,16 @@ class Wiki:
         repository, or git unavailable).
         """
         payload = b'\0'.join(os.fsencode(entry) for entry in candidates) + b'\0'
+        # the repository is the one enclosing the root, so the probe never
+        # inherits git's environment: a git hook exports GIT_DIR (relative,
+        # resolving against this cwd) and a caller may export one pointing
+        # at another repo -- either would answer with a foreign repo's rules
+        # or, on a path git cannot discover, drop the fence silently
+        env = {
+            name: value
+            for name, value in os.environ.items()
+            if not name.startswith('GIT_')
+        }
         try:
             result = subprocess.run(
                 [
@@ -471,6 +481,7 @@ class Wiki:
                 cwd=self._root,
                 input=payload,
                 capture_output=True,
+                env=env,
             )
         except FileNotFoundError:
             return None

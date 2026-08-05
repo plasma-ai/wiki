@@ -74,7 +74,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`GitignoreSkipEvent`/`on_gitignore_skip`) naming the fence. The fence reads
   the repository's own rules only -- the user-global `core.excludesFile` is
   pinned out of the probe, so fencing is identical on every clone instead of one
-  machine's personal patterns pruning rows every other machine re-adds.
+  machine's personal patterns pruning rows every other machine re-adds, and the
+  probe drops the caller's `GIT_*` environment, so an inherited `GIT_DIR` (git
+  hooks export one) can neither fence corpus content by another repository's
+  rules nor, pointed where no repository is discoverable, drop the fence and
+  adopt the residue it was holding back.
 
 - A `--path` (or cwd resolution) landing inside an existing wiki resolves upward
   to the enclosing root -- declared, or the topmost index of a bare chain --

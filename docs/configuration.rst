@@ -285,8 +285,11 @@ linked — so a driver's stray output beside tracked content cannot be swept
 into the corpus by the next update. Matching is pattern-pure (a
 force-tracked file matching a fence is still fenced), and a wiki whose own
 root is ignored is exempt, so a deliberately unindexed wiki inside a repo
-keeps working. Outside a git repository — or with git unavailable — no
-fence applies.
+keeps working. The repository is always the one enclosing the wiki root: the
+probe drops the caller's ``GIT_*`` environment, so a command run from a git
+hook (which exports ``GIT_DIR``) fences exactly as the same command run from
+a shell. Outside a git repository — or with git unavailable — no fence
+applies.
 
 The trust store: ``~/.wiki/settings.json``
 ------------------------------------------
