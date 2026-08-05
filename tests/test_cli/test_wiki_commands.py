@@ -44,6 +44,7 @@ __all__ = [
     'test_read_only_commands_are_deterministic',
     'test_path_inside_wiki_resolves_upward',
     'test_path_inside_undeclared_wiki_resolves_upward',
+    'test_path_naming_nested_declared_wiki_resolves_to_itself',
     'test_parent_enclosing_declared_wiki_is_refused',
     'test_update_cli_refuses_nested_wiki',
     'test_update_refuses_a_scope_inside_a_nested_wiki',
@@ -715,6 +716,38 @@ def test_path_inside_undeclared_wiki_resolves_upward(
     # no marker planted in the subfolder; update restores the root's own
     assert not (root / 'core' / '.wiki').exists()
     assert (root / '.wiki' / 'settings.json').is_file()
+
+
+def test_path_naming_nested_declared_wiki_resolves_to_itself(
+    tmp_path: pathlib.Path,
+) -> None:
+    """``--path`` at a declared nested wiki runs against that wiki.
+
+    A vendored guest wiki (its own ``.wiki/settings.json``, excluded
+    from the host's walks) is a sovereign tree: naming it explicitly
+    must never silently retarget the command to the enclosing host,
+    reporting success against the wrong wiki while the guest stays
+    stale.
+    """
+    host = tmp_path / 'wiki'
+    settings = '{"exclude": {"patterns": ["vendor"]}}'
+    init = _wiki(tmp_path, 'init', '--path', str(host), '--settings', settings)
+    assert init.returncode == 0, init.stdout + init.stderr
+    # a declared guest wiki vendored inside the excluded subtree
+    guest = host / 'vendor' / 'guest'
+    (guest / '.wiki').mkdir(parents=True)
+    (guest / '.wiki' / 'settings.json').write_text('{}\n', encoding='utf-8')
+    _write(guest / 'page.md', _page('page', 'A guest page.', 'Body.'))
+    host_index = (host / '_index.md').read_text(encoding='utf-8')
+
+    # the update runs against the guest itself, wiring its own index
+    result = _wiki(host, 'update', '--path', str(guest))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'using that root' not in result.stderr
+    guest_index = (guest / '_index.md').read_text(encoding='utf-8')
+    assert '[[page|page]]' in guest_index
+    # the host stays untouched
+    assert (host / '_index.md').read_text(encoding='utf-8') == host_index
 
 
 @pytest.mark.parametrize(

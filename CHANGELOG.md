@@ -66,7 +66,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   from inside `math/`) now works from anywhere in the tree; scoped work still
   goes through the entry argument. `wiki new` keeps the refusal: its name
   argument is a write target, so a rebased root would silently relocate the
-  write.
+  write. A `--path` naming a declared root resolves to that root itself -- a
+  vendored wiki inside an excluding host is a sovereign tree, never silently
+  retargeted to the host.
 
 ### Security
 

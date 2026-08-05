@@ -232,6 +232,8 @@ def resolve_wiki(
     root-relative ``--path`` works from inside the wiki too --
     ``inside='refuse'`` raises there instead, for a command whose entry
     argument is a write target a rebased root would silently relocate.
+    A path that is itself a declared root names its own wiki (a
+    vendored guest inside an excluding host), never the enclosing one.
     Corroboration diagnostics ride the resolution -- an undeclared tree
     (at its topmost index), a declared root missing its index, and an
     index chain extending above the declared root are each named on
@@ -243,8 +245,10 @@ def resolve_wiki(
     # a path inside an existing wiki is never itself a root: the command
     # would grow a second root index and rewrite name: paths relative to the
     # wrong root -- resolve upward to the enclosing root instead (scoped
-    # work still goes through the entry argument)
-    enclosing = enclosing_wiki_root(wiki_root)
+    # work still goes through the entry argument); a path that is itself a
+    # declared root names its own wiki (a vendored guest inside an excluding
+    # host), never the enclosing one
+    enclosing = None if _is_wiki_root(wiki_root) else enclosing_wiki_root(wiki_root)
     if enclosing is not None:
         if inside == 'refuse':
             raise _inside_wiki_error(enclosing)
