@@ -94,6 +94,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   vendored wiki inside an excluding host is a sovereign tree, never silently
   retargeted to the host.
 
+- `wiki lint` notes an unconfigured merge driver: a `.gitattributes` mapping
+  `merge=wiki` whose repository has no `merge.wiki.driver` configured -- the
+  fresh-clone state, since only the attributes map travels -- draws a soft note
+  (`MergeDriverUnconfiguredEvent`, a typed `lint --json` row) naming
+  `wiki config` as the fix, instead of the clone's first merge silently
+  text-merging `_index.md` files.
+
 - Bare invocation and `--path .` agree from a raw (unindexed) folder of an
   undeclared wiki: cwd resolution climbs the ancestor index chain from the
   nearest indexed ancestor at any depth -- exactly the climb an explicit path

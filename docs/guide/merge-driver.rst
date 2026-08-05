@@ -137,6 +137,13 @@ Lost delimiter
 After the merge
 ---------------
 
+Only the ``.gitattributes`` map travels with the repository — the
+``merge.wiki.driver`` config is local, per clone — so a fresh clone carries
+the map alone and git falls back to a plain text merge of ``_index.md``
+files, silently, at its first merge. ``wiki lint`` notes the gap
+(soft, and a typed row in ``lint --json``) until ``wiki config`` registers
+the driver.
+
 Run ``wiki update`` after every merge. It regenerates the link blocks from
 the merged filesystem: carried-over rows sort into place (and any whose
 target a branch deleted are pruned), labels and descriptions refresh, and a

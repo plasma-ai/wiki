@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import pathlib
 import re
+import shutil
+import subprocess
 
 import pytest
 
@@ -24,6 +26,7 @@ __all__ = [
     'test_lint_names_the_failing_naming_rule',
     'test_lint_flags_what_update_fixes',
     'test_lint_issues_are_typed',
+    'test_lint_notes_unconfigured_merge_driver',
     'test_lint_names_bare_page',
     'test_lint_names_nested_wiki_root',
     'test_lint_flags_human_only_issues',
@@ -326,6 +329,51 @@ def test_lint_issues_are_typed(tmp_path: pathlib.Path) -> None:
         'unparseable_stamp',
         'wrapped_marker',
     }
+
+
+@pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
+def test_lint_notes_unconfigured_merge_driver(tmp_path: pathlib.Path) -> None:
+    """A clone carrying ``merge=wiki`` with no driver config draws a note.
+
+    Only ``.gitattributes`` travels with the repository -- the
+    ``merge.wiki.driver`` config is per clone -- so a fresh clone
+    text-merges ``_index.md`` files silently at its first merge. Lint
+    notes the gap (soft, exit unchanged, a typed `--json` row), and
+    wiring the config half silences it.
+    """
+    subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True)
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    (tmp_path / '.gitattributes').write_text(
+        '**/_index.md merge=wiki\n', encoding='utf-8'
+    )
+
+    # the gap is a note, never an issue, naming the fix
+    notices = _capture_notices(wiki)
+    assert wiki.lint() == []
+    gaps = [
+        event.description
+        for event in notices
+        if 'merge.wiki.driver is not configured' in event.description
+    ]
+    assert gaps
+    assert all('wiki config' in gap for gap in gaps)
+
+    # wiring the config half silences the note
+    subprocess.run(
+        [
+            'git',
+            '-C',
+            str(tmp_path),
+            'config',
+            'merge.wiki.driver',
+            'wiki _merge %O %A %B %L %P',
+        ],
+        check=True,
+    )
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+    assert wiki.lint() == []
+    assert not any('merge.wiki.driver' in event.description for event in notices)
 
 
 def test_lint_names_bare_page(tmp_path: pathlib.Path) -> None:

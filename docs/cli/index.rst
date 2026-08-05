@@ -545,8 +545,11 @@ is on — missing titles.
 
 **Notes** (soft, stderr) flag placeholder (``...``) descriptions,
 descriptions over 500 characters, empty index content sections, CRLF line
-endings, and stale ``[[wikilinks]]`` in authored prose (suggesting the
-canonical target when one resolves).
+endings, stale ``[[wikilinks]]`` in authored prose (suggesting the
+canonical target when one resolves), and a ``.gitattributes`` mapping
+``merge=wiki`` with no ``merge.wiki.driver`` configured — the fresh-clone
+state where index merges silently fall back to a plain text merge until
+``wiki config`` registers the driver.
 
 A ``<!-- start: no-lint -->`` … ``<!-- end: no-lint -->`` region suppresses
 the position-based rules (conflict markers, escaped wikilinks, wrap mangles,

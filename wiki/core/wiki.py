@@ -519,6 +519,49 @@ class Wiki:
             return False
         return bool(matched)
 
+    def _git_read(self: Wiki, cmd: list[str]) -> Optional[str]:
+        """Run a read-only git command at the root; ``None`` on any failure.
+
+        The probe shares the fence's environment discipline: git's
+        repo-discovery variables are dropped, so the answering
+        repository is always the one enclosing the root.
+        """
+        env = {
+            name: value
+            for name, value in os.environ.items()
+            if not name.startswith('GIT_')
+        }
+        try:
+            result = subprocess.run(
+                ['git', *cmd],
+                cwd=self._root,
+                capture_output=True,
+                env=env,
+            )
+        except FileNotFoundError:
+            return None
+        if result.returncode != 0:
+            return None
+        return os.fsdecode(result.stdout).strip()
+
+    def _warn_unconfigured_merge_driver(self: Wiki) -> None:
+        """Note a ``merge=wiki`` attribute with no configured driver.
+
+        ``wiki init``/``wiki config`` wire two halves: the
+        ``.gitattributes`` map (committed, it travels with the
+        repository) and the ``merge.wiki.driver`` config (local, per
+        clone). A fresh clone carries the map alone, and git then falls
+        back to a plain text merge of ``_index.md`` files -- silently,
+        at the clone's first merge -- so lint notes the gap while it is
+        one ``wiki config`` away from wired.
+        """
+        attribute = self._git_read(['check-attr', 'merge', '--', WIKI_INDEX])
+        if (attribute is None) or not attribute.endswith(': merge: wiki'):
+            return
+        if self._git_read(['config', '--get', 'merge.wiki.driver']):
+            return
+        self.on_merge_driver_unconfigured()
+
     def _name_violation(self: Wiki, name: str) -> Optional[str]:
         """Return the naming rule ``name`` breaks, or ``None`` if it is valid.
 
@@ -1208,6 +1251,10 @@ class Wiki:
         self._refuse_enclosing_wiki(folder)
         # TODO: remove back-compat in future version
         self._refuse_legacy_layout()
+        # a merge=wiki attributes map without its config half means git
+        # text-merges indexes silently: note the gap (soft) before the
+        # clone's first merge pays for it
+        self._warn_unconfigured_merge_driver()
         # compute what update would write (the source of truth for drift)
         now = self._utc_now()
         overlay, _, _ = self._plan(folder, now=now)
@@ -2039,6 +2086,26 @@ class Wiki:
         """
         if event is None:
             event = GitFenceUnavailableEvent(message, **kwargs)
+        return self.on_notice(event, logging_level=logging_level)
+
+    def on_merge_driver_unconfigured(
+        self: Wiki,
+        message: Optional[str] = None,
+        *,
+        logging_level: int = logging.WARNING,
+        event: Optional[MergeDriverUnconfiguredEvent] = None,
+        **kwargs: Any,
+    ) -> Event:
+        """Handle an unconfigured-merge-driver notice event.
+
+        Constructs a ``MergeDriverUnconfiguredEvent`` from ``message``
+        and the payload kwargs unless a pre-built ``event`` is passed
+        through, then delegates to ``on_notice``. Override in subclasses
+        to intercept this notice kind alone; override ``on_notice`` to
+        intercept every notice.
+        """
+        if event is None:
+            event = MergeDriverUnconfiguredEvent(message, **kwargs)
         return self.on_notice(event, logging_level=logging_level)
 
     def on_write_skip(
@@ -4668,6 +4735,19 @@ class GitFenceUnavailableEvent(Event):
         )
 
 
+class MergeDriverUnconfiguredEvent(Event):
+    """Emitted when ``merge=wiki`` is mapped but no driver is configured."""
+
+    @property
+    def description(self: MergeDriverUnconfiguredEvent) -> str:
+        """Return the unconfigured-merge-driver notice line."""
+        return (
+            '.gitattributes maps merge=wiki but merge.wiki.driver is not'
+            ' configured; run `wiki config` to register the driver (index'
+            ' merges fall back to a plain text merge until then)'
+        )
+
+
 class WriteSkipEvent(Event):
     """Emitted when apply skips a file edited concurrently with the plan."""
 
@@ -4814,6 +4894,7 @@ _NOTICE_HOOKS = {
     ExcludeSkipEvent: 'on_exclude_skip',
     GitignoreSkipEvent: 'on_gitignore_skip',
     GitFenceUnavailableEvent: 'on_git_fence_unavailable',
+    MergeDriverUnconfiguredEvent: 'on_merge_driver_unconfigured',
     WriteSkipEvent: 'on_write_skip',
     FrontmatterMalformedEvent: 'on_frontmatter_malformed',
     IndexTruncatedEvent: 'on_index_truncated',

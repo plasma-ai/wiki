@@ -233,7 +233,8 @@ reports two kinds of problem — without writing anything:
   *cannot* fix. Any issue makes lint **exit 1** — and nothing else does: a
   command error exits 2, so 1 always means exactly "issues found".
 - **Notes** (stderr): soft advisories — unauthored descriptions, stale prose
-  links, pending CRLF normalization. Notes **never affect the exit code**.
+  links, pending CRLF normalization, an unconfigured merge driver in a fresh
+  clone. Notes **never affect the exit code**.
 
 .. code-block:: console
 
