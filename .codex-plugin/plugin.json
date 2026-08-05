@@ -1,6 +1,6 @@
 {
   "name": "wiki",
-  "version": "1.2.0",
+  "version": "1.3.0.dev0",
   "description": "Indexed knowledge bases with command-line tools for agents.",
   "author": {
     "name": "Plasma AI",

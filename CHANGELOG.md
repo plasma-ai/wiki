@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- The in-tree version is `1.3.0.dev0`: a development checkout no longer reports
+  the same `1.2.0` as the last release, so an installed release and an editable
+  dev install are distinguishable by `wiki --version` alone. Two installs
+  reporting one version silently produced different corpus verdicts -- the
+  release lacks the gitignore fence and the wrapped-marker fix, so it reported
+  issues the dev tree does not -- with nothing in the output naming which code
+  ran. The release commit sets the final `1.3.0`.
+
 ### Added
 
 - `wiki new <folder> --desc <text> --content <text>` (and `Wiki.new`): the
