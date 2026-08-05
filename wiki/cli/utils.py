@@ -609,12 +609,28 @@ def _open_config_home() -> int:
     otherwise decide trust from a ``settings.json`` outside the store.
     The caller owns the returned descriptor.
 
+    A home inside a wiki is refused outright: the store decides which
+    wikis may run code, so a wiki holding it can vouch for itself --
+    clone the repository, point the variable inside it, and its
+    committed ``trusted`` map runs its own hook. Pointed at a wiki's own
+    ``.wiki/``, the store and the wiki's declared-root marker are one
+    file, which also merges the machine-local trust map into the
+    repository's committed settings.
+
     Raises:
         FileNotFoundError: If the config home does not exist.
-        PermissionError: If the config home is not a real directory.
+        PermissionError: If the config home is not a real directory, or
+            sits inside a wiki.
 
     """
     home = _config_home()
+    enclosing = _wiki_holding(home)
+    if enclosing is not None:
+        raise PermissionError(
+            f'Refusing config home inside the wiki at: {enclosing};'
+            f' the trust store must live outside every wiki (point'
+            f' {WIKI_CONFIG_DIR} elsewhere), or a wiki can vouch for itself.'
+        )
     try:
         return os.open(home, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY)
     except OSError as e:
@@ -624,6 +640,27 @@ def _open_config_home() -> int:
                 f' (point {WIKI_CONFIG_DIR} at the real directory).'
             ) from e
         raise
+
+
+def _wiki_holding(home: pathlib.Path) -> Optional[pathlib.Path]:
+    """Return the wiki enclosing config home ``home``, if any.
+
+    Indexed content above the home is the signal: a wiki root carries an
+    ``_index.md``, so an ancestor holding one means the store lives
+    inside a wiki's tree. A declared-but-index-less root (a damaged or
+    half-initialized tree) counts too -- except through the home's own
+    marker, since the default ``~/.wiki/settings.json`` is the store
+    itself, not a declaration that the home directory is a wiki.
+    """
+    resolved = home.expanduser().resolve()
+    for ancestor in resolved.parents:
+        if (ancestor / WIKI_INDEX).is_file():
+            return ancestor
+        if (ancestor / WIKI_DIR).resolve() == resolved:
+            continue
+        if (ancestor / WIKI_SETTINGS).is_file():
+            return ancestor
+    return None
 
 
 def _open_store(path: pathlib.Path) -> Optional[int]:

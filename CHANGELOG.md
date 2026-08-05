@@ -141,6 +141,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- The trust store is refused inside a wiki, on the read path and the write path
+  alike: a wiki holding the store can list itself as trusted, so cloning a
+  repository and pointing `WIKI_CONFIG_DIR` inside it would run its own
+  `.wiki/wiki.py`. Pointed at a wiki's own `.wiki/`, the store and the
+  declared-root marker are one file, which also merged the machine-local trust
+  map into the repository's committed settings; both are named by one refusal.
+
 - The trust store's permission self-heal opens `~/.wiki/settings.json` with
   `O_NOFOLLOW` and tightens the opened descriptor (`fchmod`), mirroring the lock
   file; a `settings.json` symlinked out of the config home is now refused
@@ -151,6 +158,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   attacker's inode, so the repair would re-mode their file and every trusted
   root written afterwards would be editable through a name the `0700` home does
   not cover.
+
 - The trust store's READ path now opens through the same tamper guards as the
   write path: a symlinked or hard-linked `settings.json` is refused when
   `is_trusted` (and the hook gate behind it) consults the store, so a file
@@ -159,21 +167,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   refused up front with a plain message naming the path -- a FIFO no longer
   blocks every trust-consulting invocation on a writer that never comes, and a
   directory no longer fails deep in the rewrite with a cryptic error.
+
 - The config home directory gets the same custody: `wiki trust` tightens it
   through an `O_NOFOLLOW`/`O_DIRECTORY` descriptor and refuses a symlinked home
   outright -- a planted link can no longer have the `0700` repair chmod a
   foreign directory (and the store then written inside it). The refusal names
   the sanctioned relocation: point `WIKI_CONFIG_DIR` at the real directory.
+
 - The `.settings.lock` sibling gets the store's custody too: its mode is
   re-tightened to `0600` on every locked write (`O_CREAT` applies its mode at
   creation only, umask-masked, so a loosened lock stayed loose forever), and a
   symlinked lock is refused with the store's plain-language message instead of
   surfacing a raw `ELOOP` errno.
+
 - `wiki trust` refuses to rewrite a corrupt store: a tolerant read folds
   unparseable JSON into an empty store -- right for a trust decision (nothing is
   trusted, fail-safe), catastrophic for the rewrite, which silently dropped
   every trusted root with a clean exit. The refusal names the store and the
   stakes; the corrupt bytes survive for repair.
+
 - The config home's symlink guard moved onto the open the read path and the
   write path share, so a redirected home can no longer decide trust.
   `O_NOFOLLOW` on `settings.json` covers only its final component, so a
@@ -182,6 +194,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   directory -- and executed the `.wiki/wiki.py` of a wiki the user had never
   trusted. The store is now opened relative to the guarded home descriptor, so
   there is no window between the check and the open either.
+
 - A group- or world-writable trust store is refused, read path and write path
   alike. It is the hard-link attack without the hard link -- any local user
   rewrites the list that decides which wikis run code, needing write permission
@@ -189,6 +202,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cannot unplant an entry already written, so the store is refused (naming the
   mode and the fix) instead of self-healed. Loosened *read* bits still
   self-heal: nothing behind them was forgeable.
+
 - The `.settings.lock` sibling gets the store's full custody, not just
   `O_NOFOLLOW`. The `st_nlink` probe refuses a lock hard-linked to a file
   outside the config home -- the per-call `fchmod` re-moded that file to `0600`,
@@ -198,6 +212,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   planted FIFO succeeds, silently voiding the mutual exclusion the lock exists
   to provide). The lock is opened read-only now: `flock` and `fchmod` need no
   write access.
+
 - A `trusted` value that is not an object is refused by the rewrite exactly as a
   corrupt top level is, instead of being discarded and replaced by a fresh
   single-entry map -- the one key that matters was the one shape the strict read

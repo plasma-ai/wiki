@@ -46,6 +46,7 @@ __all__ = [
     'test_trust_reads_refuse_a_tampered_store',
     'test_trust_store_refuses_unsafe_modes',
     'test_trust_refuses_a_symlinked_config_home',
+    'test_config_home_inside_a_wiki_is_refused',
     'test_trust_root_tightens_and_guards_the_lock',
     'test_trust_root_bounds_the_wait_for_a_held_lock',
     'test_trust_root_refuses_a_corrupt_store',
@@ -713,6 +714,49 @@ def test_trust_root_bounds_the_wait_for_a_held_lock(
     assert not is_trusted(root)
     trust_root(root)
     assert is_trusted(root)
+
+
+@pytest.mark.parametrize('placement', ['control-dir', 'subfolder'])
+def test_config_home_inside_a_wiki_is_refused(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    placement: str,
+) -> None:
+    """A trust store inside a wiki is refused: no wiki vouches for itself.
+
+    The store decides which wikis may run code, so a wiki that holds it
+    can list itself as trusted -- clone the repository, point
+    ``WIKI_CONFIG_DIR`` inside it, and its committed map runs its own
+    hook. At the wiki's own ``.wiki/`` the store is additionally the
+    same file as the declared-root marker, merging the machine-local
+    trust map into the repository's committed settings. Both the read
+    path (which the hook gate consults) and the write path refuse.
+    """
+    root = tmp_path / 'wiki'
+    root.mkdir()
+    (root / '_index.md').write_text('# wiki\n\n***\n', encoding='utf-8')
+    if placement == 'control-dir':
+        home = root / '.wiki'
+    else:
+        home = root / 'notes' / 'store'
+    home.mkdir(parents=True)
+    monkeypatch.setenv('WIKI_CONFIG_DIR', str(home))
+    # a store the wiki itself carries, claiming the wiki is trusted
+    (home / 'settings.json').write_text(
+        json.dumps({'trusted': {str(root.resolve()): '2000-01-01T00:00:00Z'}}),
+        encoding='utf-8',
+    )
+
+    # the read path refuses, so the self-conferred entry never grants trust
+    with pytest.raises(PermissionError, match='config home inside the wiki'):
+        is_trusted(root)
+    (root / '.wiki').mkdir(exist_ok=True)
+    (root / '.wiki' / 'wiki.py').write_text('__all__ = []\n', encoding='utf-8')
+    with pytest.raises(PermissionError, match='config home inside the wiki'):
+        load_wiki_class(root)
+    # and the write path refuses to record anything there
+    with pytest.raises(PermissionError, match='config home inside the wiki'):
+        trust_root(root)
 
 
 def test_trust_store_refuses_non_regular_files(tmp_path: pathlib.Path) -> None:
