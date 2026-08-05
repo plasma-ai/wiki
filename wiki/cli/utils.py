@@ -172,13 +172,24 @@ def trust_root(root: pathlib.Path) -> pathlib.Path:
     # settings.json by rename, so a lock on the settings inode would not survive
     # the write. O_NOFOLLOW refuses a pre-planted symlink, so a shared
     # WIKI_CONFIG_DIR cannot redirect the open onto a file outside the store
-    lock_fd = os.open(
-        path=home / '.settings.lock',
-        flags=os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
-        mode=0o600,
-    )
+    lock_path = home / '.settings.lock'
+    try:
+        lock_fd = os.open(
+            path=lock_path,
+            flags=os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+            mode=0o600,
+        )
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise PermissionError(
+                f'Refusing symlinked trust-store lock: {lock_path}'
+            ) from e
+        raise
     with os.fdopen(lock_fd, 'rb') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        # O_CREAT applies the mode at creation only (umask-masked): re-tighten
+        # the surviving lock inode on every call, like the store and the home
+        os.fchmod(lock_fd, 0o600)
         settings = _read_global_settings()
         trusted = settings.get('trusted')
         if not isinstance(trusted, dict):

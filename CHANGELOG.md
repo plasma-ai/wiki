@@ -119,6 +119,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   outright -- a planted link can no longer have the `0700` repair chmod a
   foreign directory (and the store then written inside it). The refusal names
   the sanctioned relocation: point `WIKI_CONFIG_DIR` at the real directory.
+- The `.settings.lock` sibling gets the store's custody too: its mode is
+  re-tightened to `0600` on every locked write (`O_CREAT` applies its mode at
+  creation only, umask-masked, so a loosened lock stayed loose forever), and a
+  symlinked lock is refused with the store's plain-language message instead of
+  surfacing a raw `ELOOP` errno.
 
 ### Fixed
 

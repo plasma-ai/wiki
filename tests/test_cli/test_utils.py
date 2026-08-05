@@ -44,6 +44,7 @@ __all__ = [
     'test_trust_root_refuses_hard_linked_store',
     'test_trust_reads_refuse_a_tampered_store',
     'test_trust_root_refuses_symlinked_config_home',
+    'test_trust_root_tightens_and_guards_the_lock',
     'test_trust_store_refuses_non_regular_files',
     'test_is_trusted_ignores_malformed_store',
     'test_reused_command_honors_resolve_override',
@@ -555,6 +556,38 @@ def test_trust_root_refuses_symlinked_config_home(
         trust_root(root)
     assert victim.stat().st_mode & 0o777 == 0o755
     assert list(victim.iterdir()) == []
+
+
+def test_trust_root_tightens_and_guards_the_lock(tmp_path: pathlib.Path) -> None:
+    """The lock sibling gets the store's custody: re-tightened and unlinked.
+
+    ``O_CREAT`` applies its mode at creation only (umask-masked), so a
+    lock loosened out-of-band would stay loose forever without the
+    per-call re-tighten; and a symlinked lock is refused with the same
+    plain-language message the store gets, never a raw errno.
+    """
+    root = tmp_path / 'wiki'
+    root.mkdir()
+    home = pathlib.Path(os.environ['WIKI_CONFIG_DIR'])
+    home.mkdir(parents=True, exist_ok=True)
+    lock = home / '.settings.lock'
+    # a loosened surviving lock is re-tightened by the next write
+    lock.touch()
+    os.chmod(lock, 0o666)  # noqa: S103
+    trust_root(root)
+    assert lock.stat().st_mode & 0o777 == 0o600
+    # a symlinked lock is refused in plain language, its target untouched
+    other = tmp_path / 'wiki2'
+    other.mkdir()
+    victim = tmp_path / 'victim_lock'
+    victim.write_text('victim bytes\n', encoding='utf-8')
+    os.chmod(victim, 0o644)
+    lock.unlink()
+    lock.symlink_to(victim)
+    with pytest.raises(PermissionError, match='symlinked trust-store lock'):
+        trust_root(other)
+    assert victim.read_text(encoding='utf-8') == 'victim bytes\n'
+    assert victim.stat().st_mode & 0o777 == 0o644
 
 
 def test_trust_store_refuses_non_regular_files(tmp_path: pathlib.Path) -> None:
