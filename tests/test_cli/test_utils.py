@@ -45,6 +45,7 @@ __all__ = [
     'test_trust_reads_refuse_a_tampered_store',
     'test_trust_root_refuses_symlinked_config_home',
     'test_trust_root_tightens_and_guards_the_lock',
+    'test_trust_root_refuses_a_corrupt_store',
     'test_trust_store_refuses_non_regular_files',
     'test_is_trusted_ignores_malformed_store',
     'test_reused_command_honors_resolve_override',
@@ -614,6 +615,30 @@ def test_trust_store_refuses_non_regular_files(tmp_path: pathlib.Path) -> None:
     store.mkdir()
     with pytest.raises(PermissionError, match='not a regular file'):
         trust_root(root)
+
+
+def test_trust_root_refuses_a_corrupt_store(tmp_path: pathlib.Path) -> None:
+    """Re-trusting over a corrupt store refuses instead of emptying it.
+
+    A tolerant read folds corruption into an empty store -- right for a
+    trust decision (nothing is trusted), catastrophic for the rewrite,
+    which would silently drop every trusted root with a clean exit. The
+    refusal names the store and the stakes; the corrupt bytes survive
+    for repair, and reads keep failing safe.
+    """
+    root = tmp_path / 'wiki'
+    root.mkdir()
+    home = pathlib.Path(os.environ['WIKI_CONFIG_DIR'])
+    home.mkdir(parents=True, exist_ok=True)
+    store = home / 'settings.json'
+    for corrupt in ('{"trusted": {truncated', '["not", "an", "object"]'):
+        store.write_text(corrupt, encoding='utf-8')
+        # the trust decision fails safe; the rewrite refuses loudly
+        assert not is_trusted(root)
+        with pytest.raises(ValueError, match='Trust store is corrupt'):
+            trust_root(root)
+        # the corrupt bytes survive for repair
+        assert store.read_text(encoding='utf-8') == corrupt
 
 
 def test_is_trusted_ignores_malformed_store(tmp_path: pathlib.Path) -> None:

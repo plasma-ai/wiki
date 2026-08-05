@@ -190,7 +190,9 @@ def trust_root(root: pathlib.Path) -> pathlib.Path:
         # O_CREAT applies the mode at creation only (umask-masked): re-tighten
         # the surviving lock inode on every call, like the store and the home
         os.fchmod(lock_fd, 0o600)
-        settings = _read_global_settings()
+        # strict: rewriting over a corrupt store would fold it into an empty
+        # one and silently drop every trusted root -- refuse instead
+        settings = _read_global_settings(strict=True)
         trusted = settings.get('trusted')
         if not isinstance(trusted, dict):
             trusted = {}
@@ -578,24 +580,42 @@ def _open_store(path: pathlib.Path) -> Optional[int]:
     return fd
 
 
-def _read_global_settings() -> dict:
+def _read_global_settings(*, strict: bool = False) -> dict:
     """Load the user-global settings, through the store's tamper guards.
 
     An absent store reads as empty, and corruption tolerantly reads as
-    empty too -- fail-safe, nothing is trusted. A tampered store (a
-    symlinked, hard-linked, or non-regular file) raises instead: the
+    empty too -- fail-safe, nothing is trusted -- unless ``strict`` is
+    set, which raises on corruption instead: a caller about to rewrite
+    the store (``trust_root``) must never fold a corrupt store into an
+    empty one and silently drop every trusted root. A tampered store (a
+    symlinked, hard-linked, or non-regular file) always raises: the
     write path refuses it, and a trust decision must never be read
     through what a trust write would refuse.
     """
-    fd = _open_store(_settings_path())
+    path = _settings_path()
+    fd = _open_store(path)
     if fd is None:
         return {}
     with os.fdopen(fd, 'r', encoding='utf-8') as handle:
         try:
             result = json.loads(handle.read())
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            if strict:
+                raise ValueError(
+                    f'Trust store is corrupt: {path} ({e});'
+                    f' repair or remove it before re-trusting'
+                    f' (a rewrite would drop every trusted root).'
+                ) from e
             return {}
-    return result if isinstance(result, dict) else {}
+    if not isinstance(result, dict):
+        if strict:
+            raise ValueError(
+                f'Trust store is corrupt: {path} (top level is not an object);'
+                f' repair or remove it before re-trusting'
+                f' (a rewrite would drop every trusted root).'
+            )
+        return {}
+    return result
 
 
 def _wiki_roots(chain: Iterable[pathlib.Path]) -> list[pathlib.Path]:

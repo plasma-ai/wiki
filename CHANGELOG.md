@@ -124,6 +124,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   creation only, umask-masked, so a loosened lock stayed loose forever), and a
   symlinked lock is refused with the store's plain-language message instead of
   surfacing a raw `ELOOP` errno.
+- `wiki trust` refuses to rewrite a corrupt store: a tolerant read folds
+  unparseable JSON into an empty store -- right for a trust decision (nothing is
+  trusted, fail-safe), catastrophic for the rewrite, which silently dropped
+  every trusted root with a clean exit. The refusal names the store and the
+  stakes; the corrupt bytes survive for repair.
 
 ### Fixed
 
