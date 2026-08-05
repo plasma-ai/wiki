@@ -114,8 +114,11 @@ conflict markers, and ``wiki lint`` reports each marked file as an issue
 (suppressing its drift diff), so resolution comes first either way.
 
 Some cases get an HTML-comment hint planted above the first conflict marker;
-each hint says to delete its own line when resolving (a forgotten one renders
-invisibly):
+each hint says to delete its own line when resolving. A forgotten one is
+merge debris, not a harmless comment — planted inside the frontmatter (the
+usual spot, since the ``updated:`` stamps are the first lines to differ) it
+parses as an authored key that every later rewrite carries forward — so
+``wiki lint`` reports a leftover hint as an issue until the line goes:
 
 Add/add body conflict
    Sibling branches authored the same new directory's index body

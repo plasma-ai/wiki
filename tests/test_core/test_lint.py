@@ -36,6 +36,7 @@ __all__ = [
     'test_lint_missing_index',
     'test_lint_diff_set_matches_update',
     'test_lint_conflict_markers_suppress_diff',
+    'test_lint_flags_leftover_merge_hint',
     'test_lint_link_desc_period',
     'test_lint_scoped',
     'test_lint_flags_blank_created',
@@ -673,6 +674,43 @@ def test_lint_conflict_markers_suppress_diff(tmp_path: pathlib.Path) -> None:
         assert not any(
             issue.splitlines()[0] == f'{rel}: Requires update' for issue in issues
         )
+
+
+@pytest.mark.parametrize(
+    argnames='placement',
+    argvalues=['frontmatter', 'body'],
+)
+def test_lint_flags_leftover_merge_hint(
+    tmp_path: pathlib.Path,
+    placement: str,
+) -> None:
+    """A merge repair hint left behind after a resolution is a hard issue.
+
+    The driver plants the hint above the first conflict marker, so it
+    lands wherever the conflict was -- inside the frontmatter (the usual
+    spot, the ``updated:`` stamps differing first) it parses as an
+    authored key that every later rewrite carries forward. Nothing else
+    in the tool sees it there, so the resolution that dropped the
+    markers and forgot the hint would otherwise be permanently clean.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    index = tmp_path / 'core' / '_index.md'
+    hint = (
+        '<!-- index *** separator missing on one side: likely formatter'
+        ' damage; restore the *** line (wiki update repairs it), redo the'
+        ' merge, and delete this line when resolving -->'
+    )
+    lines = index.read_text(encoding='utf-8').split('\n')
+    lines.insert(2 if placement == 'frontmatter' else -2, hint)
+    index.write_text('\n'.join(lines), encoding='utf-8')
+
+    # the hint is named as debris, and the sweep does not carry it off
+    issues = wiki.lint()
+    assert 'core/_index.md: Leftover merge repair hint;' in '\n'.join(issues)
+    assert [issue.kind for issue in issues if 'repair hint' in issue] == ['merge_hint']
+    wiki.update()
+    assert hint in index.read_text(encoding='utf-8')
+    assert any(issue.kind == 'merge_hint' for issue in Wiki(tmp_path).lint())
 
 
 # ------ scoping and field rules

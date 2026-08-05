@@ -104,6 +104,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `wiki lint` reports a leftover merge repair hint in an `_index.md` as an
+  issue. The driver plants its hint above the first conflict marker, which
+  normally lands inside the frontmatter (the `updated:` stamps differ first),
+  where the hint parses as an authored key -- so a resolution that dropped the
+  markers but forgot the hint kept it in every later rewrite with both
+  instruments blind to it.
 - Lint's wrapped-list-marker rule no longer false-flags a legal bullet that
   follows a multi-line item whose continuation line is only a code span (for
   example a bare backticked path): such a line masks to blank but the list is

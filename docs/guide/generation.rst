@@ -320,6 +320,12 @@ its meaning:
    sweep until they are resolved. The file's drift diff is suppressed while
    the markers stand.
 
+``Leftover merge repair hint; delete the hint comment line``
+   An ``_index.md`` still carries a hint the merge driver planted for the
+   hand-resolution (see :doc:`/guide/merge-driver`). Landing inside the
+   frontmatter it reads as an authored key that update carries forward, so
+   delete the line.
+
 ``Malformed frontmatter (no closing ---)``
    A page's frontmatter block never closes; update leaves the file untouched.
    Close the block by hand.

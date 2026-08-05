@@ -43,6 +43,10 @@ _TIMEOUT_SECONDS = 10
 # since every map row and parent index link reproduces the whole desc
 _DESC_NOTE_CHARS = 500
 
+# closing words shared by the index merge driver's repair hints, which it
+# plants above the first conflict marker (_assets/git/merge_index.sh)
+_MERGE_HINT_TAIL = 'delete this line when resolving -->'
+
 # str.is* predicates a policy may require (applied to the name minus allow chars)
 _NAMING_PREDICATES = {
     'ascii': str.isascii,
@@ -1286,6 +1290,18 @@ class Wiki:
                         )
                     )
                 else:
+                    # the resolution's other half: a hint the driver planted
+                    # for the hand-resolution, kept after the markers went
+                    hints = _merge_hint_lines(text)
+                    if any(n not in suppressed for n in hints):
+                        result.append(
+                            Issue(
+                                f'{index_relpath}: Leftover merge repair hint;'
+                                ' delete the hint comment line',
+                                kind='merge_hint',
+                                path=str(index_relpath),
+                            )
+                        )
                     # out of date: show what update would change
                     diff = self._diff(index_path, overlay, current=text)
                     if diff:
@@ -4829,6 +4845,24 @@ def _conflict_marker_lines(text: str) -> list[int]:
     result = []
     for lineno, line in enumerate(text.split('\n'), 1):
         if re.match(r'^(<{7}|>{7})( |$)', line):
+            result.append(lineno)
+    return result
+
+
+def _merge_hint_lines(text: str) -> list[int]:
+    """Return 1-based line numbers of the merge driver's repair hints.
+
+    Scans the RAW text beside the marker scan: the driver plants its
+    hint above the first conflict marker, which -- the merged
+    ``updated:`` stamps being the first thing to differ -- normally
+    lands inside the frontmatter, where the hint parses as an authored
+    key. No other rule can see it there: the generated diff preserves
+    authored keys, so a resolution that drops the markers but forgets
+    the hint keeps it forever.
+    """
+    result = []
+    for lineno, line in enumerate(text.split('\n'), 1):
+        if _MERGE_HINT_TAIL in line:
             result.append(lineno)
     return result
 

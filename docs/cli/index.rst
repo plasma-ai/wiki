@@ -533,7 +533,8 @@ unchanged.
 **Issues** (hard, exit 1) cover everything ``wiki update`` would rewrite —
 each shown as ``<path>: Requires update`` with an indented unified diff — plus
 problems update cannot fix: missing indexes, invalid page/folder names, pages
-shadowed by same-named folders, merge conflict markers, malformed frontmatter
+shadowed by same-named folders, merge conflict markers, leftover merge repair
+hints, malformed frontmatter
 (no closing ``---``), empty or truncated indexes, nested wiki roots,
 formatter-damage signatures (escaped wikilinks, a missing ``***`` delimiter),
 hand-wrap mangles, authored descriptions missing their trailing period,
