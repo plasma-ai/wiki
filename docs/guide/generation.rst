@@ -224,7 +224,8 @@ What ``wiki lint`` checks
 reports two kinds of problem — without writing anything:
 
 - **Issues** (stdout): drift that update would rewrite, plus everything update
-  *cannot* fix. Any issue makes lint **exit 1**.
+  *cannot* fix. Any issue makes lint **exit 1** — and nothing else does: a
+  command error exits 2, so 1 always means exactly "issues found".
 - **Notes** (stderr): soft advisories — unauthored descriptions, stale prose
   links, pending CRLF normalization. Notes **never affect the exit code**.
 
@@ -245,10 +246,11 @@ Notes stream to stderr as the walk encounters them; issues print to stdout
 once the walk completes.
 
 Every issue line begins with the root-relative path. The output is prose for
-humans; a script must branch on the exit code (0 clean, 1 issues found) or
-read ``wiki lint --json`` — one JSON document on stdout with every finding
-severity-tagged — never classify findings by scraping the streams: a stderr
-note is not a blocking issue.
+humans; a script must branch on the exit code (0 clean, 1 issues found,
+2 error) or read ``wiki lint --json`` — one JSON document on stdout with
+every finding severity-tagged and typed (a machine ``kind`` plus per-kind
+payload fields beside the rendered ``text``) — never classify findings by
+scraping the streams: a stderr note is not a blocking issue.
 
 .. list-table::
    :header-rows: 1

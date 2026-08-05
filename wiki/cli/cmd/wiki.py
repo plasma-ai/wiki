@@ -34,6 +34,7 @@ from wiki.core.wiki import (
     FrontmatterMalformedEvent,
     IndexCreateEvent,
     IndexTruncatedEvent,
+    Issue,
     LinkAddEvent,
     LinkPruneEvent,
     NameSkipEvent,
@@ -754,19 +755,20 @@ def lint(
         """Check wiki health.
 
         Two severities on two streams: issues print to STDOUT and gate
-        the exit code (1 when any are found, 0 when the wiki is clean);
-        notes print to STDERR and NEVER affect the exit code. Issues are
-        lint's product, so every line prints by default; --count
-        condenses the run to the closing summary. The prose report is
-        for humans -- a script must branch on the exit code or read
-        --json (one document on stdout carrying every finding with an
-        explicit severity), never parse the prose streams.
+        the exit code (1 when any are found, 0 when the wiki is clean,
+        2 on a command error -- an unresolvable wiki, a bad subtree, a
+        refused hook); notes print to STDERR and NEVER affect the exit
+        code. Issues are lint's product, so every line prints by
+        default; --count condenses the run to the closing summary. The
+        prose report is for humans -- a script must branch on the exit
+        code or read --json (one document on stdout carrying every
+        finding typed, with an explicit severity and kind), never parse
+        the prose streams.
         """
         if full and count:
             raise typer.BadParameter('--full and --count are mutually exclusive.')
         if as_json and (full or count):
             raise typer.BadParameter('--json cannot combine with --full/--count.')
-        wiki = resolve(path)
         # count the soft notes lint sends to stderr, so the closing summary
         # reflects them instead of contradicting the notes still on screen
         notices: list[Event] = []
@@ -778,8 +780,17 @@ def lint(
                 typer.echo(event.description, err=True)
             return event
 
-        wiki.on_notice = _capture
-        issues = wiki.lint(name=name)
+        # every failure here -- an unresolvable wiki or subtree, a refused
+        # or broken hook, malformed settings -- must stay distinguishable
+        # from issues-found, so errors exit 2 and leave 1 meaning exactly
+        # "issues found" (the wrapper's exception path exits 1)
+        try:
+            wiki = resolve(path)
+            wiki.on_notice = _capture
+            issues = wiki.lint(name=name)
+        except Exception as e:
+            typer.echo(f'Error: {e}', err=True)
+            raise typer.Exit(code=2) from e
         # --json: the whole report is one machine-readable document on
         # stdout; only the exit code is shared with the prose modes
         if as_json:
@@ -991,17 +1002,20 @@ def merge(app: typer.Typer) -> typer.Typer:
 # ------ helper functions
 
 
-def _lint_document(issues: list[str], notices: list[Event]) -> dict:
+def _lint_document(issues: list[Issue], notices: list[Event]) -> dict:
     """Build the ``lint --json`` document from issues and captured notes.
 
     Every finding carries an explicit ``severity`` -- ``issue`` gates the
-    exit code, ``note`` never does -- so a scripted consumer branches on
-    typed fields instead of re-deriving the split from output streams.
-    A note adds its event ``kind`` (the event class, snake-cased) and
-    payload fields beside the rendered ``text``.
+    exit code, ``note`` never does -- and its machine ``kind`` with the
+    per-kind payload fields beside the rendered ``text``, so a scripted
+    consumer branches on typed fields instead of parsing prose or
+    re-deriving the split from output streams. Issues read their
+    ``kind``/``fields`` off the :class:`~wiki.core.wiki.Issue` rows lint
+    returns; notes read theirs off the event class (snake-cased) and its
+    annotations.
 
     Args:
-        issues: Issue lines from ``Wiki.lint``, in report order.
+        issues: Issues from ``Wiki.lint``, in report order.
         notices: Captured note events, in emission order.
 
     Returns:
@@ -1009,6 +1023,12 @@ def _lint_document(issues: list[str], notices: list[Event]) -> dict:
         ``summary`` with both counts.
 
     """
+    issue_rows = []
+    for issue in issues:
+        row: dict[str, Any] = {'severity': 'issue', 'kind': issue.kind}
+        row.update(issue.fields)
+        row['text'] = str(issue)
+        issue_rows.append(row)
     notes = []
     for event in notices:
         row: dict[str, Any] = {
@@ -1026,9 +1046,9 @@ def _lint_document(issues: list[str], notices: list[Event]) -> dict:
         row['text'] = event.description
         notes.append(row)
     return {
-        'issues': [{'severity': 'issue', 'text': issue} for issue in issues],
+        'issues': issue_rows,
         'notes': notes,
-        'summary': {'issues': len(issues), 'notes': len(notes)},
+        'summary': {'issues': len(issue_rows), 'notes': len(notes)},
     }
 
 

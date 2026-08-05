@@ -126,11 +126,12 @@ rather than authoring or auditing page by page yourself:
   page in the same wiki. Files outside the wiki (source files, configs, another
   wiki's pages) can be referenced by name or in backticks, but never linked.
 - **Lint's output contract.** `wiki lint` prints issues to stdout and soft notes
-  to stderr, and exits 1 only when issues are found — notes never gate. A script
-  must branch on the exit code or read `wiki lint --json` (one JSON document on
-  stdout carrying every finding with an explicit `issue`/`note` severity), never
-  classify findings by scraping the prose streams: a stderr note is not a
-  blocking issue.
+  to stderr; exit 1 means exactly "issues found" (0 clean, 2 a command error) —
+  notes never gate. A script must branch on the exit code or read
+  `wiki lint --json` (one JSON document on stdout carrying every finding typed:
+  an explicit `issue`/`note` severity, a machine `kind`, and per-kind payload
+  fields beside the prose `text`), never classify findings by scraping the prose
+  streams: a stderr note is not a blocking issue.
 - **Stale wikilinks are soft notes.** A `[[...]]` in index or page prose whose
   target no longer exists draws a stderr note from `wiki lint` without failing
   the run. Broken links in the generated index link block — the rows

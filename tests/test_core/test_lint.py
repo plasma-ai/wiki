@@ -8,12 +8,13 @@ hard-issue vs soft-note split.
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 
 import pytest
 
-from wiki.core.wiki import Wiki
+from wiki.core.wiki import Issue, Wiki
 
 from ._helpers import _capture_notices, _make_wiki, _set_exclude_patterns, page_index
 
@@ -22,6 +23,7 @@ __all__ = [
     'test_lint_flags_invalid_name',
     'test_lint_names_the_failing_naming_rule',
     'test_lint_flags_what_update_fixes',
+    'test_lint_issues_are_typed',
     'test_lint_names_bare_page',
     'test_lint_names_nested_wiki_root',
     'test_lint_flags_human_only_issues',
@@ -202,6 +204,127 @@ def test_lint_flags_what_update_fixes(tmp_path: pathlib.Path, perturb: str) -> N
     assert wiki.update() != []
     assert wiki.lint() == []
     assert wiki.update(check=True) == []
+
+
+def test_lint_issues_are_typed(tmp_path: pathlib.Path) -> None:
+    """Every lint issue carries its machine kind and payload fields.
+
+    ``lint --json`` renders issues from the typed fields, so an issue
+    kind emitting a bare prose string is a defect. The fixture exhibits
+    every issue-emitting surface (the gitignored link-target cause has
+    its own git-backed test): each returned issue must be an ``Issue``
+    whose ``kind`` is set and whose prose line opens with the file its
+    ``path`` field names.
+    """
+    _make_wiki(
+        tmp_path,
+        folders={
+            'core': ['design', 'ghost'],
+            'data': ['report', 'keep', 'shadowed'],
+        },
+    )
+    # a broken link (and its pending prune diff)
+    (tmp_path / 'core' / 'ghost.md').unlink()
+    # a bare page
+    (tmp_path / 'core' / 'bare.md').write_text('# Bare\n\nBody.\n', encoding='utf-8')
+    # an invalid folder name (and its missing index)
+    (tmp_path / 'Bad#Folder').mkdir()
+    # an invalid page name
+    (tmp_path / 'core' / 'bad#page.md').write_text(
+        '---\nname: x\ndesc: A page.\n---\n\n# x\n\nBody.\n',
+        encoding='utf-8',
+    )
+    # a folder shadowing its same-named page
+    (tmp_path / 'data' / 'shadowed').mkdir()
+    # merge conflict markers
+    (tmp_path / 'core' / 'conflicted.md').write_text(
+        '---\nname: conflicted\ndesc: A page.\n---\n\n# conflicted\n\n'
+        '<<<<<<< ours\na\n=======\nb\n>>>>>>> theirs\n',
+        encoding='utf-8',
+    )
+    # escaped wikilinks (the formatter-damage signature)
+    (tmp_path / 'data' / 'escaped.md').write_text(
+        '---\nname: escaped\ndesc: A page.\n---\n\n# escaped\n\n'
+        'See \\[\\[design notes\\]\\] for more.\n',
+        encoding='utf-8',
+    )
+    # unclosed frontmatter
+    (tmp_path / 'data' / 'malformed.md').write_text(
+        '---\nname: malformed\ndesc: A page.\n\n# malformed\n\nBody.\n',
+        encoding='utf-8',
+    )
+    # a period-less desc, an unparseable stamp, both wrap mangles, a
+    # directory link, and a dangling region marker on one messy page
+    (tmp_path / 'data' / 'messy.md').write_text(
+        '---\nname: messy\ndesc: No trailing period\n'
+        'created: not-a-stamp\n---\n\n# messy\n\n'
+        'a twenty-\nclass system, that\n+ wraps into a marker.\n\n'
+        'See [[core]] for more.\n\n<!-- start: no-lint -->\n',
+        encoding='utf-8',
+    )
+    # an emptied index (and, with a page to link, its missing delimiter)
+    trunc = tmp_path / 'trunc'
+    trunc.mkdir()
+    (trunc / '_index.md').write_text('', encoding='utf-8')
+    (trunc / 'stub.md').write_text(
+        '---\nname: stub\ndesc: A page.\n---\n\n# stub\n\nBody.\n',
+        encoding='utf-8',
+    )
+    # a nested declared wiki
+    nested = tmp_path / 'backup'
+    (nested / '.wiki').mkdir(parents=True)
+    (nested / '.wiki' / 'settings.json').write_text('{}\n', encoding='utf-8')
+    # an invalid root wiki name
+    root_index = tmp_path / '_index.md'
+    root_index.write_text(
+        root_index.read_text(encoding='utf-8').replace('name: root', 'name: bad#root'),
+        encoding='utf-8',
+    )
+    # a row into a freshly excluded page, plus required titles
+    settings = tmp_path / '.wiki' / 'settings.json'
+    data = json.loads(settings.read_text(encoding='utf-8'))
+    data['exclude'] = {'patterns': ['data/keep.md']}
+    data['titles'] = {'required': True}
+    settings.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
+    # a row whose target became a symlink
+    secret = tmp_path.parent / 'typed_issues_outside'
+    secret.write_text('outside\n', encoding='utf-8')
+    report = tmp_path / 'data' / 'report.md'
+    report.unlink()
+    report.symlink_to(secret)
+
+    issues = Wiki(tmp_path).lint()
+    assert issues
+    assert all(isinstance(issue, Issue) for issue in issues)
+    assert all(issue.kind for issue in issues)
+    # the prose line opens with the file the typed path field names
+    assert all(str(issue).startswith(issue.fields['path']) for issue in issues)
+    kinds = {issue.kind for issue in issues}
+    assert kinds == {
+        'bare_page',
+        'broken_link',
+        'conflict_markers',
+        'directory_link',
+        'escaped_wikilinks',
+        'excluded_link_target',
+        'hyphen_dangle',
+        'invalid_folder_name',
+        'invalid_page_name',
+        'invalid_wiki_name',
+        'malformed_frontmatter',
+        'missing_delimiter',
+        'missing_index',
+        'missing_period',
+        'missing_title',
+        'nested_wiki_root',
+        'region_marker',
+        'requires_update',
+        'shadowed_page',
+        'symlink_link_target',
+        'truncated_index',
+        'unparseable_stamp',
+        'wrapped_marker',
+    }
 
 
 def test_lint_names_bare_page(tmp_path: pathlib.Path) -> None:

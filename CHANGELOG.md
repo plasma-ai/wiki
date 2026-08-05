@@ -23,15 +23,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   own included -- lands before the write, so a refused adoption leaves nothing
   on disk.
 - `wiki lint --json`: one machine-readable JSON document on stdout carrying
-  every finding with an explicit `issue`/`note` severity (notes typed with their
-  event kind and payload fields) plus a summary with both counts; the exit-code
-  contract is unchanged (1 on issues, 0 otherwise). The prose report's stream
-  split -- issues on stdout, notes on stderr, exit 1 on issues only -- is now
+  every finding fully typed -- an explicit `issue`/`note` severity, a machine
+  `kind`, and per-kind payload fields (`path` always among them, plus e.g.
+  `target`/`label` on a broken link or `line` on a wrap mangle) beside the
+  rendered prose `text` -- with a summary carrying both counts; exit 1 still
+  means issues found. `Wiki.lint` returns `Issue` rows to back it: a `str`
+  subclass reading as the prose line everywhere while carrying `kind` and
+  `fields`, so library consumers keep string semantics and machine consumers
+  never parse prose. The stream split -- issues on stdout, notes on stderr -- is
   documented prominently in the command help, the CLI reference, the guide, and
   the skill: scripts branch on the exit code or read `--json`, never scrape the
   prose streams.
 
 ### Changed
+
+- `wiki lint` reserves exit 1 for issues found: a command error (an unresolvable
+  wiki, a bad subtree entry, a refused hook) exits 2 with an `Error:` line on
+  stderr, so a script gating on lint can never read a failed run as a red
+  corpus.
 
 - `wiki update` prunes broken links: an index row whose target no longer
   resolves to an indexed entry is removed, each removal announced
@@ -42,6 +51,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`N broken links (run wiki lint to list them)`) is gone with the
   `LinkBreakEvent`/`on_link_break` hook pair. `wiki lint` still reds on every
   dangling row until the sweep runs.
+
 - The `_index.md` merge driver resolves the generated link block to the union of
   both sides' rows instead of taking the current branch's copy wholesale: ours'
   layout wins, and rows present only in theirs (desc continuations included) are
@@ -50,6 +60,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   prunes it against the filesystem -- deletion custody lives with update, never
   with the merge -- and lint stays red on any carried row whose target is gone
   until that sweep runs.
+
 - The enclosing git repository's ignore rules now fence indexing, beside
   `exclude.patterns`: a gitignored path is never walked, adopted, minted an
   `_index.md`, or linked, so battery residue can no longer turn lint red and get
@@ -62,6 +73,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the repository's own rules only -- the user-global `core.excludesFile` is
   pinned out of the probe, so fencing is identical on every clone instead of one
   machine's personal patterns pruning rows every other machine re-adds.
+
 - A `--path` (or cwd resolution) landing inside an existing wiki resolves upward
   to the enclosing root -- declared, or the topmost index of a bare chain --
   with a stderr notice naming it, instead of aborting with "Path is inside the

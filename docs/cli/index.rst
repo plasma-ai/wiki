@@ -63,7 +63,8 @@ prints a usage message and exits 2 instead; a closed downstream pipe exits 0
 silently. Some commands carry their own exit-code conventions, documented in
 their sections: ``search`` follows the grep convention (0 match, 1 no match,
 2 error), ``update --check`` exits 1 when changes are pending, and ``lint``
-exits 1 when issues are found.
+reserves exit 1 for issues found -- its errors exit 2, so a script can never
+read a failed run as a red corpus.
 
 ``wiki install``
 ----------------
@@ -514,16 +515,20 @@ refused adoption leaves nothing on disk.
 Checks wiki health. Two severities ride two streams:
 
 - **Issues print to stdout** and gate the exit code: the command exits 1 when
-  any are found, 0 when the wiki is clean.
+  any are found, 0 when the wiki is clean, and 2 on a command error (an
+  unresolvable wiki, a bad subtree, a refused hook) — exit 1 always means
+  exactly "issues found".
 - **Notes print to stderr** and never affect the exit code.
 
 The prose report is for humans — a script must branch on the exit code or
 read ``--json``, never classify findings by scraping either stream (a
 stderr note is not a blocking issue). ``--json`` replaces the prose report
 with one JSON document on stdout carrying every finding under an explicit
-``severity`` (``issue``/``note``), each note typed with its event ``kind``
-and payload fields, plus a ``summary`` with both counts; the exit-code
-contract is unchanged.
+``severity`` (``issue``/``note``) and a machine ``kind`` with its per-kind
+payload fields (``path`` always among them, plus e.g. ``target``/``label``
+on a broken link or ``line`` on a wrap mangle), the rendered prose under
+``text``, and a ``summary`` with both counts; the exit-code contract is
+unchanged.
 
 **Issues** (hard, exit 1) cover everything ``wiki update`` would rewrite —
 each shown as ``<path>: Requires update`` with an indented unified diff — plus
@@ -584,7 +589,12 @@ pair is itself an issue and suppresses nothing.
    $ wiki lint --json
    {
      "issues": [
-       {"severity": "issue", "text": "topics/drafts/: Missing index"}
+       {
+         "severity": "issue",
+         "kind": "missing_index",
+         "path": "topics/drafts",
+         "text": "topics/drafts/: Missing index"
+       }
      ],
      "notes": [
        {

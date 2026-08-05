@@ -55,6 +55,7 @@ __all__ = [
     'test_lint_reports_issue_taxonomy_and_exits_nonzero',
     'test_lint_summary_counts_notes',
     'test_lint_json_reports_typed_findings',
+    'test_lint_error_exits_two',
     'test_lint_details_issues_and_count_condenses',
     'test_map_respects_view_options',
     'test_map_filters_by_category',
@@ -778,13 +779,20 @@ def test_path_naming_nested_declared_wiki_resolves_to_itself(
 
 
 @pytest.mark.parametrize(
-    argnames='args',
-    argvalues=[['update'], ['lint'], ['map']],
+    argnames=('args', 'code'),
+    argvalues=[
+        (['update'], 1),
+        # lint reserves exit 1 for issues found, so its resolution
+        # failure lands on the error leg
+        (['lint'], 2),
+        (['map'], 1),
+    ],
     ids=['update', 'lint', 'map'],
 )
 def test_parent_enclosing_declared_wiki_is_refused(
     tmp_path: pathlib.Path,
     args: list[str],
+    code: int,
 ) -> None:
     """A stray index above a declared wiki never re-roots resolution there.
 
@@ -804,7 +812,7 @@ def test_parent_enclosing_declared_wiki_is_refused(
     # cwd resolution from the parent refuses, naming the nested root
     result = _wiki(tmp_path, *args)
     combined = result.stdout + result.stderr
-    assert result.returncode == 1
+    assert result.returncode == code
     assert f'encloses the wiki at: {root};' in combined
     assert 'declared root' in combined
     # nothing was absorbed: no marker planted, no name: rewritten
@@ -863,9 +871,10 @@ def test_update_refuses_a_scope_inside_a_nested_wiki(tmp_path: pathlib.Path) -> 
     assert result.returncode == 1
     assert f'inside the wiki at: {nested};' in combined
     assert (nested / 'sub' / 'page.md').read_text(encoding='utf-8') == before
-    # lint of the same scope refuses the same way (no misleading diff)
+    # lint of the same scope refuses the same way (no misleading diff);
+    # its error leg exits 2, keeping 1 to mean exactly "issues found"
     lint = _wiki(root, 'lint', 'backup/sub', '--path', str(root))
-    assert lint.returncode == 1
+    assert lint.returncode == 2
     assert f'inside the wiki at: {nested};' in lint.stdout + lint.stderr
 
 
@@ -1026,18 +1035,45 @@ def test_lint_json_reports_typed_findings(tmp_path: pathlib.Path) -> None:
     assert document['summary'] == {'issues': 0, 'notes': len(document['notes'])}
     # the whole report is the document: nothing rides stderr
     assert clean.stderr == ''
-    # with a hard issue on top, the document carries it and the exit flips
+    # with hard issues on top, the document carries them typed -- kind
+    # and payload fields beside the prose -- and the exit flips
     (root / 'Bad#Folder').mkdir()
     dirty = _wiki(root, 'lint', '--path', str(root), '--json')
     assert dirty.returncode == 1
     document = json.loads(dirty.stdout)
     assert all(issue['severity'] == 'issue' for issue in document['issues'])
-    texts = [issue['text'] for issue in document['issues']]
-    assert any('Invalid folder name' in text for text in texts)
+    assert all(issue['kind'] and issue['path'] for issue in document['issues'])
+    kinds = {issue['kind'] for issue in document['issues']}
+    assert kinds == {'invalid_folder_name', 'missing_index'}
+    named = [
+        issue for issue in document['issues'] if issue['kind'] == 'invalid_folder_name'
+    ]
+    assert named[0]['path'] == 'Bad#Folder'
+    assert named[0]['reason']
+    assert 'Invalid folder name' in named[0]['text']
     assert document['summary']['issues'] == len(document['issues'])
     # --json owns the report shape; the prose modes cannot combine with it
     both = _wiki(root, 'lint', '--path', str(root), '--json', '--count')
     assert both.returncode == 2
+
+
+def test_lint_error_exits_two(tmp_path: pathlib.Path) -> None:
+    """Lint's error leg exits 2, keeping 1 to mean exactly issues-found.
+
+    A script gating on lint must never confuse an unresolvable wiki (or
+    a bad subtree) with a red corpus: errors land on exit 2 with an
+    ``Error:`` line on stderr, and issues alone exit 1.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # an unresolvable wiki root
+    missing = _wiki(tmp_path, 'lint', '--path', str(tmp_path / 'nowhere'))
+    assert missing.returncode == 2
+    assert 'Error:' in missing.stderr
+    # a bad subtree entry
+    entry = _wiki(root, 'lint', 'nowhere', '--path', str(root))
+    assert entry.returncode == 2
+    assert 'Error:' in entry.stderr
 
 
 def test_lint_details_issues_and_count_condenses(

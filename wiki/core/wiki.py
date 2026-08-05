@@ -1112,7 +1112,7 @@ class Wiki:
     def lint(
         self: Wiki,
         name: Optional[str] = None,
-    ) -> list[str]:
+    ) -> list[Issue]:
         """Check wiki health.
 
         Reports two kinds of issue:
@@ -1169,7 +1169,9 @@ class Wiki:
                 path). ``None`` means the entire wiki.
 
         Returns:
-            List of issue descriptions.
+            List of issues -- each an :class:`Issue`, a ``str`` subclass
+            reading as its prose line while carrying its machine
+            ``kind`` and per-kind payload ``fields``.
 
         """
         # resolve folder
@@ -1195,15 +1197,24 @@ class Wiki:
             # sweep across it, so name the marker as the root cause
             if (folder != self._root) and (folder / WIKI_SETTINGS).is_file():
                 result.append(
-                    f'{folder_relpath}/: Nested wiki root (declared by'
-                    f' {WIKI_SETTINGS}); update refuses to sweep across it'
+                    Issue(
+                        f'{folder_relpath}/: Nested wiki root (declared by'
+                        f' {WIKI_SETTINGS}); update refuses to sweep across it',
+                        kind='nested_wiki_root',
+                        path=str(folder_relpath),
+                    )
                 )
             # check folder name
             if folder != self._root:
                 violation = self._name_violation(folder.name)
                 if violation is not None:
                     result.append(
-                        f'{folder_relpath}/: Invalid folder name: {violation}'
+                        Issue(
+                            f'{folder_relpath}/: Invalid folder name: {violation}',
+                            kind='invalid_folder_name',
+                            path=str(folder_relpath),
+                            reason=violation,
+                        )
                     )
             # flag a folder that shadows a same-named page: read <name> returns the
             # folder index, hiding <name>.md (resolution is directory-first)
@@ -1213,13 +1224,24 @@ class Wiki:
                     if page.is_file():
                         page_relpath = page.relative_to(self._root)
                         result.append(
-                            f'{page_relpath}: Shadowed by folder {child.name}/'
+                            Issue(
+                                f'{page_relpath}: Shadowed by folder {child.name}/',
+                                kind='shadowed_page',
+                                path=str(page_relpath),
+                                folder=child.name,
+                            )
                         )
             # check the index
             index_path = folder / WIKI_INDEX
             if not index_path.exists():
                 # update would create it; pages below are still linted
-                result.append(f'{folder_relpath}/: Missing index')
+                result.append(
+                    Issue(
+                        f'{folder_relpath}/: Missing index',
+                        kind='missing_index',
+                        path=str(folder_relpath),
+                    )
+                )
             else:
                 index_relpath = index_path.relative_to(self._root)
                 text = self._read_text(index_path)
@@ -1237,7 +1259,13 @@ class Wiki:
                 # conflict markers take precedence over the generated diff
                 markers = _conflict_marker_lines(text)
                 if any(n not in suppressed for n in markers):
-                    result.append(f'{index_relpath}: Merge conflict markers')
+                    result.append(
+                        Issue(
+                            f'{index_relpath}: Merge conflict markers',
+                            kind='conflict_markers',
+                            path=str(index_relpath),
+                        )
+                    )
                 else:
                     # out of date: show what update would change
                     diff = self._diff(index_path, overlay, current=text)
@@ -1249,22 +1277,35 @@ class Wiki:
                     if self._index_missing_marker(folder):
                         if self._index_mangled_marker(folder):
                             result.append(
-                                f'{index_relpath}: Index missing *** delimiter'
-                                ' with a thematic break in its place: likely'
-                                ' formatter damage (keep generic markdown'
-                                ' formatters off the wiki; see README)'
+                                Issue(
+                                    f'{index_relpath}: Index missing ***'
+                                    ' delimiter with a thematic break in its'
+                                    ' place: likely formatter damage (keep'
+                                    ' generic markdown formatters off the'
+                                    ' wiki; see README)',
+                                    kind='missing_delimiter',
+                                    path=str(index_relpath),
+                                )
                             )
                         else:
                             result.append(
-                                f'{index_relpath}: Index missing *** delimiter'
+                                Issue(
+                                    f'{index_relpath}: Index missing *** delimiter',
+                                    kind='missing_delimiter',
+                                    path=str(index_relpath),
+                                )
                             )
                     # an escaped wikilink is the other formatter signature
                     escaped = format.escaped_wikilink_lines(masked)
                     if any(n not in suppressed for n in escaped):
                         result.append(
-                            f'{index_relpath}: Escaped wikilinks: likely formatter'
-                            ' damage (keep generic markdown formatters off the'
-                            ' wiki; see README)'
+                            Issue(
+                                f'{index_relpath}: Escaped wikilinks: likely'
+                                ' formatter damage (keep generic markdown'
+                                ' formatters off the wiki; see README)',
+                                kind='escaped_wikilinks',
+                                path=str(index_relpath),
+                            )
                         )
                     # human-only checks on current content
                     frontmatter, links, user_content = format.parse_index(
@@ -1276,9 +1317,13 @@ class Wiki:
                     # surface the recovery paths as a hard issue
                     if not frontmatter:
                         result.append(
-                            f'{index_relpath}: Empty or truncated index (no'
-                            ' frontmatter); restore it from git or delete it'
-                            ' to rebuild'
+                            Issue(
+                                f'{index_relpath}: Empty or truncated index (no'
+                                ' frontmatter); restore it from git or delete'
+                                ' it to rebuild',
+                                kind='truncated_index',
+                                path=str(index_relpath),
+                            )
                         )
                     result.extend(self._lint_desc(index_path, frontmatter))
                     result.extend(self._lint_title(index_path, frontmatter))
@@ -1291,8 +1336,14 @@ class Wiki:
                             violation = self._name_violation(root_name)
                         if violation is not None:
                             result.append(
-                                f'{index_relpath}: Invalid wiki name'
-                                f' {root_name!r}: {violation}'
+                                Issue(
+                                    f'{index_relpath}: Invalid wiki name'
+                                    f' {root_name!r}: {violation}',
+                                    kind='invalid_wiki_name',
+                                    path=str(index_relpath),
+                                    name=root_name,
+                                    reason=violation,
+                                )
                             )
                     # broken links (targets gone; update prunes them) + descriptions
                     # -- matched by normalized identity, as _merge_links matches
@@ -1310,26 +1361,55 @@ class Wiki:
                         if unicodedata.normalize('NFC', target) not in expected_targets:
                             if self._is_symlink_skipped(target):
                                 result.append(
-                                    f'{index_relpath}: Link [[{target}|{label}]]'
-                                    ' targets a symlink; symlinked files are'
-                                    ' not indexed'
+                                    Issue(
+                                        f'{index_relpath}: Link'
+                                        f' [[{target}|{label}]] targets a'
+                                        ' symlink; symlinked files are not'
+                                        ' indexed',
+                                        kind='symlink_link_target',
+                                        path=str(index_relpath),
+                                        target=target,
+                                        label=label,
+                                    )
                                 )
                             elif pattern := self._target_excluded_by(target):
                                 result.append(
-                                    f'{index_relpath}: Link [[{target}|{label}]]'
-                                    ' targets an excluded path; excluded paths'
-                                    ' are not indexed (exclude.patterns:'
-                                    f' {pattern!r})'
+                                    Issue(
+                                        f'{index_relpath}: Link'
+                                        f' [[{target}|{label}]] targets an'
+                                        ' excluded path; excluded paths are'
+                                        ' not indexed (exclude.patterns:'
+                                        f' {pattern!r})',
+                                        kind='excluded_link_target',
+                                        path=str(index_relpath),
+                                        target=target,
+                                        label=label,
+                                        pattern=pattern,
+                                    )
                                 )
                             elif self._target_gitignored(target):
                                 result.append(
-                                    f'{index_relpath}: Link [[{target}|{label}]]'
-                                    ' targets a gitignored path; gitignored'
-                                    ' paths are not indexed'
+                                    Issue(
+                                        f'{index_relpath}: Link'
+                                        f' [[{target}|{label}]] targets a'
+                                        ' gitignored path; gitignored paths'
+                                        ' are not indexed',
+                                        kind='gitignored_link_target',
+                                        path=str(index_relpath),
+                                        target=target,
+                                        label=label,
+                                    )
                                 )
                             else:
                                 result.append(
-                                    f'{index_relpath}: Broken link [[{target}|{label}]]'
+                                    Issue(
+                                        f'{index_relpath}: Broken link'
+                                        f' [[{target}|{label}]]',
+                                        kind='broken_link',
+                                        path=str(index_relpath),
+                                        target=target,
+                                        label=label,
+                                    )
                                 )
                             continue
                         # the period check applies only to an authored description:
@@ -1384,7 +1464,14 @@ class Wiki:
                 else:
                     violation = self._name_violation(page.name)
                 if violation is not None:
-                    result.append(f'{page_relpath}: Invalid page name: {violation}')
+                    result.append(
+                        Issue(
+                            f'{page_relpath}: Invalid page name: {violation}',
+                            kind='invalid_page_name',
+                            path=str(page_relpath),
+                            reason=violation,
+                        )
+                    )
                 # only markdown pages carry frontmatter/content to lint further
                 if page.suffix != '.md':
                     continue
@@ -1403,7 +1490,13 @@ class Wiki:
                 # conflict markers take precedence over the generated diff
                 markers = _conflict_marker_lines(text)
                 if any(n not in suppressed for n in markers):
-                    result.append(f'{page_relpath}: Merge conflict markers')
+                    result.append(
+                        Issue(
+                            f'{page_relpath}: Merge conflict markers',
+                            kind='conflict_markers',
+                            path=str(page_relpath),
+                        )
+                    )
                     continue
                 # out of date: show what update would change
                 diff = self._diff(page, overlay, current=text)
@@ -1414,9 +1507,13 @@ class Wiki:
                 escaped = format.escaped_wikilink_lines(masked)
                 if any(n not in suppressed for n in escaped):
                     result.append(
-                        f'{page_relpath}: Escaped wikilinks: likely formatter'
-                        ' damage (keep generic markdown formatters off the'
-                        ' wiki; see README)'
+                        Issue(
+                            f'{page_relpath}: Escaped wikilinks: likely'
+                            ' formatter damage (keep generic markdown'
+                            ' formatters off the wiki; see README)',
+                            kind='escaped_wikilinks',
+                            path=str(page_relpath),
+                        )
                     )
                 # human-only checks on current content
                 frontmatter, content = format.parse_page(text)
@@ -1426,12 +1523,20 @@ class Wiki:
                 first_line = text.split('\n', 1)[0].lstrip('\ufeff')
                 if not frontmatter and (first_line.strip() == '---'):
                     result.append(
-                        f'{page_relpath}: Malformed frontmatter (no closing ---)'
+                        Issue(
+                            f'{page_relpath}: Malformed frontmatter (no closing ---)',
+                            kind='malformed_frontmatter',
+                            path=str(page_relpath),
+                        )
                     )
                 elif not frontmatter:
                     result.append(
-                        f'{page_relpath}: Bare page (no frontmatter);'
-                        ' update will adopt it'
+                        Issue(
+                            f'{page_relpath}: Bare page (no frontmatter);'
+                            ' update will adopt it',
+                            kind='bare_page',
+                            path=str(page_relpath),
+                        )
                     )
                 if frontmatter:
                     result.extend(self._lint_desc(page, frontmatter))
@@ -3920,7 +4025,7 @@ class Wiki:
         overlay: dict[pathlib.Path, str],
         *,
         current: str,
-    ) -> Optional[str]:
+    ) -> Optional[Issue]:
         """Return ``path``'s drift as a header line plus an indented diff.
 
         The corrected content comes from the plan ``overlay``; the
@@ -3958,19 +4063,27 @@ class Wiki:
         # newlines and never reaches here); still report it so the flag never
         # desyncs from update's byte compare
         if not body:
-            return f'{relpath}: Requires update (final newline differs)'
+            return Issue(
+                f'{relpath}: Requires update (final newline differs)',
+                kind='requires_update',
+                path=relpath,
+            )
         # drop trailing blank context lines so the diff ends on a real change
         while body and not body[-1].strip():
             body.pop()
         # indent the body; render blank context lines as truly empty (no trailing ws)
         indented = '\n'.join('    ' + line if line.strip() else '' for line in body)
-        return f'{relpath}: Requires update\n{indented}'
+        return Issue(
+            f'{relpath}: Requires update\n{indented}',
+            kind='requires_update',
+            path=relpath,
+        )
 
     def _lint_regions(
         self: Wiki,
         path: pathlib.Path,
         masked: str,
-    ) -> tuple[set[int], list[str]]:
+    ) -> tuple[set[int], list[Issue]]:
         """Resolve ``masked``'s ``no-lint`` suppression set and region issues.
 
         ``masked`` is the file's code-masked text (lint masks each file
@@ -3985,14 +4098,17 @@ class Wiki:
         for start, end in regions.get('no-lint', []):
             suppressed.update(range(start, end + 1))
         relpath = path.relative_to(self._root)
-        result = [f'{relpath}: {error}' for error in errors]
+        result = [
+            Issue(f'{relpath}: {error}', kind='region_marker', path=str(relpath))
+            for error in errors
+        ]
         return suppressed, result
 
     def _lint_desc(
         self: Wiki,
         path: pathlib.Path,
         frontmatter: str,
-    ) -> list[str]:
+    ) -> list[Issue]:
         """Check desc is present, concise, and ends in a period."""
         # initialize issues
         result = []
@@ -4004,7 +4120,13 @@ class Wiki:
         if desc == '...':
             self.on_desc_missing(path=str(relpath))
         elif desc and not desc.strip().endswith('.'):
-            result.append(f'{relpath}: Missing period in desc')
+            result.append(
+                Issue(
+                    f'{relpath}: Missing period in desc',
+                    kind='missing_period',
+                    path=str(relpath),
+                )
+            )
         # desc length is author judgment, not structure, so an oversized desc
         # draws a soft note rather than an issue
         if desc:
@@ -4017,7 +4139,7 @@ class Wiki:
         self: Wiki,
         path: pathlib.Path,
         frontmatter: str,
-    ) -> list[str]:
+    ) -> list[Issue]:
         """Check the authored title ``titles.required`` demands.
 
         Under ``titles.required`` every index and page must carry an
@@ -4035,14 +4157,20 @@ class Wiki:
         # absent (update seeds it), blank, or the null placeholder
         if self._titles_required and frontmatter:
             if not format.read_frontmatter_title(frontmatter):
-                result.append(f'{relpath}: Missing title (author a value)')
+                result.append(
+                    Issue(
+                        f'{relpath}: Missing title (author a value)',
+                        kind='missing_title',
+                        path=str(relpath),
+                    )
+                )
         return result
 
     def _lint_timestamps(
         self: Wiki,
         path: pathlib.Path,
         frontmatter: str,
-    ) -> list[str]:
+    ) -> list[Issue]:
         """Check ``created:``/``updated:`` parse under the timestamp policy.
 
         The stamps are tool-owned -- seeded when a file gains
@@ -4068,9 +4196,16 @@ class Wiki:
             except ValueError:
                 timestamp_format = policy['format']
                 result.append(
-                    f'{relpath}: Unparseable {field}: stamp {value!r}'
-                    f' (expected timestamp format {timestamp_format!r}; a changed'
-                    ' timestamp.format needs existing stamps rewritten by hand)'
+                    Issue(
+                        f'{relpath}: Unparseable {field}: stamp {value!r}'
+                        f' (expected timestamp format {timestamp_format!r};'
+                        ' a changed timestamp.format needs existing stamps'
+                        ' rewritten by hand)',
+                        kind='unparseable_stamp',
+                        path=str(relpath),
+                        field=field,
+                        value=value,
+                    )
                 )
         return result
 
@@ -4080,7 +4215,7 @@ class Wiki:
         target: str,
         label: str,
         link_desc: str,
-    ) -> list[str]:
+    ) -> list[Issue]:
         """Check a link description ends in a period.
 
         A description out of sync with the child's ``desc`` is rewritten
@@ -4094,7 +4229,15 @@ class Wiki:
         # check link description ends in period
         joined = format.join_lines(link_desc)
         if joined and (joined != '...') and not joined.endswith('.'):
-            result.append(f'{relpath}: Missing period in [[{target}|{label}]]')
+            result.append(
+                Issue(
+                    f'{relpath}: Missing period in [[{target}|{label}]]',
+                    kind='missing_period',
+                    path=str(relpath),
+                    target=target,
+                    label=label,
+                )
+            )
         return result
 
     def _lint_wrap_mangles(
@@ -4104,7 +4247,7 @@ class Wiki:
         masked: str,
         suppressed: set[int],
         frontmatter: str,
-    ) -> list[str]:
+    ) -> list[Issue]:
         """Flag hand-wrap artifacts that read back as mangled text.
 
         Two line-level signatures: a hyphen dangle (a break inside a
@@ -4134,15 +4277,26 @@ class Wiki:
         for lineno in format.hyphen_dangle_lines(masked):
             if (lineno in in_scope) and (lineno + 1 in in_scope):
                 result.append(
-                    f'{relpath}: Hyphen dangle (line {lineno}): the line break'
-                    ' splits a hyphenated word; rejoin the wrapped line'
+                    Issue(
+                        f'{relpath}: Hyphen dangle (line {lineno}): the line'
+                        ' break splits a hyphenated word; rejoin the wrapped'
+                        ' line',
+                        kind='hyphen_dangle',
+                        path=str(relpath),
+                        line=lineno,
+                    )
                 )
         for lineno in format.wrapped_marker_lines(masked, text):
             if (lineno in in_scope) and (lineno - 1 in in_scope):
                 result.append(
-                    f'{relpath}: Wrapped list marker (line {lineno}): the line'
-                    ' reads as a list item; rejoin the wrapped line or open a'
-                    ' real list after a blank line'
+                    Issue(
+                        f'{relpath}: Wrapped list marker (line {lineno}): the'
+                        ' line reads as a list item; rejoin the wrapped line'
+                        ' or open a real list after a blank line',
+                        kind='wrapped_marker',
+                        path=str(relpath),
+                        line=lineno,
+                    )
                 )
         return result
 
@@ -4182,7 +4336,7 @@ class Wiki:
         self: Wiki,
         path: pathlib.Path,
         content: str,
-    ) -> list[str]:
+    ) -> list[Issue]:
         """Check wikilinks in content; return the hard issues.
 
         A directory link -- a target naming a folder rather than the
@@ -4257,8 +4411,15 @@ class Wiki:
                     index_target = index_path.relative_to(self._root)
                     index_target = index_target.with_suffix('').as_posix()
                     result.append(
-                        f'{relpath}: Link [[{target}{alias}]] targets a folder,'
-                        f' not a page (use [[{index_target}{anchor}{alias}]])'
+                        Issue(
+                            f'{relpath}: Link [[{target}{alias}]] targets a'
+                            ' folder, not a page'
+                            f' (use [[{index_target}{anchor}{alias}]])',
+                            kind='directory_link',
+                            path=str(relpath),
+                            target=target,
+                            canonical=index_target + anchor,
+                        )
                     )
                     continue
                 if (self._root / page_target).exists():
@@ -4278,6 +4439,31 @@ class Wiki:
                 )
             else:
                 self.on_link_stale(path=str(relpath), target=target + alias)
+        return result
+
+
+# ------ issues
+
+
+class Issue(str):
+    """A lint issue: the prose line carrying its typed fields.
+
+    A ``str`` subclass, so the report reads -- and matches -- as its
+    prose line everywhere, while a machine consumer (``lint --json``)
+    branches on ``kind`` and the per-kind payload ``fields`` (``path``
+    always among them) instead of parsing the prose.
+    """
+
+    #: machine-readable issue class, in snake case
+    kind: str
+    #: per-kind payload fields; ``path`` is always present
+    fields: dict[str, Any]
+
+    def __new__(cls, text: str, *, kind: str, **fields: Any) -> Issue:
+        """Bind ``kind`` and the payload ``fields`` onto the prose line."""
+        result = super().__new__(cls, text)
+        result.kind = kind
+        result.fields = fields
         return result
 
 

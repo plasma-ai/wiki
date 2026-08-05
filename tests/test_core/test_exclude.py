@@ -603,6 +603,9 @@ def test_gitignored_link_target_names_the_cause(tmp_path: pathlib.Path) -> None:
     joined = '\n'.join(issues)
     assert 'targets a gitignored path; gitignored paths are not indexed' in joined
     assert 'Broken link' not in joined
+    fenced = [issue for issue in issues if 'gitignored path' in issue]
+    assert fenced
+    assert all(issue.kind == 'gitignored_link_target' for issue in fenced)
     # update prunes the row, naming the fence as the cause beside the removal
     notices = _capture_notices(wiki)
     wiki.update()
