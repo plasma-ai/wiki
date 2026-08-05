@@ -610,11 +610,11 @@ Prints an indented tree overview of the wiki, driven by the index link blocks
 rather than a raw directory walk: each folder's ``_index.md`` rows are
 iterated in index order, so a file not yet linked (update pending) does not
 appear. An unindexed folder renders as ``name/ (unindexed)`` with no children;
-a preserved broken link renders ``(broken)`` and is never recursed into. Each
-line has the shape ``[category] name[/] (count): desc``. An empty result
-prints ``Wiki is empty.``; an index missing its ``***`` delimiter still maps
-via a best-effort recovery of its link block, with a stderr warning to run
-``wiki update``.
+a row whose target is gone (pending prune) renders ``(broken)`` and is never
+recursed into. Each line has the shape ``[category] name[/] (count): desc``.
+An empty result prints ``Wiki is empty.``; an index missing its ``***``
+delimiter still maps via a best-effort recovery of its link block, with a
+stderr warning to run ``wiki update``.
 
 .. list-table::
    :header-rows: 1

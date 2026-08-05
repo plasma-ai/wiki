@@ -67,8 +67,8 @@ class Wiki:
     """Base class for structured wikis.
 
     Provides ``init``, ``update_config``, ``read``, ``search``,
-    ``update``, ``lint``, and ``map`` operations for a folder-based
-    wiki with ``_index.md`` files.
+    ``update``, ``new``, ``lint``, and ``map`` operations for a
+    folder-based wiki with ``_index.md`` files.
 
     Instances are one-shot: policy (settings, naming, timestamps) and
     the root display name are cached per instance, so hosted embedders
@@ -915,7 +915,7 @@ class Wiki:
         # refuse to write over merge conflict markers: the write and the
         # dry run refuse alike, naming every marked file
         self._refuse_conflicted(baseline)
-        # report every broken/new link (preserved or added during the run)
+        # report every broken/new link (pruned or added during the run)
         # individually and statelessly; the CLI condenses by default
         for event in notices:
             self._dispatch_notice(event)
@@ -1294,7 +1294,7 @@ class Wiki:
                                 f'{index_relpath}: Invalid wiki name'
                                 f' {root_name!r}: {violation}'
                             )
-                    # broken links (targets gone; update keeps them) + descriptions
+                    # broken links (targets gone; update prunes them) + descriptions
                     # -- matched by normalized identity, as _merge_links matches
                     expected_targets = {
                         unicodedata.normalize('NFC', target)
@@ -3808,7 +3808,7 @@ class Wiki:
             if not is_folder and not matches_category:
                 continue
             # resolve the child path from the link target, never the display
-            # label (a preserved broken link keeps a live sibling's label);
+            # label (a dangling row pending prune keeps a live sibling's label);
             # markdown-ness resolves like read (_target_page), since a
             # '.'-in-target test misfires on a dotted stem like my.notes and
             # a raw file's row must not render a same-named sidecar's count
@@ -3824,7 +3824,8 @@ class Wiki:
                 child_path = self._root / target
                 is_markdown = False
             # a link resolving outside this folder (or to a missing file) is a
-            # preserved broken link: annotate it, never recurse into another subtree
+            # dangling row (pending prune): annotate it, never recurse into
+            # another subtree
             broken = unicodedata.normalize('NFC', target) not in expected_targets
             # apply markdown filter (pages only)
             if not is_folder and (markdown is not None) and (markdown != is_markdown):
