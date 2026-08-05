@@ -257,15 +257,11 @@ def resolve_wiki(
             err=True,
         )
         wiki_root = enclosing
-    # the root is declared by its settings marker; a bare index tree is
-    # tolerated with a notice, and anything less is not a wiki
     declared = (wiki_root / WIKI_SETTINGS).is_file()
-    has_index = (wiki_root / WIKI_INDEX).is_file()
-    if not (declared or has_index):
-        raise _no_wiki_error(wiki_root)
     # an undeclared enclosing wiki leaves no marker for the resolution
-    # above: a parent index means the path sits inside an index chain, so
-    # resolve upward the same way, to the chain's topmost index
+    # above: a parent index means the path sits inside an index chain --
+    # whether or not the path carries an index of its own -- so resolve
+    # upward the same way, to the chain's topmost index
     if not declared and (wiki_root.parent / WIKI_INDEX).is_file():
         enclosing = wiki_root.parent
         while (enclosing.parent / WIKI_INDEX).is_file():
@@ -277,6 +273,11 @@ def resolve_wiki(
             err=True,
         )
         wiki_root = enclosing
+    # the root is declared by its settings marker; a bare index tree is
+    # tolerated with a notice, and anything less is not a wiki
+    has_index = (wiki_root / WIKI_INDEX).is_file()
+    if not (declared or has_index):
+        raise _no_wiki_error(wiki_root)
     # never treat a path enclosing a declared wiki as an undeclared root:
     # the command would absorb the nested wiki, rewriting its name: paths
     # relative to the wrong root and planting a second settings marker

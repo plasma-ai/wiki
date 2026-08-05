@@ -44,6 +44,7 @@ __all__ = [
     'test_read_only_commands_are_deterministic',
     'test_path_inside_wiki_resolves_upward',
     'test_path_inside_undeclared_wiki_resolves_upward',
+    'test_raw_subfolder_of_undeclared_wiki_resolves_upward',
     'test_path_naming_nested_declared_wiki_resolves_to_itself',
     'test_parent_enclosing_declared_wiki_is_refused',
     'test_update_cli_refuses_nested_wiki',
@@ -715,6 +716,32 @@ def test_path_inside_undeclared_wiki_resolves_upward(
     assert f'inside the wiki at {root}' in result.stderr
     # no marker planted in the subfolder; update restores the root's own
     assert not (root / 'core' / '.wiki').exists()
+    assert (root / '.wiki' / 'settings.json').is_file()
+
+
+def test_raw_subfolder_of_undeclared_wiki_resolves_upward(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The undeclared-chain climb holds for a raw (unindexed) subfolder.
+
+    An undeclared wiki's ancestor index chain names the real root
+    whether or not the passed subfolder carries an index of its own; a
+    raw folder of not-yet-adopted files resolves upward the same way an
+    indexed one does, instead of failing as no wiki at all.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'core' / '_index.md', _index('Core', 'Core concepts.', 'Text.'))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    shutil.rmtree(root / '.wiki')
+    (root / 'core' / 'raw').mkdir()
+
+    # the raw subfolder resolves to the chain's topmost index as the root
+    result = _wiki(root, 'update', '--path', str(root / 'core' / 'raw'))
+    assert result.returncode == 0
+    assert f'inside the wiki at {root}' in result.stderr
+    # no marker planted in the subfolder; update restores the root's own
+    assert not (root / 'core' / 'raw' / '.wiki').exists()
     assert (root / '.wiki' / 'settings.json').is_file()
 
 
