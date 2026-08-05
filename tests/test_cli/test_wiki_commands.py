@@ -1766,6 +1766,11 @@ def test_merge_unions_link_rows(tmp_path: pathlib.Path) -> None:
     assert 'Second continuation line.' in merged
     # the deleted side's row rides back in: union, never one-side custody
     assert '[[core/shared|shared]]' in merged
+    # exactly once each: the union dedups rows present on both sides, and
+    # theirs' heading/preamble above its first row never rides over
+    assert merged.count('[[core/design|design]]') == 1
+    assert merged.count('[[_index|..]]') == 1
+    assert merged.count('# core') == 1
 
     # the post-merge update prunes the stale row against the filesystem
     result = _wiki(root, 'update', '--path', str(root))
