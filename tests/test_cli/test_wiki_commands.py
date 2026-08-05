@@ -25,6 +25,7 @@ from .conftest import GIT, WIKI, _git, _wiki
 __all__ = [
     'test_command_errors_exit_two',
     'test_update_check_separates_pending_from_error',
+    'test_untrusted_hook_refusal_exits_two',
     'test_init_creates_root_index',
     'test_init_guards_existing_wiki',
     'test_init_seeds_settings',
@@ -169,6 +170,23 @@ def test_command_errors_exit_two(tmp_path: pathlib.Path, args: tuple[str, ...]) 
     result = _wiki(tmp_path, *args, '--path', str(tmp_path / 'nowhere'))
     assert result.returncode == 2, result.stdout + result.stderr
     assert 'Error:' in result.stderr
+
+
+def test_untrusted_hook_refusal_exits_two(tmp_path: pathlib.Path) -> None:
+    """The untrusted-hook refusal is exit 2 in every command alike.
+
+    The refusal is a command error, not any command's own nonzero
+    outcome, so `lint`'s issues-found exit and `update --check`'s
+    pending exit stay unmistakable beside it -- no command reads a
+    refused hook as its own result.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    (root / '.wiki' / 'wiki.py').write_text('__all__ = []\n', encoding='utf-8')
+    for args in (('update',), ('lint',), ('map',), ('read', '_index')):
+        result = _wiki(root, *args, '--path', str(root))
+        assert result.returncode == 2, (args, result.stdout + result.stderr)
+        assert 'untrusted wiki hook' in result.stderr
 
 
 def test_update_check_separates_pending_from_error(tmp_path: pathlib.Path) -> None:
