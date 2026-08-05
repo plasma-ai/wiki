@@ -27,6 +27,7 @@ from wiki.constants import (
     WIKI_INDEX,
     WIKI_SETTINGS,
 )
+from wiki.core.event import Event
 from wiki.core.wiki import Wiki, _encloses_wiki_error
 
 __all__ = [
@@ -272,6 +273,16 @@ def resolve_wiki(
     when no ``.wiki/wiki.py`` hook names one.
     """
     wiki_root = resolve_wiki_root(path, fallbacks=fallbacks)
+    # diagnostics stream to stderr as they fire AND ride the instance as
+    # typed notes (resolver_notices), so a machine consumer reads them
+    # from lint --json instead of scraping the prose
+    diagnostics: list[str] = []
+
+    def _say(text: str) -> None:
+        """Record a diagnostic and stream it to stderr."""
+        diagnostics.append(text)
+        typer.echo(text, err=True)
+
     # a path inside an existing wiki is never itself a root: the command
     # would grow a second root index and rewrite name: paths relative to the
     # wrong root -- resolve upward to the enclosing root instead (scoped
@@ -282,10 +293,7 @@ def resolve_wiki(
     if enclosing is not None:
         if inside == 'refuse':
             raise _inside_wiki_error(enclosing)
-        typer.echo(
-            f'{wiki_root}: inside the wiki at {enclosing}; using that root',
-            err=True,
-        )
+        _say(f'{wiki_root}: inside the wiki at {enclosing}; using that root')
         wiki_root = enclosing
     declared = (wiki_root / WIKI_SETTINGS).is_file()
     # an undeclared enclosing wiki leaves no marker for the resolution
@@ -316,10 +324,7 @@ def resolve_wiki(
                 enclosing = enclosing.parent
             if inside == 'refuse':
                 raise _inside_wiki_error(enclosing)
-            typer.echo(
-                f'{wiki_root}: inside the wiki at {enclosing}; using that root',
-                err=True,
-            )
+            _say(f'{wiki_root}: inside the wiki at {enclosing}; using that root')
             wiki_root = enclosing
     # the root is declared by its settings marker; a bare index tree is
     # tolerated with a notice, and anything less is not a wiki
@@ -335,25 +340,22 @@ def resolve_wiki(
             raise _encloses_wiki_error(nested)
     # corroboration diagnostics: name what resolution tolerated
     if not declared:
-        typer.echo(
-            f'{wiki_root}: {WIKI_SETTINGS} missing; `wiki update` will restore it',
-            err=True,
-        )
+        _say(f'{wiki_root}: {WIKI_SETTINGS} missing; `wiki update` will restore it')
     elif not has_index:
-        typer.echo(
+        _say(
             f'{wiki_root}: wiki root is missing its {WIKI_INDEX};'
-            f' restore it from git or run `wiki update` to rebuild it',
-            err=True,
+            f' restore it from git or run `wiki update` to rebuild it'
         )
     if declared and (wiki_root.parent / WIKI_INDEX).is_file():
-        typer.echo(
+        _say(
             f'{wiki_root.parent / WIKI_INDEX} extends above the wiki root at'
             f' {wiki_root} (a foreign or damaged outer index; the root is'
-            f' declared by {WIKI_SETTINGS})',
-            err=True,
+            f' declared by {WIKI_SETTINGS})'
         )
     cls = load_wiki_class(wiki_root, default=default)
-    return cls(wiki_root)
+    result = cls(wiki_root)
+    result.resolver_notices = [ResolverNoticeEvent(text=text) for text in diagnostics]
+    return result
 
 
 def resolve_wiki_root(
@@ -680,6 +682,24 @@ def _is_wiki_root(path: pathlib.Path) -> bool:
     if (path / WIKI_DIR).resolve() == _config_home().resolve():
         return False
     return (path / WIKI_SETTINGS).is_file()
+
+
+class ResolverNoticeEvent(Event):
+    """Emitted for a diagnostic wiki resolution tolerated or adjusted.
+
+    The resolver's counterpart of the engine's notice events: upward
+    resolution into an enclosing root, a missing settings marker or root
+    index, and an index chain extending above a declared root each
+    record one, so a machine consumer reads them typed instead of
+    scraping the stderr prose.
+    """
+
+    text: str
+
+    @property
+    def description(self: ResolverNoticeEvent) -> str:
+        """Return the recorded diagnostic line."""
+        return self.text
 
 
 def _inside_wiki_error(enclosing: pathlib.Path) -> ValueError:

@@ -94,6 +94,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   vendored wiki inside an excluding host is a sovereign tree, never silently
   retargeted to the host.
 
+- `wiki lint` folds resolver diagnostics into its notes: the upward resolution
+  notice, a missing settings marker or root index, and an outer index above the
+  declared root are counted in the closing summary and land typed in
+  `lint --json` (`resolver_notice` rows carrying the diagnostic `text`), so a
+  machine consumer no longer has to scrape them off stderr. Resolved `Wiki`
+  instances expose them as `resolver_notices`.
+
 - `wiki lint` notes an unconfigured merge driver: a `.gitattributes` mapping
   `merge=wiki` whose repository has no `merge.wiki.driver` configured -- the
   fresh-clone state, since only the attributes map travels -- draws a soft note

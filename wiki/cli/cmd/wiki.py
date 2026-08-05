@@ -780,6 +780,10 @@ def lint(
         wiki = resolve(path)
         wiki.on_notice = _capture
         issues = wiki.lint(name=name)
+        # resolver diagnostics ride the report as typed notes too -- the
+        # resolution already streamed their prose to stderr, so they join
+        # the count and the document, never a second print
+        notices[:0] = wiki.resolver_notices
         # --json: the whole report is one machine-readable document on
         # stdout; only the exit code is shared with the prose modes
         if as_json:

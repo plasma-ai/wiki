@@ -92,6 +92,10 @@ class Wiki:
 
         """
         self._root = pathlib.Path(path).expanduser().resolve()
+        #: diagnostics the host's resolver recorded before handing the
+        #: instance out -- typed notes a machine consumer (``lint --json``)
+        #: folds into its report beside the engine's own
+        self.resolver_notices: list[Event] = []
 
     @functools.cached_property
     def _root_name(self: Wiki) -> str:

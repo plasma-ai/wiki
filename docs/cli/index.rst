@@ -549,7 +549,11 @@ endings, stale ``[[wikilinks]]`` in authored prose (suggesting the
 canonical target when one resolves), and a ``.gitattributes`` mapping
 ``merge=wiki`` with no ``merge.wiki.driver`` configured — the fresh-clone
 state where index merges silently fall back to a plain text merge until
-``wiki config`` registers the driver.
+``wiki config`` registers the driver. Resolver diagnostics (an upward
+resolution, a missing settings marker or root index, an outer index above
+the declared root) join the notes too — counted in the closing summary and
+typed as ``resolver_notice`` rows in ``--json`` — beside their stderr
+prose.
 
 A ``<!-- start: no-lint -->`` … ``<!-- end: no-lint -->`` region suppresses
 the position-based rules (conflict markers, escaped wikilinks, wrap mangles,

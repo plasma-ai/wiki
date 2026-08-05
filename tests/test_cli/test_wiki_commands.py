@@ -60,6 +60,7 @@ __all__ = [
     'test_lint_summary_counts_notes',
     'test_lint_json_reports_typed_findings',
     'test_lint_error_exits_two',
+    'test_lint_types_resolver_diagnostics',
     'test_lint_details_issues_and_count_condenses',
     'test_map_respects_view_options',
     'test_map_filters_by_category',
@@ -1144,6 +1145,41 @@ def test_lint_json_reports_typed_findings(tmp_path: pathlib.Path) -> None:
     # --json owns the report shape; the prose modes cannot combine with it
     both = _wiki(root, 'lint', '--path', str(root), '--json', '--count')
     assert both.returncode == 2
+
+
+def test_lint_types_resolver_diagnostics(tmp_path: pathlib.Path) -> None:
+    """Resolver diagnostics ride lint's report as typed notes.
+
+    The resolution prose (a missing settings marker, an upward
+    resolution) streams to stderr for humans; a machine consumer must
+    see the same diagnostics typed, so they join the note count and the
+    ``--json`` document as ``resolver_notice`` rows instead of living
+    on an unparseable stream only.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    shutil.rmtree(root / '.wiki')
+
+    # the prose summary counts the diagnostic beside the engine's notes
+    prose = _wiki(root, 'lint', '--path', str(root))
+    assert prose.returncode == 0, prose.stdout + prose.stderr
+    assert 'settings.json missing' in prose.stderr
+    assert 'notes)' in prose.stdout
+    # the document carries it typed
+    result = _wiki(root, 'lint', '--path', str(root), '--json')
+    assert result.returncode == 0, result.stdout + result.stderr
+    document = json.loads(result.stdout)
+    rows = [note for note in document['notes'] if note['kind'] == 'resolver_notice']
+    assert len(rows) == 1
+    assert 'settings.json missing' in rows[0]['text']
+    assert rows[0]['severity'] == 'note'
+    assert document['summary']['notes'] == len(document['notes'])
+    # a healthy declared wiki records none
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    healthy = _wiki(root, 'lint', '--path', str(root), '--json')
+    document = json.loads(healthy.stdout)
+    assert not any(note['kind'] == 'resolver_notice' for note in document['notes'])
 
 
 def test_lint_error_exits_two(tmp_path: pathlib.Path) -> None:
