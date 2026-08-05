@@ -41,6 +41,7 @@ __all__ = [
     'test_trust_root_concurrent_writes_keep_every_entry',
     'test_trust_root_tightens_store_permissions',
     'test_trust_root_refuses_symlinked_store',
+    'test_trust_root_refuses_hard_linked_store',
     'test_is_trusted_ignores_malformed_store',
     'test_reused_command_honors_resolve_override',
     'test_resolve_wiki_default_class',
@@ -457,6 +458,39 @@ def test_trust_root_refuses_symlinked_store(tmp_path: pathlib.Path) -> None:
         trust_root(root)
     assert victim.stat().st_mode & 0o777 == 0o644
     assert store.is_symlink()
+
+
+def test_trust_root_refuses_hard_linked_store(tmp_path: pathlib.Path) -> None:
+    """A store hard-linked to a file outside the config home is refused.
+
+    A second link is the symlink attack without the symlink: the store
+    is the attacker's inode, so the self-heal would re-mode their file
+    and every trusted root written afterwards would be editable through
+    a name the ``0700`` home does not cover. Both paths refuse -- the
+    rewrite, and the early return an already-trusted root takes.
+    """
+    root = tmp_path / 'wiki'
+    root.mkdir()
+    victim = tmp_path / 'victim'
+    victim.write_text(
+        json.dumps({'trusted': {str(root.resolve()): '2000-01-01T00:00:00Z'}}),
+        encoding='utf-8',
+    )
+    os.chmod(victim, 0o644)
+    home = pathlib.Path(os.environ['WIKI_CONFIG_DIR'])
+    home.mkdir(parents=True, exist_ok=True)
+    store = home / 'settings.json'
+    os.link(victim, store)
+    # the early-return path: the aliased store claims the root is trusted
+    with pytest.raises(PermissionError, match='hard-linked trust store'):
+        trust_root(root)
+    assert victim.stat().st_mode & 0o777 == 0o644
+    # the rewrite path: nothing claims the root is trusted
+    victim.write_text('{}\n', encoding='utf-8')
+    with pytest.raises(PermissionError, match='hard-linked trust store'):
+        trust_root(root)
+    assert victim.read_text(encoding='utf-8') == '{}\n'
+    assert victim.stat().st_mode & 0o777 == 0o644
 
 
 def test_is_trusted_ignores_malformed_store(tmp_path: pathlib.Path) -> None:

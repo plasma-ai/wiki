@@ -100,7 +100,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `O_NOFOLLOW` and tightens the opened descriptor (`fchmod`), mirroring the lock
   file; a `settings.json` symlinked out of the config home is now refused
   outright, so a pre-planted symlink can never retarget the repair -- or the
-  rewrite behind it -- onto a file outside the store.
+  rewrite behind it -- onto a file outside the store. A multiply-linked store is
+  refused the same way (`st_nlink > 1` on the opened descriptor): a hard link is
+  the same attack without the symlink `O_NOFOLLOW` can see -- the store is the
+  attacker's inode, so the repair would re-mode their file and every trusted
+  root written afterwards would be editable through a name the `0700` home does
+  not cover.
 
 ### Fixed
 

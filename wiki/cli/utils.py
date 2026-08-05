@@ -151,6 +151,12 @@ def trust_root(root: pathlib.Path) -> pathlib.Path:
         raise
     else:
         try:
+            # a second link is a second name for the store's own inode, and
+            # O_NOFOLLOW cannot see it: the repair would re-mode a file
+            # outside the store, and every entry written afterwards would be
+            # editable through a name the 0700 home does not cover
+            if os.fstat(store_fd).st_nlink > 1:
+                raise PermissionError(f'Refusing hard-linked trust store: {path}')
             os.fchmod(store_fd, 0o600)
         finally:
             os.close(store_fd)

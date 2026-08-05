@@ -318,7 +318,9 @@ wiki you cloned, read its ``.wiki/wiki.py``.
 
 The file is managed by ``wiki trust`` (written with ``0600`` permissions
 under a ``0700`` directory); a missing or corrupt file reads as an empty
-store. Both the config home and your home directory are exempt from root
+store, and a ``settings.json`` that is a symlink, or a hard link to a file
+outside the config home, is refused rather than written through — the store
+must be an inode only the ``0700`` home names. Both the config home and your home directory are exempt from root
 resolution, so a ``settings.json`` in either never declares a wiki root —
 the home exemption holds even when ``WIKI_CONFIG_DIR`` points the store
 elsewhere and leaves ``~/.wiki`` behind. ``wiki init`` refuses to scaffold
