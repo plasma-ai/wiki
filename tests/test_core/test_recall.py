@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+import shutil
 
 import pytest
 
@@ -13,6 +14,8 @@ __all__ = [
     'test_recall_supports_scope_tags_prefixes_and_raw_queries',
     'test_recall_scopes_to_exact_subtree',
     'test_recall_does_not_reread_unchanged_unreadable_pages',
+    'test_recall_retries_indexed_pages_after_a_transient_read_failure',
+    'test_recall_rebuilds_a_corrupt_index',
 ]
 
 
@@ -38,6 +41,9 @@ def test_recall_ranks_metadata_and_refreshes_incrementally(
         '# body-hit\n\nMnemosyne appears in ordinary prose.\n',
         encoding='utf-8',
     )
+    # drop the cache update() seeded, so the first query's own cache write
+    # is what the assertions below see
+    shutil.rmtree(tmp_path / '.wiki' / 'cache')
 
     matches = wiki.recall('mnemosyne')
     assert matches[0][0] == 'core/title-hit.md'
@@ -129,3 +135,47 @@ def test_recall_does_not_reread_unchanged_unreadable_pages(
     assert wiki.recall('hidden') == []
     assert wiki.recall('hidden') == []
     assert attempts == 1
+
+
+def test_recall_retries_indexed_pages_after_a_transient_read_failure(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed re-read keeps serving the stale row and retries next query."""
+    wiki = _make_wiki(tmp_path, folders={'core': []})
+    page = tmp_path / 'core' / 'page.md'
+    page.write_text('# page\n\nFirsttoken draft.\n', encoding='utf-8')
+    assert wiki.recall('firsttoken')[0][0] == 'core/page.md'
+
+    page.write_text('# page\n\nSecondtoken revision.\n', encoding='utf-8')
+    original_read_text = pathlib.Path.read_text
+
+    def read_text(
+        path: pathlib.Path,
+        encoding: str | None = None,
+        errors: str | None = None,
+    ) -> str:
+        if path == page:
+            raise OSError('transient')
+        return original_read_text(path, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(pathlib.Path, 'read_text', read_text)
+    assert wiki.recall('firsttoken')[0][0] == 'core/page.md'
+    assert wiki.recall('secondtoken') == []
+
+    monkeypatch.undo()
+    assert wiki.recall('secondtoken')[0][0] == 'core/page.md'
+
+
+def test_recall_rebuilds_a_corrupt_index(tmp_path: pathlib.Path) -> None:
+    """A corrupt index file is discarded and rebuilt, never fatal."""
+    wiki = _make_wiki(tmp_path, folders={'core': []})
+    (tmp_path / 'core' / 'page.md').write_text(
+        '# page\n\nCorrupttoken prose.\n',
+        encoding='utf-8',
+    )
+    assert wiki.recall('corrupttoken')[0][0] == 'core/page.md'
+
+    cache = tmp_path / '.wiki' / 'cache' / 'recall.db'
+    cache.write_bytes(b'junk')
+    assert wiki.recall('corrupttoken')[0][0] == 'core/page.md'

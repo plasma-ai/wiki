@@ -420,7 +420,7 @@ FTS5 support, or unresolved wiki exits 2.
    [
      {
        "path": "topics/parser.md",
-       "snippet": "The «parser» follows the project «architecture»...",
+       "snippet": "The >>parser<< follows the project >>architecture<<...",
        "score": 2.417
      }
    ]

@@ -260,8 +260,8 @@ default: ``wiki update`` warns per row, naming the matching pattern, and
 ``wiki update --prune`` removes the row with the normal prune notice. Prose
 wikilinks into excluded-but-present files stay live — the generated index
 link block is the hard surface, body prose is not. Scoping ``update``,
-``lint``, ``map``, or ``search`` at or under an excluded directory is
-refused with an error naming the pattern.
+``lint``, ``map``, ``recall``, or ``search`` at or under an excluded
+directory is refused with an error naming the pattern.
 
 Any ``_index.md`` files already inside an excluded subtree become inert
 unmanaged bytes — never rewritten, never deleted. A nested wiki (a

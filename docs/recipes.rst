@@ -377,7 +377,7 @@ refresh changed, added, and removed Markdown pages before querying it:
    [
      {
        "path": "topics/parser.md",
-       "snippet": "The «parser» follows the project «architecture»...",
+       "snippet": "The >>parser<< follows the project >>architecture<<...",
        "score": 2.417
      }
    ]

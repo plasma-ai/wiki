@@ -73,7 +73,7 @@ def recall(
         _refresh(connection, root, files)
         sql = (
             'SELECT path, '
-            "snippet(notes_fts, 3, '«', '»', '…', 12), "
+            "snippet(notes_fts, 3, '>>', '<<', '...', 12), "
             'bm25(notes_fts, 10.0, 4.0, 6.0, 1.0) '
             'FROM notes_fts WHERE notes_fts MATCH ?'
         )
@@ -105,7 +105,19 @@ def _open(root: pathlib.Path) -> sqlite3.Connection:
     gitignore = cache / '.gitignore'
     if not gitignore.exists():
         wiki.util.fs.write_atomic(gitignore, '*\n')
-    connection = sqlite3.connect(cache / _CACHE_NAME)
+    try:
+        return _connect(cache / _CACHE_NAME)
+    except sqlite3.DatabaseError:
+        # a corrupt index is derived state: discard it and rebuild once,
+        # the same contract the word-counts cache honors
+        for suffix in ('', '-wal', '-shm'):
+            (cache / (_CACHE_NAME + suffix)).unlink(missing_ok=True)
+        return _connect(cache / _CACHE_NAME)
+
+
+def _connect(path: pathlib.Path) -> sqlite3.Connection:
+    """Open the index database and apply its connection pragmas."""
+    connection = sqlite3.connect(path)
     connection.execute('PRAGMA journal_mode=WAL')
     connection.execute('PRAGMA busy_timeout=5000')
     return connection
@@ -146,6 +158,21 @@ def _refresh(
             connection.execute('DELETE FROM files WHERE path = ?', (relative,))
         for relative in changed:
             path, mtime_ns, size = present[relative]
+            # read before mutating: a failed read leaves an indexed page
+            # serving its stale row, to be retried on the next refresh
+            try:
+                text = path.read_text(encoding='utf-8')
+            except (OSError, UnicodeDecodeError):
+                # only a never-indexed page earns a tombstone signature, so
+                # the unreadable file is not re-read on every query
+                if relative not in indexed:
+                    connection.execute(
+                        'INSERT INTO files(path, mtime_ns, size) VALUES (?, ?, ?)',
+                        (relative, mtime_ns, size),
+                    )
+                continue
+            title, headings, tags, body = _fields(path, text)
+            folder = str(pathlib.PurePath(relative).parent)
             connection.execute('DELETE FROM notes_fts WHERE path = ?', (relative,))
             connection.execute(
                 'INSERT INTO files(path, mtime_ns, size) VALUES (?, ?, ?) '
@@ -153,12 +180,6 @@ def _refresh(
                 'mtime_ns=excluded.mtime_ns, size=excluded.size',
                 (relative, mtime_ns, size),
             )
-            try:
-                text = path.read_text(encoding='utf-8')
-            except (OSError, UnicodeDecodeError):
-                continue
-            title, headings, tags, body = _fields(path, text)
-            folder = str(pathlib.PurePath(relative).parent)
             connection.execute(
                 'INSERT INTO notes_fts(title, headings, tags, body, path, folder) '
                 'VALUES (?, ?, ?, ?, ?, ?)',

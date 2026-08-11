@@ -1128,7 +1128,7 @@ def test_recall_ranked_and_json_output(wiki: pathlib.Path) -> None:
     rendered = _wiki(wiki, 'recall', 'widget', '--path', str(wiki))
     assert rendered.returncode == 0, rendered.stdout + rendered.stderr
     assert 'core/design.md' in rendered.stdout
-    assert '«widget»' in rendered.stdout
+    assert '>>widget<<' in rendered.stdout
 
     structured = _wiki(
         wiki,
