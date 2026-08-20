@@ -44,6 +44,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   documented prominently in the command help, the CLI reference, the guide, and
   the skill: scripts branch on the exit code or read `--json`, never scrape the
   prose streams.
+- Ranked full-text recall through `wiki recall`. A zero-dependency SQLite FTS5
+  index under `.wiki/cache/` refreshes incrementally before each query, weights
+  titles, headings, and tags above body prose, and supports subtree, tag,
+  prefix, raw-FTS5, limit, and JSON controls.
 
 ### Changed
 

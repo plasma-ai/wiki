@@ -76,6 +76,8 @@ __all__ = [
     'test_search_invalid_regex_reports_error',
     'test_search_resolution_failure_exits_two',
     'test_search_all_skips_undecodable_files',
+    'test_recall_ranked_and_json_output',
+    'test_recall_exit_codes',
     'test_read_slice_forms',
     'test_read_resolves_dotted_page_name',
     'test_read_errors',
@@ -1561,6 +1563,69 @@ def test_search_all_skips_undecodable_files(wiki: pathlib.Path) -> None:
         assert 'snippet.txt' in result.stdout
     finally:
         binary.unlink()
+
+
+# ------ recall
+
+
+def test_recall_ranked_and_json_output(wiki: pathlib.Path) -> None:
+    """Recall returns ranked snippets and structured output for agents."""
+    rendered = _wiki(wiki, 'recall', 'widget', '--path', str(wiki))
+    assert rendered.returncode == 0, rendered.stdout + rendered.stderr
+    assert 'core/design.md' in rendered.stdout
+    assert '>>widget<<' in rendered.stdout
+
+    structured = _wiki(
+        wiki,
+        'recall',
+        'widg',
+        '--prefix',
+        '--json',
+        '--path',
+        str(wiki),
+    )
+    assert structured.returncode == 0, structured.stdout + structured.stderr
+    results = json.loads(structured.stdout)
+    assert results[0]['path'] == 'core/design.md'
+    assert set(results[0]) == {'path', 'snippet', 'score'}
+
+
+def test_recall_exit_codes(wiki: pathlib.Path) -> None:
+    """Recall distinguishes a clean miss from invalid FTS input."""
+    missing = _wiki(wiki, 'recall', 'zzz_no_such_token', '--path', str(wiki))
+    assert missing.returncode == 1
+    assert 'No matches' in missing.stderr
+    assert missing.stdout == ''
+
+    invalid = _wiki(wiki, 'recall', '[', '--raw', '--path', str(wiki))
+    assert invalid.returncode == 2
+    assert 'Error:' in invalid.stderr
+
+    conflict = _wiki(
+        wiki,
+        'recall',
+        'widget',
+        '--prefix',
+        '--raw',
+        '--path',
+        str(wiki),
+    )
+    assert conflict.returncode == 2
+    assert 'Usage:' in (conflict.stdout + conflict.stderr)
+    assert 'mutually exclusive' in (conflict.stdout + conflict.stderr).lower()
+
+    invalid_limit = _wiki(
+        wiki,
+        'recall',
+        'widget',
+        '--limit',
+        '0',
+        '--path',
+        str(wiki),
+    )
+    assert invalid_limit.returncode == 2
+    assert 'Usage:' in (invalid_limit.stdout + invalid_limit.stderr)
+    assert '--limit must be >= 1' in (invalid_limit.stdout + invalid_limit.stderr)
 
 
 # ------ read

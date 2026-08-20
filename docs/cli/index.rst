@@ -45,9 +45,9 @@ run and points at ``wiki trust``. There is no silent fallback.
 Subtree scope
 ~~~~~~~~~~~~~
 
-``map``, ``search``, ``update``, and ``lint`` take an optional positional
-``name`` argument restricting the operation to a subtree. The scope must
-resolve to a directory relative to the wiki root — a page name fails with
+``map``, ``recall``, ``search``, ``update``, and ``lint`` take an optional
+positional ``name`` argument restricting the operation to a subtree. The scope
+must resolve to a directory relative to the wiki root — a page name fails with
 ``Wiki folder not found: '<name>'``. A scope outside the root is refused, as
 is one inside an excluded directory — dot-prefixed (``.wiki``, ``.git``,
 ``.obsidian``), symlinked, or matched by ``exclude.patterns``, the last
@@ -61,10 +61,10 @@ exits 2, as does invalid option usage — mutually exclusive flags, a bad
 slice/``--depth``/``--desc-limit`` value, or malformed ``--settings`` JSON,
 which prints a usage message; a closed downstream pipe exits 0 silently. Exit 1
 is left to each command's own nonzero outcome, documented in its section:
-``search`` follows the grep convention (0 match, 1 no match, 2 error),
-``update --check`` exits 1 when changes are pending, and ``lint`` exits 1 when
-issues are found — so a script gating on one can never read a failed run as
-the other.
+``search`` and ``recall`` follow the grep convention (0 match, 1 no match,
+2 error), ``update --check`` exits 1 when changes are pending, and ``lint``
+exits 1 when issues are found — so a script gating on one can never read a
+failed run as the other.
 
 ``wiki install``
 ----------------
@@ -362,6 +362,74 @@ body search.
    $ wiki search -i 'parser' topics
    topics/example.md
    topics/parser.md
+
+``wiki recall``
+---------------
+
+.. code-block:: text
+
+   wiki recall <query> [name] [--path <dir>] [--limit <n>] [--prefix]
+               [--tag <tag>] [--raw] [--json]
+
+Returns relevant Markdown pages from a local SQLite FTS5 index. The index lives
+at ``.wiki/cache/recall.db``, where the cache's own ``.gitignore`` keeps all
+derived state out of commits. Every query first compares path, mtime, and size,
+then updates only added, changed, or removed pages. No explicit build command
+is required.
+
+Ordinary queries quote each whitespace-separated term and combine the terms
+with AND, so FTS5 operators in user text are not executed. ``--prefix`` turns
+the final term into a prefix query. ``--raw`` opts into the full FTS5 query
+grammar instead. BM25 ranks title, heading, and frontmatter-tag matches above
+body prose. Default output prints score, path, and a highlighted body snippet;
+``--json`` emits objects with ``path``, ``snippet``, and ``score`` keys.
+
+The exit code follows the grep convention: matches exit 0; no match prints
+``No matches found.`` on stderr and exits 1; an invalid FTS5 query, unavailable
+FTS5 support, or unresolved wiki exits 2.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 26 18 56
+
+   * - Argument / option
+     - Default
+     - Behavior
+   * - ``query`` (positional, required)
+     - —
+     - Terms to recall, or raw FTS5 syntax with ``--raw``.
+   * - ``name`` (positional)
+     - the whole wiki
+     - Restrict scope to a subtree (must be a folder).
+   * - ``--path``
+     - the enclosing wiki root
+     - Wiki root directory (see `Wiki root resolution`_).
+   * - ``--limit``
+     - ``10``
+     - Maximum number of ranked pages to return (at least 1).
+   * - ``--prefix``
+     - off
+     - Treat the final ordinary-query term as a prefix.
+   * - ``--tag``
+     - none
+     - Require a matching frontmatter tag token.
+   * - ``--raw``
+     - off
+     - Interpret ``query`` as raw FTS5 syntax.
+   * - ``--json``
+     - off
+     - Emit structured results for agents and scripts.
+
+.. code-block:: console
+
+   $ wiki recall 'parser architecture' topics --json
+   [
+     {
+       "path": "topics/parser.md",
+       "snippet": "The >>parser<< follows the project >>architecture<<...",
+       "score": 2.417
+     }
+   ]
 
 ``wiki update``
 ---------------

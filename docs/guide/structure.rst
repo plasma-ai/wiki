@@ -40,9 +40,9 @@ excluded from the tree entirely:
 - **Paths matching ``exclude.patterns``** — opt-in gitignore-style globs in
   ``.wiki/settings.json`` (see :doc:`/configuration`).
 
-``wiki map``, ``wiki search``, ``wiki update``, and ``wiki lint`` all accept
-an optional positional argument naming a subtree to work on. It must be a
-folder, not a page:
+``wiki map``, ``wiki recall``, ``wiki search``, ``wiki update``, and
+``wiki lint`` all accept an optional positional argument naming a subtree
+to work on. It must be a folder, not a page:
 
 .. code-block:: console
 

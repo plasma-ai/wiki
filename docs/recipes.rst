@@ -368,6 +368,25 @@ Search follows the grep convention — a match exits 0, no match prints ``No
 matches found.`` on stderr and exits 1, and an error (bad regex, no resolvable
 wiki) exits 2 — so scripts branch on the exit code rather than parse output.
 
+Use ranked recall when relevance matters more than exact matching lines. The
+first call builds a self-ignored SQLite FTS5 index; later calls incrementally
+refresh changed, added, and removed Markdown pages before querying it:
+
+.. code-block:: console
+
+   $ wiki recall 'parser architecture' topics --json
+   [
+     {
+       "path": "topics/parser.md",
+       "snippet": "The >>parser<< follows the project >>architecture<<...",
+       "score": 2.417
+     }
+   ]
+
+Safe queries combine whitespace-separated terms with AND. Add ``--prefix``
+for partial final terms, ``--tag <tag>`` for a frontmatter-tag filter, or
+``--raw`` when the caller intentionally supplies FTS5 syntax.
+
 Read entries
 ~~~~~~~~~~~~
 

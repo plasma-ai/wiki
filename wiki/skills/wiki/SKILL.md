@@ -26,6 +26,7 @@ Maintain indexes as files are added and removed:
 Browse structure, search across content, and read entries:
 
 - `wiki map` — print an indented tree overview
+- `wiki recall` — rank relevant pages with SQLite FTS5
 - `wiki search` — search content with regex
 - `wiki read` — read a named entry
 
@@ -69,8 +70,8 @@ rather than authoring or auditing page by page yourself:
 - **`.wiki/` is the tool's namespace.** Every root carries a `.wiki/` directory
   holding `settings.json` — the file that declares the wiki root; `wiki init`
   writes it and `wiki update` restores a missing one — plus the derived
-  word-counts cache and the staged Obsidian config. Never author content there;
-  the walk skips dot-directories by construction.
+  word-counts and ranked-recall caches and the staged Obsidian config. Never
+  author content there; the walk skips dot-directories by construction.
 - **Exclusions are configurable.** Beyond the built-ins (dot-paths, symlinks,
   `_index.md`), gitignore-style globs in `exclude.patterns` in
   `.wiki/settings.json` exclude whole subtrees from indexing — never walked,
