@@ -1,3 +1,51 @@
+/* Plasma brand theming for pydata-sphinx-theme.
+ *
+ * Loaded after the Typekit kit (see `html_css_files` in conf.py) so the two
+ * Neue Haas Grotesk families are resolvable by the time the variables below
+ * reference them. Nothing here forks the theme: everything is either a
+ * `--pst-*` variable override or a rule layered on top of the theme's own.
+ *
+ * The palette is deliberately monochrome -- pure black and pure white anchor
+ * the two color modes, and every gray is an alpha tint of the foreground so
+ * hairlines stay consistent across both. Violet (rgb(212 194 255)) is the one
+ * chromatic accent, carried over from the landing page, and is reserved for
+ * selection, targets and the syntax accents.
+ *
+ * Section map:
+ *   1.  Fonts
+ *   2.  Design tokens
+ *   3.  Theme wiring and type scale
+ *   4.  Baseline typography
+ *   5.  Content measure and layout
+ *   6.  Color mode -- dark
+ *   7.  Color mode -- light
+ *   8.  Eyebrow labels
+ *   9.  Selection and focus
+ *   10. Links
+ *   11. Breadcrumbs
+ *   12. Header
+ *   13. Brand
+ *   14. Search
+ *   15. Icon buttons and theme switcher
+ *   16. Sidebars
+ *   17. Article body
+ *   18. Prev / next
+ *   19. Index pages
+ *   20. Admonitions, topics and asides
+ *   21. Code -- inline and blocks
+ *   22. API signatures and field lists
+ *   23. Code highlighting (Pygments)
+ *   24. Scrollbars
+ *   25. Footer and back-to-top
+ *   26. Print
+ *   27. Reduced motion
+ */
+
+/* -- 1. Fonts ---------------------------------------------------------------- */
+
+/* Neue Haas Grotesk arrives from the Typekit kit; IBM Plex Mono is self-hosted
+ * as a Latin subset under fonts/ (see fonts/OFL.txt for its license). */
+
 @font-face {
     font-family: "IBM Plex Mono";
     src: url("fonts/IBMPlexMono-Regular.woff2") format("woff2");
@@ -20,6 +68,11 @@
     font-display: swap;
 }
 
+/* -- 2. Design tokens -------------------------------------------------------- */
+
+/* Mode-independent tokens. The gray ramp lives here in its dark-mode form; the
+ * light mode block (section 7) re-points the alpha tints at black. */
+
 :root {
     --plasma-background: #000000;
     --plasma-foreground: #ededed;
@@ -33,6 +86,7 @@
 
     --plasma-scrim: rgba(0, 0, 0, 0.56);
 
+    /* alpha tints, so borders sit on whatever surface they land on */
     --plasma-hairline: rgba(255, 255, 255, 0.08);
     --plasma-ui-divider: rgba(255, 255, 255, 0.16);
     --plasma-ui-faint: rgba(255, 255, 255, 0.04);
@@ -40,6 +94,7 @@
     --plasma-typography-secondary: #afafaf;
     --plasma-typography-tertiary: #878787;
 
+    /* the one chromatic accent in the system */
     --plasma-violet: rgb(212 194 255);
     --plasma-selection: rgb(212 194 255 / 0.35);
 
@@ -56,13 +111,43 @@
         "IBM Plex Mono", ui-monospace, "Cascadia Code", "Source Code Pro",
         "Menlo", "Consolas", monospace;
 
+    /* ~82 characters at the body size -- the target line length for prose */
     --plasma-measure: 51.25rem;
     --plasma-content-inset: 1rem;
 
+    /* shared height for search field, icon buttons and other header controls */
     --plasma-control-height: 2rem;
 
+    /* Sticky-header offset, used for scroll-padding and for pinning both
+     * sidebars below the header. Kept as an explicit sum so each term stays
+     * traceable to what produces it:
+     *
+     *   2.75rem  the tallest header row -- .navbar-brand, whose 1.75rem
+     *            logo/title line sits inside the theme's 2 x 0.5rem padding
+     *   1rem     .bd-header__inner's own 2 x 0.5rem vertical padding
+     *   1px      the bottom hairline added in section 12
+     *
+     * There is no theme variable to read this from, so if pydata-sphinx-theme
+     * changes .bd-header__inner's padding or .navbar-brand's box, this drifts
+     * silently: anchors land under the header and the sidebars misalign.
+     * Verify with `document.querySelector('.bd-header').offsetHeight` -- it
+     * should equal 61px at the default root font size. */
     --plasma-header-height: calc(2.75rem + 1rem + 1px);
+
+    /* Bootstrap radii -- the theme ships Bootstrap's utilities, so components
+     * we do not style directly still pick their corners up from here. */
+    --bs-border-radius: 0.25rem;
+    --bs-border-radius-sm: 0.125rem;
+    --bs-border-radius-lg: 0.5rem;
+    --bs-border-radius-xl: 0.5rem;
+    --bs-border-radius-2xl: 1rem;
+    --bs-border-radius-pill: 9999px;
 }
+
+/* -- 3. Theme wiring and type scale ------------------------------------------ */
+
+/* Point the theme's own font and size variables at the Plasma tokens, rather
+ * than restyling each component that consumes them. */
 
 html {
     scrollbar-gutter: stable;
@@ -79,9 +164,12 @@ html {
     --pst-font-size-h3: 1.5rem;
     --pst-font-size-h4: 1.25rem;
 
+    /* h5/h6 are set as mono eyebrows rather than shrinking headings */
     --pst-font-size-h5: 0.75rem;
     --pst-font-size-h6: 0.75rem;
 
+    /* 450 matches the landing page's heading weight; the Typekit kit serves
+     * static weights, so this resolves to the 500 master */
     --pst-font-weight-heading: 450;
     --pst-font-weight-caption: 400;
     --pst-admonition-font-weight-heading: 500;
@@ -95,6 +183,11 @@ html {
     --pst-sidebar-header-font-size: 0.75rem;
     --pst-sidebar-header-font-weight: 500;
 }
+
+/* -- 4. Baseline typography -------------------------------------------------- */
+
+/* Headings are on a 0.5rem vertical rhythm, with space above scaled to depth so
+ * section boundaries read without rules. */
 
 body {
     line-height: 1.5;
@@ -123,6 +216,8 @@ h4 {
     line-height: 1.75rem;
     margin: 2rem 0 0.75rem;
 }
+
+/* below h4 the scale stops shrinking and switches to a mono eyebrow */
 h5,
 h6 {
     font-family: var(--plasma-font-mono);
@@ -138,14 +233,7 @@ p {
     margin-bottom: 1.5rem;
 }
 
-:root {
-    --bs-border-radius: 0.25rem;
-    --bs-border-radius-sm: 0.125rem;
-    --bs-border-radius-lg: 0.5rem;
-    --bs-border-radius-xl: 0.5rem;
-    --bs-border-radius-2xl: 1rem;
-    --bs-border-radius-pill: 9999px;
-}
+/* -- 5. Content measure and layout ------------------------------------------- */
 
 .bd-main .bd-content .bd-article-container {
     max-width: var(--plasma-measure);
@@ -155,6 +243,8 @@ p {
     padding: 0;
 }
 
+/* Align the article, its header strip and the navbar to one left edge once
+ * there is room for the secondary sidebar. */
 @media (min-width: 1200px) {
     .bd-main .bd-content .bd-article-container .bd-article,
     .bd-header-article .header-article__inner,
@@ -162,6 +252,12 @@ p {
         padding-left: var(--plasma-content-inset);
     }
 }
+
+/* -- 6. Color mode -- dark --------------------------------------------------- */
+
+/* Dark is the primary mode: pure black page, white accent, no chroma in the
+ * chrome. Admonition colors keep a transparent background and carry their
+ * meaning in the border and title color alone. */
 
 html[data-theme="dark"] {
     --pst-color-background: var(--plasma-background);
@@ -216,6 +312,7 @@ html[data-theme="dark"] {
     --pst-color-danger-bg: transparent;
     --pst-color-danger-text: var(--plasma-background);
 
+    /* tables carry structure in hairlines only -- no zebra fill */
     --pst-color-table: var(--plasma-foreground);
     --pst-color-table-outer-border: var(--plasma-hairline);
     --pst-color-table-inner-border: var(--plasma-hairline);
@@ -225,6 +322,11 @@ html[data-theme="dark"] {
     --pst-color-table-row-hover-bg: rgba(255, 255, 255, 0.06);
     --pst-color-table-row-hover: var(--plasma-foreground);
 }
+
+/* -- 7. Color mode -- light -------------------------------------------------- */
+
+/* Light inverts the ramp: the alpha tints re-point at black, the accent becomes
+ * black, and the admonition hues darken to hold contrast on white. */
 
 html[data-theme="light"] {
     --plasma-hairline: rgba(0, 0, 0, 0.08);
@@ -297,6 +399,12 @@ html[data-theme="light"] {
     --pst-color-table-row-hover: #000000;
 }
 
+/* -- 8. Eyebrow labels ------------------------------------------------------- */
+
+/* One shared treatment -- uppercase mono at 0.75rem -- for every structural
+ * label in the UI, so sidebar captions, table headers and field names all read
+ * as the same class of element. */
+
 .bd-sidebar-primary p.bd-links__title,
 .bd-sidebar-primary p.caption,
 .bd-sidebar-primary .caption-text,
@@ -317,6 +425,8 @@ dl[class]:not(.option-list, .field-list, .footnote, .glossary, .simple)
     color: var(--plasma-typography-tertiary);
 }
 
+/* -- 9. Selection and focus -------------------------------------------------- */
+
 ::selection {
     background-color: var(--plasma-selection);
     color: #ffffff;
@@ -326,12 +436,20 @@ html[data-theme="light"] ::selection {
     color: #000000;
 }
 
+/* The halo sits between the outline and the element so the ring stays legible
+ * on any surface. No border-radius here: the outline follows whatever radius
+ * the focused element already has, and forcing one would reshape controls that
+ * define their own (the search field, for one). */
 :focus-visible {
     outline: 2px solid var(--plasma-focus-ring);
     outline-offset: 4px;
     box-shadow: 0 0 0 4px var(--plasma-focus-halo);
-    border-radius: 0.375rem;
 }
+
+/* -- 10. Links --------------------------------------------------------------- */
+
+/* Prose links are underlined rather than colored, since the accent is the same
+ * near-white/near-black as body text in either mode. */
 
 .bd-article-container a,
 .bd-article-container a:visited {
@@ -354,6 +472,8 @@ html[data-theme="light"] ::selection {
     text-decoration-color: var(--pst-color-accent);
 }
 
+/* Navigational and affordance links opt out of the underline -- they are
+ * already identifiable from position or icon. */
 .bd-article-container a.headerlink,
 .bd-article-container a.toc-backref,
 .bd-article-container a.viewcode-back,
@@ -376,6 +496,7 @@ html[data-theme="light"] ::selection {
     color: var(--pst-color-heading);
 }
 
+/* headings that are their own backref keep the heading color */
 .bd-article-container h1 > a.toc-backref,
 .bd-article-container h2 > a.toc-backref,
 .bd-article-container h3 > a.toc-backref,
@@ -394,6 +515,8 @@ html[data-theme="light"] ::selection {
     text-decoration-line: underline;
     text-decoration-color: var(--pst-color-accent);
 }
+
+/* -- 11. Breadcrumbs --------------------------------------------------------- */
 
 ul.bd-breadcrumbs {
     font-family: var(--plasma-font-mono);
@@ -415,6 +538,12 @@ ul.bd-breadcrumbs li.breadcrumb-item a:hover {
     color: var(--pst-color-heading);
 }
 
+/* -- 12. Header -------------------------------------------------------------- */
+
+/* The theme sets its header background with !important, so matching it needs
+ * the same weight. The drop shadow is traded for a single hairline -- see
+ * --plasma-header-height in section 2, which counts that 1px. */
+
 .bd-header {
     background-color: var(--pst-color-background) !important;
     box-shadow: none;
@@ -427,6 +556,7 @@ ul.bd-breadcrumbs li.breadcrumb-item a:hover {
     transition: color 200ms var(--plasma-ease-standard);
 }
 
+/* drop the theme's underline-on-hover bar; nav state is carried by color */
 .bd-header ul.navbar-nav > li.nav-item.current > .nav-link::before,
 .bd-header ul.navbar-nav > li.nav-item > .nav-link:hover::before {
     border-bottom: none;
@@ -455,6 +585,8 @@ ul.bd-breadcrumbs li.breadcrumb-item a:hover {
     margin-right: 0.5rem;
 }
 
+/* -- 13. Brand --------------------------------------------------------------- */
+
 .navbar-brand {
     height: auto;
 }
@@ -469,6 +601,7 @@ ul.bd-breadcrumbs li.breadcrumb-item a:hover {
     text-decoration: none;
 }
 
+/* the wordmark is set in the display cut at the landing page's heading weight */
 .navbar-brand .logo__title {
     font-family: var(--plasma-font-display);
     font-weight: 450;
@@ -477,6 +610,10 @@ ul.bd-breadcrumbs li.breadcrumb-item a:hover {
     letter-spacing: -0.01em;
     color: var(--pst-color-heading);
 }
+
+/* -- 14. Search -------------------------------------------------------------- */
+
+/* The trigger button and the dialog's input share one field treatment. */
 
 .search-button-field,
 .bd-search input.form-control {
@@ -516,6 +653,7 @@ ul.bd-breadcrumbs li.breadcrumb-item a:hover {
     opacity: 1;
 }
 
+/* the dialog input is inside a focus ring of its own, so suppress the theme's */
 .bd-search:focus-within {
     box-shadow: none;
 }
@@ -526,6 +664,10 @@ ul.bd-breadcrumbs li.breadcrumb-item a:hover {
     box-shadow: none;
 }
 
+/* Tighter offset than the global ring: the trigger sits in a dense header row.
+ * The radius is repeated because the theme re-asserts its own pill shape in
+ * `.search-button-field:focus-visible { border-radius: 1.5em }`; without this
+ * the button rounds to a pill the moment it takes focus. */
 .search-button-field:focus-visible {
     outline: 2px solid var(--plasma-focus-ring);
     outline-offset: 2px;
@@ -549,6 +691,7 @@ kbd.kbd-shortcut__modifier {
     padding-left: 0;
 }
 
+/* hairlines between results only, not above the first one */
 .bd-search-container ul.search li {
     border-top: none;
 }
@@ -556,6 +699,11 @@ kbd.kbd-shortcut__modifier {
 .bd-search-container ul.search li + li {
     border-top: 1px solid var(--plasma-hairline);
 }
+
+/* -- 15. Icon buttons and theme switcher ------------------------------------- */
+
+/* Icon links and the color-mode toggle become bordered squares matching the
+ * search field, on the shared control height. */
 
 .bd-header .pst-navbar-icon,
 .bd-sidebar-primary .pst-navbar-icon {
@@ -571,10 +719,6 @@ kbd.kbd-shortcut__modifier {
         color var(--plasma-dur-fast) var(--plasma-ease-standard);
 }
 
-.bd-header .pst-navbar-icon svg {
-width: 0.85em !important;
-}
-
 .bd-header .pst-navbar-icon:hover,
 .bd-header .pst-navbar-icon:focus-visible,
 .bd-sidebar-primary .pst-navbar-icon:hover,
@@ -583,6 +727,7 @@ width: 0.85em !important;
     color: var(--pst-color-heading);
 }
 
+/* the button already reads as a target; drop the theme's hover underline */
 .bd-header .pst-navbar-icon:hover::before,
 .bd-sidebar-primary .pst-navbar-icon:hover::before {
     border-bottom: none;
@@ -604,6 +749,11 @@ width: 0.85em !important;
     background-color: var(--plasma-ui-faint);
     color: var(--pst-color-heading);
 }
+
+/* -- 16. Sidebars ------------------------------------------------------------ */
+
+/* Both sidebars are pinned below the sticky header. The breakpoints match the
+ * theme's own -- primary appears at 960px, secondary at 1200px. */
 
 @media (min-width: 960px) {
     .bd-sidebar-primary {
@@ -643,6 +793,8 @@ width: 0.85em !important;
     transition: color 200ms var(--plasma-ease-standard);
 }
 
+/* nav state is carried by color and the inset rule below -- never by weight,
+ * which would reflow the list as the active entry changes */
 .bd-sidebar-primary nav.bd-links li > a:hover,
 .bd-sidebar-primary nav.bd-links .current > a,
 .bd-sidebar-primary .reference:hover,
@@ -660,6 +812,7 @@ width: 0.85em !important;
     margin-bottom: 0.75rem;
 }
 
+/* the "On this page" and source-link icons are redundant next to their labels */
 .bd-sidebar-secondary .onthispage > i,
 .bd-sidebar-secondary .onthispage > svg,
 .bd-sidebar-secondary .sourcelink i,
@@ -691,8 +844,12 @@ width: 0.85em !important;
     text-decoration: none;
 }
 
-.bd-sidebar-primary #pst-collapse-sidebar-button:hover .pst-collapse-sidebar-label,
-.bd-sidebar-primary #pst-collapse-sidebar-button:hover .pst-expand-sidebar-label {
+.bd-sidebar-primary
+    #pst-collapse-sidebar-button:hover
+    .pst-collapse-sidebar-label,
+.bd-sidebar-primary
+    #pst-collapse-sidebar-button:hover
+    .pst-expand-sidebar-label {
     color: var(--pst-color-heading);
 }
 
@@ -700,6 +857,7 @@ width: 0.85em !important;
     color: var(--plasma-typography-tertiary);
 }
 
+/* current-page marker: an inset rule instead of the theme's filled pill */
 .bd-sidebar-secondary .toc-entry a.nav-link.active,
 .bd-sidebar-secondary .toc-entry a.nav-link[aria-current="true"],
 .bd-sidebar-primary nav.bd-links .current > a {
@@ -707,11 +865,15 @@ width: 0.85em !important;
     box-shadow: inset 2px 0 0 var(--pst-color-accent);
 }
 
+/* -- 17. Article body -------------------------------------------------------- */
+
 .bd-article ul > li,
 .bd-article ol > li {
     margin-bottom: 1rem;
 }
 
+/* Prose bullets are drawn as pseudo-elements so their size and color are ours;
+ * toctrees and nav lists keep the theme's markers. */
 .bd-article ul:not(.toctree-wrapper ul, .nav, .navbar-nav, nav.contents ul) {
     list-style: none;
     padding-left: 0;
@@ -730,6 +892,7 @@ width: 0.85em !important;
     content: "";
     position: absolute;
     left: 0.25rem;
+    /* centers the dot on the first line at line-height 1.5 */
     top: 0.5625rem;
     width: 0.375rem;
     height: 0.375rem;
@@ -771,6 +934,11 @@ table.table thead tr {
     border-bottom: 1px solid var(--plasma-hairline);
 }
 
+/* -- 18. Prev / next --------------------------------------------------------- */
+
+/* The underline is a border rather than text-decoration so it clears the
+ * descenders in the page titles. */
+
 .prev-next-area a p.prev-next-title {
     display: inline-block;
     font-family: var(--plasma-font-sans);
@@ -792,6 +960,11 @@ table.table thead tr {
     text-decoration: none;
     border-bottom-color: var(--pst-color-accent);
 }
+
+/* -- 19. Index pages --------------------------------------------------------- */
+
+/* genindex and py-modindex are dense link grids, so links there stay unadorned
+ * until hover rather than filling the page with underlines. */
 
 table.indextable tr.cap {
     background-color: transparent;
@@ -824,6 +997,7 @@ div.modindex-jumpbox {
     color: inherit;
 }
 
+/* the A-Z jump letters and section captions read as eyebrows */
 div.genindex-jumpbox strong,
 div.modindex-jumpbox strong,
 table.indextable tr.cap td strong {
@@ -837,6 +1011,7 @@ table.indextable tr.cap td strong {
     color: var(--plasma-typography-tertiary);
 }
 
+/* genindex emits one h2 per letter; those are labels, not display headings */
 h2:has(+ table.genindextable) {
     font-family: var(--plasma-font-mono);
     font-size: 0.875rem;
@@ -847,6 +1022,11 @@ h2:has(+ table.genindextable) {
     padding-bottom: 0.5rem;
     border-bottom: 1px solid var(--plasma-hairline);
 }
+
+/* -- 20. Admonitions, topics and asides -------------------------------------- */
+
+/* Admonition color lives in the 2px left border and the title, not a tinted
+ * fill -- the --pst-color-*-bg variables are set transparent in sections 6-7. */
 
 div.admonition,
 .admonition {
@@ -888,6 +1068,8 @@ div.topic,
     border-left: 2px solid var(--pst-color-danger);
 }
 
+/* the theme mutes topic text with !important, which loses contrast on our
+ * surface color; restore it at the same weight */
 aside.topic p,
 div.topic p,
 div.topic.contents p,
@@ -910,6 +1092,8 @@ div.topic.contents a:hover {
     text-decoration-color: var(--pst-color-accent);
 }
 
+/* -- 21. Code -- inline and blocks ------------------------------------------- */
+
 code.literal {
     background-color: var(--plasma-ui-faint);
     border: 1px solid var(--plasma-hairline);
@@ -918,6 +1102,8 @@ code.literal {
     font-size: 0.8125rem;
 }
 
+/* In dense contexts -- nav, breadcrumbs, signatures, field lists -- the chip
+ * treatment is noise; keep the mono face and drop the box. */
 .bd-sidebar-primary code.literal,
 .bd-sidebar-secondary code.literal,
 .bd-breadcrumbs code.literal,
@@ -930,6 +1116,7 @@ dl.field-list code.literal,
     padding: 0;
 }
 
+/* inside a heading, inline code rides the heading's size */
 :is(h1, h2, h3, h4, h5, h6) code.literal {
     font-size: inherit;
     padding: 0.1em 0.25em;
@@ -953,17 +1140,22 @@ span.linenos {
     color: var(--plasma-typography-tertiary);
 }
 
+/* -- 22. API signatures and field lists -------------------------------------- */
+
 .sig {
     font-family: var(--plasma-font-mono);
     font-size: 0.8125rem;
 }
 
+/* a hairline above each signature separates consecutive members */
 .bd-article-container dl.py > dt.sig {
     border-top: 1px solid var(--plasma-hairline);
     padding-top: 1rem;
     margin-top: 1rem;
 }
 
+/* Parameters / Returns / Raises render as small filled tags rather than
+ * full-width headings */
 dl[class]:not(.option-list, .field-list, .footnote, .glossary, .simple)
     dt.field-odd,
 dl[class]:not(.option-list, .field-list, .footnote, .glossary, .simple)
@@ -977,20 +1169,48 @@ table.field-list th.field-name {
     margin-bottom: 0.25rem;
 }
 
+/* -- 23. Code highlighting (Pygments) ---------------------------------------- */
+
+/* One color per token family, mapped onto the pygments classes over the theme's
+ * default style; unmapped tokens keep the default style's colors.
+ *
+ * The hues are spread evenly around the wheel and pulled toward the palette the
+ * admonitions already use -- violet for keywords (the brand accent), amber for
+ * numbers, green for strings, and the danger red for errors -- so code reads as
+ * part of the same system rather than a pasted-in editor theme. Dark mode uses
+ * pastels on the raised surface, light mode their darkened counterparts; every
+ * value clears 4.5:1 against its own --code-bg. */
+
 html[data-theme="dark"] {
     --code-bg: var(--plasma-surface-raised);
     --code-fg: var(--plasma-foreground);
-    --code-muted: var(--plasma-typography-tertiary);
-    --code-strong: #ffffff;
-    --code-accent: var(--plasma-violet);
+    --code-comment: #85858f;
+    --code-keyword: var(--plasma-violet);
+    --code-builtin: #8fd0dd;
+    --code-number: #e8c07d;
+    --code-string: #9fd6b4;
+    --code-function: #f0b49b;
+    --code-class: #a9c2f5;
+    --code-decorator: #ccd68d;
+    --code-self: #efb0c9;
+    --code-constant: #e2b3ec;
+    --code-punct: #9a9aa3;
     --code-error: #f0908d;
 }
 html[data-theme="light"] {
     --code-bg: #fafafa;
     --code-fg: #141416;
-    --code-muted: var(--plasma-typography-tertiary);
-    --code-strong: #000000;
-    --code-accent: #6d4fd1;
+    --code-comment: #6b6b73;
+    --code-keyword: #5b3fbf;
+    --code-builtin: #12667a;
+    --code-number: #8a5a12;
+    --code-string: #1f6b46;
+    --code-function: #b4442a;
+    --code-class: #2b57a8;
+    --code-decorator: #4f6b12;
+    --code-self: #a52a63;
+    --code-constant: #8a2f9c;
+    --code-punct: #55555c;
     --code-error: #b3312d;
 }
 
@@ -1001,35 +1221,108 @@ html[data-theme] .highlight {
     color: var(--code-fg);
 }
 
-html[data-theme] .highlight :is(.c, .ch, .cm, .cp, .cs, .c1, .gp) {
-    color: var(--code-muted);
+/* comments, plus the doctest/console prompt, which is chrome not code */
+html[data-theme] .highlight .c,
+html[data-theme] .highlight .ch,
+html[data-theme] .highlight .cm,
+html[data-theme] .highlight .cp,
+html[data-theme] .highlight .cs,
+html[data-theme] .highlight .c1,
+html[data-theme] .highlight .gp {
+    color: var(--code-comment);
     font-style: italic;
 }
 
-html[data-theme] .highlight :is(.o, .p, .nn) {
-    color: var(--code-muted);
+/* keywords, word operators (and/or/not/in), and string affixes (f, r, b) */
+html[data-theme] .highlight .k,
+html[data-theme] .highlight .kd,
+html[data-theme] .highlight .kr,
+html[data-theme] .highlight .ow,
+html[data-theme] .highlight .sa {
+    color: var(--code-keyword);
 }
 
-html[data-theme] .highlight
-    :is(.k, .kd, .kr, .kn, .kc, .kt, .nb, .ow, .sa, .nd, .bp) {
-    color: var(--code-strong);
+/* import/from lean, to set the module header apart from the body */
+html[data-theme] .highlight .kn {
+    color: var(--code-keyword);
+    font-style: italic;
 }
 
-html[data-theme] .highlight
-    :is(
-        .s, .sb, .sc, .sd, .sh, .sr, .sx, .si, .s1, .s2, .se,
-        .m, .mb, .mf, .mh, .mi, .mo, .il, .no
-    ) {
-    color: var(--code-accent);
+/* builtins and type keywords -- True/False/None, int, len, print */
+html[data-theme] .highlight .kc,
+html[data-theme] .highlight .kt,
+html[data-theme] .highlight .nb {
+    color: var(--code-builtin);
 }
 
-html[data-theme] .highlight :is(.nf, .fm, .nc, .ne, .nv, .vm, .go) {
+html[data-theme] .highlight .m,
+html[data-theme] .highlight .mb,
+html[data-theme] .highlight .mf,
+html[data-theme] .highlight .mh,
+html[data-theme] .highlight .mi,
+html[data-theme] .highlight .mo,
+html[data-theme] .highlight .il {
+    color: var(--code-number);
+}
+
+html[data-theme] .highlight .s,
+html[data-theme] .highlight .sb,
+html[data-theme] .highlight .sc,
+html[data-theme] .highlight .sd,
+html[data-theme] .highlight .sh,
+html[data-theme] .highlight .sr,
+html[data-theme] .highlight .sx,
+html[data-theme] .highlight .si,
+html[data-theme] .highlight .s1,
+html[data-theme] .highlight .s2 {
+    color: var(--code-string);
+}
+
+/* function names at definition and call sites */
+html[data-theme] .highlight .nf,
+html[data-theme] .highlight .fm {
+    color: var(--code-function);
+}
+
+html[data-theme] .highlight .nd {
+    color: var(--code-decorator);
+}
+
+/* class and exception names */
+html[data-theme] .highlight .nc,
+html[data-theme] .highlight .ne {
+    color: var(--code-class);
+}
+
+/* self / cls */
+html[data-theme] .highlight .bp {
+    color: var(--code-self);
+}
+
+html[data-theme] .highlight .no {
+    color: var(--code-constant);
+}
+
+/* operators and punctuation recede so structure reads without competing */
+html[data-theme] .highlight .o,
+html[data-theme] .highlight .p {
+    color: var(--code-punct);
+}
+
+/* escapes, namespaces, variables and generic output stay at body color */
+html[data-theme] .highlight .se,
+html[data-theme] .highlight .nn,
+html[data-theme] .highlight .nv,
+html[data-theme] .highlight .vm,
+html[data-theme] .highlight .go {
     color: var(--code-fg);
 }
 
 html[data-theme] .highlight .err {
     color: var(--code-error);
 }
+
+/* -- 24. Scrollbars ---------------------------------------------------------- */
 
 html {
     scrollbar-color: var(--plasma-ui-divider) transparent;
@@ -1043,6 +1336,8 @@ div[class*="highlight-"],
 pre {
     scrollbar-width: thin;
 }
+
+/* -- 25. Footer and back-to-top ---------------------------------------------- */
 
 .bd-footer {
     border-top: 1px solid var(--plasma-hairline);
@@ -1062,6 +1357,7 @@ pre {
     margin-bottom: 0;
 }
 
+/* the theme pins this to the top; move it out of the sticky header's way */
 #pst-back-to-top {
     top: auto;
     bottom: 1.5rem;
@@ -1071,6 +1367,12 @@ pre {
         background-color var(--plasma-dur-fast) var(--plasma-ease-standard),
         color var(--plasma-dur-fast) var(--plasma-ease-standard);
 }
+
+/* -- 26. Print --------------------------------------------------------------- */
+
+/* Force the light ramp regardless of the active mode, drop the chrome, and
+ * collapse the syntax palette to a gray ramp -- hue is unreliable on a
+ * grayscale printer, so token families separate by value instead. */
 
 @media print {
     html,
@@ -1098,9 +1400,18 @@ pre {
 
         --code-bg: #ffffff;
         --code-fg: #000000;
-        --code-muted: #555555;
-        --code-strong: #000000;
-        --code-accent: #333333;
+        --code-comment: #6b6b6b;
+        --code-keyword: #000000;
+        --code-builtin: #3d3d3d;
+        --code-number: #3d3d3d;
+        --code-string: #575757;
+        --code-function: #1f1f1f;
+        --code-class: #1f1f1f;
+        --code-decorator: #575757;
+        --code-self: #3d3d3d;
+        --code-constant: #3d3d3d;
+        --code-punct: #6b6b6b;
+        --code-error: #000000;
     }
 
     .bd-sidebar-primary,
@@ -1132,6 +1443,8 @@ pre {
         break-after: avoid;
     }
 }
+
+/* -- 27. Reduced motion ------------------------------------------------------ */
 
 @media (prefers-reduced-motion: reduce) {
     *,
