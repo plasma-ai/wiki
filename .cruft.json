@@ -1,6 +1,6 @@
 {
   "template": "https://github.com/plasma-ai/templates.git",
-  "commit": "1ba996cbf849f04ea49fb66869ecd71d8dabe4fc",
+  "commit": "3e122fe5619de93a1c334d8ed416c4acaf912a19",
   "checkout": null,
   "context": {
     "cookiecutter": {
@@ -39,7 +39,7 @@
         "docs": "docs.plasma.ai/wiki"
       },
       "_template": "https://github.com/plasma-ai/templates.git",
-      "_commit": "1ba996cbf849f04ea49fb66869ecd71d8dabe4fc"
+      "_commit": "3e122fe5619de93a1c334d8ed416c4acaf912a19"
     }
   },
   "directory": "package"
