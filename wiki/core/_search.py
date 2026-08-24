@@ -6,10 +6,11 @@ import pathlib
 import re
 import sqlite3
 import unicodedata
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from typing import Optional
 
 import wiki.util
-from wiki.constants import WIKI_CACHE
+from wiki.constants import DEFAULT_SEARCH_LIMIT, WIKI_CACHE
 
 from . import format
 
@@ -47,10 +48,11 @@ def search(
     query: str,
     *,
     folder: pathlib.Path,
-    limit: int = 10,
+    limit: Optional[int] = None,
+    tag: Optional[str] = None,
     prefix: bool = False,
-    tag: str = '',
     raw: bool = False,
+    on_unreadable: Optional[Callable[[str], object]] = None,
 ) -> list[tuple[str, str, float]]:
     """Refresh the derived index and return ranked full-text matches.
 
@@ -59,10 +61,14 @@ def search(
         files: Markdown files visible to the wiki walk.
         query: Search terms, or an FTS5 expression when ``raw`` is set.
         folder: Resolved subtree scope.
-        limit: Maximum number of matches.
+        limit: Maximum number of matches. ``None`` means
+            :data:`~wiki.constants.DEFAULT_SEARCH_LIMIT`.
+        tag: Require this frontmatter tag token. ``None`` means no tag
+            filter.
         prefix: Treat the final safe-query term as a prefix.
-        tag: Require this frontmatter tag token.
         raw: Pass ``query`` through as FTS5 syntax.
+        on_unreadable: Called with the relative path of each page whose
+            refresh read fails. ``None`` means no narration.
 
     Returns:
         ``(relative_path, snippet, score)`` tuples ordered by relevance.
@@ -75,14 +81,16 @@ def search(
     # validate the environment, limit, and query
     if not _has_fts5():
         raise RuntimeError("This Python's sqlite3 module lacks FTS5 support.")
+    if limit is None:
+        limit = DEFAULT_SEARCH_LIMIT
     if limit < 1:
         raise ValueError(f'Limit must be at least 1, got {limit!r} instead.')
-    expression = _match_expression(query, prefix=prefix, tag=tag, raw=raw)
+    expression = _build_match_expression(query, prefix=prefix, tag=tag, raw=raw)
 
     # refresh the index, then rank matches within the scope
     connection = _open(root)
     try:
-        _refresh(connection, root, files)
+        _refresh(connection, root, files, on_unreadable=on_unreadable)
         # select weighted-BM25-ranked rows with a snippet of the body
         # (only trusted module constants interpolate; values bind via ?)
         sql = (
@@ -105,6 +113,11 @@ def search(
         try:
             rows = connection.execute(sql, parameters).fetchall()
         except sqlite3.OperationalError as e:
+            # SQLITE_ERROR is the generic query-error code that FTS5 syntax
+            # and no-such-column failures carry; other codes (locking, I/O)
+            # are environment faults and propagate untouched
+            if e.sqlite_errorcode != sqlite3.SQLITE_ERROR:
+                raise
             raise ValueError(f'Invalid FTS5 query {expression!r}: {e}') from e
     finally:
         connection.close()
@@ -163,6 +176,8 @@ def _refresh(
     connection: sqlite3.Connection,
     root: pathlib.Path,
     files: Iterable[pathlib.Path],
+    *,
+    on_unreadable: Optional[Callable[[str], object]] = None,
 ) -> None:
     """Incrementally refresh rows whose mtime or size changed."""
     # take the write lock up front: the schema gate, the signature diff,
@@ -205,6 +220,11 @@ def _refresh(
             try:
                 text = path.read_text(encoding='utf-8')
             except (OSError, UnicodeDecodeError):
+                # narrate the attempted-and-failed read through the caller's
+                # seam; a standing tombstone never reaches this branch, so
+                # the narration fires per attempt, not per query
+                if on_unreadable is not None:
+                    on_unreadable(relpath)
                 # only a never-indexed page earns a tombstone signature, so
                 # the unreadable file is not re-read on every query
                 if relpath not in indexed:
@@ -279,11 +299,11 @@ def _read_fields(path: pathlib.Path, text: str) -> tuple[str, str, str, str, str
     return ' '.join(values), desc, headings, tags, body
 
 
-def _match_expression(
+def _build_match_expression(
     query: str,
     *,
     prefix: bool,
-    tag: str,
+    tag: Optional[str],
     raw: bool,
 ) -> str:
     """Build an FTS5 expression, quoting ordinary user terms."""
@@ -301,7 +321,7 @@ def _match_expression(
         if prefix:
             quoted[-1] += '*'
         expression = ' '.join(quoted)
-    if tag:
+    if tag is not None:
         value = tag.replace('"', '""')
         expression = f'({expression}) AND tags:"{value}"'
     return expression

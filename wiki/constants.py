@@ -10,6 +10,8 @@ WIKI_CACHE = f'{WIKI_DIR}/cache'
 WIKI_SETTINGS = f'{WIKI_DIR}/settings.json'
 #: index page filename generated at every folder level
 WIKI_INDEX = '_index.md'
+#: default maximum number of ranked pages returned by search
+DEFAULT_SEARCH_LIMIT = 10
 
 #: environment variable that disables downloads when set to true
 OFFLINE_MODE = 'OFFLINE_MODE'

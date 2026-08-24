@@ -27,16 +27,15 @@ existing wiki and accepts ``--path <dir>`` to name its root directly. Without
    the topmost directory of the contiguous ``_index.md`` chain above it.
 3. ``{cwd}/wiki/``, when that directory is declared or indexed.
 
-When none of these produce a wiki, the command fails with
-``Could not locate .wiki/settings.json, _index.md, or wiki/_index.md from the
-current directory.`` A path inside an existing wiki resolves upward to the
-enclosing root with a stderr notice naming it, so the habitual root-relative
-``--path`` works from anywhere in the tree. ``wiki new`` is the exception:
-its name argument is a write target an upward-rebased root would silently
-relocate, so an interior ``--path`` is refused there, naming the enclosing
-root to pass instead. Nested wikis are unsupported:
-resolution refuses an undeclared root that encloses a declared one. See
-:doc:`/guide/structure` for the root and index model.
+When none of these produce a wiki, the command fails with ``Could not locate
+.wiki/settings.json, _index.md, or wiki/_index.md from the current directory.``
+A path inside an existing wiki resolves upward to the enclosing root with a
+stderr notice naming it, so the habitual root-relative ``--path`` works from
+anywhere in the tree. ``wiki new`` is the exception: its name argument is a
+write target an upward-rebased root would silently relocate, so an interior
+``--path`` is refused there, naming the enclosing root to pass instead. Nested
+wikis are unsupported: resolution refuses an undeclared root that encloses a
+declared one. See :doc:`/guide/structure` for the root and index model.
 
 If the resolved wiki carries a ``.wiki/wiki.py`` hook that has not been
 trusted, every command that resolves the wiki — reads included — refuses to
@@ -306,8 +305,8 @@ unsliced read. Non-markdown files slice as a whole.
 
 .. code-block:: text
 
-   wiki search <query> [name] [--path <dir>] [--limit <n>] [--prefix]
-               [--tag <tag>] [--raw] [--json]
+   wiki search <query> [name] [--path <dir>] [--limit <n>] [--tag <tag>]
+               [--prefix] [--raw] [--json]
 
 Returns relevant Markdown pages from a local SQLite FTS5 index. The index lives
 at ``.wiki/cache/search.db``, where the cache's own ``.gitignore`` keeps all
@@ -351,12 +350,13 @@ FTS5 support, or unresolved wiki exits 2.
    * - ``--limit``
      - ``10``
      - Maximum number of ranked pages to return (at least 1).
-   * - ``--prefix``
-     - off
-     - Treat the final ordinary-query term as a prefix.
    * - ``--tag``
      - none
      - Require a matching frontmatter tag token.
+   * - ``--prefix``
+     - off
+     - Treat the final ordinary-query term as a prefix (mutually exclusive
+       with ``--raw``).
    * - ``--raw``
      - off
      - Interpret ``query`` as raw FTS5 syntax.
@@ -541,18 +541,17 @@ sweep covers the parent's whole subtree — the entire wiki for a top-level
 folder — so pending maintenance in that scope (adoptions, prunes) lands in
 the same run.
 
-The command refuses (exit 2, nothing written) a blank or placeholder input,
-the wiki root itself (``wiki init`` owns it), a target outside the root,
-without an existing indexed parent (an unindexed parent would be minted a
-placeholder index, dangling from the root chain), or reached through a
-symlinked segment, a path
-segment violating the naming policy, a target excluded from indexing
-(``exclude.patterns`` or the enclosing repo's gitignore, naming the cause),
-and a folder whose ``_index.md`` already exists — the generator never
-overwrites. The wiring sweep's own refusals (merge conflict markers or a
-nested wiki in the parent scope) are checked before the index is written —
-marker-shaped lines in the authored inputs are refused the same way — so a
-refused adoption leaves nothing on disk.
+The command refuses (exit 2, nothing written) a blank or placeholder input, the
+wiki root itself (``wiki init`` owns it), a target outside the root, without an
+existing indexed parent (an unindexed parent would be minted a placeholder
+index, dangling from the root chain), or reached through a symlinked segment, a
+path segment violating the naming policy, a target excluded from indexing
+(``exclude.patterns`` or the enclosing repo's gitignore, naming the cause), and
+a folder whose ``_index.md`` already exists — the generator never overwrites.
+The wiring sweep's own refusals (merge conflict markers or a nested wiki in the
+parent scope) are checked before the index is written — marker-shaped lines in
+the authored inputs are refused the same way — so a refused adoption leaves
+nothing on disk.
 
 .. list-table::
    :header-rows: 1
@@ -561,8 +560,8 @@ refused adoption leaves nothing on disk.
    * - Argument / option
      - Default
      - Behavior
-   * - ``name`` (positional)
-     - required
+   * - ``name`` (positional, required)
+     - —
      - Folder to create and index, relative to the wiki root.
    * - ``--desc``
      - required
@@ -618,20 +617,18 @@ index block, prose wikilinks naming a folder rather than its ``_index`` page,
 dangling or nested region markers, and — when the ``titles.required`` setting
 is on — missing titles.
 
-**Notes** (soft, stderr) flag placeholder (``...``) descriptions,
-descriptions over 500 characters, empty index content sections, CRLF line
-endings, stale ``[[wikilinks]]`` in authored prose (suggesting the
-canonical target when one resolves), an indexed path this machine's git
-ignores (a personal ``core.excludesFile`` rule — the row ships where the
-file cannot, so every other clone reds on a broken link), and a
-``.gitattributes`` mapping
-``merge=wiki`` with no ``merge.wiki.driver`` configured — the fresh-clone
-state where index merges silently fall back to a plain text merge until
-``wiki config`` registers the driver. Resolver diagnostics (an upward
-resolution, a missing settings marker or root index, an outer index above
-the declared root) join the notes too — counted in the closing summary and
-typed as ``resolver_notice`` rows in ``--json`` — beside their stderr
-prose.
+**Notes** (soft, stderr) flag placeholder (``...``) descriptions, descriptions
+over 500 characters, empty index content sections, CRLF line endings, stale
+``[[wikilinks]]`` in authored prose (suggesting the canonical target when one
+resolves), an indexed path this machine's git ignores (a personal
+``core.excludesFile`` rule — the row ships where the file cannot, so every other
+clone reds on a broken link), and a ``.gitattributes`` mapping ``merge=wiki``
+with no ``merge.wiki.driver`` configured — the fresh-clone state where index
+merges silently fall back to a plain text merge until ``wiki config`` registers
+the driver. Resolver diagnostics (an upward resolution, a missing settings
+marker or root index, an outer index above the declared root) join the notes too
+— counted in the closing summary and typed as ``resolver_notice`` rows in
+``--json`` — beside their stderr prose.
 
 A ``<!-- start: no-lint -->`` ... ``<!-- end: no-lint -->`` region suppresses
 the position-based rules (conflict markers, escaped wikilinks, wrap mangles,

@@ -13,7 +13,6 @@ import os
 import pathlib
 import re
 import shutil
-import subprocess
 import tempfile
 import unicodedata
 import urllib.request
@@ -467,9 +466,7 @@ class Wiki:
         that repository fences).
         """
         payload = b'\0'.join(os.fsencode(entry) for entry in candidates) + b'\0'
-        env = _git_env()
         cmd = [
-            'git',
             '-c',
             f'core.excludesFile={os.devnull}',
             'check-ignore',
@@ -477,16 +474,7 @@ class Wiki:
             '--stdin',
             '--no-index',
         ]
-        try:
-            result = subprocess.run(
-                cmd,
-                cwd=self._root,
-                input=payload,
-                capture_output=True,
-                env=env,
-            )
-        except FileNotFoundError:
-            result = None
+        result = wiki.util.git._git(cmd, cwd=self._root, input=payload, raw=True)
         # 0 = some matched, 1 = none matched; anything else (128 outside a
         # repo) means no fence applies here
         if (result is None) or (result.returncode not in (0, 1)):
@@ -546,22 +534,14 @@ class Wiki:
         # git would refuse the file, so a tracked file reads as safe and
         # the personal global counts
         payload = b'\0'.join(os.fsencode(entry) for entry in candidates) + b'\0'
-        try:
-            result = subprocess.run(
-                ['git', 'check-ignore', '-z', '-v', '--stdin'],
-                cwd=self._root,
-                input=payload,
-                capture_output=True,
-                env=_git_env(),
-            )
-        except FileNotFoundError:
-            return
-        if result.returncode not in (0, 1):
+        cmd = ['check-ignore', '-z', '-v', '--stdin']
+        result = wiki.util.git._git(cmd, cwd=self._root, input=payload, raw=True)
+        if (result is None) or (result.returncode not in (0, 1)):
             return
         # -v -z frames each hit as source, line, pattern, pathname
         fields = [os.fsdecode(entry) for entry in result.stdout.split(b'\0') if entry]
         for source, line, pattern, path in zip(*[iter(fields)] * 4, strict=False):
-            self.on_untrackable_path(
+            self.on_path_untrackable(
                 path=path,
                 source=source,
                 line=int(line),
@@ -575,19 +555,7 @@ class Wiki:
         repo-discovery variables are dropped, so the answering
         repository is always the one enclosing the root.
         """
-        env = _git_env()
-        try:
-            result = subprocess.run(
-                ['git', *cmd],
-                cwd=self._root,
-                capture_output=True,
-                env=env,
-            )
-        except FileNotFoundError:
-            return None
-        if result.returncode != 0:
-            return None
-        return os.fsdecode(result.stdout).strip()
+        return wiki.util.git._git(cmd, cwd=self._root, check=False)
 
     def _warn_unconfigured_merge_driver(self: Wiki) -> None:
         """Note a ``merge=wiki`` attribute with no configured driver.
@@ -1725,9 +1693,9 @@ class Wiki:
         query: str,
         *,
         name: Optional[str] = None,
-        limit: int = 10,
+        limit: Optional[int] = None,
+        tag: Optional[str] = None,
         prefix: bool = False,
-        tag: str = '',
         raw: bool = False,
     ) -> list[tuple[str, str, float]]:
         """Return ranked full-text matches from an incremental FTS5 index.
@@ -1743,9 +1711,11 @@ class Wiki:
             query: Search terms, or an FTS5 expression when ``raw`` is set.
             name: Restrict scope to a named subtree. ``None`` means the whole
                 wiki.
-            limit: Maximum number of matching pages.
+            limit: Maximum number of matching pages. ``None`` means
+                :data:`~wiki.constants.DEFAULT_SEARCH_LIMIT`.
+            tag: Require this frontmatter tag token. ``None`` means no tag
+                filter.
             prefix: Treat the final safe-query term as a prefix.
-            tag: Require this frontmatter tag token.
             raw: Pass ``query`` through as FTS5 syntax.
 
         Returns:
@@ -1762,15 +1732,19 @@ class Wiki:
         files = [
             path for path in self._search_files(self._root) if path.name != WIKI_INDEX
         ]
+        # the refresh narrates a failed page read through the seam below;
+        # tombstone semantics live in the refresh, so the hook fires only
+        # when a read is attempted and fails, never over a standing tombstone
         return _search.search(
             root=self._root,
             files=files,
             query=query,
             folder=folder,
             limit=limit,
-            prefix=prefix,
             tag=tag,
+            prefix=prefix,
             raw=raw,
+            on_unreadable=lambda relpath: self.on_read_skip(path=relpath),
         )
 
     def match(
@@ -2190,24 +2164,24 @@ class Wiki:
             event = GitFenceUnavailableEvent(message, **kwargs)
         return self.on_notice(event, logging_level=logging_level)
 
-    def on_untrackable_path(
+    def on_path_untrackable(
         self: Wiki,
         message: Optional[str] = None,
         *,
         logging_level: int = logging.WARNING,
-        event: Optional[UntrackablePathEvent] = None,
+        event: Optional[PathUntrackableEvent] = None,
         **kwargs: Any,
     ) -> Event:
         """Handle an untrackable-indexed-path notice event.
 
-        Constructs an ``UntrackablePathEvent`` from ``message`` and the
+        Constructs a ``PathUntrackableEvent`` from ``message`` and the
         payload kwargs unless a pre-built ``event`` is passed through,
         then delegates to ``on_notice``. Override in subclasses to
         intercept this notice kind alone; override ``on_notice`` to
         intercept every notice.
         """
         if event is None:
-            event = UntrackablePathEvent(message, **kwargs)
+            event = PathUntrackableEvent(message, **kwargs)
         return self.on_notice(event, logging_level=logging_level)
 
     def on_merge_driver_unconfigured(
@@ -2248,6 +2222,26 @@ class Wiki:
         """
         if event is None:
             event = WriteSkipEvent(message, **kwargs)
+        return self.on_notice(event, logging_level=logging_level)
+
+    def on_read_skip(
+        self: Wiki,
+        message: Optional[str] = None,
+        *,
+        logging_level: int = logging.WARNING,
+        event: Optional[ReadSkipEvent] = None,
+        **kwargs: Any,
+    ) -> Event:
+        """Handle an unreadable-page skip notice event.
+
+        Constructs a ``ReadSkipEvent`` from ``message`` and the payload
+        kwargs (the live-site path) unless a pre-built ``event`` is
+        passed through, then delegates to ``on_notice``. Override in
+        subclasses to intercept this notice kind alone; override
+        ``on_notice`` to intercept every notice.
+        """
+        if event is None:
+            event = ReadSkipEvent(message, **kwargs)
         return self.on_notice(event, logging_level=logging_level)
 
     def on_frontmatter_malformed(
@@ -2761,6 +2755,9 @@ class Wiki:
         if resolved.is_dir():
             if not resolved.is_relative_to(self._root):
                 raise self._outside_root(path)
+            # canonicalize casing before the exclusion probes below, so
+            # they and every downstream consumer see the on-disk spelling
+            resolved = self._true_case(resolved)
             # reject a scope that is (or nests under) an excluded dot
             # directory (a symlinked scope already resolved to its real
             # target above): the walk skips those by construction, so
@@ -2780,6 +2777,32 @@ class Wiki:
                     raise ValueError(f'Path is inside an excluded directory: {path!r}')
             return resolved
         raise FileNotFoundError(f'Wiki folder not found: {path!r}')
+
+    def _true_case(self: Wiki, resolved: pathlib.Path) -> pathlib.Path:
+        """Return ``resolved`` with every component in its on-disk casing.
+
+        A case-insensitive filesystem resolves a mis-cased scope (e.g.
+        ``CORE`` for the on-disk ``core``), and the spelled casing then
+        leaks into casing-exact consumers: search's SQL prefix filter
+        scopes to nothing, and match reports paths under the caller's
+        spelling. Each component found exact-case in its parent skips
+        the case-insensitive lookup, so a case-sensitive filesystem's
+        scopes -- where an existing component is exact-case by
+        construction -- pass through unchanged.
+        """
+        current = self._root
+        for part in resolved.relative_to(self._root).parts:
+            # fast path: an exact-case entry needs no case-insensitive
+            # lookup; only a mismatch is folded against the listing, and
+            # only a unique match substitutes
+            entries = os.listdir(current)
+            if part not in entries:
+                folded = part.casefold()
+                matches = [entry for entry in entries if entry.casefold() == folded]
+                if len(matches) == 1:
+                    part = matches[0]
+            current = current / part
+        return current
 
     def _path_to_name(self: Wiki, path: pathlib.Path) -> str:
         """Convert a wiki path (folder or page) to a display name.
@@ -4857,7 +4880,7 @@ class GitFenceUnavailableEvent(Event):
         )
 
 
-class UntrackablePathEvent(Event):
+class PathUntrackableEvent(Event):
     """Emitted when the caller's git refuses to track an indexed path."""
 
     path: str
@@ -4866,7 +4889,7 @@ class UntrackablePathEvent(Event):
     pattern: str
 
     @property
-    def description(self: UntrackablePathEvent) -> str:
+    def description(self: PathUntrackableEvent) -> str:
         """Return the untrackable-path notice line."""
         return (
             f"{self.path}: indexed, but this machine's git ignores it"
@@ -4898,6 +4921,17 @@ class WriteSkipEvent(Event):
     def description(self: WriteSkipEvent) -> str:
         """Return the concurrent-edit skip notice line."""
         return f'Skipping {self.path}: changed during update; re-run `wiki update`'
+
+
+class ReadSkipEvent(Event):
+    """Emitted when the search refresh skips an unreadable page."""
+
+    path: str
+
+    @property
+    def description(self: ReadSkipEvent) -> str:
+        """Return the unreadable-page skip notice line."""
+        return f'Skipping {self.path}: unreadable during search refresh'
 
 
 class FrontmatterMalformedEvent(Event):
@@ -5035,9 +5069,10 @@ _NOTICE_HOOKS = {
     ExcludeSkipEvent: 'on_exclude_skip',
     GitignoreSkipEvent: 'on_gitignore_skip',
     GitFenceUnavailableEvent: 'on_git_fence_unavailable',
-    UntrackablePathEvent: 'on_untrackable_path',
+    PathUntrackableEvent: 'on_path_untrackable',
     MergeDriverUnconfiguredEvent: 'on_merge_driver_unconfigured',
     WriteSkipEvent: 'on_write_skip',
+    ReadSkipEvent: 'on_read_skip',
     FrontmatterMalformedEvent: 'on_frontmatter_malformed',
     IndexTruncatedEvent: 'on_index_truncated',
     IndexMarkerlessEvent: 'on_index_markerless',
@@ -5052,20 +5087,6 @@ _NOTICE_HOOKS = {
 
 
 # ------ helper functions
-
-
-def _git_env() -> dict[str, str]:
-    """Return the environment for a git probe, minus repo discovery.
-
-    The repository a probe answers from is the one enclosing the wiki
-    root, never one the caller's environment names: a git hook exports
-    ``GIT_DIR`` (relative, resolving against the probe's cwd) and a
-    caller may export one pointing at another repo -- either would
-    answer with a foreign repository's rules, or none at all.
-    """
-    return {
-        name: value for name, value in os.environ.items() if not name.startswith('GIT_')
-    }
 
 
 def _conflict_marker_lines(text: str) -> list[int]:

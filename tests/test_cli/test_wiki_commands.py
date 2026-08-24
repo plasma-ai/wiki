@@ -77,7 +77,10 @@ __all__ = [
     'test_match_resolution_failure_exits_two',
     'test_match_all_skips_undecodable_files',
     'test_search_ranked_and_json_output',
-    'test_search_exit_codes',
+    'test_search_no_match_exits_nonzero',
+    'test_search_invalid_query_reports_error',
+    'test_search_prefix_and_raw_are_mutually_exclusive',
+    'test_search_limit_must_be_positive',
     'test_read_slice_forms',
     'test_read_resolves_dotted_page_name',
     'test_read_errors',
@@ -121,9 +124,12 @@ def wiki(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
 
     Built once per module so link generation, frontmatter enrichment, and
     word counts are exercised exactly as a user would drive them.
-    READ-ONLY by convention: the few tests that must add a file to the
-    shared tree remove it in a ``finally`` block, so siblings observe
-    the arrangement unchanged.
+    READ-ONLY by convention for authored content: the few tests that
+    must add a file to the shared tree remove it in a ``finally`` block,
+    so siblings observe the arrangement unchanged. Product-derived cache
+    state under ``.wiki/`` (the search tests' ``search.db``) is
+    sanctioned residue -- the tool owns and refreshes it, so it never
+    changes what siblings observe.
     """
     base = tmp_path_factory.mktemp('wiki_cli')
     root = base / 'wiki'
@@ -1598,21 +1604,34 @@ def test_search_ranked_and_json_output(wiki: pathlib.Path) -> None:
     assert rendered_score == f'{score:.3f}'
 
 
-def test_search_exit_codes(wiki: pathlib.Path) -> None:
-    """Search distinguishes a clean miss from invalid FTS input."""
-    # a clean miss exits 1 with the notice on stderr
-    missing = _wiki(wiki, 'search', 'zzz_no_such_token', '--path', str(wiki))
-    assert missing.returncode == 1
-    assert 'No matches' in missing.stderr
-    assert missing.stdout == ''
+def test_search_no_match_exits_nonzero(wiki: pathlib.Path) -> None:
+    """A query with no hits exits 1 with the notice on stderr.
 
-    # invalid raw FTS input is an error, not a no-match
-    invalid = _wiki(wiki, 'search', '[', '--raw', '--path', str(wiki))
-    assert invalid.returncode == 2
-    assert 'Error:' in invalid.stderr
+    The grep convention: scripts distinguish no-match from match by exit
+    code, and stdout stays reserved for matches so a page named
+    'No matches found.' can never be mistaken for the notice.
+    """
+    result = _wiki(wiki, 'search', 'zzz_no_such_token', '--path', str(wiki))
+    assert result.returncode == 1
+    assert 'No matches' in result.stderr
+    assert result.stdout == ''
 
-    # --prefix and --raw are mutually exclusive
-    conflict = _wiki(
+
+def test_search_invalid_query_reports_error(wiki: pathlib.Path) -> None:
+    """Invalid raw FTS input is an error (exit 2), distinct from a clean no-match.
+
+    Grep reserves exit 2 for errors so a script following the documented
+    branch-on-exit-code contract never reads a failed search (bad query, no
+    wiki) as an absent term (exit 1).
+    """
+    result = _wiki(wiki, 'search', '[', '--raw', '--path', str(wiki))
+    assert result.returncode == 2
+    assert 'Error:' in result.stderr
+
+
+def test_search_prefix_and_raw_are_mutually_exclusive(wiki: pathlib.Path) -> None:
+    """--prefix and --raw cannot be combined (usage error, exit 2)."""
+    result = _wiki(
         wiki,
         'search',
         'widget',
@@ -1621,12 +1640,13 @@ def test_search_exit_codes(wiki: pathlib.Path) -> None:
         '--path',
         str(wiki),
     )
-    assert conflict.returncode == 2
-    assert 'Usage:' in (conflict.stdout + conflict.stderr)
-    assert 'mutually exclusive' in (conflict.stdout + conflict.stderr).lower()
+    assert result.returncode == 2
+    assert 'mutually exclusive' in (result.stdout + result.stderr).lower()
 
-    # --limit rejects values below 1
-    invalid_limit = _wiki(
+
+def test_search_limit_must_be_positive(wiki: pathlib.Path) -> None:
+    """--limit rejects values below 1 (usage error, exit 2)."""
+    result = _wiki(
         wiki,
         'search',
         'widget',
@@ -1635,9 +1655,8 @@ def test_search_exit_codes(wiki: pathlib.Path) -> None:
         '--path',
         str(wiki),
     )
-    assert invalid_limit.returncode == 2
-    assert 'Usage:' in (invalid_limit.stdout + invalid_limit.stderr)
-    assert '--limit must be >= 1' in (invalid_limit.stdout + invalid_limit.stderr)
+    assert result.returncode == 2
+    assert '--limit must be >= 1' in (result.stdout + result.stderr)
 
 
 # ------ read

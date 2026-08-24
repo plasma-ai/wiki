@@ -129,13 +129,17 @@ For consuming a wiki, the skill directs the agent to the read commands:
 - ``wiki read`` to print a named entry, optionally sliced by lines, words, or
   characters to keep large pages out of the context window.
 
-Maintaining: update and lint
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Maintaining: update, new, and lint
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For writing, the ownership model is central: the agent authors page bodies,
 frontmatter descriptions, and index content below ``***``, then runs
 ``wiki update`` to sync everything generated — index link blocks, frontmatter
-order and placeholders, path-derived names. ``wiki lint`` verifies the result
+order and placeholders, path-derived names. ``wiki new`` is the
+deliberate-creation complement to update's placeholder minting: where a sweep
+adopts what it finds and stubs a placeholder desc for a later hand-fill,
+``wiki new`` takes the authored desc and content up front, so a new indexed
+folder lands lint-complete in one pass. ``wiki lint`` verifies the result
 and names anything the agent must fix by hand (missing descriptions, broken
 links, naming violations). The generated surfaces are never edited directly.
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import pathlib
+import shutil
+import subprocess
 from typing import Any, Optional
 
 import pytest
@@ -13,6 +15,9 @@ from wiki.core.wiki import Wiki
 
 __all__ = [
     'page_index',
+    '_needs_git',
+    '_git',
+    '_git_repo',
     '_capture_notices',
     'CategorizedWiki',
     '_make_wiki',
@@ -21,6 +26,26 @@ __all__ = [
 ]
 
 page_index = pytest.mark.parametrize('kind', ['page', 'index'])
+
+# gates the tests that drive a real git repository
+_needs_git = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
+
+
+def _git(cwd: pathlib.Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """Run a git command in ``cwd``, capturing text output and checking exit."""
+    return subprocess.run(
+        ['git', '-C', f'{cwd}', *args],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
+def _git_repo(path: pathlib.Path, *ignores: str) -> None:
+    """Initialize a git repository at ``path`` with ``ignores`` fence lines."""
+    _git(path, 'init', '-q')
+    if ignores:
+        (path / '.gitignore').write_text('\n'.join(ignores) + '\n', encoding='utf-8')
 
 
 def _capture_notices(wiki: Wiki) -> list[Event]:

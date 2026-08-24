@@ -11,10 +11,8 @@ import json
 import os
 import pathlib
 import stat
-import subprocess
 import sys
 import time
-import typing
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any, Literal, Optional
 
@@ -30,6 +28,7 @@ from wiki.constants import (
 )
 from wiki.core.event import Event
 from wiki.core.wiki import Wiki, _encloses_wiki_error
+from wiki.util.git import _git
 
 __all__ = [
     'command',
@@ -61,12 +60,10 @@ def command(
 ) -> Callable:
     """Register a CLI command on ``app`` with error wrapping.
 
-    A command error -- an unresolvable wiki, a bad subtree entry, a
-    refused hook -- prints ``Error: <message>`` on stderr and exits 2,
+    A command error prints ``Error: <message>`` on stderr and exits 2,
     beside typer's own usage errors, so exit 1 is left to mean exactly
-    the command's own nonzero outcome (``lint``'s issues found,
-    ``search``'s no match, ``update --check``'s pending changes) and a
-    script gating on one can never read a failed run as the other.
+    the command's own nonzero outcome and a script gating on one can
+    never read a failed run as the other.
     """
 
     def decorator(f: Callable, /) -> Callable:
@@ -960,74 +957,3 @@ def _nested_wiki_root(path: pathlib.Path) -> Optional[pathlib.Path]:
             if _is_wiki_root(result):
                 return result
     return None
-
-
-@typing.overload
-def _git(
-    cmd: list[str],
-    *,
-    cwd: Optional[pathlib.Path] = None,
-    check: Literal[True] = True,
-) -> str: ...
-
-
-@typing.overload
-def _git(
-    cmd: list[str],
-    *,
-    cwd: Optional[pathlib.Path] = None,
-    check: Literal[False],
-) -> Optional[str]: ...
-
-
-def _git(
-    cmd: list[str],
-    *,
-    cwd: Optional[pathlib.Path] = None,
-    check: bool = True,
-) -> Optional[str]:
-    """Run a git command and return stripped stdout.
-
-    Args:
-        cmd: Git subcommand and arguments (without ``git`` prefix).
-        cwd: Working directory for the command.
-        check: Raise ``RuntimeError`` on non-zero exit.
-
-    Returns:
-        Stripped stdout string, or ``None`` on non-zero
-        exit when ``check`` is ``False``.
-
-    """
-    full_cmd = ['git']
-    if cwd:
-        full_cmd.extend(['-C', f'{cwd}'])
-    full_cmd.extend(cmd)
-    # the repository is the one enclosing the given cwd, so the command never
-    # inherits git's repo-discovery environment (mirroring the gitignore
-    # fence): a git hook exports GIT_DIR (relative, resolving against this
-    # cwd) and a caller may export one pointing at another repo -- either
-    # would wire the merge-driver config into a foreign repository and drop
-    # .gitattributes beside the wrong toplevel
-    env = {
-        name: value for name, value in os.environ.items() if not name.startswith('GIT_')
-    }
-    # a missing git binary is treated like a failed command, so callers that
-    # pass check=False (e.g. the leading rev-parse) degrade to a clean no-op;
-    # output is captured as bytes and fsdecoded -- text mode would decode with
-    # the locale codec and raise on an undecodable repo path
-    try:
-        result = subprocess.run(full_cmd, capture_output=True, env=env)
-    except FileNotFoundError as e:
-        if check:
-            cmd_string = ' '.join(cmd)
-            raise RuntimeError(f'git {cmd_string} failed: {e}') from e
-        return None
-    if result.returncode != 0:
-        if check:
-            cmd_string = ' '.join(cmd)
-            error = os.fsdecode(result.stderr).strip()
-            raise RuntimeError(
-                f'git {cmd_string} failed (exit {result.returncode}): {error!r}'
-            )
-        return None
-    return os.fsdecode(result.stdout).strip()

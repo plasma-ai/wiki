@@ -254,13 +254,12 @@ excluded, and are checked first. A pattern matching only an ``_index.md``
 path has no effect — indexes are tool-owned per folder, so the unit of
 exclusion is the folder or the page.
 
-A parent index row pointing into a newly excluded target is pruned by the
-next ``wiki update``, which names the matching pattern as the cause beside
-the prune notice; until then ``wiki lint`` reports the row as a hard issue
-naming the pattern. Prose
-wikilinks into excluded-but-present files stay live — the generated index
-link block is the hard surface, body prose is not. Scoping ``update``,
-``lint``, ``map``, ``search``, or ``match`` at or under an excluded
+A parent index row pointing into a newly excluded target is pruned by the next
+``wiki update``, which names the matching pattern as the cause beside the prune
+notice; until then ``wiki lint`` reports the row as a hard issue naming the
+pattern. Prose wikilinks into excluded-but-present files stay live — the
+generated index link block is the hard surface, body prose is not. Scoping
+``update``, ``lint``, ``map``, ``search``, or ``match`` at or under an excluded
 directory is refused with an error naming the pattern.
 
 Any ``_index.md`` files already inside an excluded subtree become inert

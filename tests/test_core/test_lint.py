@@ -11,14 +11,20 @@ from __future__ import annotations
 import json
 import pathlib
 import re
-import shutil
-import subprocess
 
 import pytest
 
 from wiki.core.wiki import Issue, Wiki
 
-from ._helpers import _capture_notices, _make_wiki, _set_exclude_patterns, page_index
+from ._helpers import (
+    _capture_notices,
+    _git,
+    _git_repo,
+    _make_wiki,
+    _needs_git,
+    _set_exclude_patterns,
+    page_index,
+)
 
 __all__ = [
     'test_lint_reports_missing_root_name_without_crashing',
@@ -331,7 +337,7 @@ def test_lint_issues_are_typed(tmp_path: pathlib.Path) -> None:
     }
 
 
-@pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
+@_needs_git
 def test_lint_notes_unconfigured_merge_driver(tmp_path: pathlib.Path) -> None:
     """A clone carrying ``merge=wiki`` with no driver config draws a note.
 
@@ -341,12 +347,7 @@ def test_lint_notes_unconfigured_merge_driver(tmp_path: pathlib.Path) -> None:
     notes the gap (soft, exit unchanged, a typed ``--json`` row), and
     wiring the config half silences it.
     """
-    subprocess.run(
-        ['git', 'init', '-q', str(tmp_path)],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    _git_repo(tmp_path)
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
     (tmp_path / '.gitattributes').write_text(
         '**/_index.md merge=wiki\n', encoding='utf-8'
@@ -364,19 +365,7 @@ def test_lint_notes_unconfigured_merge_driver(tmp_path: pathlib.Path) -> None:
     assert all('wiki config' in gap for gap in gaps)
 
     # wiring the config half silences the note
-    subprocess.run(
-        [
-            'git',
-            '-C',
-            str(tmp_path),
-            'config',
-            'merge.wiki.driver',
-            'wiki _merge %O %A %B %L %P',
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    _git(tmp_path, 'config', 'merge.wiki.driver', 'wiki _merge %O %A %B %L %P')
     wiki = Wiki(tmp_path)
     notices = _capture_notices(wiki)
     assert wiki.lint() == []

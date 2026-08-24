@@ -12,14 +12,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   previously at `wiki search` lives at `wiki match`, with flags, output, and the
   grep exit triple unchanged. `Wiki.search` and `Wiki.match` split the same way
   in the library API.
-
 - Every command reserves exit 1 for its own nonzero outcome — `lint`'s issues
   found, `search`'s no match, `update --check`'s pending changes: a command
   error (an unresolvable wiki, a bad subtree entry, a refused hook) exits 2 with
   an `Error:` line on stderr, beside typer's usage errors. A script gating on
   `lint` can never read a failed run as a red corpus, and one gating on
   `update --check` can never read a typo'd `--path` as pending drift.
-
 - `wiki update` prunes broken links: an index row whose target no longer
   resolves to an indexed entry is removed, each removal announced
   (`Pruned N broken links`), so a deleted target takes its row with it instead
@@ -72,7 +70,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   release lacks the gitignore fence and the wrapped-marker fix, so it reported
   issues the dev tree does not — with nothing in the output naming which code
   ran. The release commit sets the final `1.3.0`.
-
 - The `_index.md` merge driver resolves the generated link block to the union of
   both sides' rows instead of taking the current branch's copy wholesale: ours'
   layout wins, and rows present only in theirs (desc continuations included) are
@@ -81,7 +78,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   prunes it against the filesystem — deletion custody lives with update, never
   with the merge — and lint stays red on any carried row whose target is gone
   until that sweep runs.
-
 - The enclosing git repository's ignore rules now fence indexing, beside
   `exclude.patterns`: a gitignored path is never walked, adopted, minted an
   `_index.md`, or linked, so battery residue can no longer turn lint red and get
@@ -101,7 +97,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   — git off `PATH`, a broken install — narrates the degrade
   (`GitFenceUnavailableEvent`/`on_git_fence_unavailable`, a `lint --json` note)
   instead of sweeping unfenced in silence.
-
 - A `--path` (or cwd resolution) landing inside an existing wiki resolves upward
   to the enclosing root — declared, or the topmost index of a bare chain — with
   a stderr notice naming it, instead of aborting with "Path is inside the wiki".
@@ -112,32 +107,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `--path` naming a declared root resolves to that root itself — a vendored wiki
   inside an excluding host is a sovereign tree, never silently retargeted to the
   host.
-
 - `wiki update` and `wiki lint` note an indexed path the running machine's git
   ignores — a personal `core.excludesFile` rule the repository does not carry.
   The fence stays pinned to the repository's own rules, so what gets indexed
   never varies by machine; but the row that ships for such a file points at
   content the author's `git add` refuses, reddening every other clone while
-  their own lint stays green. The note (`UntrackablePathEvent`, a typed
-  `untrackable_path` row in `lint --json`) names the path, the excluding source
+  their own lint stays green. The note (`PathUntrackableEvent`, a typed
+  `path_untrackable` row in `lint --json`) names the path, the excluding source
   and line, and the pattern. The row is still minted: refusing it would make
   indexing machine-dependent, the non-determinism the pinned fence exists to
   prevent.
-
 - `wiki lint` folds resolver diagnostics into its notes: the upward resolution
   notice, a missing settings marker or root index, and an outer index above the
   declared root are counted in the closing summary and land typed in
   `lint --json` (`resolver_notice` rows carrying the diagnostic `text`), so a
   machine consumer no longer has to scrape them off stderr. Resolved `Wiki`
   instances expose them as `resolver_notices`.
-
 - `wiki lint` notes an unconfigured merge driver: a `.gitattributes` mapping
   `merge=wiki` whose repository has no `merge.wiki.driver` configured — the
   fresh-clone state, since only the attributes map travels — draws a soft note
   (`MergeDriverUnconfiguredEvent`, a typed `lint --json` row) naming
   `wiki config` as the fix, instead of the clone's first merge silently
   text-merging `_index.md` files.
-
 - Bare invocation and `--path .` agree from a raw (unindexed) folder of an
   undeclared wiki: cwd resolution climbs the ancestor index chain from the
   nearest indexed ancestor at any depth — exactly the climb an explicit path
@@ -150,7 +141,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   to absorb. An undeclared root that would sweep up a wiki islanded below it by
   an unindexed folder refuses instead, naming the island and both ways out (run
   against it, or index the folder between them).
-
 - The merge-driver wiring (`wiki init`/`wiki config`) drops git's repo-discovery
   environment the way the gitignore fence does: an inherited `GIT_DIR` can no
   longer land `merge.wiki.driver` in an unrelated repository's config while
@@ -166,7 +156,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `.wiki/wiki.py`. Pointed at a wiki's own `.wiki/`, the store and the
   declared-root marker are one file, which also merged the machine-local trust
   map into the repository's committed settings; both are named by one refusal.
-
 - The trust store's permission self-heal opens `~/.wiki/settings.json` with
   `O_NOFOLLOW` and tightens the opened descriptor (`fchmod`), mirroring the lock
   file; a `settings.json` symlinked out of the config home is now refused
@@ -177,7 +166,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   attacker's inode, so the repair would re-mode their file and every trusted
   root written afterwards would be editable through a name the `0700` home does
   not cover.
-
 - The trust store's READ path now opens through the same tamper guards as the
   write path: a symlinked or hard-linked `settings.json` is refused when
   `is_trusted` (and the hook gate behind it) consults the store, so a file
@@ -186,25 +174,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   refused up front with a plain message naming the path — a FIFO no longer
   blocks every trust-consulting invocation on a writer that never comes, and a
   directory no longer fails deep in the rewrite with a cryptic error.
-
 - The config home directory gets the same custody: `wiki trust` tightens it
   through an `O_NOFOLLOW`/`O_DIRECTORY` descriptor and refuses a symlinked home
   outright — a planted link can no longer have the `0700` repair chmod a foreign
   directory (and the store then written inside it). The refusal names the
   sanctioned relocation: point `WIKI_CONFIG_DIR` at the real directory.
-
 - The `.settings.lock` sibling gets the store's custody too: its mode is
   re-tightened to `0600` on every locked write (`O_CREAT` applies its mode at
   creation only, umask-masked, so a loosened lock stayed loose forever), and a
   symlinked lock is refused with the store's plain-language message instead of
   surfacing a raw `ELOOP` errno.
-
 - `wiki trust` refuses to rewrite a corrupt store: a tolerant read folds
   unparseable JSON into an empty store — right for a trust decision (nothing is
   trusted, fail-safe), catastrophic for the rewrite, which silently dropped
   every trusted root with a clean exit. The refusal names the store and the
   stakes; the corrupt bytes survive for repair.
-
 - The config home's symlink guard moved onto the open the read path and the
   write path share, so a redirected home can no longer decide trust.
   `O_NOFOLLOW` on `settings.json` covers only its final component, so a
@@ -213,7 +197,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   directory — and executed the `.wiki/wiki.py` of a wiki the user had never
   trusted. The store is now opened relative to the guarded home descriptor, so
   there is no window between the check and the open either.
-
 - A group- or world-writable trust store is refused, read path and write path
   alike. It is the hard-link attack without the hard link — any local user
   rewrites the list that decides which wikis run code, needing write permission
@@ -221,7 +204,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cannot unplant an entry already written, so the store is refused (naming the
   mode and the fix) instead of self-healed. Loosened *read* bits still
   self-heal: nothing behind them was forgeable.
-
 - The `.settings.lock` sibling gets the store's full custody, not just
   `O_NOFOLLOW`. The `st_nlink` probe refuses a lock hard-linked to a file
   outside the config home — the per-call `fchmod` re-moded that file to `0600`,
@@ -231,7 +213,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   FIFO succeeds, silently voiding the mutual exclusion the lock exists to
   provide). The lock is opened read-only now: `flock` and `fchmod` need no write
   access.
-
 - A `trusted` value that is not an object is refused by the rewrite exactly as a
   corrupt top level is, instead of being discarded and replaced by a fresh
   single-entry map — the one key that matters was the one shape the strict read
@@ -243,6 +224,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A case-mismatched subtree scope (`wiki search ... CORE` for the on-disk
+  `core`) on a case-insensitive filesystem canonicalizes to the on-disk
+  spelling, so `wiki search` and `wiki match` agree — search's path prefix
+  filter matched nothing under the spelled casing while match still found the
+  pages — and reported paths carry the true casing.
 - `wiki trust` bounds its wait for the trust-store lock instead of blocking on
   it forever: one stopped holder (or a stalled network-filesystem write) wedged
   every fleet-wide spawn-time trust call with no diagnostic at all. The wait

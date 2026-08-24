@@ -27,7 +27,12 @@ from wiki.cli.utils import (
     resolve_wiki_root,
     trust_root,
 )
-from wiki.constants import DEFAULT_WIKI_NAME, WIKI_DIR, WIKI_INDEX, WIKI_SETTINGS
+from wiki.constants import (
+    DEFAULT_WIKI_NAME,
+    WIKI_DIR,
+    WIKI_INDEX,
+    WIKI_SETTINGS,
+)
 from wiki.core.event import Event
 from wiki.core.wiki import (
     DescOverwriteEvent,
@@ -486,13 +491,13 @@ def search(
     path = typer.Option(None, '--path', help=path_help)
     # result limit option
     limit_help = 'Maximum number of ranked pages to return (at least 1).'
-    limit = typer.Option(10, '--limit', help=limit_help)
+    limit = typer.Option(None, '--limit', help=limit_help)
+    # tag filter option
+    tag_help = 'Require a frontmatter tag token.'
+    tag = typer.Option(None, '--tag', help=tag_help)
     # prefix flag
     prefix_help = 'Treat the final query term as a prefix.'
     prefix = typer.Option(False, '--prefix', help=prefix_help)
-    # tag filter option
-    tag_help = 'Require a frontmatter tag token.'
-    tag = typer.Option('', '--tag', help=tag_help)
     # raw query flag
     raw_help = 'Interpret the query as raw FTS5 syntax.'
     raw = typer.Option(False, '--raw', help=raw_help)
@@ -505,9 +510,9 @@ def search(
         query: str = query,
         name: Optional[str] = name,
         path: Optional[str] = path,
-        limit: int = limit,
+        limit: Optional[int] = limit,
+        tag: Optional[str] = tag,
         prefix: bool = prefix,
-        tag: str = tag,
         raw: bool = raw,
         as_json: bool = as_json,
     ) -> None:
@@ -521,7 +526,7 @@ def search(
         """
         if prefix and raw:
             raise typer.BadParameter('--prefix and --raw are mutually exclusive.')
-        if limit < 1:
+        if (limit is not None) and (limit < 1):
             raise typer.BadParameter('--limit must be >= 1.')
         # every failure here -- invalid FTS input, an unresolvable wiki or
         # subtree, a refused or broken hook -- is the triple's error leg,
@@ -531,8 +536,8 @@ def search(
             query,
             name=name,
             limit=limit,
-            prefix=prefix,
             tag=tag,
+            prefix=prefix,
             raw=raw,
         )
         # grep convention: no-match exits 1 with the notice on stderr, so
@@ -838,10 +843,10 @@ def lint(
     ) -> None:
         """Check wiki health.
 
-        Two severities on two streams: issues print to STDOUT and gate
+        Two severities on two streams: issues print to stdout and gate
         the exit code (1 when any are found, 0 when the wiki is clean,
         2 on a command error -- an unresolvable wiki, a bad subtree, a
-        refused hook); notes print to STDERR and NEVER affect the exit
+        refused hook); notes print to stderr and never affect the exit
         code. Issues are lint's product, so every line prints by
         default; --count condenses the run to the closing summary. The
         prose report is for humans -- a script must branch on the exit
@@ -877,8 +882,9 @@ def lint(
         # --json: the whole report is one machine-readable document on
         # stdout; only the exit code is shared with the prose modes
         if as_json:
-            document = json.dumps(_lint_document(issues, notices), indent=2)
-            typer.echo(document)
+            document = _lint_document(issues, notices)
+            output = json.dumps(document, ensure_ascii=False, indent=2)
+            typer.echo(output)
             if issues:
                 raise SystemExit(1)
             return

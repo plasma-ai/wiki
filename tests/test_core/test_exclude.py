@@ -6,7 +6,7 @@ excluded subtrees, the pruned-row notices naming the pattern as the
 cause, symlink precedence, the nested-wiki lift, and the scope refusal.
 The enclosing repo's gitignore fences: adoption/minting refusal for
 fenced strays, pattern-pure matching, the ignored-root lift, and the
-fence-named prune cause. The lint, map, search, and read surfaces are
+fence-named prune cause. The lint, map, match, and read surfaces are
 covered beside their precedent tests in their own modules.
 """
 
@@ -14,14 +14,19 @@ from __future__ import annotations
 
 import json
 import pathlib
-import shutil
-import subprocess
 
 import pytest
 
 from wiki.core.wiki import Wiki
 
-from ._helpers import _capture_notices, _make_wiki, _set_exclude_patterns
+from ._helpers import (
+    _capture_notices,
+    _git,
+    _git_repo,
+    _make_wiki,
+    _needs_git,
+    _set_exclude_patterns,
+)
 
 __all__ = [
     'test_exclude_policy_rejects_invalid_settings',
@@ -44,21 +49,6 @@ __all__ = [
     'test_new_refuses_a_fenced_target',
     'test_gitignored_link_target_names_the_cause',
 ]
-
-# the gitignore-fence tests drive a real repository
-_needs_git = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
-
-
-def _git_repo(path: pathlib.Path, *ignores: str) -> None:
-    """Initialize a git repository at ``path`` with ``ignores`` fence lines."""
-    subprocess.run(
-        ['git', 'init', '-q', str(path)],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    if ignores:
-        (path / '.gitignore').write_text('\n'.join(ignores) + '\n', encoding='utf-8')
 
 
 # ------ policy validation
@@ -505,12 +495,7 @@ def test_fenced_directory_is_invisible_to_every_check(
     stale = '---\nname: output\ndesc: Stale.\n---\n\n# output\n\n***\n\nBody.\n'
     (fenced / '_index.md').write_text(stale, encoding='utf-8')
     (fenced / 'base_table.log').write_text('rows\n', encoding='utf-8')
-    subprocess.run(
-        ['git', '-C', str(tmp_path), 'add', '-f', str(root), '.gitignore'],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    _git(tmp_path, 'add', '-f', str(root), '.gitignore')
 
     # every check is silent about the fenced directory, and it stays put
     wiki = Wiki(root)
@@ -534,12 +519,7 @@ def test_gitignore_fence_is_pattern_pure(tmp_path: pathlib.Path) -> None:
     _git_repo(tmp_path, 'TABLES.md')
     junk = tmp_path / 'core' / 'TABLES.md'
     junk.write_text('# t\n\nrows\n', encoding='utf-8')
-    subprocess.run(
-        ['git', '-C', str(tmp_path), 'add', '-f', str(junk)],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    _git(tmp_path, 'add', '-f', str(junk))
 
     wiki = Wiki(tmp_path)
     assert wiki.lint() == []
@@ -679,12 +659,7 @@ def test_personally_ignored_row_draws_a_note(
     # a personal global ignore, in force for this repo only on this machine
     excludes = tmp_path.parent / 'personal_ignore'
     excludes.write_text('*.draft.md\n', encoding='utf-8')
-    subprocess.run(
-        ['git', '-C', str(tmp_path), 'config', 'core.excludesFile', str(excludes)],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    _git(tmp_path, 'config', 'core.excludesFile', str(excludes))
     (tmp_path / 'notes' / 'plan.draft.md').write_text(
         '---\nname: plan\ndesc: A draft.\n---\n\n# plan\n\nBody.\n',
         encoding='utf-8',
@@ -698,7 +673,7 @@ def test_personally_ignored_row_draws_a_note(
     index = (tmp_path / 'notes' / '_index.md').read_text(encoding='utf-8')
     assert '[[notes/plan.draft|plan.draft]]' in index
     flagged = [
-        event for event in notices if type(event).__name__ == 'UntrackablePathEvent'
+        event for event in notices if type(event).__name__ == 'PathUntrackableEvent'
     ]
     assert [event.path for event in flagged] == ['notes/plan.draft.md']
     assert flagged[0].pattern == '*.draft.md'
@@ -710,7 +685,7 @@ def test_personally_ignored_row_draws_a_note(
     wiki = Wiki(tmp_path)
     notices = _capture_notices(wiki)
     assert wiki.lint() == []
-    assert any(type(event).__name__ == 'UntrackablePathEvent' for event in notices)
+    assert any(type(event).__name__ == 'PathUntrackableEvent' for event in notices)
 
     # a file the repository itself tracks draws nothing
     assert not any(getattr(event, 'path', None) == 'notes/keep.md' for event in notices)
