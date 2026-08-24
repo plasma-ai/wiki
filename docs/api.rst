@@ -1,8 +1,8 @@
 API Reference
 =============
 
-Reference for the ``wiki`` package internals, generated from the source
-docstrings.
+Reference for the ``wiki`` package internals,
+generated from the source docstrings.
 
 .. toctree::
    :maxdepth: 3
