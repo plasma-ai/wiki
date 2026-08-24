@@ -26,8 +26,8 @@ Maintain indexes as files are added and removed:
 Browse structure, search across content, and read entries:
 
 - `wiki map` — print an indented tree overview
-- `wiki recall` — rank relevant pages with SQLite FTS5
-- `wiki search` — search content with regex
+- `wiki search` — rank relevant pages with SQLite FTS5
+- `wiki match` — match content with regex
 - `wiki read` — read a named entry
 
 ## Usage
@@ -70,7 +70,7 @@ rather than authoring or auditing page by page yourself:
 - **`.wiki/` is the tool's namespace.** Every root carries a `.wiki/` directory
   holding `settings.json` — the file that declares the wiki root; `wiki init`
   writes it and `wiki update` restores a missing one — plus the derived
-  word-counts and ranked-recall caches and the staged Obsidian config. Never
+  word-counts and ranked-search caches and the staged Obsidian config. Never
   author content there; the walk skips dot-directories by construction.
 - **Exclusions are configurable.** Beyond the built-ins (dot-paths, symlinks,
   `_index.md`), gitignore-style globs in `exclude.patterns` in
@@ -106,7 +106,7 @@ rather than authoring or auditing page by page yourself:
   `title: null` — update removes it, and lowercase `null` is the only reset
   spelling (`~`/`Null`/`NULL` render literally as the heading). Keep titles on a
   single line, quote a title containing `: `, and prefer plain text.
-  `wiki search --field title` matches only authored titles — an unset entry has
+  `wiki match --field title` matches only authored titles — an unset entry has
   no line to match. Setting `titles.required` to true in `.wiki/settings.json`
   demands a title everywhere: update seeds a `title: null` placeholder on every
   index and page missing one, and lint fails each placeholder until a value is

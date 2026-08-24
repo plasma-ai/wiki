@@ -23,9 +23,9 @@ gives the agent:
   by ``_index.md`` files, with authored content below the ``***`` delimiter
   and generated surfaces above it.
 - **A command map** — ``init``/``config``/``trust`` for setup,
-  ``lint``/``update`` for maintenance, and ``map``/``search``/``read`` for
-  consumption, with the instruction to consult ``--help`` for full option
-  surfaces.
+  ``lint``/``update``/``new`` for maintenance, and
+  ``map``/``search``/``match``/``read`` for consumption, with the instruction
+  to consult ``--help`` for full option surfaces.
 - **A bootstrap path** — if the ``wiki`` CLI is not on the agent's ``PATH``,
   the skill instructs it to install the package from PyPI
   (``pipx install plasma-wiki``; ``pip install`` and ``uv tool install`` work
@@ -115,16 +115,16 @@ guesses they might.
 The workflow it drives
 ----------------------
 
-Navigating: map, recall, search, read
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Navigating: map, search, match, read
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For consuming a wiki, the skill directs the agent to the read commands:
 
 - ``wiki map`` for an indented tree overview — the agent's first move when
   orienting in an unfamiliar wiki, scoped and filtered as needed.
-- ``wiki recall`` for ranked lexical retrieval when the agent needs the most
+- ``wiki search`` for ranked lexical retrieval when the agent needs the most
   relevant pages and snippets rather than exact matching lines.
-- ``wiki search`` for regex search over page content (or frontmatter fields
+- ``wiki match`` for regex matching over page content (or frontmatter fields
   with ``--field``).
 - ``wiki read`` to print a named entry, optionally sliced by lines, words, or
   characters to keep large pages out of the context window.

@@ -113,7 +113,7 @@ appears as untracked noise, and deleting it is always safe. The companion
    1 line, <chars> chars, <words> words
 
 ``wiki read`` prints an entry verbatim (the name resolves by appending
-``.md``), and ``wiki search`` greps body content — including the index's link
+``.md``), and ``wiki match`` greps body content — including the index's link
 block, which is body — following the grep exit-code convention (0 match, 1 no
 match, 2 error):
 
@@ -124,7 +124,7 @@ match, 2 error):
    name: world
    title: World
    ...
-   $ wiki search customary --lines
+   $ wiki match customary --lines
    _index.md:<lineno>: [[world|world]]: The customary first page.
    world.md:<lineno>: The customary first page. Add more pages beside this one and run `wiki update`
 

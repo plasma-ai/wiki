@@ -170,7 +170,8 @@ file:
 Like a formatter's check mode, it **exits 1 when changes are pending** and 0
 (``Nothing to update.``) when the wiki is clean — a nonzero exit is not an
 error, and a real error (an unresolvable wiki, a bad subtree) exits 2, so a
-gate reading 1 as pending drift never mistakes a typo'd path for one. Pending-action narration (create, adopt, add, prune, overwrite) uses
+gate reading 1 as pending drift never mistakes a typo'd path for one.
+Pending-action narration (create, adopt, add, prune, overwrite) uses
 ``Would ...`` wording; the state-report categories — skipped names and files,
 malformed frontmatter, truncated indexes — keep their normal wording. A dry
 run performs no housekeeping either: it neither restores a missing

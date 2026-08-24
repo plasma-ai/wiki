@@ -6,7 +6,10 @@ import importlib
 import subprocess
 import sys
 
-__all__ = ['test_import', 'test_cli_subpackage_imports_fresh']
+__all__ = [
+    'test_import',
+    'test_cli_subpackage_imports_fresh',
+]
 
 
 def test_import() -> None:

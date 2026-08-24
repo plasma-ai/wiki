@@ -338,10 +338,15 @@ def test_lint_notes_unconfigured_merge_driver(tmp_path: pathlib.Path) -> None:
     Only ``.gitattributes`` travels with the repository -- the
     ``merge.wiki.driver`` config is per clone -- so a fresh clone
     text-merges ``_index.md`` files silently at its first merge. Lint
-    notes the gap (soft, exit unchanged, a typed `--json` row), and
+    notes the gap (soft, exit unchanged, a typed ``--json`` row), and
     wiring the config half silences it.
     """
-    subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True)
+    subprocess.run(
+        ['git', 'init', '-q', str(tmp_path)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
     (tmp_path / '.gitattributes').write_text(
         '**/_index.md merge=wiki\n', encoding='utf-8'
@@ -368,6 +373,8 @@ def test_lint_notes_unconfigured_merge_driver(tmp_path: pathlib.Path) -> None:
             'merge.wiki.driver',
             'wiki _merge %O %A %B %L %P',
         ],
+        capture_output=True,
+        text=True,
         check=True,
     )
     wiki = Wiki(tmp_path)
@@ -1482,8 +1489,8 @@ def test_lint_directory_link_is_issue_naming_index_form(
 
 
 @pytest.mark.parametrize(
-    ('body', 'flagged'),
-    [
+    argnames=('body', 'flagged'),
+    argvalues=[
         ('para:\n\n    see [[core]]\n', False),
         ('para:\n\n\tsee [[core]]\n', False),
         ('<!-- todo: link [[core]] later -->\n', False),

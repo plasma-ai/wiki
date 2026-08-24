@@ -51,7 +51,7 @@ __all__ = [
     'trust',
     'read',
     'search',
-    'recall',
+    'match',
     'update',
     'new',
     'lint',
@@ -471,8 +471,97 @@ def search(
     resolve: Callable[[Optional[str]], Wiki] = resolve_wiki,
 ) -> typer.Typer:
     """Register the ``search`` command."""
-    # search pattern argument
-    pattern_help = 'Regex pattern to search for.'
+    # search query argument
+    query_help = 'Terms to search, combined with AND by default.'
+    query = typer.Argument(..., help=query_help)
+    # folder name argument
+    name_help = 'Restrict scope to named subtree (relative path).'
+    name = typer.Argument(None, help=name_help)
+    # wiki root option
+    path_help = (
+        'Wiki root directory. Defaults to the enclosing wiki root (the'
+        ' ancestor declaring .wiki/settings.json, else the outermost'
+        ' _index.md chain), else {cwd}/wiki/.'
+    )
+    path = typer.Option(None, '--path', help=path_help)
+    # result limit option
+    limit_help = 'Maximum number of ranked pages to return (at least 1).'
+    limit = typer.Option(10, '--limit', help=limit_help)
+    # prefix flag
+    prefix_help = 'Treat the final query term as a prefix.'
+    prefix = typer.Option(False, '--prefix', help=prefix_help)
+    # tag filter option
+    tag_help = 'Require a frontmatter tag token.'
+    tag = typer.Option('', '--tag', help=tag_help)
+    # raw query flag
+    raw_help = 'Interpret the query as raw FTS5 syntax.'
+    raw = typer.Option(False, '--raw', help=raw_help)
+    # json flag
+    as_json_help = 'Emit structured JSON results.'
+    as_json = typer.Option(False, '--json', help=as_json_help)
+
+    @command(app, 'search')
+    def _search(
+        query: str = query,
+        name: Optional[str] = name,
+        path: Optional[str] = path,
+        limit: int = limit,
+        prefix: bool = prefix,
+        tag: str = tag,
+        raw: bool = raw,
+        as_json: bool = as_json,
+    ) -> None:
+        """Search wiki pages through ranked full-text retrieval.
+
+        The derived FTS5 index refreshes incrementally before each query.
+        Follows the grep convention: a match exits 0, no match prints a
+        notice on stderr and exits 1, and an error (invalid query, no
+        resolvable wiki) exits 2, so scripts should branch on the exit
+        code rather than parse the output.
+        """
+        if prefix and raw:
+            raise typer.BadParameter('--prefix and --raw are mutually exclusive.')
+        if limit < 1:
+            raise typer.BadParameter('--limit must be >= 1.')
+        # every failure here -- invalid FTS input, an unresolvable wiki or
+        # subtree, a refused or broken hook -- is the triple's error leg,
+        # which the command wrapper renders and exits 2 on
+        wiki = resolve(path)
+        matches = wiki.search(
+            query,
+            name=name,
+            limit=limit,
+            prefix=prefix,
+            tag=tag,
+            raw=raw,
+        )
+        # grep convention: no-match exits 1 with the notice on stderr, so
+        # scripts can distinguish no-match from match by exit code alone
+        if not matches:
+            typer.echo('No matches found.', err=True)
+            raise SystemExit(1)
+        elif as_json:
+            results = [
+                {'path': relpath, 'snippet': snippet, 'score': score}
+                for relpath, snippet, score in matches
+            ]
+            output = json.dumps(results, ensure_ascii=False, indent=2)
+            typer.echo(output)
+        else:
+            for relpath, snippet, score in matches:
+                typer.echo(f'{score:>7.3f}  {relpath}\n         {snippet}')
+
+    return app
+
+
+def match(
+    app: typer.Typer,
+    *,
+    resolve: Callable[[Optional[str]], Wiki] = resolve_wiki,
+) -> typer.Typer:
+    """Register the ``match`` command."""
+    # match pattern argument
+    pattern_help = 'Regex pattern to match.'
     pattern = typer.Argument(..., help=pattern_help)
     # folder name argument
     name_help = 'Restrict scope to named subtree (relative path).'
@@ -484,14 +573,14 @@ def search(
         ' _index.md chain), else {cwd}/wiki/.'
     )
     path = typer.Option(None, '--path', help=path_help)
-    # search field option
-    field_help = 'Comma-separated frontmatter fields to search.'
+    # match field option
+    field_help = 'Comma-separated frontmatter fields to match.'
     field = typer.Option(None, '--field', '-f', help=field_help)
     # ignore case flag
     ignore_case_help = 'Case-insensitive matching.'
     ignore_case = typer.Option(False, '--ignore-case', '-i', help=ignore_case_help)
     # all files flag
-    all_files_help = 'Include non-markdown files in the search.'
+    all_files_help = 'Include non-markdown files in the match.'
     all_files = typer.Option(False, '--all', '-a', help=all_files_help)
     # lines flag
     lines_help = 'Show matching lines with line numbers.'
@@ -500,8 +589,8 @@ def search(
     lineno_help = 'Show file paths with line numbers (no content).'
     lineno = typer.Option(False, '--lineno', help=lineno_help)
 
-    @command(app, 'search')
-    def _search(
+    @command(app, 'match')
+    def _match(
         pattern: str = pattern,
         name: Optional[str] = name,
         path: Optional[str] = path,
@@ -511,7 +600,7 @@ def search(
         lines: bool = lines,
         lineno: bool = lineno,
     ) -> None:
-        """Search wiki content for a regex pattern.
+        """Match wiki content lines against a regex pattern.
 
         Follows the grep convention: a match exits 0, no match prints a
         notice on stderr and exits 1, and an error (invalid regex, no
@@ -524,7 +613,7 @@ def search(
         # subtree, a refused or broken hook -- is the triple's error leg,
         # which the command wrapper renders and exits 2 on
         wiki = resolve(path)
-        matches = wiki.search(
+        matches = wiki.match(
             pattern,
             name=name,
             field=field,
@@ -548,100 +637,6 @@ def search(
                 if relpath not in seen:
                     seen.add(relpath)
                     typer.echo(relpath)
-
-    return app
-
-
-def recall(
-    app: typer.Typer,
-    *,
-    resolve: Callable[[Optional[str]], Wiki] = resolve_wiki,
-) -> typer.Typer:
-    """Register the ``recall`` command."""
-    # search query argument
-    query_help = 'Terms to recall, combined with AND by default.'
-    query = typer.Argument(..., help=query_help)
-    # folder name argument
-    name_help = 'Restrict scope to named subtree (relative path).'
-    name = typer.Argument(None, help=name_help)
-    # wiki root option
-    path_help = (
-        'Wiki root directory. Defaults to the enclosing wiki root (the'
-        ' ancestor declaring .wiki/settings.json, else the outermost'
-        ' _index.md chain), else {cwd}/wiki/.'
-    )
-    path = typer.Option(None, '--path', help=path_help)
-    # result limit option
-    limit_help = 'Maximum number of ranked pages to return.'
-    limit = typer.Option(10, '--limit', help=limit_help)
-    # prefix flag
-    prefix_help = 'Treat the final query term as a prefix.'
-    prefix = typer.Option(False, '--prefix', help=prefix_help)
-    # tag filter option
-    tag_help = 'Require a frontmatter tag token.'
-    tag = typer.Option('', '--tag', help=tag_help)
-    # raw query flag
-    raw_help = 'Interpret the query as raw FTS5 syntax.'
-    raw = typer.Option(False, '--raw', help=raw_help)
-    # JSON output flag
-    json_help = 'Emit structured JSON results.'
-    as_json = typer.Option(False, '--json', help=json_help)
-
-    @command(app, 'recall')
-    def _recall(
-        query: str = query,
-        name: Optional[str] = name,
-        path: Optional[str] = path,
-        limit: int = limit,
-        prefix: bool = prefix,
-        tag: str = tag,
-        raw: bool = raw,
-        as_json: bool = as_json,
-    ) -> None:
-        """Recall relevant wiki pages through ranked full-text search.
-
-        The derived FTS5 index refreshes incrementally before each query.
-        A match exits 0, no match exits 1, and an invalid query or unresolved
-        wiki exits 2.
-        """
-        if prefix and raw:
-            raise typer.BadParameter('--prefix and --raw are mutually exclusive.')
-        if limit < 1:
-            raise typer.BadParameter('--limit must be >= 1.')
-        # every failure here -- invalid FTS input, an unresolvable wiki or
-        # subtree, a refused or broken hook -- is the triple's error leg,
-        # so the catch is total: a per-type list would leak new failure
-        # modes to the wrapper's exit 1, aliasing them with a no-match
-        try:
-            wiki = resolve(path)
-            matches = wiki.recall(
-                query,
-                name=name,
-                limit=limit,
-                prefix=prefix,
-                tag=tag,
-                raw=raw,
-            )
-        except Exception as e:
-            # grep triple: runtime errors exit 2 (the wrapper's exception
-            # path exits 1), so the body renders in the wrapper's grammar
-            typer.echo(f'Error: {e}', err=True)
-            raise typer.Exit(code=2) from e
-        # grep convention: no-match exits 1 with the notice on stderr, so
-        # scripts can distinguish no-match from match by exit code alone
-        if not matches:
-            typer.echo('No matches found.', err=True)
-            raise SystemExit(1)
-        elif as_json:
-            results = [
-                {'path': path, 'snippet': snippet, 'score': score}
-                for path, snippet, score in matches
-            ]
-            output = json.dumps(results, ensure_ascii=False, indent=2)
-            typer.echo(output)
-        else:
-            for path, snippet, score in matches:
-                typer.echo(f'{score:>7.3f}  {path}\n         {snippet}')
 
     return app
 

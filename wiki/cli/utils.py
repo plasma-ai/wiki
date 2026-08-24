@@ -307,7 +307,7 @@ def resolve_wiki(
     declared = (wiki_root / WIKI_SETTINGS).is_file()
     # an undeclared enclosing wiki leaves no marker for the resolution
     # above: an ancestor index means the path sits inside an index chain,
-    # so resolve upward the same way, to the chain's topmost index. An
+    # so resolve upward the same way, to the chain's topmost index; an
     # indexed path climbs only a contiguous parent chain (a standalone
     # wiki under a stray outer index is its own topmost chain); a raw
     # path belongs to the nearest indexed ancestor's chain at any depth,
@@ -411,7 +411,7 @@ def resolve_wiki_root(
     # undeclared tree: climb from the nearest indexed ancestor (cwd
     # included) to the topmost _index.md -- a raw (unindexed) folder of
     # an undeclared wiki resolves like an explicit `--path .` does,
-    # instead of falling through to a different wiki entirely. A raw cwd
+    # instead of falling through to a different wiki entirely; a raw cwd
     # holding a wiki of its own is the one case the climb must decline:
     # it is a project directory, not a folder of the outer tree, and
     # climbing would hand its standalone wiki to that tree to absorb

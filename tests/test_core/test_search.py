@@ -1,150 +1,246 @@
-"""Behavioral tests for ``Wiki.search``.
-
-Body and frontmatter-field search, and the body-region agreement
-with ``read`` slicing and the word counts.
-"""
+"""Behavioral tests for ``Wiki.search``, the ranked FTS5 search."""
 
 from __future__ import annotations
 
 import pathlib
+import shutil
+import sqlite3
+from typing import Optional
 
-from wiki.core.wiki import Wiki
+import pytest
 
-from ._helpers import _make_wiki, _set_exclude_patterns
+from ._helpers import _make_wiki
 
 __all__ = [
-    'test_body_includes_h1_for_counts_and_search',
-    'test_search_field_matches_value_only',
-    'test_all_files_searches_non_markdown_whole',
-    'test_search_skips_excluded_paths',
+    'test_search_ranks_metadata_and_refreshes_incrementally',
+    'test_search_ranks_desc_matches_above_body_prose',
+    'test_search_never_returns_index_pages',
+    'test_search_supports_scope_tags_prefixes_and_raw_queries',
+    'test_search_scopes_to_exact_subtree',
+    'test_search_does_not_reread_unchanged_unreadable_pages',
+    'test_search_retries_indexed_pages_after_a_transient_read_failure',
+    'test_search_rebuilds_a_corrupt_index',
+    'test_search_rebuilds_an_outdated_schema_cache',
 ]
 
 
-def test_body_includes_h1_for_counts_and_search(
+def test_search_ranks_metadata_and_refreshes_incrementally(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Only the frontmatter is special; the H1 is ordinary body content.
+    """Search ranks metadata first and never serves stale derived rows.
 
-    Word count, search, and ``read`` slicing all cover everything below the
-    frontmatter -- the H1 heading and an index's auto-generated link block
-    alike -- so a query matches the H1 line and the count includes it.
+    The first query creates the ignored cache. Later queries detect a new page
+    and a removed page directly from filesystem signatures, without requiring
+    ``wiki update`` or an explicit index command.
     """
-    wiki = Wiki(tmp_path)
-    wiki.init(name='root')
-    (tmp_path / 'topic.md').write_text(
-        '---\nname: topic\ndesc: d\n---\n\n# topic\n\nbody prose words\n',
+    wiki = _make_wiki(tmp_path, folders={'core': []})
+    title_hit = tmp_path / 'core' / 'title-hit.md'
+    title_hit.write_text(
+        '---\nname: core/title-hit\ntitle: Mnemosyne\ndesc: A page.\n'
+        'tags: [memory]\n---\n\n# title-hit\n\nShort body.\n',
         encoding='utf-8',
     )
-    wiki.update()
-    # the count covers the H1 ("# topic" = 2) plus the prose (3)
-    assert 'topic (5)' in wiki.map()
-    # search matches the page's H1 line (frontmatter is skipped; prose lacks it)
-    hits = wiki.search('topic')
-    assert any(path == 'topic.md' and '# topic' in line for path, _, line in hits)
-    # the index's auto-generated link block is body too, so it is matched as well
-    assert any('_index.md' in path for path, _, _ in hits)
-
-
-def test_search_field_matches_value_only(tmp_path: pathlib.Path) -> None:
-    """``field`` patterns match the field's VALUE, never the ``key:`` prefix.
-
-    Matching the raw line would mean a value anchor (``^...``) could
-    never hit and a pattern naming the key (``desc``) would hit every
-    line of that field; the match runs against the value alone --
-    block-scalar continuation lines included, surrounding YAML quotes
-    stripped -- while the reported line text stays raw.
-    """
-    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
-    (tmp_path / 'core' / 'block.md').write_text(
-        '---\nname: block\ndesc: |\n  Multi-line summary.\n---\n\n# block\n\nBody.\n',
+    body_hit = tmp_path / 'core' / 'body-hit.md'
+    body_hit.write_text(
+        '---\nname: core/body-hit\ndesc: A page.\ntags: []\n---\n\n'
+        '# body-hit\n\nMnemosyne appears in ordinary prose.\n',
         encoding='utf-8',
     )
-    # a ': ' in the page name makes update write the name quoted
-    (tmp_path / 'core' / 'note: draft.md').write_text(
-        '---\nname: note: draft\ndesc: d\n---\n\n# note: draft\n\nBody.\n',
+    # drop the cache update() seeded, so the first query's own cache write
+    # is what the assertions below see
+    shutil.rmtree(tmp_path / '.wiki' / 'cache')
+
+    # the first query ranks the title match first and seeds the ignored cache
+    matches = wiki.search('mnemosyne')
+    assert matches[0][0] == 'core/title-hit.md'
+    assert (tmp_path / '.wiki' / 'cache' / 'search.db').is_file()
+    gitignore = (tmp_path / '.wiki' / 'cache' / '.gitignore').read_text(
+        encoding='utf-8'
+    )
+    assert gitignore.strip() == '*'
+
+    # a new page is detected from filesystem signatures
+    fresh = tmp_path / 'core' / 'fresh.md'
+    fresh.write_text('# fresh\n\nA newly authored quasarlex page.\n', encoding='utf-8')
+    assert wiki.search('quasarlex')[0][0] == 'core/fresh.md'
+
+    # a removed page leaves the results
+    title_hit.unlink()
+    assert all(path != 'core/title-hit.md' for path, _, _ in wiki.search('mnemosyne'))
+
+
+def test_search_ranks_desc_matches_above_body_prose(tmp_path: pathlib.Path) -> None:
+    """A frontmatter-desc match outranks the same term in body prose."""
+    wiki = _make_wiki(tmp_path, folders={'core': []})
+    desc_hit = tmp_path / 'core' / 'desc-hit.md'
+    desc_hit.write_text(
+        '---\nname: core/desc-hit\ndesc: Chronotrope timing utilities.\n'
+        'tags: []\n---\n\n# desc-hit\n\nShort body.\n',
         encoding='utf-8',
     )
-    # a custom key may carry a hyphen (the field grammar is [\w-]+)
-    (tmp_path / 'core' / 'tracked.md').write_text(
-        '---\nname: tracked\ndesc: d\nreview-status: approved\n---\n\n# t\n\nBody.\n',
+    body_hit = tmp_path / 'core' / 'body-hit.md'
+    body_hit.write_text(
+        '---\nname: core/body-hit\ndesc: A page.\ntags: []\n---\n\n'
+        '# body-hit\n\nChronotrope appears in ordinary prose.\n',
         encoding='utf-8',
     )
-    # a dotted key sits outside the field grammar but still ends its neighbor
-    (tmp_path / 'core' / 'foreign.md').write_text(
-        '---\nname: foreign\ndesc: d\ncom.example: |\n  needle body\n---\n'
-        '\n# f\n\nBody.\n',
+
+    matches = wiki.search('chronotrope')
+    assert [path for path, _, _ in matches] == [
+        'core/desc-hit.md',
+        'core/body-hit.md',
+    ]
+
+
+def test_search_never_returns_index_pages(tmp_path: pathlib.Path) -> None:
+    """Index pages stay out of results even when their link blocks match."""
+    wiki = _make_wiki(tmp_path, folders={'core': ['glimmerfax']})
+    # the generated link block carries the child's name and desc, so the
+    # index would shadow the page itself in ranked results
+    index_text = (tmp_path / 'core' / '_index.md').read_text(encoding='utf-8')
+    assert 'glimmerfax' in index_text
+
+    matches = wiki.search('glimmerfax')
+    assert [path for path, _, _ in matches] == ['core/glimmerfax.md']
+
+
+def test_search_supports_scope_tags_prefixes_and_raw_queries(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Safe queries compose with tag and subtree filters; raw FTS stays opt-in."""
+    wiki = _make_wiki(tmp_path, folders={'core': [], 'guides': []})
+    (tmp_path / 'core' / 'agents.md').write_text(
+        '---\nname: core/agents\ndesc: A page.\ntags: [agents]\n---\n\n'
+        '# agents\n\nZettelkasten context for autonomous work.\n',
         encoding='utf-8',
     )
-    wiki.update()
-
-    # a value anchor matches from the value's first character
-    hits = wiki.search('^The design', field='desc')
-    assert [relpath for relpath, _, _ in hits] == ['core/design.md']
-    # ... including on a block scalar's continuation lines
-    hits = wiki.search('^Multi-line', field='desc')
-    assert [relpath for relpath, _, _ in hits] == ['core/block.md']
-    # the key name itself is never part of the searched text
-    assert wiki.search('desc', field='desc') == []
-    # anchors see the unquoted value even when the wiki quotes it (format.quote)
-    for anchored in ('^core/note', 'draft$', '^core/note: draft$'):
-        hits = wiki.search(anchored, field='name')
-        assert [relpath for relpath, _, _ in hits] == ['core/note: draft.md']
-    # a hyphenated custom key is a field like any other: the value anchor
-    # hits and the key name stays out of the searched text
-    hits = wiki.search('^approved', field='review-status')
-    assert [relpath for relpath, _, _ in hits] == ['core/tracked.md']
-    assert wiki.search('review', field='review-status') == []
-    # a dotted key's line and block body never attribute to the field
-    # before it: field-scoped search must not hit foreign-key content
-    assert wiki.search('needle', field='desc') == []
-
-
-def test_all_files_searches_non_markdown_whole(tmp_path: pathlib.Path) -> None:
-    """Frontmatter is a markdown concept; non-md files are searched whole.
-
-    ``read`` slices non-markdown files whole, so a non-md file whose
-    first lines form a ``---`` pair (a multi-document YAML, say) has no
-    frontmatter to skip -- body search matches inside the leading block
-    and ``field`` search never reads it as frontmatter.
-    """
-    wiki = Wiki(tmp_path)
-    wiki.init(name='root')
-    (tmp_path / 'deploy.yaml').write_text(
-        '---\nhost: prod.example.com\nport: 443\n---\nhost: staging.example.com\n',
+    (tmp_path / 'guides' / 'notes.md').write_text(
+        '---\nname: guides/notes\ndesc: A page.\ntags: [writing]\n---\n\n'
+        '# notes\n\nZettelkasten context for authors.\n',
         encoding='utf-8',
     )
-    wiki.update()
-    # body search matches inside the leading '---' pair and below it alike
-    for pattern, lineno in [(r'prod\.example', 2), (r'staging\.example', 5)]:
-        hits = wiki.search(pattern, all_files=True)
-        assert [(path, num) for path, num, _ in hits] == [('deploy.yaml', lineno)]
-    # field mode searches frontmatter, which a non-md file never carries
-    assert wiki.search('prod', field='host', all_files=True) == []
+
+    # a tag filter composes with prefix matching
+    tagged = wiki.search('zettel', prefix=True, tag='agents')
+    assert [path for path, _, _ in tagged] == ['core/agents.md']
+    # a subtree scope narrows results to its pages
+    scoped = wiki.search('zettelkasten', name='guides')
+    assert [path for path, _, _ in scoped] == ['guides/notes.md']
+    # raw FTS syntax is opt-in
+    raw = wiki.search('zettel* OR autonomous', raw=True)
+    assert {path for path, _, _ in raw} == {
+        'core/agents.md',
+        'guides/notes.md',
+    }
+    # a safe query is sanitized, never parsed as FTS syntax
+    assert wiki.search('zettelkasten" OR title:escape AND (') == []
+    # an invalid raw query raises instead of matching nothing
+    with pytest.raises(ValueError, match='fts5'):
+        wiki.search('[', raw=True)
 
 
-def test_search_skips_excluded_paths(tmp_path: pathlib.Path) -> None:
-    """Excluded files never surface in search, ``all_files`` included.
-
-    Search enumerates through the same walk update indexes with, so an
-    ``exclude.patterns`` subtree is invisible to body search and to the
-    ``all_files`` sweep over non-markdown files alike.
-    """
-    _make_wiki(tmp_path, folders={'core': ['design']})
-    (tmp_path / 'vendor').mkdir()
-    (tmp_path / 'vendor' / 'lib.md').write_text(
-        '---\nname: lib\ndesc: A page.\n---\n\n# lib\n\nneedle prose\n',
+def test_search_scopes_to_exact_subtree(tmp_path: pathlib.Path) -> None:
+    """Subtree names treat SQL wildcard characters as literal path text."""
+    wiki = _make_wiki(
+        tmp_path,
+        folders={'my_notes': [], 'myxnotes': [], 'myxnotes/sub': []},
+    )
+    (tmp_path / 'my_notes' / 'inside.md').write_text(
+        '# inside\n\nSharedtoken belongs here.\n',
         encoding='utf-8',
     )
-    (tmp_path / 'vendor' / 'raw.txt').write_text('needle raw\n', encoding='utf-8')
-    (tmp_path / 'core' / 'keep.md').write_text(
-        '---\nname: keep\ndesc: A page.\n---\n\n# keep\n\nneedle kept\n',
+    (tmp_path / 'myxnotes' / 'sub' / 'outside.md').write_text(
+        '# outside\n\nSharedtoken belongs elsewhere.\n',
         encoding='utf-8',
     )
-    _set_exclude_patterns(tmp_path, ['vendor'])
-    wiki = Wiki(tmp_path)
 
-    # only the indexed sibling matches, with or without all_files
-    hits = wiki.search('needle')
-    assert [relpath for relpath, _, _ in hits] == ['core/keep.md']
-    hits = wiki.search('needle', all_files=True)
-    assert [relpath for relpath, _, _ in hits] == ['core/keep.md']
+    matches = wiki.search('sharedtoken', name='my_notes')
+    assert [path for path, _, _ in matches] == ['my_notes/inside.md']
+
+
+def test_search_does_not_reread_unchanged_unreadable_pages(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unchanged read failure stays off the incremental refresh path."""
+    wiki = _make_wiki(tmp_path, folders={'core': []})
+    unreadable = tmp_path / 'core' / 'unreadable.md'
+    unreadable.write_text('# unreadable\n\nHidden token.\n', encoding='utf-8')
+    original_read_text = pathlib.Path.read_text
+    attempts = 0
+
+    def read_text(
+        path: pathlib.Path,
+        encoding: Optional[str] = None,
+        errors: Optional[str] = None,
+    ) -> str:
+        nonlocal attempts
+        if path == unreadable:
+            attempts += 1
+            raise OSError('unreadable')
+        return original_read_text(path, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(pathlib.Path, 'read_text', read_text)
+    assert wiki.search('hidden') == []
+    assert wiki.search('hidden') == []
+    assert attempts == 1
+
+
+def test_search_retries_indexed_pages_after_a_transient_read_failure(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed re-read keeps serving the stale row and retries next query."""
+    wiki = _make_wiki(tmp_path, folders={'core': []})
+    page = tmp_path / 'core' / 'page.md'
+    page.write_text('# page\n\nFirsttoken draft.\n', encoding='utf-8')
+    assert wiki.search('firsttoken')[0][0] == 'core/page.md'
+
+    page.write_text('# page\n\nSecondtoken revision.\n', encoding='utf-8')
+    original_read_text = pathlib.Path.read_text
+
+    def read_text(
+        path: pathlib.Path,
+        encoding: Optional[str] = None,
+        errors: Optional[str] = None,
+    ) -> str:
+        if path == page:
+            raise OSError('transient')
+        return original_read_text(path, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(pathlib.Path, 'read_text', read_text)
+    assert wiki.search('firsttoken')[0][0] == 'core/page.md'
+    assert wiki.search('secondtoken') == []
+
+    monkeypatch.undo()
+    assert wiki.search('secondtoken')[0][0] == 'core/page.md'
+
+
+def test_search_rebuilds_a_corrupt_index(tmp_path: pathlib.Path) -> None:
+    """A corrupt index file is discarded and rebuilt, never fatal."""
+    wiki = _make_wiki(tmp_path, folders={'core': []})
+    (tmp_path / 'core' / 'page.md').write_text(
+        '# page\n\nCorrupttoken prose.\n',
+        encoding='utf-8',
+    )
+    assert wiki.search('corrupttoken')[0][0] == 'core/page.md'
+
+    cache = tmp_path / '.wiki' / 'cache' / 'search.db'
+    cache.write_bytes(b'junk')
+    assert wiki.search('corrupttoken')[0][0] == 'core/page.md'
+
+
+def test_search_rebuilds_an_outdated_schema_cache(tmp_path: pathlib.Path) -> None:
+    """A cache stamped with an older schema version rebuilds on the next query."""
+    wiki = _make_wiki(tmp_path, folders={'core': []})
+    (tmp_path / 'core' / 'page.md').write_text(
+        '# page\n\nVintagetoken prose.\n',
+        encoding='utf-8',
+    )
+    assert wiki.search('vintagetoken')[0][0] == 'core/page.md'
+
+    connection = sqlite3.connect(tmp_path / '.wiki' / 'cache' / 'search.db')
+    with connection:
+        connection.execute("UPDATE meta SET value = '1' WHERE key = 'schema_version'")
+    connection.close()
+    assert wiki.search('vintagetoken')[0][0] == 'core/page.md'

@@ -74,7 +74,7 @@ def test_read_line_slicing(tmp_path: pathlib.Path) -> None:
     argvalues=[
         ('read', '../outside/secret'),
         ('read', '{outside}/secret.md'),
-        ('search', '..'),
+        ('match', '..'),
         ('map', '../outside'),
         ('update', '..'),
         ('lint', '../outside'),
@@ -82,7 +82,7 @@ def test_read_line_slicing(tmp_path: pathlib.Path) -> None:
     ids=[
         'read-relative',
         'read-absolute',
-        'search-parent',
+        'match-parent',
         'map-sibling',
         'update-parent',
         'lint-sibling',
@@ -111,7 +111,7 @@ def test_operations_refuse_paths_outside_root(
     name = name.format(outside=outside)
     calls = {
         'read': lambda: wiki.read(name),
-        'search': lambda: wiki.search('Secret', name=name),
+        'match': lambda: wiki.match('Secret', name=name),
         'map': lambda: wiki.map(name),
         'update': lambda: wiki.update(name),
         'lint': lambda: wiki.lint(name),

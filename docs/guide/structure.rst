@@ -40,7 +40,7 @@ excluded from the tree entirely:
 - **Paths matching ``exclude.patterns``** — opt-in gitignore-style globs in
   ``.wiki/settings.json`` (see :doc:`/configuration`).
 
-``wiki map``, ``wiki recall``, ``wiki search``, ``wiki update``, and
+``wiki map``, ``wiki search``, ``wiki match``, ``wiki update``, and
 ``wiki lint`` all accept an optional positional argument naming a subtree
 to work on. It must be a folder, not a page:
 
@@ -94,7 +94,7 @@ Any ``[[topics/example]]`` wikilinks in prose now
 name a folder rather than a page, which ``wiki lint`` reports as an issue
 naming the ``[[topics/example/_index]]`` form to use instead (a plain rename,
 where the old name vanishes, draws a stale-link note — once per target).
-Wikilinks in prose are authored by hand, so find them (``wiki search``) and
+Wikilinks in prose are authored by hand, so find them (``wiki match``) and
 update them yourself.
 
 Do not leave a page and a folder with the same name side by side
@@ -176,7 +176,7 @@ The counts are derived state, cached in ``.wiki/cache/word_counts.json`` as
 one entry per markdown file keyed by root-relative path, each carrying the
 file's mtime, size, and word count. Counts cover the body only — everything
 below the frontmatter, including the H1 and an index's link block — matching
-the region the ``wiki read`` slice options select and ``wiki search`` scans
+the region the ``wiki read`` slice options select and ``wiki match`` scans
 (an unsliced read also returns the frontmatter).
 
 The cache maintains itself: entries whose mtime or size no longer match are

@@ -33,16 +33,16 @@ __all__ = [
     'test_exclude_lifts_nested_wiki_refusal',
     'test_scope_inside_excluded_dir_refused',
     'test_gitignored_residue_is_never_adopted',
+    'test_fenced_directory_is_invisible_to_every_check',
     'test_gitignore_fence_is_pattern_pure',
     'test_gitignore_fence_ignores_machine_local_excludes',
     'test_gitignore_fence_ignores_an_inherited_git_dir',
     'test_unavailable_fence_is_narrated_inside_a_repository',
+    'test_personally_ignored_row_draws_a_note',
     'test_gitignore_fence_reaches_a_nested_wiki_root',
     'test_ignored_wiki_root_stays_unfenced',
-    'test_gitignored_link_target_names_the_cause',
     'test_new_refuses_a_fenced_target',
-    'test_fenced_directory_is_invisible_to_every_check',
-    'test_personally_ignored_row_draws_a_note',
+    'test_gitignored_link_target_names_the_cause',
 ]
 
 # the gitignore-fence tests drive a real repository
@@ -51,7 +51,12 @@ _needs_git = pytest.mark.skipif(shutil.which('git') is None, reason='requires gi
 
 def _git_repo(path: pathlib.Path, *ignores: str) -> None:
     """Initialize a git repository at ``path`` with ``ignores`` fence lines."""
-    subprocess.run(['git', 'init', '-q', str(path)], check=True)
+    subprocess.run(
+        ['git', 'init', '-q', str(path)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
     if ignores:
         (path / '.gitignore').write_text('\n'.join(ignores) + '\n', encoding='utf-8')
 
@@ -399,7 +404,7 @@ def test_exclude_lifts_nested_wiki_refusal(tmp_path: pathlib.Path) -> None:
     assert not (tmp_path / 'vendor' / '_index.md').exists()
 
 
-@pytest.mark.parametrize('operation', ['update', 'lint', 'map', 'search'])
+@pytest.mark.parametrize('operation', ['update', 'lint', 'map', 'match'])
 def test_scope_inside_excluded_dir_refused(
     tmp_path: pathlib.Path,
     operation: str,
@@ -418,7 +423,7 @@ def test_scope_inside_excluded_dir_refused(
         'update': lambda: wiki.update('vendor/pkg'),
         'lint': lambda: wiki.lint('vendor/pkg'),
         'map': lambda: wiki.map('vendor/pkg'),
-        'search': lambda: wiki.search('x', name='vendor/pkg'),
+        'match': lambda: wiki.match('x', name='vendor/pkg'),
     }
 
     with pytest.raises(ValueError, match='excluded directory') as excinfo:
@@ -502,8 +507,9 @@ def test_fenced_directory_is_invisible_to_every_check(
     (fenced / 'base_table.log').write_text('rows\n', encoding='utf-8')
     subprocess.run(
         ['git', '-C', str(tmp_path), 'add', '-f', str(root), '.gitignore'],
-        check=True,
         capture_output=True,
+        text=True,
+        check=True,
     )
 
     # every check is silent about the fenced directory, and it stays put
@@ -530,6 +536,8 @@ def test_gitignore_fence_is_pattern_pure(tmp_path: pathlib.Path) -> None:
     junk.write_text('# t\n\nrows\n', encoding='utf-8')
     subprocess.run(
         ['git', '-C', str(tmp_path), 'add', '-f', str(junk)],
+        capture_output=True,
+        text=True,
         check=True,
     )
 
@@ -673,6 +681,8 @@ def test_personally_ignored_row_draws_a_note(
     excludes.write_text('*.draft.md\n', encoding='utf-8')
     subprocess.run(
         ['git', '-C', str(tmp_path), 'config', 'core.excludesFile', str(excludes)],
+        capture_output=True,
+        text=True,
         check=True,
     )
     (tmp_path / 'notes' / 'plan.draft.md').write_text(

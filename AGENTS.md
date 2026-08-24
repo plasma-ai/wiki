@@ -24,7 +24,7 @@ integration.
 
 `core/` decomposes into `wiki.py` (the `Wiki` engine class), `format.py`
 (functions over the on-disk page format), `event.py` (the payload-only `Event`
-base), `_obsidian.py` (the internal Obsidian integration), and `_recall.py` (the
+base), `_obsidian.py` (the internal Obsidian integration), and `_search.py` (the
 internal SQLite FTS5 index). Engine diagnostics are typed notice events: each
 kind has an `on_<kind>` hook delegating to the `on_notice` funnel, which logs
 `event.description` through the stdlib `Wiki.logger`; hosts intercept by

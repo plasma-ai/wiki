@@ -18,16 +18,15 @@ set -euo pipefail
 # REGENERATED_KEYS -- normalizing it to ours would silently discard
 # theirs' titles; the H1 rides ours' link-block layout, so a merged-in
 # title shows in the H1 only after the post-merge wiki update. On
-# add/add merges (empty
-# base) created joins the regenerated keys: both sides seed it from
-# independent wiki update runs, so the stamps are churn, not authorship.
-# A side whose frontmatter is undetectable (formatter-mangled or
-# unclosed) is treated as unchanged from base, never as a deletion of
-# the block; a side missing the *** separator entirely cannot be split
-# into regions at all, so it surfaces a whole-file conflict with a
-# repair hint. Everything below *** is manually written content, so it
-# also gets a normal three-way merge, with an in-situ hint comment
-# planted above add/add body conflicts.
+# add/add merges (empty base) created joins the regenerated keys: both
+# sides seed it from independent wiki update runs, so the stamps are
+# churn, not authorship. A side whose frontmatter is undetectable
+# (formatter-mangled or unclosed) is treated as unchanged from base,
+# never as a deletion of the block; a side missing the *** separator
+# entirely cannot be split into regions at all, so it surfaces a
+# whole-file conflict with a repair hint. Everything below *** is manually
+# written content, so it also gets a normal three-way merge, with an
+# in-situ hint comment planted above add/add body conflicts.
 #
 # Install via .gitattributes:
 #   **/_index.md merge=wiki
@@ -209,9 +208,9 @@ git merge-file --marker-size="$MARKER_SIZE" -p -L ours -L base -L theirs \
 # merge never silently drops one side's additions (the next wiki update
 # re-sorts the block and prunes whatever rows went stale)
 if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
-    # rows key on their [[target| prefix; continuation and blank lines ride
-    # with the row that precedes them, and theirs' heading/preamble (before
-    # its first row) is never collected
+    # rows key on their [[target| prefix (mirrors Python _LINK_ROW);
+    # continuation and blank lines ride with the row that precedes them,
+    # and theirs' heading/preamble (before its first row) is never collected
     awk '
         FNR == 1 { part++ }
         part == 1 {
@@ -231,7 +230,8 @@ if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
         keep { print }
     ' "$WORK/ours_links" "$WORK/theirs_links" >"$WORK/extra_links"
     # insert the extras directly above ours' closing *** (the region ends
-    # at its first ***, so the anchor is unambiguous)
+    # at its first ***, so the anchor is unambiguous); the extras path
+    # travels through the environment so awk never mangles it
     EXTRAS="$WORK/extra_links" awk '
         /^\*\*\*[[:space:]]*$/ && !done {
             while ((getline line < ENVIRON["EXTRAS"]) > 0) print line

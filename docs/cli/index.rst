@@ -45,7 +45,7 @@ run and points at ``wiki trust``. There is no silent fallback.
 Subtree scope
 ~~~~~~~~~~~~~
 
-``map``, ``recall``, ``search``, ``update``, and ``lint`` take an optional
+``map``, ``search``, ``match``, ``update``, and ``lint`` take an optional
 positional ``name`` argument restricting the operation to a subtree. The scope
 must resolve to a directory relative to the wiki root — a page name fails with
 ``Wiki folder not found: '<name>'``. A scope outside the root is refused, as
@@ -61,7 +61,7 @@ exits 2, as does invalid option usage — mutually exclusive flags, a bad
 slice/``--depth``/``--desc-limit`` value, or malformed ``--settings`` JSON,
 which prints a usage message; a closed downstream pipe exits 0 silently. Exit 1
 is left to each command's own nonzero outcome, documented in its section:
-``search`` and ``recall`` follow the grep convention (0 match, 1 no match,
+``search`` and ``match`` follow the grep convention (0 match, 1 no match,
 2 error), ``update --check`` exits 1 when changes are pending, and ``lint``
 exits 1 when issues are found — so a script gating on one can never read a
 failed run as the other.
@@ -306,73 +306,11 @@ unsliced read. Non-markdown files slice as a whole.
 
 .. code-block:: text
 
-   wiki search <pattern> [name] [--path <dir>] [-f|--field <fields>]
-               [-i|--ignore-case] [-a|--all] [--lines | --lineno]
-
-Searches wiki content with a Python regular expression. The exit code follows
-the grep convention: a match exits 0; no match prints ``No matches found.`` on
-stderr and exits 1; an error (invalid regex, no resolvable wiki, a refused
-hook) exits 2. Scripts should branch on the exit code, not parse the output.
-
-By default the search runs over page bodies — everything below the
-frontmatter, which includes the H1 and an index's generated link block — and
-the default output is the matching file paths, deduplicated, in match order.
-``--field`` switches to frontmatter search: the pattern runs against each
-named field's value (the ``key:`` prefix and YAML quotes are stripped;
-block-scalar continuation lines are included). An empty ``--field ""`` is an
-explicit empty field set that matches nothing — it does not fall back to a
-body search.
-
-.. list-table::
-   :header-rows: 1
-   :widths: 26 18 56
-
-   * - Argument / option
-     - Default
-     - Behavior
-   * - ``pattern`` (positional, required)
-     - —
-     - Python ``re`` pattern to search for.
-   * - ``name`` (positional)
-     - the whole wiki
-     - Restrict scope to a subtree (must be a folder).
-   * - ``--path``
-     - the enclosing wiki root
-     - Wiki root directory (see `Wiki root resolution`_).
-   * - ``-f``, ``--field``
-     - none (body search)
-     - Comma-separated frontmatter fields to search instead of the body.
-   * - ``-i``, ``--ignore-case``
-     - off
-     - Case-insensitive matching.
-   * - ``-a``, ``--all``
-     - off
-     - Include non-markdown files, searched whole (``--field`` never matches
-       them; undecodable files are skipped).
-   * - ``--lines``
-     - off
-     - Print ``path:lineno: line`` for each match.
-   * - ``--lineno``
-     - off
-     - Print ``path:lineno`` for each match (mutually exclusive with
-       ``--lines``).
-
-.. code-block:: console
-
-   $ wiki search -i 'parser' topics
-   topics/example.md
-   topics/parser.md
-
-``wiki recall``
----------------
-
-.. code-block:: text
-
-   wiki recall <query> [name] [--path <dir>] [--limit <n>] [--prefix]
+   wiki search <query> [name] [--path <dir>] [--limit <n>] [--prefix]
                [--tag <tag>] [--raw] [--json]
 
 Returns relevant Markdown pages from a local SQLite FTS5 index. The index lives
-at ``.wiki/cache/recall.db``, where the cache's own ``.gitignore`` keeps all
+at ``.wiki/cache/search.db``, where the cache's own ``.gitignore`` keeps all
 derived state out of commits. Every query first compares path, mtime, and size,
 then updates only added, changed, or removed pages. No explicit build command
 is required.
@@ -380,9 +318,15 @@ is required.
 Ordinary queries quote each whitespace-separated term and combine the terms
 with AND, so FTS5 operators in user text are not executed. ``--prefix`` turns
 the final term into a prefix query. ``--raw`` opts into the full FTS5 query
-grammar instead. BM25 ranks title, heading, and frontmatter-tag matches above
-body prose. Default output prints score, path, and a highlighted body snippet;
-``--json`` emits objects with ``path``, ``snippet``, and ``score`` keys.
+grammar instead. BM25 ranks title, frontmatter-desc, heading, and
+frontmatter-tag matches above body prose. Index pages are never returned:
+their generated link blocks duplicate child names and descs, which would crowd
+ranked results with navigation scaffolding. Default output prints score, path,
+and a highlighted body snippet; ``--json`` emits objects with ``path``,
+``snippet``, and ``score`` keys. The score is ordinal — higher means more
+relevant within a single result set — and is not comparable across queries or
+wikis (the text output rounds it to three decimals for display; ``--json``
+carries the full float).
 
 The exit code follows the grep convention: matches exit 0; no match prints
 ``No matches found.`` on stderr and exits 1; an invalid FTS5 query, unavailable
@@ -397,7 +341,7 @@ FTS5 support, or unresolved wiki exits 2.
      - Behavior
    * - ``query`` (positional, required)
      - —
-     - Terms to recall, or raw FTS5 syntax with ``--raw``.
+     - Terms to search, or raw FTS5 syntax with ``--raw``.
    * - ``name`` (positional)
      - the whole wiki
      - Restrict scope to a subtree (must be a folder).
@@ -422,14 +366,77 @@ FTS5 support, or unresolved wiki exits 2.
 
 .. code-block:: console
 
-   $ wiki recall 'parser architecture' topics --json
+   $ wiki search 'parser architecture' topics --json
    [
      {
        "path": "topics/parser.md",
        "snippet": "The >>parser<< follows the project >>architecture<<...",
-       "score": 2.417
+       "score": 2.4170236587524414
      }
    ]
+
+``wiki match``
+--------------
+
+.. code-block:: text
+
+   wiki match <pattern> [name] [--path <dir>] [-f|--field <fields>]
+              [-i|--ignore-case] [-a|--all] [--lines | --lineno]
+
+Matches wiki content lines against a Python regular expression. The exit code
+follows the grep convention: a match exits 0; no match prints ``No matches
+found.`` on stderr and exits 1; an error (invalid regex, no resolvable wiki, a
+refused hook) exits 2. Scripts should branch on the exit code, not parse the
+output.
+
+By default the pattern runs over page bodies — everything below the
+frontmatter, which includes the H1 and an index's generated link block — and
+the default output is the matching file paths, deduplicated, in match order.
+``--field`` switches to frontmatter matching: the pattern runs against each
+named field's value (the ``key:`` prefix and YAML quotes are stripped;
+block-scalar continuation lines are included). An empty ``--field ""`` is an
+explicit empty field set that matches nothing — it does not fall back to a
+body match.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 26 18 56
+
+   * - Argument / option
+     - Default
+     - Behavior
+   * - ``pattern`` (positional, required)
+     - —
+     - Python ``re`` pattern to match.
+   * - ``name`` (positional)
+     - the whole wiki
+     - Restrict scope to a subtree (must be a folder).
+   * - ``--path``
+     - the enclosing wiki root
+     - Wiki root directory (see `Wiki root resolution`_).
+   * - ``-f``, ``--field``
+     - none (body match)
+     - Comma-separated frontmatter fields to match instead of the body.
+   * - ``-i``, ``--ignore-case``
+     - off
+     - Case-insensitive matching.
+   * - ``-a``, ``--all``
+     - off
+     - Include non-markdown files, matched whole (``--field`` never matches
+       them; undecodable files are skipped).
+   * - ``--lines``
+     - off
+     - Print ``path:lineno: line`` for each match.
+   * - ``--lineno``
+     - off
+     - Print ``path:lineno`` for each match (mutually exclusive with
+       ``--lines``).
+
+.. code-block:: console
+
+   $ wiki match -i 'parser' topics
+   topics/example.md
+   topics/parser.md
 
 ``wiki update``
 ---------------
@@ -626,7 +633,7 @@ the declared root) join the notes too — counted in the closing summary and
 typed as ``resolver_notice`` rows in ``--json`` — beside their stderr
 prose.
 
-A ``<!-- start: no-lint -->`` … ``<!-- end: no-lint -->`` region suppresses
+A ``<!-- start: no-lint -->`` ... ``<!-- end: no-lint -->`` region suppresses
 the position-based rules (conflict markers, escaped wikilinks, wrap mangles,
 stale-link notes, directory-link issues) for the lines it wraps; a malformed
 pair is itself an issue and suppresses nothing.

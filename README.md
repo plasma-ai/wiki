@@ -83,7 +83,7 @@ their work in project-specific knowledge.
 Every wiki root carries a `.wiki/` directory — the tool's namespace, holding
 `settings.json` (the file that declares the root; `wiki init` writes it and
 `wiki update` restores a missing one), the derived word counts and ranked
-full-text recall caches, and the staged Obsidian config. Page, folder, and wiki
+full-text search caches, and the staged Obsidian config. Page, folder, and wiki
 names are lenient by default: spaces, dashes, mixed case, and unicode are all
 fine. Only characters that would break the wiki's structure — its path, link,
 and index syntax — are rejected, along with leading dots (hidden files) and the
@@ -120,12 +120,12 @@ truncation — while `wiki map --stat` sizes the dump (lines, chars, words)
 without printing it. The map's indent unit and truncation marker are
 configurable via `map.indent` and `map.ellipsis` in `.wiki/settings.json`.
 
-Ranked recall uses the same self-ignored cache directory. `wiki recall` builds
+Ranked search uses the same self-ignored cache directory. `wiki search` builds
 an SQLite FTS5 index on first use and refreshes added, changed, and removed
-Markdown pages before each query. BM25 ranking weights titles, headings, and
-frontmatter tags above body prose; the default query form safely combines terms
-with AND, while `--prefix`, `--tag`, `--raw`, and `--json` cover agent
-workflows.
+Markdown pages before each query. BM25 ranking weights titles, descriptions,
+headings, and frontmatter tags above body prose; the default query form safely
+combines terms with AND, while `--prefix`, `--tag`, `--raw`, and `--json` cover
+agent workflows.
 
 ### CLI
 
@@ -156,6 +156,7 @@ Maintain indexes as files are added and removed:
 
 - `wiki lint` — validate structure and flag issues
 - `wiki update` — sync index links with the filesystem
+- `wiki new` — create an indexed folder with an authored desc and content
 
 `wiki lint` exits 1 on issues and 0 on a clean wiki (soft notes go to stderr and
 never affect the exit code — a stale wikilink in prose is a note, while a broken
@@ -168,8 +169,8 @@ the positional rules, notes included, for just that span.
 Browse structure, search across content, and read entries:
 
 - `wiki map` — print an indented tree overview
-- `wiki recall` — rank relevant pages with SQLite FTS5
-- `wiki search` — search content with regex
+- `wiki search` — rank relevant pages with SQLite FTS5
+- `wiki match` — match content with regex
 - `wiki read` — read a named entry
 
 Commands other than `init` operate on the enclosing wiki when run from inside
@@ -177,8 +178,8 @@ one (the root is the ancestor declaring itself with `.wiki/settings.json`; an
 undeclared index tree resolves to its outermost `_index.md`, unless the tree
 encloses a declared root — then resolution refuses and directs you to that
 root), or else on the `wiki/` folder under the current directory; pass `--path`
-to target another wiki. `map`, `recall`, `search`, `update`, and `lint` accept
-an optional name argument to restrict scope to a subtree. Run `wiki --help` and
+to target another wiki. `map`, `search`, `match`, `update`, and `lint` accept an
+optional name argument to restrict scope to a subtree. Run `wiki --help` and
 `wiki <command> --help` for full option descriptions.
 
 ### Formatters

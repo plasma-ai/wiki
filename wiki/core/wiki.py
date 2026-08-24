@@ -30,7 +30,7 @@ from wiki.constants import (
 )
 from wiki.typing import Link, PathLike
 
-from . import _obsidian, _recall, format
+from . import _obsidian, _search, format
 from .event import Event
 
 __all__ = ['Wiki']
@@ -71,8 +71,8 @@ class Wiki:
     """Base class for structured wikis.
 
     Provides ``init``, ``update_config``, ``read``, ``search``,
-    ``update``, ``new``, ``lint``, and ``map`` operations for a
-    folder-based wiki with ``_index.md`` files.
+    ``match``, ``update``, ``new``, ``lint``, and ``map`` operations
+    for a folder-based wiki with ``_index.md`` files.
 
     Instances are one-shot: policy (settings, naming, timestamps) and
     the root display name are cached per instance, so hosted embedders
@@ -468,17 +468,18 @@ class Wiki:
         """
         payload = b'\0'.join(os.fsencode(entry) for entry in candidates) + b'\0'
         env = _git_env()
+        cmd = [
+            'git',
+            '-c',
+            f'core.excludesFile={os.devnull}',
+            'check-ignore',
+            '-z',
+            '--stdin',
+            '--no-index',
+        ]
         try:
             result = subprocess.run(
-                [
-                    'git',
-                    '-c',
-                    f'core.excludesFile={os.devnull}',
-                    'check-ignore',
-                    '-z',
-                    '--stdin',
-                    '--no-index',
-                ],
+                cmd,
                 cwd=self._root,
                 input=payload,
                 capture_output=True,
@@ -1721,6 +1722,59 @@ class Wiki:
 
     def search(
         self: Wiki,
+        query: str,
+        *,
+        name: Optional[str] = None,
+        limit: int = 10,
+        prefix: bool = False,
+        tag: str = '',
+        raw: bool = False,
+    ) -> list[tuple[str, str, float]]:
+        """Return ranked full-text matches from an incremental FTS5 index.
+
+        The derived index lives under ``.wiki/cache`` and refreshes changed,
+        added, and removed Markdown pages before each query. Title,
+        frontmatter desc, headings, and frontmatter tags receive more BM25
+        weight than body prose. Index pages are never returned -- their link
+        blocks duplicate child names and descs. The score is ordinal:
+        comparable within a single result set, never across queries or wikis.
+
+        Args:
+            query: Search terms, or an FTS5 expression when ``raw`` is set.
+            name: Restrict scope to a named subtree. ``None`` means the whole
+                wiki.
+            limit: Maximum number of matching pages.
+            prefix: Treat the final safe-query term as a prefix.
+            tag: Require this frontmatter tag token.
+            raw: Pass ``query`` through as FTS5 syntax.
+
+        Returns:
+            ``(relative_path, snippet, score)`` tuples ordered by relevance.
+
+        """
+        # resolve folder
+        if name:
+            folder = self._resolve_folder(name)
+        else:
+            folder = self._root
+        # index pages are navigation scaffolding whose link blocks duplicate
+        # child names and descs, so they stay out of the ranked corpus
+        files = [
+            path for path in self._search_files(self._root) if path.name != WIKI_INDEX
+        ]
+        return _search.search(
+            root=self._root,
+            files=files,
+            query=query,
+            folder=folder,
+            limit=limit,
+            prefix=prefix,
+            tag=tag,
+            raw=raw,
+        )
+
+    def match(
+        self: Wiki,
         pattern: str,
         *,
         name: Optional[str] = None,
@@ -1728,10 +1782,10 @@ class Wiki:
         ignore_case: bool = False,
         all_files: bool = False,
     ) -> list[tuple[str, int, str]]:
-        """Search wiki content for a regex pattern.
+        """Match wiki content lines against a regex pattern.
 
-        By default searches body content of wiki-tracked
-        markdown files. Use ``field`` to search specific
+        By default matches body content of wiki-tracked
+        markdown files. Use ``field`` to match specific
         frontmatter fields instead. Use ``all_files`` to
         include non-markdown files.
 
@@ -1740,13 +1794,13 @@ class Wiki:
             name: Restrict scope to named subtree (relative
                 path). ``None`` means the entire wiki.
             field: Comma-separated frontmatter field names to
-                search (e.g. ``'tags'``, ``'desc,name'``). When
-                ``None``, searches body content only. Patterns match
+                match (e.g. ``'tags'``, ``'desc,name'``). When
+                ``None``, matches body content only. Patterns match
                 each field's value (block-scalar continuation lines
                 included), never the ``key:`` prefix.
             ignore_case: Use case-insensitive matching.
             all_files: Include non-markdown files in the
-                search. Non-markdown files are searched whole
+                match. Non-markdown files are matched whole
                 (frontmatter is a markdown concept), so ``field``
                 mode never matches them.
 
@@ -1819,51 +1873,6 @@ class Wiki:
                     if regex.search(line):
                         result.append((relpath, lineno, line))
         return result
-
-    def recall(
-        self: Wiki,
-        query: str,
-        *,
-        name: Optional[str] = None,
-        limit: int = 10,
-        prefix: bool = False,
-        tag: str = '',
-        raw: bool = False,
-    ) -> list[tuple[str, str, float]]:
-        """Return ranked full-text matches from an incremental FTS5 index.
-
-        The derived index lives under ``.wiki/cache`` and refreshes changed,
-        added, and removed Markdown pages before each query. Title, headings,
-        and frontmatter tags receive more BM25 weight than body prose.
-
-        Args:
-            query: Search terms, or an FTS5 expression when ``raw`` is set.
-            name: Restrict scope to a named subtree. ``None`` means the whole
-                wiki.
-            limit: Maximum number of matching pages.
-            prefix: Treat the final safe-query term as a prefix.
-            tag: Require this frontmatter tag token.
-            raw: Pass ``query`` through as FTS5 syntax.
-
-        Returns:
-            ``(relative_path, snippet, score)`` tuples ordered by relevance.
-
-        """
-        if name:
-            folder = self._resolve_folder(name)
-        else:
-            folder = self._root
-        files = self._search_files(self._root)
-        return _recall.recall(
-            self._root,
-            files,
-            query,
-            folder=folder,
-            limit=limit,
-            prefix=prefix,
-            tag=tag,
-            raw=raw,
-        )
 
     def map(
         self: Wiki,
@@ -2499,8 +2508,8 @@ class Wiki:
         ``.wiki/``, a write sweep would run on defaults and index
         ``_config/`` as content -- and a dry run (``update --check``,
         ``lint``) would preview that same sweep, so every sweep-planning
-        path refuses alike. Read paths (``read``, ``search``, ``map``)
-        stay tolerant.
+        path refuses alike. Read paths (``read``, ``search``, ``match``,
+        ``map``) stay tolerant.
 
         Raises:
             ValueError: If a root ``_config/settings.json`` exists.
@@ -3778,7 +3787,7 @@ class Wiki:
         expected = self._build_expected_links(folder)
         # drop links for filesystem entries whose stem/name fails the naming
         # policy (a denied char like '|' yields a malformed [[a|b|a|b]] link that
-        # grows the index every run); skip them and warn once, like search skips
+        # grows the index every run); skip them and warn once, like match skips
         # an undecodable file rather than aborting the whole run
         relpath = path.relative_to(self._root)
         notices = []
@@ -4694,7 +4703,7 @@ class Issue(str):
     #: per-kind payload fields; ``path`` is always present
     fields: dict[str, Any]
 
-    def __new__(cls, text: str, *, kind: str, **fields: Any) -> Issue:
+    def __new__(cls: type[Issue], text: str, *, kind: str, **fields: Any) -> Issue:
         """Bind ``kind`` and the payload ``fields`` onto the prose line."""
         result = super().__new__(cls, text)
         result.kind = kind
@@ -4849,7 +4858,7 @@ class GitFenceUnavailableEvent(Event):
 
 
 class UntrackablePathEvent(Event):
-    """Emitted when an indexed path the caller's git refuses to track."""
+    """Emitted when the caller's git refuses to track an indexed path."""
 
     path: str
     source: str
@@ -5026,8 +5035,8 @@ _NOTICE_HOOKS = {
     ExcludeSkipEvent: 'on_exclude_skip',
     GitignoreSkipEvent: 'on_gitignore_skip',
     GitFenceUnavailableEvent: 'on_git_fence_unavailable',
-    MergeDriverUnconfiguredEvent: 'on_merge_driver_unconfigured',
     UntrackablePathEvent: 'on_untrackable_path',
+    MergeDriverUnconfiguredEvent: 'on_merge_driver_unconfigured',
     WriteSkipEvent: 'on_write_skip',
     FrontmatterMalformedEvent: 'on_frontmatter_malformed',
     IndexTruncatedEvent: 'on_index_truncated',

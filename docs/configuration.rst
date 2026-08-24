@@ -205,7 +205,7 @@ Presentation defaults for ``wiki map``.
 Excludes paths from indexing entirely. An excluded subtree is invisible to
 every walk: ``wiki update`` never scaffolds indexes, adopts pages, or
 rewrites anything inside it, ``wiki lint`` checks nothing there, ``wiki
-map`` and ``wiki search`` never enumerate it (``--all`` included), and its
+map`` and ``wiki match`` never enumerate it (``--all`` included), and its
 word counts drop from the cache. ``wiki read`` stays permissive — exclusion
 is indexing policy, not access control, and ``wiki read`` is how one
 inspects deliberately unindexed content (dot-paths read the same way).
@@ -260,7 +260,7 @@ the prune notice; until then ``wiki lint`` reports the row as a hard issue
 naming the pattern. Prose
 wikilinks into excluded-but-present files stay live — the generated index
 link block is the hard surface, body prose is not. Scoping ``update``,
-``lint``, ``map``, ``recall``, or ``search`` at or under an excluded
+``lint``, ``map``, ``search``, or ``match`` at or under an excluded
 directory is refused with an error naming the pattern.
 
 Any ``_index.md`` files already inside an excluded subtree become inert
@@ -387,5 +387,5 @@ A wiki whose settings live at the legacy ``_config/settings.json`` location
 makes every sweep-planning command (``init``, ``update``,
 ``update --check``, ``lint``, ``config``) refuse with a migration message:
 move ``_config/`` to ``.wiki/``, run ``wiki config``, then ``wiki update``.
-Read paths (``read``, ``search``, ``map``) keep working in the meantime — a
-half-working wiki is the migration signature.
+Read paths (``read``, ``search``, ``match``, ``map``) keep working in the
+meantime — a half-working wiki is the migration signature.

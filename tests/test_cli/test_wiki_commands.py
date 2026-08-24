@@ -3,7 +3,7 @@
 Drives the real ``wiki`` console script as a subprocess against a throwaway
 wiki built with two folders (``core``, ``guides``) and a handful of pages.
 The suite covers every sub-command -- init, install, update, new, lint,
-map, search, read, config, trust, and the hidden ``_merge`` driver --
+map, search, match, read, config, trust, and the hidden ``_merge`` driver --
 plus ``--version``, exercising option behavior, exit codes, and error
 reporting as observable output rather than internal state.
 """
@@ -24,8 +24,8 @@ from .conftest import GIT, WIKI, _git, _wiki
 
 __all__ = [
     'test_command_errors_exit_two',
-    'test_update_check_separates_pending_from_error',
     'test_untrusted_hook_refusal_exits_two',
+    'test_update_check_separates_pending_from_error',
     'test_init_creates_root_index',
     'test_init_guards_existing_wiki',
     'test_init_seeds_settings',
@@ -61,23 +61,23 @@ __all__ = [
     'test_lint_reports_issue_taxonomy_and_exits_nonzero',
     'test_lint_summary_counts_notes',
     'test_lint_json_reports_typed_findings',
-    'test_lint_error_exits_two',
     'test_lint_types_resolver_diagnostics',
+    'test_lint_error_exits_two',
     'test_lint_details_issues_and_count_condenses',
     'test_map_respects_view_options',
     'test_map_filters_by_category',
     'test_map_empty_wiki_reports_empty',
     'test_map_stat_and_desc_limit_bounds',
-    'test_search_output_modes',
-    'test_search_field_and_ignore_case',
-    'test_search_all_includes_non_markdown',
-    'test_search_no_match_exits_nonzero',
-    'test_search_line_flags_are_mutually_exclusive',
-    'test_search_invalid_regex_reports_error',
-    'test_search_resolution_failure_exits_two',
-    'test_search_all_skips_undecodable_files',
-    'test_recall_ranked_and_json_output',
-    'test_recall_exit_codes',
+    'test_match_output_modes',
+    'test_match_field_and_ignore_case',
+    'test_match_all_includes_non_markdown',
+    'test_match_no_match_exits_nonzero',
+    'test_match_line_flags_are_mutually_exclusive',
+    'test_match_invalid_regex_reports_error',
+    'test_match_resolution_failure_exits_two',
+    'test_match_all_skips_undecodable_files',
+    'test_search_ranked_and_json_output',
+    'test_search_exit_codes',
     'test_read_slice_forms',
     'test_read_resolves_dotted_page_name',
     'test_read_errors',
@@ -153,17 +153,17 @@ def wiki(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
 
 
 @pytest.mark.parametrize(
-    'args',
-    [
+    argnames='args',
+    argvalues=[
         ('update',),
         ('update', '--check'),
         ('lint',),
         ('map',),
-        ('search', 'widget'),
+        ('match', 'widget'),
         ('read', 'design'),
         ('new', 'orphan', '--desc', 'A folder.', '--content', 'Body.'),
     ],
-    ids=lambda args: args[0],
+    ids=['update', 'update-check', 'lint', 'map', 'match', 'read', 'new'],
 )
 def test_command_errors_exit_two(tmp_path: pathlib.Path, args: tuple[str, ...]) -> None:
     """An unresolvable wiki is exit 2 in every command, never exit 1.
@@ -181,7 +181,7 @@ def test_untrusted_hook_refusal_exits_two(tmp_path: pathlib.Path) -> None:
     """The untrusted-hook refusal is exit 2 in every command alike.
 
     The refusal is a command error, not any command's own nonzero
-    outcome, so `lint`'s issues-found exit and `update --check`'s
+    outcome, so ``lint``'s issues-found exit and ``update --check``'s
     pending exit stay unmistakable beside it -- no command reads a
     refused hook as its own result.
     """
@@ -736,11 +736,11 @@ def test_read_only_commands_are_deterministic(wiki: pathlib.Path) -> None:
         (['update'], 0),
         (['lint'], 0),
         (['map'], 0),
-        # search's grep triple: the probe word appears nowhere, so the
+        # match's grep triple: the probe word appears nowhere, so the
         # resolved run lands on the clean no-match leg
-        (['search', 'widget'], 1),
+        (['match', 'widget'], 1),
     ],
-    ids=['update', 'lint', 'map', 'search'],
+    ids=['update', 'lint', 'map', 'match'],
 )
 def test_path_inside_wiki_resolves_upward(
     tmp_path: pathlib.Path,
@@ -1406,34 +1406,34 @@ def test_map_stat_and_desc_limit_bounds(wiki: pathlib.Path) -> None:
     assert '-1' in below.stdout + below.stderr
 
 
-# ------ search
+# ------ match
 
 
-def test_search_output_modes(wiki: pathlib.Path) -> None:
-    """A search prints unique paths by default, and line detail on request."""
+def test_match_output_modes(wiki: pathlib.Path) -> None:
+    """A match prints unique paths by default, and line detail on request."""
     # default mode lists each matching file once
-    paths = _wiki(wiki, 'search', 'widget', '--path', str(wiki))
+    paths = _wiki(wiki, 'match', 'widget', '--path', str(wiki))
     assert paths.returncode == 0, paths.stdout + paths.stderr
     assert 'core/design.md' in paths.stdout
     assert ':' not in paths.stdout.replace('.md', '').replace('.txt', '')
     # --lines includes line numbers and the matching text
-    lines = _wiki(wiki, 'search', 'widget', '--path', str(wiki), '--lines')
+    lines = _wiki(wiki, 'match', 'widget', '--path', str(wiki), '--lines')
     assert lines.returncode == 0, lines.stdout + lines.stderr
     assert 'core/design.md:' in lines.stdout
     assert 'subsystem' in lines.stdout
     # --lineno includes line numbers but not the line text
-    lineno = _wiki(wiki, 'search', 'widget', '--path', str(wiki), '--lineno')
+    lineno = _wiki(wiki, 'match', 'widget', '--path', str(wiki), '--lineno')
     assert lineno.returncode == 0, lineno.stdout + lineno.stderr
     assert 'core/design.md:' in lineno.stdout
     assert 'subsystem' not in lineno.stdout
 
 
-def test_search_field_and_ignore_case(wiki: pathlib.Path) -> None:
-    """A search can target a frontmatter field and match case-insensitively."""
+def test_match_field_and_ignore_case(wiki: pathlib.Path) -> None:
+    """A match can target a frontmatter field and match case-insensitively."""
     # a body-content search for 'design' should not match the frontmatter desc
     field = _wiki(
         wiki,
-        'search',
+        'match',
         'design',
         '--path',
         str(wiki),
@@ -1446,7 +1446,7 @@ def test_search_field_and_ignore_case(wiki: pathlib.Path) -> None:
     # case-insensitive matching finds the lowercase body term from an upper query
     insensitive = _wiki(
         wiki,
-        'search',
+        'match',
         'WIDGET',
         '--path',
         str(wiki),
@@ -1455,39 +1455,39 @@ def test_search_field_and_ignore_case(wiki: pathlib.Path) -> None:
     assert insensitive.returncode == 0, insensitive.stdout + insensitive.stderr
     assert 'core/design.md' in insensitive.stdout
     # without the flag the uppercase query misses the lowercase body
-    sensitive = _wiki(wiki, 'search', 'WIDGET', '--path', str(wiki))
+    sensitive = _wiki(wiki, 'match', 'WIDGET', '--path', str(wiki))
     assert sensitive.returncode == 1
     assert 'No matches' in sensitive.stderr
 
 
-def test_search_all_includes_non_markdown(wiki: pathlib.Path) -> None:
-    """--all widens the search to non-markdown files in the tree."""
-    without = _wiki(wiki, 'search', 'widget', '--path', str(wiki))
-    with_all = _wiki(wiki, 'search', 'widget', '--path', str(wiki), '--all')
+def test_match_all_includes_non_markdown(wiki: pathlib.Path) -> None:
+    """--all widens the match to non-markdown files in the tree."""
+    without = _wiki(wiki, 'match', 'widget', '--path', str(wiki))
+    with_all = _wiki(wiki, 'match', 'widget', '--path', str(wiki), '--all')
     assert without.returncode == 0, without.stdout + without.stderr
     assert with_all.returncode == 0, with_all.stdout + with_all.stderr
     assert 'snippet.txt' not in without.stdout
     assert 'snippet.txt' in with_all.stdout
 
 
-def test_search_no_match_exits_nonzero(wiki: pathlib.Path) -> None:
+def test_match_no_match_exits_nonzero(wiki: pathlib.Path) -> None:
     """A pattern with no hits exits 1 with the notice on stderr.
 
     The grep convention: scripts distinguish no-match from match by exit
     code, and stdout stays reserved for matches so a page named
     'No matches found.' can never be mistaken for the notice.
     """
-    result = _wiki(wiki, 'search', 'zzz_no_such_token', '--path', str(wiki))
+    result = _wiki(wiki, 'match', 'zzz_no_such_token', '--path', str(wiki))
     assert result.returncode == 1
     assert 'No matches' in result.stderr
     assert result.stdout == ''
 
 
-def test_search_line_flags_are_mutually_exclusive(wiki: pathlib.Path) -> None:
+def test_match_line_flags_are_mutually_exclusive(wiki: pathlib.Path) -> None:
     """--lines and --lineno cannot be combined (usage error, exit 2)."""
     result = _wiki(
         wiki,
-        'search',
+        'match',
         'widget',
         '--path',
         str(wiki),
@@ -1498,40 +1498,40 @@ def test_search_line_flags_are_mutually_exclusive(wiki: pathlib.Path) -> None:
     assert 'mutually exclusive' in (result.stdout + result.stderr).lower()
 
 
-def test_search_invalid_regex_reports_error(wiki: pathlib.Path) -> None:
+def test_match_invalid_regex_reports_error(wiki: pathlib.Path) -> None:
     """A malformed regex is an error (exit 2), distinct from a clean no-match.
 
     Grep reserves exit 2 for errors so a script following the documented
-    branch-on-exit-code contract never reads a failed search (bad regex, no
+    branch-on-exit-code contract never reads a failed match (bad regex, no
     wiki) as an absent term (exit 1).
     """
-    result = _wiki(wiki, 'search', '[', '--path', str(wiki))
+    result = _wiki(wiki, 'match', '[', '--path', str(wiki))
     assert result.returncode == 2
     assert 'error' in (result.stdout + result.stderr).lower()
 
 
-def test_search_resolution_failure_exits_two(
+def test_match_resolution_failure_exits_two(
     tmp_path: pathlib.Path,
     wiki: pathlib.Path,
 ) -> None:
-    """A search that cannot resolve its wiki or subtree is an error (exit 2).
+    """A match that cannot resolve its wiki or subtree is an error (exit 2).
 
     A wiki-less cwd, a missing/out-of-root/excluded subtree argument, and
-    an untrusted or broken hook are failed searches, not absent terms;
+    an untrusted or broken hook are failed matches, not absent terms;
     exit 1 stays reserved for a clean no-match so the branch-on-exit-code
     contract holds.
     """
-    no_wiki = _wiki(tmp_path, 'search', 'widget')
+    no_wiki = _wiki(tmp_path, 'match', 'widget')
     assert no_wiki.returncode == 2
     assert 'Error:' in no_wiki.stderr
-    missing = _wiki(wiki, 'search', 'widget', 'no_such_subtree', '--path', str(wiki))
+    missing = _wiki(wiki, 'match', 'widget', 'no_such_subtree', '--path', str(wiki))
     assert missing.returncode == 2
     assert 'Error:' in missing.stderr
     # a subtree escaping the root or naming an excluded dot directory
-    outside = _wiki(wiki, 'search', 'widget', '../..', '--path', str(wiki))
+    outside = _wiki(wiki, 'match', 'widget', '../..', '--path', str(wiki))
     assert outside.returncode == 2
     assert 'Error:' in outside.stderr
-    excluded = _wiki(wiki, 'search', 'widget', '.wiki', '--path', str(wiki))
+    excluded = _wiki(wiki, 'match', 'widget', '.wiki', '--path', str(wiki))
     assert excluded.returncode == 2
     assert 'Error:' in excluded.stderr
     # an untrusted .wiki/wiki.py hook is refused, not read as an absent
@@ -1542,42 +1542,44 @@ def test_search_resolution_failure_exits_two(
         'import nonexistent_module\n',
         encoding='utf-8',
     )
-    untrusted = _wiki(hooked, 'search', 'widget', '--path', str(hooked))
+    untrusted = _wiki(hooked, 'match', 'widget', '--path', str(hooked))
     assert untrusted.returncode == 2
     assert 'wiki trust' in untrusted.stderr
     # trusting the root executes the hook; its failure to load is the
     # error leg too, not a no-match
     assert _wiki(hooked, 'trust', '--path', str(hooked)).returncode == 0
-    broken = _wiki(hooked, 'search', 'widget', '--path', str(hooked))
+    broken = _wiki(hooked, 'match', 'widget', '--path', str(hooked))
     assert broken.returncode == 2
     assert 'Failed to load' in broken.stderr
 
 
-def test_search_all_skips_undecodable_files(wiki: pathlib.Path) -> None:
-    """``search --all`` skips a non-UTF-8 file instead of crashing the whole run."""
+def test_match_all_skips_undecodable_files(wiki: pathlib.Path) -> None:
+    """``match --all`` skips a non-UTF-8 file instead of crashing the whole run."""
     binary = wiki / 'diagram.png'
     binary.write_bytes(b'\x89PNG\r\n\x1a\n\xff\xfe\x00\x01')
     try:
-        result = _wiki(wiki, 'search', 'widget', '--path', str(wiki), '--all')
+        result = _wiki(wiki, 'match', 'widget', '--path', str(wiki), '--all')
         assert result.returncode == 0, result.stdout + result.stderr
         assert 'snippet.txt' in result.stdout
     finally:
         binary.unlink()
 
 
-# ------ recall
+# ------ search
 
 
-def test_recall_ranked_and_json_output(wiki: pathlib.Path) -> None:
-    """Recall returns ranked snippets and structured output for agents."""
-    rendered = _wiki(wiki, 'recall', 'widget', '--path', str(wiki))
+def test_search_ranked_and_json_output(wiki: pathlib.Path) -> None:
+    """Search returns ranked snippets and structured output for agents."""
+    # the rendered mode lists ranked snippets
+    rendered = _wiki(wiki, 'search', 'widget', '--path', str(wiki))
     assert rendered.returncode == 0, rendered.stdout + rendered.stderr
     assert 'core/design.md' in rendered.stdout
     assert '>>widget<<' in rendered.stdout
 
+    # --json emits the typed rows
     structured = _wiki(
         wiki,
-        'recall',
+        'search',
         'widg',
         '--prefix',
         '--json',
@@ -1588,22 +1590,31 @@ def test_recall_ranked_and_json_output(wiki: pathlib.Path) -> None:
     results = json.loads(structured.stdout)
     assert results[0]['path'] == 'core/design.md'
     assert set(results[0]) == {'path', 'snippet', 'score'}
+    # the raw BM25 float rides through JSON; only the text renderer rounds
+    text_mode = _wiki(wiki, 'search', 'widg', '--prefix', '--path', str(wiki))
+    assert text_mode.returncode == 0, text_mode.stdout + text_mode.stderr
+    score = results[0]['score']
+    rendered_score = text_mode.stdout.split()[0]
+    assert rendered_score == f'{score:.3f}'
 
 
-def test_recall_exit_codes(wiki: pathlib.Path) -> None:
-    """Recall distinguishes a clean miss from invalid FTS input."""
-    missing = _wiki(wiki, 'recall', 'zzz_no_such_token', '--path', str(wiki))
+def test_search_exit_codes(wiki: pathlib.Path) -> None:
+    """Search distinguishes a clean miss from invalid FTS input."""
+    # a clean miss exits 1 with the notice on stderr
+    missing = _wiki(wiki, 'search', 'zzz_no_such_token', '--path', str(wiki))
     assert missing.returncode == 1
     assert 'No matches' in missing.stderr
     assert missing.stdout == ''
 
-    invalid = _wiki(wiki, 'recall', '[', '--raw', '--path', str(wiki))
+    # invalid raw FTS input is an error, not a no-match
+    invalid = _wiki(wiki, 'search', '[', '--raw', '--path', str(wiki))
     assert invalid.returncode == 2
     assert 'Error:' in invalid.stderr
 
+    # --prefix and --raw are mutually exclusive
     conflict = _wiki(
         wiki,
-        'recall',
+        'search',
         'widget',
         '--prefix',
         '--raw',
@@ -1614,9 +1625,10 @@ def test_recall_exit_codes(wiki: pathlib.Path) -> None:
     assert 'Usage:' in (conflict.stdout + conflict.stderr)
     assert 'mutually exclusive' in (conflict.stdout + conflict.stderr).lower()
 
+    # --limit rejects values below 1
     invalid_limit = _wiki(
         wiki,
-        'recall',
+        'search',
         'widget',
         '--limit',
         '0',
@@ -1754,11 +1766,11 @@ def test_read_slice_short_aliases(
 @pytest.mark.parametrize(
     argnames='args',
     argvalues=[
-        ['search', 'widget', '-l'],
-        ['search', 'widget', '-n'],
+        ['match', 'widget', '-l'],
+        ['match', 'widget', '-n'],
         ['map', '-c', 'guides'],
     ],
-    ids=['search-lines', 'search-lineno', 'map-category'],
+    ids=['match-lines', 'match-lineno', 'map-category'],
 )
 def test_colliding_short_flags_are_rejected(
     wiki: pathlib.Path,
@@ -1767,7 +1779,7 @@ def test_colliding_short_flags_are_rejected(
     """Colliding short flags do not exist; only the long options do.
 
     Every short alias is unique across the entire CLI (read: l/w/c;
-    search: f/i/a), so search's ``-l``/``-n`` and map's ``-c`` -- whose
+    match: f/i/a), so match's ``-l``/``-n`` and map's ``-c`` -- whose
     letters belong to read -- exist only as long options.
     """
     result = _wiki(wiki, *args, '--path', str(wiki))

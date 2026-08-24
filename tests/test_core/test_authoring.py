@@ -3,7 +3,7 @@
 A single flagship test walks the real authoring path an agent follows --
 ``init`` a wiki, author a titled page inside a subfolder, ``update`` to
 generate links and frontmatter, ``lint`` the authored subtree, ``read``
-a word slice, and ``search`` a frontmatter field -- exercising the core
+a word slice, and ``match`` a frontmatter field -- exercising the core
 operations together rather than in isolation. The ``new`` generator's
 authored-inputs contract lives beside it.
 
@@ -22,7 +22,7 @@ from wiki.core.wiki import Wiki
 from ._helpers import _make_wiki, _set_exclude_patterns
 
 __all__ = [
-    'test_authoring_workflow_init_update_lint_read_search',
+    'test_authoring_workflow_init_update_lint_read_match',
     'test_fresh_wiki_lints_clean',
     'test_update_path_joins_title',
     'test_new_generates_a_converged_index',
@@ -36,15 +36,15 @@ __all__ = [
 # ------ flagship authoring workflow
 
 
-def test_authoring_workflow_init_update_lint_read_search(
+def test_authoring_workflow_init_update_lint_read_match(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Init, author, update, lint, read --words, and search round-trip.
+    """Init, author, update, lint, read --words, and match round-trip.
 
     Drives the whole authoring path an agent uses and checks the
     observable result of each stage: update reports the authored files,
     the authored subtree lints clean, a word slice preserves frontmatter
-    while slicing the body, and a field search finds the authored desc.
+    while slicing the body, and a field match finds the authored desc.
     """
     root = tmp_path / 'wiki'
     wiki = Wiki(root)
@@ -73,8 +73,8 @@ def test_authoring_workflow_init_update_lint_read_search(
     assert 'Welcome' in sliced
     assert 'bootstrap' not in sliced
 
-    # search a frontmatter field finds the authored description
-    matches = wiki.search('teammate', field='desc')
+    # match a frontmatter field finds the authored description
+    matches = wiki.match('teammate', field='desc')
     assert [relpath for relpath, _lineno, _line in matches] == ['guides/Onboarding.md']
 
 

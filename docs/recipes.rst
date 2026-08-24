@@ -212,7 +212,7 @@ them by hand:
 
 .. code-block:: console
 
-   $ wiki search '\[\[topics/example' --lines
+   $ wiki match '\[\[topics/example' --lines
    notes/related.md:10: See [[topics/example]] for the walkthrough.
 
 Any you miss show up as ``Stale link [[topics/example]]`` notes the next time
@@ -345,14 +345,14 @@ in (update pending) does not appear, and an unindexed folder shows
 Search content and frontmatter
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``wiki search`` runs a Python regex over page bodies (frontmatter excluded; the
+``wiki match`` runs a Python regex over page bodies (frontmatter excluded; the
 H1 and an index's link block count as body). Default output is matching file
 paths; ``--lines`` shows ``path:lineno: line`` and ``--lineno`` just
 ``path:lineno``:
 
 .. code-block:: console
 
-   $ wiki search 'parser' topics --lines -i
+   $ wiki match 'parser' topics --lines -i
    topics/sample.md:10: The parser accepts one production per line.
 
 Scope with a folder name argument, add ``-i`` for case-insensitive matching,
@@ -361,25 +361,25 @@ the *values* of named frontmatter fields instead of the body:
 
 .. code-block:: console
 
-   $ wiki search -f desc,tags 'draft'
+   $ wiki match -f desc,tags 'draft'
    topics/sample.md
 
-Search follows the grep convention — a match exits 0, no match prints ``No
+Match follows the grep convention — a match exits 0, no match prints ``No
 matches found.`` on stderr and exits 1, and an error (bad regex, no resolvable
 wiki) exits 2 — so scripts branch on the exit code rather than parse output.
 
-Use ranked recall when relevance matters more than exact matching lines. The
+Use ranked search when relevance matters more than exact matching lines. The
 first call builds a self-ignored SQLite FTS5 index; later calls incrementally
 refresh changed, added, and removed Markdown pages before querying it:
 
 .. code-block:: console
 
-   $ wiki recall 'parser architecture' topics --json
+   $ wiki search 'parser architecture' topics --json
    [
      {
        "path": "topics/parser.md",
        "snippet": "The >>parser<< follows the project >>architecture<<...",
-       "score": 2.417
+       "score": 2.4170236587524414
      }
    ]
 
