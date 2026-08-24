@@ -7,6 +7,8 @@ may include breaking changes, each listed under a Breaking heading.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-24
+
 ### Breaking
 
 - `wiki search` is now ranked full-text retrieval; the regex line search
@@ -328,4 +330,5 @@ Initial release.
 [1.0.0]: https://github.com/plasma-ai/wiki/compare/v0.1.0...v1.0.0
 [1.1.0]: https://github.com/plasma-ai/wiki/compare/v1.0.0...v1.1.0
 [1.2.0]: https://github.com/plasma-ai/wiki/compare/v1.1.0...v1.2.0
-[unreleased]: https://github.com/plasma-ai/wiki/compare/v1.2.0...HEAD
+[1.3.0]: https://github.com/plasma-ai/wiki/compare/v1.2.0...v1.3.0
+[unreleased]: https://github.com/plasma-ai/wiki/compare/v1.3.0...HEAD
