@@ -7,6 +7,23 @@ may include breaking changes, each listed under a Breaking heading.
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-08-25
+
+### Fixed
+
+- A read-only search index heals like a corrupt one: a fault in the
+  `SQLITE_READONLY` family — a read-only `search.db`, or the stale read-only WAL
+  companion a permission fault leaves behind — discards and rebuilds the derived
+  index, so `wiki search` recovers once the cause is gone instead of failing on
+  every later query. A read-only cache directory stays a single clean error.
+- Duplicate terms in a `wiki search` query collapse before matching, so a
+  repeated word no longer inflates query cost quadratically. Results are
+  unchanged — with `--prefix`, the final term still keeps its exact twin.
+- `wiki update`, `lint`, `search`, `match`, and `map` tolerate pages and folders
+  deleted while a run is in flight: a path that vanishes between the walk and
+  its read drops out of the walk, and the next run converges, instead of the
+  command aborting with an error.
+
 ## [1.3.0] - 2026-08-24
 
 ### Breaking
@@ -331,4 +348,5 @@ Initial release.
 [1.1.0]: https://github.com/plasma-ai/wiki/compare/v1.0.0...v1.1.0
 [1.2.0]: https://github.com/plasma-ai/wiki/compare/v1.1.0...v1.2.0
 [1.3.0]: https://github.com/plasma-ai/wiki/compare/v1.2.0...v1.3.0
-[unreleased]: https://github.com/plasma-ai/wiki/compare/v1.3.0...HEAD
+[1.3.1]: https://github.com/plasma-ai/wiki/compare/v1.3.0...v1.3.1
+[unreleased]: https://github.com/plasma-ai/wiki/compare/v1.3.1...HEAD
