@@ -1010,7 +1010,7 @@ class Wiki:
             return [
                 str(path.relative_to(self._root))
                 for path, content in overlay.items()
-                if content != self._current_text(path) or self._has_crlf(path)
+                if (content != self._current_text(path)) or self._has_crlf(path)
             ]
         result = self._apply_plan(overlay, baseline, now)
         # refresh the counts cache, announcing a recreated .wiki/cache/ rather

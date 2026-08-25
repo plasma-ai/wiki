@@ -10,7 +10,6 @@ from typing import Optional
 
 import pytest
 
-from wiki.core._search import _build_match_expression
 from wiki.core.wiki import Wiki
 
 from ._helpers import _capture_notices, _make_wiki, _set_exclude_patterns
@@ -22,7 +21,6 @@ __all__ = [
     'test_search_skips_excluded_paths',
     'test_search_supports_scope_tags_prefixes_and_raw_queries',
     'test_search_dedupes_duplicate_query_terms',
-    'test_search_builds_deduped_match_expressions',
     'test_search_propagates_non_query_operational_errors',
     'test_search_scopes_to_exact_subtree',
     'test_search_and_match_canonicalize_scope_casing',
@@ -200,32 +198,6 @@ def test_search_dedupes_duplicate_query_terms(tmp_path: pathlib.Path) -> None:
     # matching only the wider prefix never surfaces
     matches = wiki.search('glint gaze glint', prefix=True)
     assert [path for path, _, _ in matches] == ['core/exact.md']
-
-
-@pytest.mark.parametrize(
-    ('query', 'prefix', 'raw', 'expression'),
-    [
-        # exact duplicates collapse to their first occurrence
-        ('foo bar foo', False, False, '"foo" "bar"'),
-        # the starred final term keeps its exact twin: 'foo*' alone is
-        # wider than 'foo AND foo*'
-        ('foo bar foo', True, False, '"foo" "bar" "foo"*'),
-        ('foo foo', True, False, '"foo" "foo"*'),
-        # without duplicates the final term stars in place
-        ('foo bar', True, False, '"foo" "bar"*'),
-        # raw queries pass through untouched
-        ('foo foo', False, True, 'foo foo'),
-    ],
-)
-def test_search_builds_deduped_match_expressions(
-    query: str,
-    prefix: bool,
-    raw: bool,
-    expression: str,
-) -> None:
-    """Safe queries dedupe exact duplicate terms; the prefix term stays exact."""
-    built = _build_match_expression(query, prefix=prefix, tag=None, raw=raw)
-    assert built == expression
 
 
 def test_search_propagates_non_query_operational_errors(

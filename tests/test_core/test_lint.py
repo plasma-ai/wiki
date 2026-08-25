@@ -1370,13 +1370,14 @@ def test_lint_survives_folder_deleted_mid_walk(
 
 
 @pytest.mark.parametrize(
-    ('vanish_read', 'expected_kinds'),
-    [
+    argnames=('vanish_read', 'expected_kinds'),
+    argvalues=[
         # the plan's baseline read is first; lint's own index read is second
         (2, {'missing_index'}),
         # the marker probe re-reads after lint's read: the check ran clean
         (3, set()),
     ],
+    ids=['index-check-read', 'marker-probe-read'],
 )
 def test_lint_survives_index_deleted_mid_check(
     tmp_path: pathlib.Path,

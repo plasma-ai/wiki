@@ -106,7 +106,7 @@ def search(
         # read-only index or a stale read-only WAL companion; both are
         # derived state one discard-and-rebuild cures, and a second
         # failure propagates so a read-only cache directory stays a
-        # single clean error, never a loop. Every other subclass carries
+        # single clean error, never a loop; every other subclass carries
         # query and environment faults a rebuild cannot cure -- locking
         # (SQLITE_BUSY, SQLITE_LOCKED) and I/O faults propagate
         # untouched -- so the gate widens no further
