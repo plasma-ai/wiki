@@ -267,6 +267,9 @@ sources, tagging, CI guard) are documented in:
 - Release process (organization-wide):
   [RELEASING.md](https://github.com/plasma-ai/.github/blob/main/RELEASING.md)
 
+Pull requests should be branched from `dev`, not `main`, and opened against
+`dev` — `main` only advances at releases.
+
 ## Third-Party Software
 
 `wiki` sets up the
