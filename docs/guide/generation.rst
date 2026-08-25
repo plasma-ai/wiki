@@ -385,8 +385,10 @@ its meaning:
    or ``exclude.patterns`` segment keeps its whole subtree out of the
    index, leaving nothing to name.
 
-``Nested '<!-- start: no-lint -->' (line N)`` / ``Dangling '<!-- end: no-lint -->' (line N)``
-   A malformed region directive pair (below); it suppresses nothing.
+``Nested '<!-- start: no-lint -->' (line N)`` / ``Dangling '<!-- start: no-lint -->' (line N)`` / ``Dangling '<!-- end: no-lint -->' (line N)``
+   A malformed region directive (below): a second start inside an open
+   region, a start never closed (N is the start's line), or an end with no
+   open start. A malformed pair suppresses nothing.
 
 ``Missing title (author a value)``
    Only under ``titles.required`` (see :doc:`/configuration`): the file's
@@ -420,6 +422,33 @@ notes is clean — lint exits 0.
        [[canonical]])``. Prose links are soft because pages come and go —
        the generated link block's broken-link check is the hard surface.
        A target notes once per file, however often the prose repeats it.
+   * - ``<path>: indexed, but this machine's git ignores it (<source>:<line> '<pattern>'); its generated row ships where the file cannot, so every other clone reds on a broken link``
+     - The gitignore fence reads only the repository's own rules (pinned, so
+       indexing is identical on every clone), but the named ignore rule —
+       typically a personal ``core.excludesFile`` pattern — stops this
+       machine's ``git add`` from tracking the file, so its generated row
+       would be committed without it. Drop the rule, or keep the path out of
+       the index with ``exclude.patterns``. Only emitted inside a git
+       repository.
+   * - ``.gitattributes maps merge=wiki but merge.wiki.driver is not configured; run `wiki config` to register the driver (index merges fall back to a plain text merge until then)``
+     - A fresh clone carries the committed ``.gitattributes`` map but not the
+       per-clone ``merge.wiki.driver`` config, so git text-merges
+       ``_index.md`` files until ``wiki config`` registers the driver (see
+       :doc:`/guide/merge-driver`).
+   * - ``Gitignore fence unavailable: `git check-ignore` failed inside the enclosing repository (is git installed?); indexing proceeds unfenced, so paths the repository ignores are adopted``
+     - A ``.git`` directory encloses the wiki root but ``git check-ignore``
+       could not run (git missing or broken), so the walk proceeds without
+       the gitignore fence and adopts paths the repository ignores.
+   * - resolver diagnostics (``resolver_notice`` in ``--json``)
+     - Emitted by wiki-root resolution before the walk, prefixed with the
+       absolute root rather than a root-relative path: an upward resolution
+       into an enclosing root (``<path>: inside the wiki at <root>; using
+       that root``), a missing settings marker (``.wiki/settings.json
+       missing; `wiki update` will restore it``), a declared root missing
+       its ``_index.md`` (``restore it from git or run `wiki update` to
+       rebuild it``), or an ``_index.md`` extending above the declared root.
+       They stream to stderr as resolution runs and join the note count and
+       the ``--json`` document as typed rows.
 
 Suppressing positional checks: ``no-lint`` regions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -438,13 +467,16 @@ Each marker stands alone on its line. The region suppresses the positional
 rules — conflict markers, escaped wikilinks, wrap mangles, stale-link notes,
 directory-link issues — for the wrapped lines only; file-level checks are
 unaffected. Content inside fenced or inline code is already masked, so those
-code samples need no region; an indented code block and an HTML comment are
-not masked, so a wikilink in either is scanned and does need wrapping. A
-nested or dangling marker is itself a hard issue, and a malformed pair
-suppresses nothing. Conflict markers in particular *must* be wrapped: the
-scan that makes update refuse the sweep deliberately looks inside code
-fences (a real conflict can land there), so only a ``no-lint`` region
-sanctions them.
+code samples need no region. The link rules — stale-link notes and
+directory-link issues — also skip a wikilink inside an HTML comment or an
+indented code block, so a link sample in either needs no wrapping; the
+escaped-wikilink and wrap-mangle checks do not mask those, so an
+escaped-bracket sample or a deliberately wrapped line in a comment or
+indented block still does. A nested or dangling marker is itself a hard
+issue, and a malformed pair suppresses nothing. Conflict markers in
+particular *must* be wrapped: the scan that makes update refuse the sweep
+deliberately looks inside code fences (a real conflict can land there), so
+only a ``no-lint`` region sanctions them.
 
 Update narration reference
 --------------------------
@@ -495,6 +527,12 @@ verbatim, even in condensed mode:
   lines beside a prune
 - ``Restored missing .wiki/settings.json ({} -- all defaults)``
 - ``Recreated .wiki/cache/ (derived counts cache)``
+- ``<path>: indexed, but this machine's git ignores it (<source>:<line>
+  '<pattern>'); its generated row ships where the file cannot, so every other
+  clone reds on a broken link``
+- ``Gitignore fence unavailable: `git check-ignore` failed inside the
+  enclosing repository (is git installed?); indexing proceeds unfenced, so
+  paths the repository ignores are adopted``
 
 Idempotency and safety of re-running
 ------------------------------------
@@ -520,8 +558,10 @@ Both commands are safe to run at any time, as often as you like:
   is the place to edit.
 - **Lint writes nothing**, and ``update --check`` writes nothing — not even
   the settings-marker restore.
-- **The cache is disposable.** ``.wiki/cache/`` holds derived word counts
-  only; delete it freely and update recreates it (with a notice).
+- **The cache is disposable.** ``.wiki/cache/`` holds derived data only — the
+  word-count cache and the ``wiki search`` index (``search.db``). Delete it
+  freely: update recreates the directory and its counts (with a notice), and
+  the next ``wiki search`` rebuilds the index.
 - **A restored ``.wiki/settings.json`` is empty.** Update restores the
   missing marker as ``{}`` — all defaults. If the file held custom settings,
   restore it from version control instead of relying on the marker restore;

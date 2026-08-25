@@ -82,11 +82,12 @@ rather than authoring or auditing page by page yourself:
   residue rather than letting update sweep it in. A wiki whose own root is
   gitignored is exempt.
 - **Name validation is configurable.** By default the wiki rejects only
-  structural characters (`/`, `\`, `*`, `[`, `]`, `|`, `#`), a leading dot, and
-  the reserved `_index` stem — spaces, dashes, and unicode all pass. Stricter
-  rules (e.g. ASCII identifiers) are opt-in per wiki via `naming.validate` in
-  `.wiki/settings.json` (seed it at creation with `wiki init --settings`);
-  `wiki init` and `wiki lint` enforce whatever policy is set.
+  structural characters (`/`, `\`, `*`, `[`, `]`, `|`, `#`), a leading dot,
+  non-printable names, and the reserved `_index` stem — spaces, dashes, and
+  unicode all pass. Stricter rules (e.g. ASCII identifiers) are opt-in per wiki
+  via `naming.validate` in `.wiki/settings.json` (seed it at creation with
+  `wiki init --settings`); `wiki init` and `wiki lint` enforce whatever policy
+  is set.
 - **Timestamps are tool-owned and configurable.** `wiki update` writes both
   stamps when a file gains frontmatter, keeps `created:` from then on, and
   rewrites `updated:` on every actual write — never hand-edit them; an edit goes
@@ -187,20 +188,23 @@ rather than authoring or auditing page by page yourself:
   faces round-trip byte-identically; for formatters with no plugin lane (e.g.
   prettier) exclude the wiki root instead (`wiki/` in `.prettierignore`).
 - **The git merge driver resolves only the generated region.** For `_index.md`
-  files it takes *ours* for the regenerated parts above `***` (the link block
-  plus the `name`/`updated` keys `wiki update` regenerates) and three-way merges
-  everything authored — the remaining frontmatter fields
-  (`title`/`desc`/`created`/`category`/`tags`/ `sources`) and the user content
+  files it normalizes the regenerated `name`/`updated` keys to *ours* (plus
+  `created` on an add/add merge, where both sides seeded it), resolves the link
+  block to the union of both sides' rows — ours' layout wins and rows present
+  only in theirs ride over with their desc continuations, appended above the
+  closing `***`, so a merge never drops one side's additions — and three-way
+  merges everything authored — the remaining frontmatter fields
+  (`title`/`desc`/`created`/`category`/`tags`/`sources`) and the user content
   below `***` — which can still conflict for hand-resolution. A side missing its
   `***` entirely (formatter damage) can't be split into regions, so it conflicts
   whole-file with a hint comment naming the repair — restore the `***` on that
   branch (`wiki update` does it), then redo the merge. Run `wiki update` after a
-  merge to regenerate the link rows from the filesystem — the H1 rides the
-  taken-ours region, so a merged-in `title:` shows in its H1 only after that
-  update. `init`/`config` register the driver in local git config and write the
-  `**/_index.md` glob to `.gitattributes` in the working tree only — you stage
-  and commit it yourself, and each clone runs `wiki config` once to register the
-  driver.
+  merge to re-sort the link rows and prune any carried row whose target is gone
+  from the merged filesystem — the H1 rides ours' link-block layout, so a
+  merged-in `title:` shows in its H1 only after that update. `init`/`config`
+  register the driver in local git config and write the `**/_index.md` glob to
+  `.gitattributes` in the working tree only — you stage and commit it yourself,
+  and each clone runs `wiki config` once to register the driver.
 - **Leave new-directory index bodies empty during concurrent work.** When
   sibling branches both create the same new directory, its two `_index.md`s
   merge add/add with no common ancestor: the generated region resolves

@@ -97,16 +97,19 @@ Frontmatter timestamps default to UTC in ISO-8601. To change them, set a
 timezone (any IANA name) and format (a strftime string) under `timestamp` in
 `.wiki/settings.json`. The stamps are tool-owned: `created:` is written when a
 file gains frontmatter and kept from then on, and `updated:` is rewritten on
-every actual write. A hand edit goes undetected unless the value stops parsing
+every write that changes content (a write that only normalizes CRLF line endings
+leaves it untouched). A hand edit goes undetected unless the value stops parsing
 under the configured format — `wiki lint` fails an unparseable stamp.
 
 Display names are path-derived: `wiki update` owns each entry's `name:`
 frontmatter and rewrites the H1 heading to match. An optional authored `title:`
 field — on any index or page — overrides the H1 while `name` stays tool-owned;
-set `title: null` (or delete the line) to unset it. Setting `titles.required` in
-`.wiki/settings.json` demands an authored title everywhere: `wiki update` seeds
-a `title: null` placeholder on every entry missing one and `wiki lint` fails
-each placeholder until a title is authored.
+set `title: null` (or delete the line) to unset it. When a page first gains
+frontmatter, `wiki update` seeds `title:` from its existing H1, so the authored
+heading survives adoption; a page with no H1 gains the path-derived heading and
+no title. Setting `titles.required` in `.wiki/settings.json` demands an authored
+title everywhere: `wiki update` seeds a `title: null` placeholder on every entry
+missing one and `wiki lint` fails each placeholder until a title is authored.
 
 Word counts shown by `wiki map` are computed from page bodies and cached in
 `.wiki/cache/word_counts.json` under the wiki root — never stored in
@@ -161,10 +164,13 @@ Maintain indexes as files are added and removed:
 `wiki lint` exits 1 on issues and 0 on a clean wiki (soft notes go to stderr and
 never affect the exit code — a stale wikilink in prose is a note, while a broken
 link in a generated index block, or a prose link naming a folder rather than its
-`_index` page, is an issue). A page that must display otherwise-flagged content
-— sample conflict markers, stale link examples — wraps those lines in a
-`<!-- start: no-lint -->` ... `<!-- end: no-lint -->` region, which suppresses
-the positional rules, notes included, for just that span.
+`_index` page, is an issue). Scripts should read `wiki lint --json` — one JSON
+document on stdout listing every issue and note with a `severity` and `kind` —
+rather than parse the prose; the exit code is unchanged. A page that must
+display otherwise-flagged content — sample conflict markers, stale link examples
+— wraps those lines in a `<!-- start: no-lint -->` ... `<!-- end: no-lint -->`
+region, which suppresses the positional rules, notes included, for just that
+span.
 
 Browse structure, search across content, and read entries:
 

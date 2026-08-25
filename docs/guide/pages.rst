@@ -37,12 +37,15 @@ A page looks like this:
 
 Frontmatter is YAML between two ``---`` lines, and the opening ``---`` must be
 the first line of the file. Fresh frontmatter — written when a bare page is
-adopted or an index is created — contains exactly ``name``, a ``desc: ...``
-placeholder, ``tags: []``, ``sources: []``, ``created``, and ``updated``, plus
-a ``title:`` seeded from the authored H1 when an adopted bare page carries one
-(and, when ``titles.required`` is set, a ``title: null`` placeholder); no
-``category:`` line is ever seeded. Everything below the frontmatter is the
-page body, and apart from the H1 heading it is entirely yours.
+adopted or when ``wiki init`` or ``wiki update`` creates an index — contains
+exactly ``name``, a ``desc: ...`` placeholder, ``tags: []``, ``sources: []``,
+``created``, and ``updated``, plus a ``title:`` seeded from the authored H1
+when an adopted bare page carries one (and, when ``titles.required`` is set,
+a ``title: null`` placeholder); no ``category:`` line is ever seeded. An
+index created with ``wiki new`` has the same shape but carries its authored
+``--desc`` in place of the placeholder (``wiki new`` refuses a blank or
+``...`` desc). Everything below the frontmatter is the page body, and apart
+from the H1 heading it is entirely yours.
 
 ``wiki update`` keeps fields in canonical order: ``name``, ``title``,
 ``desc``, ``category``, ``tags``, ``sources``, then any custom authored keys
@@ -75,7 +78,8 @@ Frontmatter fields
        label.
    * - ``tags``
      - author
-     - Free-form list, seeded ``[]``.
+     - Free-form list, seeded ``[]``. Indexed by ``wiki search`` (weighted
+       above body text) and filterable with ``wiki search --tag``.
    * - ``sources``
      - author
      - Free-form list, seeded ``[]``.
@@ -274,14 +278,14 @@ Any page or index may wrap lines in an HTML-comment region:
    <!-- end: no-lint -->
 
 Each marker sits alone on its line. The ``no-lint`` directive suppresses
-``wiki lint``'s positional rules — conflict markers, escaped wikilinks, wrap
-mangles, stale-link notes, directory-link issues — for the wrapped lines, so
-a page can display sample conflict markers or stale-link examples without
-failing lint. A nested or dangling marker is itself a hard lint issue, and a
-malformed pair suppresses nothing. Markers inside fenced or inline code are
-masked — a marker shown in a code block is a sample, not a directive.
-Well-formed regions with other directive names are inert; ``no-lint`` is the
-only directive with shipped semantics.
+``wiki lint``'s positional rules — conflict markers and leftover merge repair
+hints, escaped wikilinks, wrap mangles, stale-link notes, directory-link
+issues — for the wrapped lines, so a page can display sample conflict markers
+or stale-link examples without failing lint. A nested or dangling marker is
+itself a hard lint issue, and a malformed pair suppresses nothing. Markers
+inside fenced or inline code are masked — a marker shown in a code block is a
+sample, not a directive. Well-formed regions with other directive names are
+inert; ``no-lint`` is the only directive with shipped semantics.
 
 Ownership summary
 -----------------

@@ -18,36 +18,59 @@ Wiki root resolution
 --------------------
 
 Every command except ``wiki install`` and ``wiki init`` operates on a wiki
-root. With ``--path <dir>`` the root is taken as given (``~`` expanded,
-relative paths resolved against the current directory). Without it, the root
-is resolved from the working directory, in order:
+root. With ``--path <dir>`` that directory (``~`` expanded, relative paths
+resolved against the current directory) is the candidate root: it skips the
+search below but goes through the same checks, so a path inside a wiki is
+rebased upward to the enclosing root as described under those checks.
+Without ``--path``, the root is resolved from the working directory, in
+order:
 
 1. The nearest ancestor (the current directory included) containing
    ``.wiki/settings.json``. The walk checks the whole ancestor chain: two
    markers on one chain fail with ``Ambiguous wiki root`` rather than
    silently picking one.
-2. If the current directory holds an ``_index.md`` but no ancestor declares a
-   root, the topmost directory of the contiguous ``_index.md`` chain — an
-   *undeclared* wiki, tolerated with a stderr notice that ``wiki update``
-   will restore the marker.
+2. Otherwise, the topmost directory of the contiguous ``_index.md`` chain
+   above the nearest indexed ancestor — the current directory included, so
+   a raw (not yet indexed) folder of an undeclared wiki resolves like
+   ``--path .`` does. One exception: a raw current directory that itself
+   holds an indexed directory below it is a project directory, not a folder
+   of the outer tree, and the climb declines. The result is an *undeclared*
+   wiki, tolerated with a stderr notice that ``wiki update`` will restore
+   the marker.
 3. ``{cwd}/wiki/``, when that directory is declared or at least indexed.
 4. Otherwise the command fails: ``Could not locate .wiki/settings.json,
    _index.md, or wiki/_index.md from the current directory.``
 
 The resolved root must be a real wiki — declared by ``.wiki/settings.json``
-or at least indexed by ``_index.md``. These configurations are refused
-outright, because nested wikis are unsupported:
+or at least indexed by ``_index.md``. Nested wikis are unsupported, so
+resolution treats the nesting shapes differently:
 
 - a path *inside* an enclosing wiki (a declared marker above it, or a parent
-  ``_index.md`` chain) — scoped work goes through a command's positional
-  ``name`` argument instead;
-- an undeclared root that *encloses* a declared root below it — run the
-  command from that declared root.
+  ``_index.md`` chain) resolves upward to that wiki's root with a stderr
+  notice (``<path>: inside the wiki at <root>; using that root``), so the
+  habitual root-relative ``--path`` works from inside the wiki — scoped
+  work goes through a command's positional ``name`` argument instead.
+  ``wiki new`` is the exception: its ``name`` is a write target a rebased
+  root would silently relocate, so an interior ``--path`` fails with
+  ``Path is inside the wiki at: <root>; pass --path <root> and the
+  root-relative name.`` A path that is itself a declared root names its
+  own wiki, never the enclosing one;
+- an undeclared root that *encloses* a declared root below it is refused
+  outright — run the command from that declared root;
+- an undeclared root that encloses an indexed wiki reachable only through
+  an unindexed folder — an *islanded* wiki, typically a vendored or nested
+  checkout — is refused too, since only a guessed root would sweep it up:
+  ``Path encloses the wiki at: <island>, islanded from this tree by an
+  unindexed folder; run the command with --path <island>, or index the
+  folder between them to make it part of this wiki.``
 
-Non-fatal diagnostics print to stderr when resolution tolerates something: a
-missing settings marker, a declared root missing its ``_index.md``, or an
+Non-fatal diagnostics print to stderr when resolution tolerates or adjusts
+something: a path inside a wiki resolved upward to its root, a missing
+settings marker, a declared root missing its ``_index.md``, or an
 ``_index.md`` chain extending above the declared root (a foreign or damaged
-outer index).
+outer index). ``wiki lint`` also carries each of them as a
+``resolver_notice`` note in its report, so a ``lint --json`` consumer reads
+them typed instead of scraping stderr.
 
 See :doc:`/cli/index` for the per-command ``--path`` and ``name`` surfaces.
 
@@ -205,10 +228,11 @@ Presentation defaults for ``wiki map``.
 Excludes paths from indexing entirely. An excluded subtree is invisible to
 every walk: ``wiki update`` never scaffolds indexes, adopts pages, or
 rewrites anything inside it, ``wiki lint`` checks nothing there, ``wiki
-map`` and ``wiki match`` never enumerate it (``--all`` included), and its
-word counts drop from the cache. ``wiki read`` stays permissive — exclusion
-is indexing policy, not access control, and ``wiki read`` is how one
-inspects deliberately unindexed content (dot-paths read the same way).
+map`` and ``wiki match`` never enumerate it (``--all`` included),
+``wiki search`` never indexes it, and its word counts drop from the cache.
+``wiki read`` stays permissive — exclusion is indexing policy, not access
+control, and ``wiki read`` is how one inspects deliberately unindexed
+content (dot-paths read the same way).
 
 .. code-block:: json
 
@@ -266,9 +290,12 @@ Any ``_index.md`` files already inside an excluded subtree become inert
 unmanaged bytes — never rewritten, never deleted. A nested wiki (a
 directory carrying its own ``.wiki/settings.json``) under an excluded
 directory no longer trips the nested-wiki sweep refusal, so a vendored or
-checked-out wiki can sit inside a host wiki once its subtree is excluded. It
-is not operable in place, though — from inside the guest every command reports
-an ambiguous root — so drive it from its own checkout.
+checked-out wiki can sit inside a host wiki once its subtree is excluded.
+From inside the guest a bare invocation reports an ambiguous root (two
+``.wiki/settings.json`` markers on one path), but an explicit
+``--path <guest>`` names the guest's own wiki — a path that is itself a
+declared root never resolves to the enclosing one — so every command can
+drive the guest in place.
 
 To exclude an already-indexed subtree: add the pattern, delete any
 ``_index.md`` inside the subtree, run ``wiki update`` once, and
@@ -367,6 +394,14 @@ it holds:
    (containing ``*``), so it never needs host-repo ignore configuration.
    Safe to delete at any time; it is rebuilt on demand.
 
+``.wiki/cache/search.db``
+   The SQLite FTS5 index behind ``wiki search``, built on the first query
+   and refreshed before each one by comparing every page's path, mtime, and
+   size. It shares the cache directory's ``.gitignore``. SQLite may leave
+   transient ``search.db-wal``/``search.db-shm`` journal files beside it
+   while a query holds the database open. Safe to delete at any time; a
+   missing or corrupt database is rebuilt on the next search.
+
 ``.wiki/obsidian/``
    The staged Obsidian configuration template that ``wiki init`` and
    ``wiki config`` install into ``.obsidian/``. See :doc:`/guide/obsidian`.
@@ -383,8 +418,8 @@ Legacy layout
 ~~~~~~~~~~~~~
 
 A wiki whose settings live at the legacy ``_config/settings.json`` location
-makes every sweep-planning command (``init``, ``update``,
-``update --check``, ``lint``, ``config``) refuse with a migration message:
+makes every sweep-planning command (``init``, ``update``, ``update --check``,
+``new``, ``lint``, ``config``) refuse with a migration message:
 move ``_config/`` to ``.wiki/``, run ``wiki config``, then ``wiki update``.
 Read paths (``read``, ``search``, ``match``, ``map``) keep working in the
 meantime — a half-working wiki is the migration signature.

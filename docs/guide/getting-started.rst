@@ -146,10 +146,12 @@ The one structural rule to know is who owns what:
   page when needed) and keeps the H1 heading in sync with the name — or with
   an authored ``title:`` when you set one. Everything else, including ``desc:``,
   ``tags:``, and ``sources:``, is authored. See :doc:`/guide/pages`.
-- **In indexes**, the ``***`` delimiter line splits the file: everything above
-  it (frontmatter, H1, the link block) is generated and rewritten by the tool;
-  your prose goes below it. Never hand-edit the link block — the next update
-  overwrites it. See :doc:`/guide/structure`.
+- **In indexes**, the ``***`` delimiter line splits the file: the H1 and the
+  link block above it are generated and rewritten by the tool, and the
+  frontmatter follows the same ownership as a page's (``name:``, ``created:``,
+  and ``updated:`` are tool-owned; ``desc:``, ``tags:``, and ``sources:`` are
+  yours); your prose goes below the delimiter. Never hand-edit the link block —
+  the next update overwrites it. See :doc:`/guide/structure`.
 
 The core loop: update and lint
 ------------------------------
@@ -163,8 +165,8 @@ indexes:
 
    $ wiki update
    Created 1 new index (fill in its desc)
-   Adopted 1 bare page (frontmatter added)
    Added 2 new links
+   Adopted 1 bare page (frontmatter added)
    Updated 3 files.
 
 The count lines are narration on stderr; the ``Updated N files.`` summary is
@@ -209,6 +211,17 @@ And the new ``topics/_index.md`` links the page, with everything above the
 
    ***
 
+The ``desc: ...`` placeholder is the cost of letting ``wiki update`` mint the
+index for you. To create a section deliberately instead, run
+``wiki new topics --desc 'Topic pages.' --content 'Overview prose.'``: it
+writes ``topics/_index.md`` with the description and the below-delimiter prose
+authored up front (creating the folder when it does not exist yet, and adopting
+any bare pages already in it) and runs the same update sweep over the parent
+folder, so the new row lands in the root index with its description and the
+section is lint-complete in one pass — no ``Needs desc`` note to chase. Both
+options are required; blanks and the ``...`` placeholder are refused. See
+:doc:`/cli/index`.
+
 ``wiki lint`` checks wiki health. With every description still a placeholder,
 it reports them as notes:
 
@@ -231,9 +244,11 @@ code.
 
 Now author the descriptions. A page's ``desc:`` frontmatter is the source of
 truth for its link row in the parent index — edit it in the page, not in the
-index. Set ``desc: An example page.`` in ``topics/example.md`` and
-``desc: Topic pages.`` in ``topics/_index.md`` (authored descriptions end
-in a period — lint flags a missing one), then run the loop again:
+index. Set ``desc: An example page.`` in ``topics/example.md``,
+``desc: Topic pages.`` in ``topics/_index.md``, and
+``desc: The myproject wiki.`` in the root ``wiki/_index.md`` (authored
+descriptions end in a period — lint flags a missing one), then run the loop
+again:
 
 .. code-block:: console
 
@@ -294,6 +309,12 @@ rhythm of working with a wiki: add or move markdown files, run
    * - ``--count``
      - Print only the closing summary, e.g. ``2 issues, 1 note.`` (default:
        off; mutually exclusive with ``--full``).
+   * - ``--json``
+     - Emit one JSON document on stdout — ``{"issues": [...], "notes": [...],
+       "summary": {"issues": N, "notes": M}}``, every finding typed with a
+       ``severity`` and ``kind`` — instead of the prose report; the exit code
+       is unchanged (default: off; mutually exclusive with ``--full`` and
+       ``--count``).
 
 Where next
 ----------
@@ -304,8 +325,8 @@ naming rules, and the link grammar. :doc:`/guide/generation` details exactly
 what ``wiki update`` owns and how ``wiki lint`` judges health.
 :doc:`/guide/obsidian` and :doc:`/guide/merge-driver` explain the
 integrations ``wiki init`` set up. The full command surface, including
-``wiki read``, ``wiki search``, and ``wiki map``, is in :doc:`/cli/index`;
-per-wiki settings are in :doc:`/configuration`; the agent skill is in
-:doc:`/skill`.
+``wiki new``, ``wiki read``, ``wiki search``, and ``wiki map``, is in
+:doc:`/cli/index`; per-wiki settings are in :doc:`/configuration`; the agent
+skill is in :doc:`/skill`.
 :doc:`/recipes` collects task-oriented walkthroughs, and :doc:`/examples`
 tours the committed ``hello`` example wiki.

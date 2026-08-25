@@ -110,8 +110,11 @@ before anything is installed; a changed upstream asset is refused with a
 warning rather than installed.
 
 One step cannot be automated: Obsidian gates community plugins behind
-Restricted Mode. After ``wiki init`` or ``wiki config``, the CLI prints the
-reminder (on stderr, only when attached to a terminal):
+Restricted Mode. When ``wiki init`` or ``wiki config`` completes with no
+download warnings, the CLI prints the reminder (on stderr, only when attached
+to a terminal; ``wiki init --quiet`` suppresses it). A skipped or failed
+plugin download prints its warning in place of the reminder — re-run
+``wiki config`` online to finish setup and see it:
 
 .. code-block:: text
 

@@ -23,8 +23,12 @@ existing wiki and accepts ``--path <dir>`` to name its root directly. Without
 
 1. The nearest ancestor of the current directory (itself included) holding the
    declared-root marker ``.wiki/settings.json``.
-2. If the current directory holds an ``_index.md`` but no marker is declared,
-   the topmost directory of the contiguous ``_index.md`` chain above it.
+2. If no marker is declared, the topmost directory of the contiguous
+   ``_index.md`` chain climbed from the nearest indexed ancestor (the current
+   directory included, so a raw folder of an undeclared wiki resolves like an
+   explicit ``--path .``). A raw current directory that holds an indexed
+   folder anywhere below it is a project directory, not a folder of an outer
+   tree, so resolution declines to climb from it.
 3. ``{cwd}/wiki/``, when that directory is declared or indexed.
 
 When none of these produce a wiki, the command fails with ``Could not locate
@@ -35,7 +39,11 @@ anywhere in the tree. ``wiki new`` is the exception: its name argument is a
 write target an upward-rebased root would silently relocate, so an interior
 ``--path`` is refused there, naming the enclosing root to pass instead. Nested
 wikis are unsupported: resolution refuses an undeclared root that encloses a
-declared one. See :doc:`/guide/structure` for the root and index model.
+declared one, refuses an undeclared root that encloses an indexed wiki
+islanded from it by an unindexed folder (naming the island to pass as
+``--path``), and fails with ``Ambiguous wiki root`` when two
+``.wiki/settings.json`` markers sit on one ancestor chain. See
+:doc:`/guide/structure` for the root and index model.
 
 If the resolved wiki carries a ``.wiki/wiki.py`` hook that has not been
 trusted, every command that resolves the wiki — reads included — refuses to
@@ -49,8 +57,10 @@ positional ``name`` argument restricting the operation to a subtree. The scope
 must resolve to a directory relative to the wiki root — a page name fails with
 ``Wiki folder not found: '<name>'``. A scope outside the root is refused, as
 is one inside an excluded directory — dot-prefixed (``.wiki``, ``.git``,
-``.obsidian``), symlinked, or matched by ``exclude.patterns``, the last
-refused with a message naming the matching pattern.
+``.obsidian``), matched by ``exclude.patterns`` (refused with a message
+naming the matching pattern), or fenced by the enclosing repo's gitignore.
+A symlinked scope is not refused as such: it resolves to its real target,
+and the root and exclusion checks apply to that target.
 
 Errors and exit codes
 ~~~~~~~~~~~~~~~~~~~~~
@@ -461,7 +471,9 @@ keeps the tool-owned surfaces in sync with the filesystem (see
   overwritten with a warning naming the page as the place to edit.
 - **Repairs frontmatter** — refreshes ``name:`` from the path, fills missing
   ``desc``/``created``/``updated`` fields, removes unset ``title:`` and
-  ``category:`` lines, and enforces the canonical field order.
+  ``category:`` lines (under ``titles.required``, a missing or unset title is
+  instead seeded as a ``title: null`` placeholder for lint to fail until a
+  value is authored), and enforces the canonical field order.
 - **Rewrites the H1** to the authored ``title`` or the path-derived name.
 - **Adopts bare pages** — a markdown page with no frontmatter gains a fresh
   block, seeding ``title:`` from its authored H1 when one exists.
@@ -599,7 +611,9 @@ read ``--json``, never classify findings by scraping either stream (a
 stderr note is not a blocking issue). ``--json`` replaces the prose report
 with one JSON document on stdout carrying every finding under an explicit
 ``severity`` (``issue``/``note``) and a machine ``kind`` with its per-kind
-payload fields (``path`` always among them, plus e.g. ``target``/``label``
+payload fields (``path`` on every issue and on most notes — the
+``resolver_notice``, ``merge_driver_unconfigured``, and
+``git_fence_unavailable`` notes carry none — plus e.g. ``target``/``label``
 on a broken link or ``line`` on a wrap mangle), the rendered prose under
 ``text``, and a ``summary`` with both counts; the exit-code contract is
 unchanged.
@@ -622,12 +636,15 @@ over 500 characters, empty index content sections, CRLF line endings, stale
 ``[[wikilinks]]`` in authored prose (suggesting the canonical target when one
 resolves), an indexed path this machine's git ignores (a personal
 ``core.excludesFile`` rule — the row ships where the file cannot, so every other
-clone reds on a broken link), and a ``.gitattributes`` mapping ``merge=wiki``
-with no ``merge.wiki.driver`` configured — the fresh-clone state where index
-merges silently fall back to a plain text merge until ``wiki config`` registers
-the driver. Resolver diagnostics (an upward resolution, a missing settings
-marker or root index, an outer index above the declared root) join the notes too
-— counted in the closing summary and typed as ``resolver_notice`` rows in
+clone reds on a broken link), a gitignore fence the probe cannot read inside an
+enclosing repository (``git check-ignore`` failed — git off ``PATH`` or a
+broken install — so indexing proceeds unfenced and adopts what the repository
+ignores), and a ``.gitattributes`` mapping ``merge=wiki`` with no
+``merge.wiki.driver`` configured — the fresh-clone state where index merges
+silently fall back to a plain text merge until ``wiki config`` registers the
+driver. Resolver diagnostics (an upward resolution, a missing settings marker
+or root index, an outer index above the declared root) join the notes too —
+counted in the closing summary and typed as ``resolver_notice`` rows in
 ``--json`` — beside their stderr prose.
 
 A ``<!-- start: no-lint -->`` ... ``<!-- end: no-lint -->`` region suppresses
@@ -687,7 +704,10 @@ pair is itself an issue and suppresses nothing.
          "text": "topics/example.md: Needs desc"
        }
      ],
-     "summary": {"issues": 1, "notes": 1}
+     "summary": {
+       "issues": 1,
+       "notes": 1
+     }
    }
 
 ``wiki map``

@@ -30,7 +30,7 @@ and looks like this:
            └── internals.md
 
 Non-markdown files (a diagram, a ``Makefile``) may live in the tree too — they
-are indexed alongside pages, linked by their full filename. Four things are
+are indexed alongside pages, linked by their full filename. Five things are
 excluded from the tree entirely:
 
 - **Dot-prefixed files and directories** — which is how ``.wiki/``, ``.git/``,
@@ -39,6 +39,13 @@ excluded from the tree entirely:
 - **The name ``_index``** — reserved in every folder for the index itself.
 - **Paths matching ``exclude.patterns``** — opt-in gitignore-style globs in
   ``.wiki/settings.json`` (see :doc:`/configuration`).
+- **Paths the enclosing git repository ignores** — no configuration needed:
+  what the repo's own rules (its ``.gitignore`` files and
+  ``.git/info/exclude``, never a personal ``core.excludesFile``) fence out of
+  version control is never walked, adopted, or linked, and a pruned row whose
+  target is gitignored is announced as a gitignore skip. A force-tracked file
+  matching a rule is still fenced; a wiki whose own root is ignored is exempt
+  (see :doc:`/configuration`).
 
 ``wiki map``, ``wiki search``, ``wiki match``, ``wiki update``, and
 ``wiki lint`` all accept an optional positional argument naming a subtree
@@ -76,6 +83,19 @@ Content starts as leaf pages. A page that grows into several distinct
 concerns becomes a folder: a section with its own index, child pages, and room
 to keep growing.
 
+To create a folder deliberately, use ``wiki new``: it writes the folder's
+``_index.md`` with an authored ``desc:`` and overview prose below the ``***``
+delimiter — both required, a blank or ``...`` value is refused — and runs a
+scoped update on the parent so the parent's new row carries the description
+at once, with no placeholder left to fill in:
+
+.. code-block:: console
+
+   $ wiki new topics/guides --desc "How-to guides." --content "Start here."
+
+The parent folder (``topics/`` here) must already exist and be indexed — each
+level carries its own authored index.
+
 To convert a page into a folder — say ``topics/example.md`` into
 ``topics/example/`` — create the directory, move the page's content into it
 (as one or more child pages, with overview prose below the new index's ``***``
@@ -90,6 +110,12 @@ delimiter), and run ``wiki update``:
 ``wiki update`` creates the new folder's index, links the children in,
 rewrites each moved file's ``name:`` and H1 to match its new path, and prunes
 the parent's now-broken row for the vanished page (announcing the removal).
+``wiki new`` accepts the folder in this state too — an existing folder of raw
+files is its expected shape — so ``wiki new topics/example``, with its
+``--desc`` and ``--content``, in place of the bare ``wiki update`` wires the
+parent subtree the same way (children linked, the broken row pruned) with
+the index's description and overview prose authored up front, leaving no
+placeholder to fill in.
 Any ``[[topics/example]]`` wikilinks in prose now
 name a folder rather than a page, which ``wiki lint`` reports as an issue
 naming the ``[[topics/example/_index]]`` form to use instead (a plain rename,
@@ -120,9 +146,13 @@ in order:
 1. An explicit ``--path``, used as given.
 2. The nearest ancestor of the current directory (itself included) holding
    ``.wiki/settings.json``.
-3. From a directory holding ``_index.md`` with no declared root above it: the
-   topmost ``_index.md`` in the chain. Such an **undeclared** tree works, with
-   a notice on stderr that ``wiki update`` will restore the marker.
+3. From the nearest directory in the chain holding ``_index.md`` (the current
+   directory itself, or — for a raw, not-yet-indexed folder — its nearest
+   indexed ancestor): the topmost ``_index.md`` in that chain. Such an
+   **undeclared** tree works, with a notice on stderr that ``wiki update``
+   will restore the marker. A raw directory that holds an indexed folder of
+   its own is a project directory, not part of an outer tree, and does not
+   climb.
 4. A ``wiki/`` folder under the current directory, when declared or indexed.
 
 If none match, the command fails, naming what it looked for. See
@@ -135,7 +165,10 @@ for scoped work), while a path enclosing a declared wiki is refused; two
 ``.wiki/settings.json`` markers on one ancestor chain are an ambiguous-root
 error; and ``wiki update`` refuses to sweep across a nested declared root
 (``wiki lint`` completes the sweep and reports the nested root as a hard
-issue).
+issue). An undeclared root is likewise refused when an indexed tree sits
+below it behind an unindexed folder — a vendored or nested checkout is its
+own wiki, not a subtree, so run the command with ``--path`` at that inner
+root or index the folder between them.
 
 The ``.wiki/`` directory
 ------------------------
@@ -152,7 +185,8 @@ never author content there. Contents:
    the file drops any custom policy for good.
 
 ``cache/``
-   The derived word-counts cache (see below). Safe to delete at any time.
+   Derived state: the word-counts cache and the ``wiki search`` index (see
+   below). Safe to delete at any time.
 
 ``obsidian/``
    The staged Obsidian configuration template, copied into ``.obsidian/`` by
@@ -185,3 +219,11 @@ cache write never fails a command. The cache directory carries its own
 ``.gitignore`` (containing ``*``) so it never needs host-repo ignore
 configuration, and it can be deleted at any time — the worst case is a full
 recompute on the next run.
+
+``wiki search`` keeps a second derived store beside the counts,
+``.wiki/cache/search.db``, on the same contract: each search refreshes the
+index for added, changed, and removed pages (by mtime and size) before
+ranking, a corrupt database is deleted and rebuilt, and a schema change drops
+and rebuilds the tables. Deleting the cache directory therefore also costs a
+full reindex on the next search. ``wiki map`` and ``wiki search`` recreate
+the directory silently; only ``wiki update`` announces the recreation.

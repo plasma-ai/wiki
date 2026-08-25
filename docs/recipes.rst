@@ -3,11 +3,12 @@ Recipes
 
 Task-oriented walkthroughs for common wiki workflows. Each recipe is
 self-contained and assumes the ``wiki`` CLI is installed (``pip install
-plasma-wiki``). Run from anywhere inside the wiki — or from the directory
-containing it — commands resolve the enclosing wiki root automatically; from
-elsewhere, pass ``--path`` to name the root. See
-:doc:`/guide/getting-started` for a first-run tour and :doc:`/cli/index` for
-every command's full option surface.
+plasma-wiki``). Run from anywhere inside the wiki — commands resolve the
+enclosing wiki root automatically — or from the project directory when the
+wiki sits at its default ``{cwd}/wiki/`` location; from anywhere else
+(including the directory above a wiki placed with ``--path``), pass
+``--path`` to name the root. See :doc:`/guide/getting-started` for a
+first-run tour and :doc:`/cli/index` for every command's full option surface.
 
 Stand up a wiki in an existing repository
 -----------------------------------------
@@ -61,15 +62,22 @@ Adopt an existing folder of markdown
 tree the way ``wiki update`` does: every folder gains an ``_index.md``, every
 bare page is adopted with fresh frontmatter (an authored H1 is preserved by
 seeding ``title:`` from it), and every entry is linked into its parent index.
-The notices stream to stderr as it works:
+The sweep itself announces nothing — ``wiki init`` prints only its closing
+line — so review what it did with ``wiki lint``, which names every seeded
+placeholder and empty index (pass the same ``--path`` when running from
+outside the wiki):
 
 .. code-block:: console
 
    $ wiki init --path docs/notes
-   New index: guides/_index.md (fill in its desc)
-   Adopted bare page: guides/setup.md (frontmatter added; title: seeded from its H1)
-   New link: [[guides/setup|setup]] in guides/_index.md
    Initialized wiki at: /home/user/myproject/docs/notes
+   $ wiki lint --path docs/notes
+   _index.md: Needs desc
+   _index.md: Empty content
+   guides/_index.md: Needs desc
+   guides/_index.md: Empty content
+   guides/setup.md: Needs desc
+   No issues found (5 notes).
 
 New indexes and adopted pages carry the ``desc: ...`` placeholder. Fill each
 in — the frontmatter ``desc`` of a page is the source of truth for its link row
@@ -186,8 +194,8 @@ so an accidental deletion is a revert away):
 
    $ git mv topics/example.md topics/sample.md
    $ wiki update
-   Added 1 new link
    Pruned 1 broken link
+   Added 1 new link
    Updated 2 files.
 
 The moved page's ``name:`` and H1 are rewritten to the new path, and the
@@ -228,10 +236,10 @@ move and the real sweep to preview the rename:
 .. code-block:: console
 
    $ wiki update --check
-   Would add 1 new link
    Would prune 1 broken link
-   Would update: topics/sample.md
+   Would add 1 new link
    Would update: topics/_index.md
+   Would update: topics/sample.md
 
    2 files would change (run without --check to apply).
 
@@ -245,14 +253,43 @@ Run it
 
    $ wiki lint
    topics/sample.md: Needs desc
-   topics/_index.md: Broken link [[topics/example|example]]
+   topics/_index.md: Requires update
+       @@ -11,7 +11,7 @@
 
-   1 issue, 1 note.
+        [[_index|..]]
+
+       -[[topics/example|example]]: ...
+       +[[topics/sample|sample]]: ...
+
+        ***
+   topics/_index.md: Broken link [[topics/example|example]]
+   topics/sample.md: Requires update
+       @@ -1,5 +1,5 @@
+        ---
+       -name: topics/example
+       +name: topics/sample
+        desc: ...
+        tags: []
+        sources: []
+       @@ -7,6 +7,6 @@
+        updated: 2026-01-01T00:00:00Z
+        ---
+
+       -# topics/example
+       +# topics/sample
+
+        Body.
+
+   3 issues, 1 note.
 
 ``wiki lint`` exits 1 when issues are found and 0 when the wiki is clean.
 Issues print to stdout; *notes* print to stderr and never affect the exit code.
 Scope the audit to a subtree by passing a folder name (``wiki lint topics``),
 and pass ``--count`` to condense the run to the closing summary alone.
+
+Until ``wiki update`` runs, the dangling row shows up twice — as the
+``Broken link`` issue and inside the index's ``Requires update`` diff, which
+prunes it — and the renamed page reports its own pending ``name:``/H1 rewrite.
 
 Read the output
 ~~~~~~~~~~~~~~~
@@ -260,18 +297,32 @@ Read the output
 Issues come in two flavors. Anything ``wiki update`` would rewrite reports as
 ``Requires update`` with an indented unified diff of the pending rewrite — run
 ``wiki update`` to clear the whole class at once. Update also creates missing
-indexes (fill in each new ``desc:``) and repairs a mangled ``***`` delimiter.
-Everything else needs a human: names that violate the naming policy, pages
-shadowed by a same-named folder, merge conflict markers, malformed
-frontmatter, truncated indexes, escaped wikilinks in page prose (formatter
-damage), broken links in generated index blocks, prose wikilinks naming a
-folder rather than its ``_index`` page, and unparseable
-``created:``/``updated:`` stamps.
+indexes (fill in each new ``desc:``), prunes index rows whose target is gone
+or unindexable (excluded, gitignored, or symlinked), and repairs a mangled
+``***`` delimiter. Everything else needs a human: names that violate the
+naming policy, pages shadowed by a same-named folder, merge conflict markers
+and leftover merge-repair hint comments, malformed frontmatter, truncated
+indexes, escaped wikilinks in page prose and hyphen dangles or wrapped list
+markers (formatter and line-wrap damage), descriptions missing their trailing
+period, prose wikilinks naming a folder rather than its ``_index`` page,
+unparseable ``created:``/``updated:`` stamps, a nested ``.wiki/settings.json``
+declaring a foreign wiki root, dangling or nested region markers, and — under
+``titles.required`` — a missing or unfilled ``title:``.
 
 Notes flag soft hygiene: placeholder (``...``) and oversized descriptions,
 empty index content sections, CRLF line endings, and stale ``[[wikilinks]]`` in
 prose — where a folder-relative target that resolves to a real page gets a
 ``(use [[canonical]])`` suggestion, since wiki targets are root-relative.
+Four environment notes ride along and count in the closing summary: a
+``.gitattributes`` ``merge=wiki`` mapping with no ``merge.wiki.driver``
+configured in the clone (the fresh-clone state — run ``wiki config``); an
+indexed path this machine's personal ``core.excludesFile`` ignores (its
+generated row ships where the file cannot, so every other clone reds on a
+broken link); a ``git check-ignore`` probe that fails inside the enclosing
+repository (git missing or broken), so indexing proceeds unfenced; and any
+root-resolution diagnostic the command printed while starting — a ``--path``
+inside the wiki resolved upward to its root, a missing ``.wiki/settings.json``
+or root ``_index.md``, or an index chain extending above the declared root.
 
 Exempt intentional content
 ~~~~~~~~~~~~~~~~~~~~~~~~~~

@@ -60,6 +60,16 @@ Frontmatter
    ``tags:``, ``sources:``, ``created:`` (ordinarily), and any custom keys —
    get a normal three-way merge that can conflict.
 
+   A side whose frontmatter block cannot be detected at all — a formatter
+   mangled or left unclosed the ``---`` delimiters of a block the base had —
+   is treated as unchanged from base for the whole region above ``***``,
+   frontmatter and link block alike, never as a deletion of the block. The
+   other side's frontmatter survives, the damaged side's authored keys and
+   link rows do not enter the merge, and its prose below ``***`` still merges
+   normally. No conflict or hint is raised, so if those edits matter, repair
+   the ``---`` lines by hand on that branch (``wiki update`` skips such an
+   index with a notice rather than rebuilding it) and redo the merge.
+
 Link block
    The H1 heading and the generated link rows, up to and including the
    ``***`` line, resolve to the union of both sides' rows: the current

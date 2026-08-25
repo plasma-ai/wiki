@@ -137,6 +137,18 @@ The committed tree is fully converged, so the health checks come back clean:
    $ wiki update --check
    Nothing to update.
 
+In a fresh clone, ``wiki lint`` prints one line before that summary, on
+stderr — a note that ``.gitattributes`` maps ``merge=wiki`` but
+``merge.wiki.driver`` is not configured, naming ``wiki config`` as the fix —
+and the summary reads ``No issues found (1 note).`` The note is about the
+clone, not the sample tree: the repository's ``.gitattributes`` maps
+``**/_index.md merge=wiki`` and travels with every clone, while the
+``merge.wiki.driver`` git config it pairs with is local and unset until
+``wiki config`` runs inside the clone. The exit code is 0 either way. Run
+``wiki config`` once from ``examples/hello`` (it also stages the local
+Obsidian configuration noted above) and the transcript matches exactly; see
+:doc:`/guide/merge-driver`.
+
 ``wiki lint`` exits 1 when it finds issues; ``wiki update --check`` is the dry
 run, exiting 1 when a write run would change something. The full command
 surface is documented under :doc:`/cli/index`.
@@ -154,8 +166,8 @@ bare page beside ``world.md`` and running ``wiki update`` replays exactly how
    $ cd /tmp/hello
    $ printf '# Another\n\nA second page.\n' > another.md
    $ wiki update
-   Adopted 1 bare page (frontmatter added)
    Added 1 new link
+   Adopted 1 bare page (frontmatter added)
    Updated 2 files.
 
 The update adopts the bare page (frontmatter added, ``title: Another`` seeded
