@@ -87,7 +87,63 @@ def search(
         raise ValueError(f'Limit must be at least 1, got {limit!r} instead.')
     expression = _build_match_expression(query, prefix=prefix, tag=tag, raw=raw)
 
-    # refresh the index, then rank matches within the scope
+    # refresh the index, then rank matches within the scope, snapshotting
+    # files once so a corruption retry walks the same pages
+    files = list(files)
+    try:
+        rows = _rank(
+            root=root,
+            files=files,
+            expression=expression,
+            folder=folder,
+            limit=limit,
+            on_unreadable=on_unreadable,
+        )
+    except sqlite3.DatabaseError as e:
+        # corruption (SQLITE_CORRUPT, SQLITE_NOTADB) raises the bare
+        # DatabaseError class; its subclasses carry query and environment
+        # faults a rebuild cannot cure, so only the bare class discards
+        if type(e) is not sqlite3.DatabaseError:
+            raise
+        _discard(root / WIKI_CACHE)
+        rows = _rank(
+            root=root,
+            files=files,
+            expression=expression,
+            folder=folder,
+            limit=limit,
+            on_unreadable=on_unreadable,
+        )
+
+    # collapse snippet whitespace and negate rank into a descending score
+    return [(path, ' '.join(snippet.split()), -rank) for path, snippet, rank in rows]
+
+
+# ------ helper functions
+
+
+def _has_fts5() -> bool:
+    """Return ``True`` if the running Python's SQLite exposes FTS5."""
+    connection = sqlite3.connect(':memory:')
+    try:
+        connection.execute('CREATE VIRTUAL TABLE probe USING fts5(text)')
+        return True
+    except sqlite3.OperationalError:
+        return False
+    finally:
+        connection.close()
+
+
+def _rank(
+    root: pathlib.Path,
+    files: Iterable[pathlib.Path],
+    expression: str,
+    *,
+    folder: pathlib.Path,
+    limit: int,
+    on_unreadable: Optional[Callable[[str], object]] = None,
+) -> list[tuple[str, str, float]]:
+    """Refresh the derived index, then rank matches within the scope."""
     connection = _open(root)
     try:
         _refresh(connection, root, files, on_unreadable=on_unreadable)
@@ -111,7 +167,7 @@ def search(
         parameters.append(limit)
         # execute the ranked query
         try:
-            rows = connection.execute(sql, parameters).fetchall()
+            return connection.execute(sql, parameters).fetchall()
         except sqlite3.OperationalError as e:
             # SQLITE_ERROR is the generic query-error code that FTS5 syntax
             # and no-such-column failures carry; other codes (locking, I/O)
@@ -119,24 +175,6 @@ def search(
             if e.sqlite_errorcode != sqlite3.SQLITE_ERROR:
                 raise
             raise ValueError(f'Invalid FTS5 query {expression!r}: {e}') from e
-    finally:
-        connection.close()
-
-    # collapse snippet whitespace and negate rank into a descending score
-    return [(path, ' '.join(snippet.split()), -rank) for path, snippet, rank in rows]
-
-
-# ------ helper functions
-
-
-def _has_fts5() -> bool:
-    """Return ``True`` if the running Python's SQLite exposes FTS5."""
-    connection = sqlite3.connect(':memory:')
-    try:
-        connection.execute('CREATE VIRTUAL TABLE probe USING fts5(text)')
-        return True
-    except sqlite3.OperationalError:
-        return False
     finally:
         connection.close()
 
@@ -153,9 +191,14 @@ def _open(root: pathlib.Path) -> sqlite3.Connection:
     except sqlite3.DatabaseError:
         # a corrupt index is derived state: discard it and rebuild once,
         # the same contract the word-counts cache honors
-        for suffix in ('', '-wal', '-shm'):
-            (cache / (_CACHE_NAME + suffix)).unlink(missing_ok=True)
+        _discard(cache)
         return _connect(cache / _CACHE_NAME)
+
+
+def _discard(cache: pathlib.Path) -> None:
+    """Unlink the derived index database and its WAL companion files."""
+    for suffix in ('', '-wal', '-shm'):
+        (cache / (_CACHE_NAME + suffix)).unlink(missing_ok=True)
 
 
 def _connect(path: pathlib.Path) -> sqlite3.Connection:

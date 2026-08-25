@@ -345,8 +345,18 @@ def test_search_retries_indexed_pages_after_a_transient_read_failure(
     assert wiki.search('secondtoken')[0][0] == 'core/page.md'
 
 
-def test_search_rebuilds_a_corrupt_index(tmp_path: pathlib.Path) -> None:
-    """A corrupt index file is discarded and rebuilt, never fatal."""
+@pytest.mark.parametrize('region', ['header', 'interior'])
+def test_search_rebuilds_a_corrupt_index(
+    tmp_path: pathlib.Path,
+    region: str,
+) -> None:
+    """A corrupt index file is discarded and rebuilt, never fatal.
+
+    Header corruption fails the connect-time pragmas; interior corruption
+    passes them and surfaces only once the refresh or the ranked query
+    reads deeper pages. Both regions honor the discard-and-rebuild
+    contract.
+    """
     wiki = _make_wiki(tmp_path, folders={'core': []})
     (tmp_path / 'core' / 'page.md').write_text(
         '# page\n\nCorrupttoken prose.\n',
@@ -355,7 +365,21 @@ def test_search_rebuilds_a_corrupt_index(tmp_path: pathlib.Path) -> None:
     assert wiki.search('corrupttoken')[0][0] == 'core/page.md'
 
     cache = tmp_path / '.wiki' / 'cache' / 'search.db'
-    cache.write_bytes(b'junk')
+    if region == 'header':
+        # junk in place of the SQLite header fails the connect-time pragmas
+        cache.write_bytes(b'junk')
+    else:
+        # flip every byte past page 1, leaving the header page valid
+        connection = sqlite3.connect(cache)
+        page_size = connection.execute('PRAGMA page_size').fetchone()[0]
+        connection.close()
+        data = bytearray(cache.read_bytes())
+        assert len(data) > page_size
+        data[page_size:] = bytes(byte ^ 0xFF for byte in data[page_size:])
+        cache.write_bytes(data)
+        # drop the WAL companions so recovery cannot mask the flipped pages
+        for suffix in ('-wal', '-shm'):
+            cache.with_name(cache.name + suffix).unlink(missing_ok=True)
     assert wiki.search('corrupttoken')[0][0] == 'core/page.md'
 
 
