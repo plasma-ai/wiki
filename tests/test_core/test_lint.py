@@ -11,10 +11,12 @@ from __future__ import annotations
 import json
 import pathlib
 import re
+import shutil
 
 import pytest
 
 from wiki.core.wiki import Issue, Wiki
+from wiki.util import markdown
 
 from ._helpers import (
     _capture_notices,
@@ -64,6 +66,10 @@ __all__ = [
     'test_region_directive_pairing_errors',
     'test_region_directives_pair_per_directive',
     'test_lint_clean',
+    'test_lint_survives_page_deleted_mid_walk',
+    'test_lint_survives_page_deleted_before_crlf_probe',
+    'test_lint_survives_folder_deleted_mid_walk',
+    'test_lint_survives_index_deleted_mid_check',
     'test_quoted_placeholder_desc_is_soft',
     'test_long_desc_is_note_only',
     'test_lint_stale_body_link_names_canonical',
@@ -1271,6 +1277,137 @@ def test_lint_clean(tmp_path: pathlib.Path) -> None:
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
     issues = wiki.lint()
     assert issues == []
+
+
+def test_lint_survives_page_deleted_mid_walk(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A page deleted after the walk lists it never crashes lint.
+
+    Lint reads each walked page directly, so a page vanishing between
+    its folder's enumeration and its read (a concurrent delete) must
+    lint as absent from the walk, with the next run flagging the stale
+    index row it leaves behind.
+    """
+    wiki = _make_wiki(tmp_path, folders={'notes': ['alpha', 'doomed']})
+    alpha = tmp_path / 'notes' / 'alpha.md'
+    doomed = tmp_path / 'notes' / 'doomed.md'
+    real = Wiki._has_crlf
+
+    def racy(self: Wiki, path: pathlib.Path) -> bool:
+        """Delete the doomed page while its already-walked sibling lints."""
+        if (path == alpha) and doomed.exists():
+            doomed.unlink()
+        return real(self, path)
+
+    # the mid-walk deletion is handled, not crashed on
+    monkeypatch.setattr(Wiki, '_has_crlf', racy)
+    assert wiki.lint() == []
+
+    # the next run flags the stale index row the vanished page left
+    issues = wiki.lint()
+    assert any(issue.kind == 'broken_link' for issue in issues)
+
+
+def test_lint_survives_page_deleted_before_crlf_probe(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A page vanishing between its read and its CRLF probe never crashes.
+
+    Lint reads a page's text, masks it, then probes the file's bytes for
+    CRLF drift; a delete landing inside that window must leave the probe
+    with nothing to normalize rather than raising ``FileNotFoundError``.
+    """
+    wiki = _make_wiki(tmp_path, folders={'notes': ['doomed']})
+    doomed = tmp_path / 'notes' / 'doomed.md'
+    doomed_text = doomed.read_text(encoding='utf-8')
+    real = markdown.mask_code
+
+    def racy(text: str) -> str:
+        """Delete the doomed page once its lint read is already in hand."""
+        if (text == doomed_text) and doomed.exists():
+            doomed.unlink()
+        return real(text)
+
+    # the pre-probe deletion is handled, not crashed on
+    monkeypatch.setattr(markdown, 'mask_code', racy)
+    assert wiki.lint() == []
+
+    # the next run flags the stale index row the vanished page left
+    issues = wiki.lint()
+    assert any(issue.kind == 'broken_link' for issue in issues)
+
+
+def test_lint_survives_folder_deleted_mid_walk(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A folder deleted after the walk lists it never crashes lint.
+
+    Lint enumerates every walked folder's children for the shadow
+    check, so a folder vanishing between the walk and its own listing
+    (a concurrent delete) must lint as absent from the walk, with the
+    same run flagging the stale index row it leaves behind.
+    """
+    wiki = _make_wiki(tmp_path, folders={'doomed': ['gone'], 'notes': ['alpha']})
+    doomed = tmp_path / 'doomed'
+    real = Wiki._has_crlf
+
+    def racy(self: Wiki, path: pathlib.Path) -> bool:
+        """Delete the doomed folder while the already-walked root lints."""
+        if doomed.exists():
+            shutil.rmtree(doomed)
+        return real(self, path)
+
+    # the mid-walk deletion is handled, not crashed on: the vanished
+    # folder lints as absent, leaving only its stale parent row flagged
+    monkeypatch.setattr(Wiki, '_has_crlf', racy)
+    issues = wiki.lint()
+    assert {issue.kind for issue in issues} == {'broken_link'}
+    assert all('doomed' in issue for issue in issues)
+
+
+@pytest.mark.parametrize(
+    ('vanish_read', 'expected_kinds'),
+    [
+        # the plan's baseline read is first; lint's own index read is second
+        (2, {'missing_index'}),
+        # the marker probe re-reads after lint's read: the check ran clean
+        (3, set()),
+    ],
+)
+def test_lint_survives_index_deleted_mid_check(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    vanish_read: int,
+    expected_kinds: set[str],
+) -> None:
+    """An index vanishing between probe and re-read never crashes lint.
+
+    Lint re-reads each index after probing it -- once for the index
+    check and once for the missing-delimiter probe -- so a delete
+    landing before either re-read (a concurrent delete) must classify
+    the index as missing (or leave the probe silent) rather than raise.
+    """
+    wiki = _make_wiki(tmp_path, folders={'notes': ['alpha']})
+    index = tmp_path / 'notes' / '_index.md'
+    real = Wiki._read_text
+    reads: list[pathlib.Path] = []
+
+    def racy(self: Wiki, path: pathlib.Path) -> str:
+        """Delete the index just as the numbered re-read begins."""
+        if path == index:
+            reads.append(path)
+            if len(reads) == vanish_read:
+                index.unlink()
+        return real(self, path)
+
+    # the mid-check deletion is handled, not crashed on
+    monkeypatch.setattr(Wiki, '_read_text', racy)
+    issues = wiki.lint()
+    assert {issue.kind for issue in issues} == expected_kinds
 
 
 def test_quoted_placeholder_desc_is_soft(

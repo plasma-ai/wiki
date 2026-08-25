@@ -1002,14 +1002,15 @@ class Wiki:
         for event in notices:
             self._dispatch_notice(event)
         # dry run: report which files would change without writing (a CRLF
-        # file reads equal but would be rewritten, so probe its bytes too)
+        # file reads equal but would be rewritten, so probe its bytes too);
+        # _current_text answers a file vanishing under the probe (a
+        # concurrent delete) as absent, reporting it as pending rather
+        # than raising
         if check:
             return [
                 str(path.relative_to(self._root))
                 for path, content in overlay.items()
-                if not path.exists()
-                or content != self._read_text(path)
-                or self._has_crlf(path)
+                if content != self._current_text(path) or self._has_crlf(path)
             ]
         result = self._apply_plan(overlay, baseline, now)
         # refresh the counts cache, announcing a recreated .wiki/cache/ rather
@@ -1304,8 +1305,14 @@ class Wiki:
                         )
                     )
             # flag a folder that shadows a same-named page: read <name> returns the
-            # folder index, hiding <name>.md (resolution is directory-first)
-            for child in sorted(folder.iterdir()):
+            # folder index, hiding <name>.md (resolution is directory-first); a
+            # folder vanishing between the walk and this listing (a concurrent
+            # delete) lints as absent from the walk
+            try:
+                children = sorted(folder.iterdir())
+            except FileNotFoundError:
+                continue
+            for child in children:
                 if child.is_dir() and not self._is_excluded_dir(child):
                     page = child.with_name(child.name + '.md')
                     if page.is_file():
@@ -1318,9 +1325,15 @@ class Wiki:
                                 folder=child.name,
                             )
                         )
-            # check the index
+            # check the index; read-then-catch rather than an exists probe: an
+            # index vanishing between probe and read (a concurrent delete)
+            # must lint as missing, not raise
             index_path = folder / WIKI_INDEX
-            if not index_path.exists():
+            try:
+                text = self._read_text(index_path)
+            except FileNotFoundError:
+                text = None
+            if text is None:
                 # update would create it; pages below are still linted
                 result.append(
                     Issue(
@@ -1331,7 +1344,6 @@ class Wiki:
                 )
             else:
                 index_relpath = index_path.relative_to(self._root)
-                text = self._read_text(index_path)
                 # mask code once per file; the region parse and the
                 # escaped-wikilink scan below share it
                 masked = wiki.util.markdown.mask_code(text)
@@ -1574,7 +1586,13 @@ class Wiki:
                 # only markdown pages carry frontmatter/content to lint further
                 if page.suffix != '.md':
                     continue
-                text = self._read_text(page)
+                # a page vanishing between the walk and the read (a concurrent
+                # delete) lints as absent from the walk; the next run flags
+                # the stale index row it leaves behind
+                try:
+                    text = self._read_text(page)
+                except FileNotFoundError:
+                    continue
                 # mask code once per file; the region parse and the
                 # escaped-wikilink scan below share it
                 masked = wiki.util.markdown.mask_code(text)
@@ -1802,10 +1820,12 @@ class Wiki:
         result = []
         for path in files:
             # skip binary / non-utf-8 files (e.g. an image under --all) rather
-            # than aborting the whole search on one undecodable file
+            # than aborting the whole search on one undecodable file; a file
+            # vanishing between the walk and the read (a concurrent delete)
+            # matches as absent from the walk
             try:
                 text = path.read_text(encoding='utf-8')
-            except UnicodeDecodeError:
+            except (UnicodeDecodeError, FileNotFoundError):
                 continue
             relpath = str(path.relative_to(self._root))
             lines = text.split('\n')
@@ -2537,16 +2557,24 @@ class Wiki:
             return False
         # only a folder with on-disk children (pages or child folders) would
         # lose links to the gap; the parent '..' link is not a child, so check
-        # the filesystem directly rather than _build_expected_links
+        # the filesystem directly rather than _build_expected_links; a folder
+        # vanishing under the probe (a concurrent delete) has no gap to report
         has_pages = bool(self._find_pages(folder))
-        has_dirs = any(
-            child.is_dir() and not self._is_excluded_dir(child)
-            for child in folder.iterdir()
-        )
+        try:
+            has_dirs = any(
+                child.is_dir() and not self._is_excluded_dir(child)
+                for child in folder.iterdir()
+            )
+        except FileNotFoundError:
+            return False
         if not (has_pages or has_dirs):
             return False
-        # the marker is a line equal to the delimiter
-        text = self._read_text(index_path)
+        # the marker is a line equal to the delimiter; an index vanishing
+        # after the probe (a concurrent delete) has no marker to miss
+        try:
+            text = self._read_text(index_path)
+        except FileNotFoundError:
+            return False
         lines = [line.rstrip() for line in text.split('\n')]
         return self.index_delimiter not in lines
 
@@ -2561,7 +2589,12 @@ class Wiki:
         than a hand-deleted marker. A break deeper in body prose is
         ordinary content and never matches.
         """
-        text = self._read_text(folder / WIKI_INDEX)
+        # an index vanishing under the probe (a concurrent delete) carries
+        # no rewritten marker
+        try:
+            text = self._read_text(folder / WIKI_INDEX)
+        except FileNotFoundError:
+            return False
         lines = text.split('\n')
         _, line_number = format.extract_frontmatter(lines)
         # unclosed frontmatter extracts as none, leaving its own opening
@@ -3031,16 +3064,28 @@ class Wiki:
 
     def _find_dirs(self: Wiki, root: pathlib.Path) -> list[pathlib.Path]:
         """Return all non-excluded directories under ``root``, depth-first."""
+        # a folder vanishing between the walk and its listing (a concurrent
+        # delete) walks as absent, its subtree with it; the next run converges
+        try:
+            children = sorted(root.iterdir())
+        except FileNotFoundError:
+            return []
         result = [root]
-        for child in sorted(root.iterdir()):
+        for child in children:
             if child.is_dir() and not self._is_excluded_dir(child):
                 result.extend(self._find_dirs(child))
         return result
 
     def _find_pages(self: Wiki, folder: pathlib.Path) -> list[pathlib.Path]:
         """Return non-excluded files in ``folder``."""
+        # a folder vanishing between the walk and its listing (a concurrent
+        # delete) has no files left to list
+        try:
+            children = sorted(folder.iterdir())
+        except FileNotFoundError:
+            return []
         result = []
-        for path in sorted(folder.iterdir()):
+        for path in children:
             if path.is_file() and not self._is_excluded_file(path):
                 result.append(path)
         return result
@@ -3099,7 +3144,12 @@ class Wiki:
         normalized form; this byte probe is what makes the drift visible
         to update and lint.
         """
-        return b'\r' in path.read_bytes()
+        # a file vanishing between its read and the probe (a concurrent
+        # delete) has no drift left to normalize
+        try:
+            return b'\r' in path.read_bytes()
+        except FileNotFoundError:
+            return False
 
     def _current_text(
         self: Wiki,
@@ -3126,9 +3176,13 @@ class Wiki:
         """
         if (overlay is not None) and (path in overlay):
             return overlay[path]
-        if path.exists():
+        # read-then-catch rather than an exists probe: a file vanishing
+        # between probe and read (a concurrent delete) must answer as
+        # absent, not raise
+        try:
             return self._read_text(path)
-        return None
+        except FileNotFoundError:
+            return None
 
     def _load_counts(self: Wiki) -> dict[str, int]:
         """Return body word counts for every markdown file, via the cache.
@@ -3167,8 +3221,13 @@ class Wiki:
                 relpath = unicodedata.normalize('NFC', relative)
                 # freshness keys on mtime and size: size catches a rewrite
                 # landing within the filesystem's mtime granularity, and bool
-                # is excluded because it passes an isinstance int check
-                stat = path.stat()
+                # is excluded because it passes an isinstance int check; a
+                # file vanishing before the stat (a concurrent delete) drops
+                # out of the counts like any deleted file
+                try:
+                    stat = path.stat()
+                except FileNotFoundError:
+                    continue
                 entry = cached.get(relpath)
                 fresh = isinstance(entry, dict)
                 if fresh:
@@ -3178,11 +3237,15 @@ class Wiki:
                     counted = isinstance(count, int) and not isinstance(count, bool)
                     fresh = same_mtime and same_size and counted
                 if not fresh:
-                    # an undecodable page has no countable body
+                    # an undecodable page has no countable body; one vanishing
+                    # before the read (a concurrent delete) drops out of the
+                    # counts like any deleted file
                     try:
                         words = format.body_words(self._read_text(path))
                     except UnicodeDecodeError:
                         words = 0
+                    except FileNotFoundError:
+                        continue
                     entry = {
                         'mtime': stat.st_mtime,
                         'size': stat.st_size,
@@ -3318,9 +3381,14 @@ class Wiki:
             target = parent / WIKI_INDEX
             target = target.relative_to(self._root).with_suffix('').as_posix()
             result.append((target, '..'))
-        # child directory links
+        # child directory links; a folder vanishing between the walk and this
+        # listing (a concurrent delete) has no children left to link
+        try:
+            entries = list(folder.iterdir())
+        except FileNotFoundError:
+            entries = []
         children = []
-        for path in folder.iterdir():
+        for path in entries:
             if path.is_dir() and not self._is_excluded_dir(path):
                 children.append(path)
         for child in sorted(children):
@@ -3358,8 +3426,14 @@ class Wiki:
         """
         # initialize results
         result = []
-        # child directory entries (validated on the folder name)
-        for path in sorted(folder.iterdir()):
+        # child directory entries (validated on the folder name); a folder
+        # vanishing between the walk and this listing (a concurrent delete)
+        # has no entries left to validate
+        try:
+            entries = sorted(folder.iterdir())
+        except FileNotFoundError:
+            entries = []
+        for path in entries:
             if path.is_dir() and not self._is_excluded_dir(path):
                 violation = self._name_violation(path.name)
                 if violation is not None:
@@ -3528,9 +3602,14 @@ class Wiki:
             Dict mapping wikilink targets to categorized labels.
 
         """
-        # collect child directories
+        # collect child directories; a folder vanishing between the walk and
+        # this listing (a concurrent delete) has no children left to read
+        try:
+            entries = list(folder.iterdir())
+        except FileNotFoundError:
+            entries = []
         children = []
-        for path in folder.iterdir():
+        for path in entries:
             if path.is_dir() and not self._is_excluded_dir(path):
                 children.append(path)
         # read folder categories from child indexes
@@ -3631,7 +3710,13 @@ class Wiki:
         for folder in folders:
             for page in self._find_pages(folder):
                 if page.suffix == '.md':
-                    text = self._read_text(page)
+                    # a page vanishing between the walk and the read (a
+                    # concurrent delete) plans as absent from the walk; the
+                    # next run prunes its stale index row
+                    try:
+                        text = self._read_text(page)
+                    except FileNotFoundError:
+                        continue
                     baseline[page] = text
                     content, page_notices = self._plan_page(page, now, text=text)
                     overlay[page] = content
@@ -3694,7 +3779,18 @@ class Wiki:
                     count=1,
                     flags=re.MULTILINE,
                 )
-            wiki.util.fs.write_atomic(path, content)
+            # a folder vanishing between the plan and the write (a concurrent
+            # delete) leaves the write nowhere to land: drop the file -- the
+            # next run converges -- while a failure with the folder still
+            # present propagates
+            try:
+                wiki.util.fs.write_atomic(path, content)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                if path.parent.is_dir():
+                    raise
+                continue
             result.append(str(path.relative_to(self._root)))
         return result
 
@@ -4056,11 +4152,16 @@ class Wiki:
         contributes at least one line under ``category``/``markdown``
         and returns whether ``folder``'s did.
         """
-        # an unindexed folder renders no children, so it never matches
+        # an unindexed folder renders no children, so it never matches; an
+        # index vanishing between the probe and the read (a concurrent
+        # delete) matches as unindexed
         index_path = folder / WIKI_INDEX
         if not index_path.is_file():
             return False
-        text = self._read_text(index_path)
+        try:
+            text = self._read_text(index_path)
+        except FileNotFoundError:
+            return False
         _, links, _ = format.parse_index(text, delimiter=self.index_delimiter)
         # broken-ness is the renderer's normalized-target identity (see
         # _map_folder), so the two traversals agree link for link
@@ -4139,10 +4240,17 @@ class Wiki:
         policy = self._map_policy
         indent_unit = policy['indent']
         ellipsis = policy['ellipsis']
-        # read and parse the folder's index
+        # read and parse the folder's index; an index vanishing between the
+        # probe and the read (a concurrent delete) maps as unindexed
         index_path = folder / WIKI_INDEX
         if index_path.is_file():
-            text = self._read_text(index_path)
+            try:
+                text = self._read_text(index_path)
+            except FileNotFoundError:
+                text = None
+        else:
+            text = None
+        if text is not None:
             _, links, _ = format.parse_index(text, delimiter=self.index_delimiter)
         elif current_depth == 0:
             # top-level target has no index: mark it unindexed

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import pathlib
 import shutil
 import sqlite3
@@ -9,6 +10,7 @@ from typing import Optional
 
 import pytest
 
+from wiki.core._search import _build_match_expression
 from wiki.core.wiki import Wiki
 
 from ._helpers import _capture_notices, _make_wiki, _set_exclude_patterns
@@ -19,6 +21,8 @@ __all__ = [
     'test_search_never_returns_index_pages',
     'test_search_skips_excluded_paths',
     'test_search_supports_scope_tags_prefixes_and_raw_queries',
+    'test_search_dedupes_duplicate_query_terms',
+    'test_search_builds_deduped_match_expressions',
     'test_search_propagates_non_query_operational_errors',
     'test_search_scopes_to_exact_subtree',
     'test_search_and_match_canonicalize_scope_casing',
@@ -26,6 +30,8 @@ __all__ = [
     'test_search_notices_unreadable_pages_per_read_attempt',
     'test_search_retries_indexed_pages_after_a_transient_read_failure',
     'test_search_rebuilds_a_corrupt_index',
+    'test_search_heals_a_readonly_index_family',
+    'test_search_raises_once_for_a_readonly_cache_dir',
     'test_search_rebuilds_an_outdated_schema_cache',
 ]
 
@@ -168,6 +174,58 @@ def test_search_supports_scope_tags_prefixes_and_raw_queries(
     # an invalid raw query raises instead of matching nothing
     with pytest.raises(ValueError, match='fts5'):
         wiki.search('[', raw=True)
+
+
+def test_search_dedupes_duplicate_query_terms(tmp_path: pathlib.Path) -> None:
+    """Duplicate safe-query terms match exactly what their deduped form does.
+
+    AND is order-insensitive, so exact duplicates never change the
+    result set -- but with ``prefix`` the final term keeps its exact
+    twin: ``glint gaze glint`` must not widen to pages that only match
+    ``glint*``.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': []})
+    (tmp_path / 'core' / 'exact.md').write_text(
+        '# exact\n\nGlint gaze glintstone prose.\n',
+        encoding='utf-8',
+    )
+    (tmp_path / 'core' / 'wider.md').write_text(
+        '# wider\n\nGlintstone gaze prose.\n',
+        encoding='utf-8',
+    )
+
+    # a duplicate-heavy query matches exactly what its deduped form does
+    assert wiki.search('glint ' * 100) == wiki.search('glint')
+    # the prefixed final term keeps its exact requirement: the page
+    # matching only the wider prefix never surfaces
+    matches = wiki.search('glint gaze glint', prefix=True)
+    assert [path for path, _, _ in matches] == ['core/exact.md']
+
+
+@pytest.mark.parametrize(
+    ('query', 'prefix', 'raw', 'expression'),
+    [
+        # exact duplicates collapse to their first occurrence
+        ('foo bar foo', False, False, '"foo" "bar"'),
+        # the starred final term keeps its exact twin: 'foo*' alone is
+        # wider than 'foo AND foo*'
+        ('foo bar foo', True, False, '"foo" "bar" "foo"*'),
+        ('foo foo', True, False, '"foo" "foo"*'),
+        # without duplicates the final term stars in place
+        ('foo bar', True, False, '"foo" "bar"*'),
+        # raw queries pass through untouched
+        ('foo foo', False, True, 'foo foo'),
+    ],
+)
+def test_search_builds_deduped_match_expressions(
+    query: str,
+    prefix: bool,
+    raw: bool,
+    expression: str,
+) -> None:
+    """Safe queries dedupe exact duplicate terms; the prefix term stays exact."""
+    built = _build_match_expression(query, prefix=prefix, tag=None, raw=raw)
+    assert built == expression
 
 
 def test_search_propagates_non_query_operational_errors(
@@ -381,6 +439,58 @@ def test_search_rebuilds_a_corrupt_index(
         for suffix in ('-wal', '-shm'):
             cache.with_name(cache.name + suffix).unlink(missing_ok=True)
     assert wiki.search('corrupttoken')[0][0] == 'core/page.md'
+
+
+def test_search_heals_a_readonly_index_family(tmp_path: pathlib.Path) -> None:
+    """A read-only index and its stale WAL companions rebuild, never fatal.
+
+    A connection against a read-only ``search.db`` mints WAL companions
+    mirroring its mode, and they outlive a permission fix on the
+    database itself: every later query would fail writing the stale
+    read-only ``-shm``. The readonly family on the derived index
+    discards and rebuilds like corruption.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': []})
+    (tmp_path / 'core' / 'page.md').write_text(
+        '# page\n\nRegrowtoken prose.\n',
+        encoding='utf-8',
+    )
+    assert wiki.search('regrowtoken')[0][0] == 'core/page.md'
+
+    cache = tmp_path / '.wiki' / 'cache' / 'search.db'
+    # a connection against the read-only database mints WAL companions
+    # that mirror its mode, exactly as the engine's own open does
+    os.chmod(cache, 0o444)
+    connection = sqlite3.connect(cache)
+    connection.execute('PRAGMA journal_mode=WAL')
+    connection.close()
+    os.chmod(cache, 0o644)
+    shm = cache.with_name(cache.name + '-shm')
+    assert shm.stat().st_mode & 0o200 == 0
+
+    assert wiki.search('regrowtoken')[0][0] == 'core/page.md'
+
+
+def test_search_raises_once_for_a_readonly_cache_dir(tmp_path: pathlib.Path) -> None:
+    """A read-only cache directory raises one clean error, never a rebuild loop.
+
+    The rebuild itself cannot write into the directory, so the discard
+    seam propagates the failure instead of retrying forever.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': []})
+    (tmp_path / 'core' / 'page.md').write_text(
+        '# page\n\nWalledtoken prose.\n',
+        encoding='utf-8',
+    )
+    assert wiki.search('walledtoken')[0][0] == 'core/page.md'
+
+    cache = tmp_path / '.wiki' / 'cache'
+    os.chmod(cache, 0o555)  # noqa: S103
+    try:
+        with pytest.raises((OSError, sqlite3.OperationalError)):
+            wiki.search('walledtoken')
+    finally:
+        os.chmod(cache, 0o755)  # noqa: S103
 
 
 def test_search_rebuilds_an_outdated_schema_cache(tmp_path: pathlib.Path) -> None:

@@ -101,9 +101,20 @@ def search(
         )
     except sqlite3.DatabaseError as e:
         # corruption (SQLITE_CORRUPT, SQLITE_NOTADB) raises the bare
-        # DatabaseError class; its subclasses carry query and environment
-        # faults a rebuild cannot cure, so only the bare class discards
-        if type(e) is not sqlite3.DatabaseError:
+        # DatabaseError class, and a readonly fault (primary errorcode
+        # SQLITE_READONLY, the low byte of the extended code) marks a
+        # read-only index or a stale read-only WAL companion; both are
+        # derived state one discard-and-rebuild cures, and a second
+        # failure propagates so a read-only cache directory stays a
+        # single clean error, never a loop. Every other subclass carries
+        # query and environment faults a rebuild cannot cure -- locking
+        # (SQLITE_BUSY, SQLITE_LOCKED) and I/O faults propagate
+        # untouched -- so the gate widens no further
+        corrupt = type(e) is sqlite3.DatabaseError
+        readonly = False
+        if type(e) is sqlite3.OperationalError:
+            readonly = (e.sqlite_errorcode & 0xFF) == sqlite3.SQLITE_READONLY
+        if not (corrupt or readonly):
             raise
         _discard(root / WIKI_CACHE)
         rows = _rank(
@@ -360,9 +371,14 @@ def _build_match_expression(
         terms = query.split()
         if not terms:
             raise ValueError(_EMPTY_QUERY)
-        quoted = ['"' + term.replace('"', '""') + '"' for term in terms]
+        # AND is order-insensitive, so exact duplicate terms collapse to
+        # their first occurrence -- except the final term when it stars
+        # below: "foo"* is wider than "foo", so the prefix entry never
+        # absorbs or replaces an exact twin
+        deduped = list(dict.fromkeys(terms[:-1] if prefix else terms))
+        quoted = ['"' + term.replace('"', '""') + '"' for term in deduped]
         if prefix:
-            quoted[-1] += '*'
+            quoted.append('"' + terms[-1].replace('"', '""') + '"*')
         expression = ' '.join(quoted)
     if tag is not None:
         value = tag.replace('"', '""')

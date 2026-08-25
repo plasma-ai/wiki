@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import pathlib
 
+import pytest
+
 from wiki.core.wiki import Wiki
 
 from ._helpers import _make_wiki, _set_exclude_patterns
@@ -17,6 +19,7 @@ __all__ = [
     'test_match_field_matches_value_only',
     'test_all_files_matches_non_markdown_whole',
     'test_match_skips_excluded_paths',
+    'test_match_survives_page_deleted_mid_scan',
 ]
 
 
@@ -148,3 +151,36 @@ def test_match_skips_excluded_paths(tmp_path: pathlib.Path) -> None:
     assert [relpath for relpath, _, _ in hits] == ['core/keep.md']
     hits = wiki.match('needle', all_files=True)
     assert [relpath for relpath, _, _ in hits] == ['core/keep.md']
+
+
+def test_match_survives_page_deleted_mid_scan(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A page deleted after enumeration never crashes match.
+
+    Match reads each enumerated file directly, so a page vanishing
+    between the walk and its read (a concurrent delete) must match as
+    absent from the walk while the surviving pages still report hits.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['keep', 'doomed']})
+    doomed = tmp_path / 'core' / 'doomed.md'
+    real = Wiki._search_files
+
+    def racy(
+        self: Wiki,
+        folder: pathlib.Path,
+        **kwargs: bool,
+    ) -> list[pathlib.Path]:
+        """Delete the doomed page right after the walk lists it."""
+        result = real(self, folder, **kwargs)
+        if doomed.exists():
+            doomed.unlink()
+        return result
+
+    # the mid-scan deletion is handled, not crashed on
+    monkeypatch.setattr(Wiki, '_search_files', racy)
+    hits = wiki.match('Content for')
+    paths = [relpath for relpath, _, _ in hits]
+    assert 'core/keep.md' in paths
+    assert 'core/doomed.md' not in paths

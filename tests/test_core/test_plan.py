@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+import shutil
 import threading
 from typing import Any, Optional
 
@@ -27,6 +28,10 @@ __all__ = [
     'test_update_writes_are_atomic_for_concurrent_readers',
     'test_update_preserves_file_mode',
     'test_update_survives_page_deleted_mid_plan',
+    'test_update_survives_page_deleted_mid_page_pass',
+    'test_update_survives_page_deleted_mid_read',
+    'test_update_survives_folder_deleted_mid_walk',
+    'test_update_survives_folder_deleted_mid_write',
     'test_update_normalizes_crlf_file',
 ]
 
@@ -235,6 +240,149 @@ def test_update_survives_page_deleted_mid_plan(
     err = '\n'.join(event.description for event in notices)
     assert 'Pruned link' in err
     assert 'doomed' in err
+
+
+def test_update_survives_page_deleted_mid_page_pass(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A page deleted after the page pass walks it never crashes update.
+
+    The page pass reads each walked file directly, so a page vanishing
+    between its folder's enumeration and its read (a concurrent node's
+    delete) must plan as absent from the walk rather than raise
+    ``FileNotFoundError``.
+    """
+    wiki = _make_wiki(tmp_path, folders={'notes': ['alpha', 'doomed']})
+    doomed = tmp_path / 'notes' / 'doomed.md'
+    real = Wiki._plan_page
+
+    def racy(
+        self: Wiki,
+        path: pathlib.Path,
+        now: str,
+        **kwargs: Any,
+    ) -> tuple:
+        """Delete the doomed page while its already-walked sibling plans."""
+        if (path != doomed) and doomed.exists():
+            doomed.unlink()
+        return real(self, path, now, **kwargs)
+
+    # the mid-pass deletion is handled, not crashed on
+    monkeypatch.setattr(Wiki, '_plan_page', racy)
+    wiki.update()
+
+    # the next run prunes the vanished page's row with the ordinary notice
+    notices = _capture_notices(wiki)
+    wiki.update()
+    err = '\n'.join(event.description for event in notices)
+    assert 'Pruned link' in err
+    assert 'doomed' in err
+
+
+def test_update_survives_page_deleted_mid_read(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A page deleted inside the read itself never crashes update.
+
+    Cross-file reads resolve absence at the read rather than through a
+    separate existence probe, so a delete landing between any probe and
+    the read (a concurrent node's) still answers as an absent file
+    rather than raising ``FileNotFoundError``.
+    """
+    wiki = _make_wiki(tmp_path, folders={'notes': ['doomed', 'readme']})
+    doomed = tmp_path / 'notes' / 'doomed.md'
+    real = Wiki._read_text
+
+    def racy(self: Wiki, path: pathlib.Path) -> str:
+        """Delete the doomed page just as its read begins."""
+        if (path == doomed) and doomed.exists():
+            doomed.unlink()
+        return real(self, path)
+
+    # the mid-read deletion is handled, not crashed on
+    monkeypatch.setattr(Wiki, '_read_text', racy)
+    wiki.update()
+
+    # the next run prunes the vanished page's row with the ordinary notice
+    notices = _capture_notices(wiki)
+    wiki.update()
+    err = '\n'.join(event.description for event in notices)
+    assert 'Pruned link' in err
+    assert 'doomed' in err
+
+
+def test_update_survives_folder_deleted_mid_walk(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A folder deleted between listing and descent never crashes update.
+
+    The walk lists a folder from its parent and then descends into it,
+    so a folder vanishing inside that window (a concurrent delete) must
+    walk as absent -- its subtree with it -- with the same run pruning
+    the stale parent row.
+    """
+    wiki = _make_wiki(tmp_path, folders={'doomed': ['gone'], 'notes': ['alpha']})
+    doomed = tmp_path / 'doomed'
+    real = Wiki._is_excluded_dir
+
+    def racy(self: Wiki, path: pathlib.Path) -> bool:
+        """Delete the doomed folder just after the walk lists it."""
+        result = real(self, path)
+        if (path == doomed) and doomed.exists():
+            shutil.rmtree(doomed)
+        return result
+
+    # the mid-walk deletion is handled, not crashed on, and the same run
+    # prunes the vanished folder's row with the ordinary notice
+    monkeypatch.setattr(Wiki, '_is_excluded_dir', racy)
+    notices = _capture_notices(wiki)
+    wiki.update()
+    err = '\n'.join(event.description for event in notices)
+    assert 'Pruned link' in err
+    assert 'doomed' in err
+
+    # the tree has converged: nothing left pending
+    assert wiki.update(check=True) == []
+
+
+def test_update_survives_folder_deleted_mid_write(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A folder deleted between the plan and the write never crashes update.
+
+    A fresh folder's planned index has nowhere to land once the folder
+    vanishes (a concurrent delete), so the write is dropped -- never
+    recreating the folder or reporting it written -- and the next run
+    converges.
+    """
+    wiki = _make_wiki(tmp_path, folders={'notes': ['alpha']})
+    doomed = tmp_path / 'doomed'
+    doomed.mkdir()
+    real = Wiki._refuse_conflicted
+
+    def racy(
+        self: Wiki,
+        baseline: dict[pathlib.Path, Optional[str]],
+    ) -> None:
+        """Delete the doomed folder after the plan staged its fresh index."""
+        if doomed.exists():
+            shutil.rmtree(doomed)
+        return real(self, baseline)
+
+    # the mid-write deletion is handled, not crashed on, and the dropped
+    # write neither recreates the folder nor reports it written
+    monkeypatch.setattr(Wiki, '_refuse_conflicted', racy)
+    written = wiki.update()
+    assert not doomed.exists()
+    assert all('doomed' not in path for path in written)
+
+    # the next run prunes the stale parent row and converges
+    wiki.update()
+    assert wiki.update(check=True) == []
 
 
 # ------ byte normalization

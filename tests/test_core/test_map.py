@@ -30,6 +30,8 @@ __all__ = [
     'test_update_announces_recreated_cache',
     'test_map_survives_cache_damage',
     'test_map_survives_readonly_cache',
+    'test_map_survives_page_deleted_mid_count',
+    'test_map_survives_index_deleted_mid_render',
     'test_map_recounts_same_mtime_rewrite',
     'test_quoted_category_labels_and_filters',
     'test_map_output',
@@ -145,6 +147,67 @@ def test_map_survives_readonly_cache(tmp_path: pathlib.Path) -> None:
     finally:
         cache_dir.chmod(0o755)
     assert re.search(r'design \(\d+\)', output)
+
+
+def test_map_survives_page_deleted_mid_count(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A page deleted while its count recomputes never crashes map.
+
+    The cache can never break a command: a page vanishing between the
+    walk and its recount read (a concurrent delete) drops out of the
+    counts like any deleted file, and the render still shows real counts
+    for the survivors.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design', 'doomed']})
+    doomed = tmp_path / 'core' / 'doomed.md'
+    # stale the cached count, so the render must re-read the page
+    doomed.write_text(
+        doomed.read_text(encoding='utf-8') + '\nMore words for the count.\n',
+        encoding='utf-8',
+    )
+    real = Wiki._read_text
+
+    def racy(self: Wiki, path: pathlib.Path) -> str:
+        """Delete the doomed page just before its recount reads it."""
+        if (path == doomed) and doomed.exists():
+            doomed.unlink()
+        return real(self, path)
+
+    # the mid-count deletion is handled, not crashed on
+    monkeypatch.setattr(Wiki, '_read_text', racy)
+    output = wiki.map()
+    assert re.search(r'design \(\d+\)', output)
+
+
+def test_map_survives_index_deleted_mid_render(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An index deleted just before its render read never crashes map.
+
+    The render probes each folder's index and then reads it, so an
+    index vanishing inside that window (a concurrent delete) must
+    render the folder as unindexed while the rest of the tree still
+    shows.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design'], 'doomed': ['gone']})
+    doomed_index = tmp_path / 'doomed' / '_index.md'
+    real = Wiki._read_text
+
+    def racy(self: Wiki, path: pathlib.Path) -> str:
+        """Delete the doomed index just as its render read begins."""
+        if (path == doomed_index) and doomed_index.exists():
+            doomed_index.unlink()
+        return real(self, path)
+
+    # the mid-render deletion is handled, not crashed on, and the
+    # vanished folder renders unindexed while the survivors still show
+    monkeypatch.setattr(Wiki, '_read_text', racy)
+    output = wiki.map()
+    assert re.search(r'design \(\d+\)', output)
+    assert 'gone' not in output
 
 
 def test_map_recounts_same_mtime_rewrite(tmp_path: pathlib.Path) -> None:
