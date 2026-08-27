@@ -7,6 +7,8 @@ import fcntl
 import json
 import os
 import pathlib
+import subprocess
+import sys
 import threading
 from typing import Optional
 
@@ -26,7 +28,7 @@ from wiki.cli.utils import (
 )
 from wiki.core.wiki import Wiki
 
-from .conftest import GIT, _git
+from .conftest import GIT, _env, _git
 
 __all__ = [
     'test_resolve_wiki_root',
@@ -55,6 +57,7 @@ __all__ = [
     'test_is_trusted_ignores_malformed_store',
     'test_reused_command_honors_resolve_override',
     'test_resolve_wiki_default_class',
+    'test_interrupt_reports_and_exits_130',
     'test_merge_driver_wiring_ignores_ambient_git_dir',
     'test_configure_git_merge_driver',
     'test_merge_driver_skips_dirty_gitattributes',
@@ -915,6 +918,48 @@ def test_resolve_wiki_default_class(tmp_path: pathlib.Path) -> None:
         encoding='utf-8',
     )
     assert type(resolve_wiki(str(root), default=EmbedderWiki)).__name__ == 'HookWiki'
+
+
+# ------ command error wrapper
+
+# a wrapped command interrupted mid-body: the self-delivered SIGINT is a
+# foreground Ctrl-C in miniature
+_INTERRUPTED = """
+import os
+import signal
+
+import typer
+
+from wiki.cli.utils import command
+
+app = typer.Typer()
+
+
+@command(app, 'quick')
+def quick() -> None:
+    os.kill(os.getpid(), signal.SIGINT)
+
+
+app([])
+"""
+
+
+def test_interrupt_reports_and_exits_130() -> None:
+    """A Ctrl-C prints one ``Interrupted.`` line and exits 130.
+
+    The wrapper names the interrupt on stderr and re-raises, so typer's
+    own KeyboardInterrupt handling supplies the exit code and no
+    traceback reaches the operator.
+    """
+    result = subprocess.run(
+        [sys.executable, '-c', _INTERRUPTED],
+        capture_output=True,
+        text=True,
+        env=_env(),
+        timeout=60,
+    )
+    assert result.returncode == 130, result.stderr
+    assert result.stderr == 'Interrupted.\n'
 
 
 # ------ configure_git_merge_driver
