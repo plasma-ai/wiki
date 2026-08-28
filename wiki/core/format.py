@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import re
 import textwrap
 from typing import Optional
@@ -34,6 +35,20 @@ _FRONTMATTER_TAIL = (
     'created',
     'updated',
 )
+
+# per-process memo of composed frontmatter blocks: an update reads each block
+# a few times and a lint a few more, and a run over a few thousand pages fits
+# one cache at about a kilobyte per block
+_SCALAR_CACHE_SIZE = 4096
+
+# characters that open a YAML indicator (flow collection, comment, node
+# property, block scalar, quote, directive, reserved) when they lead a value
+_INDICATOR_CHARS = ',[]{}#&*!|>\'"%@`'
+
+# the scalar fields of one block: key -> (value text, style) for a scalar
+# value -- the style None for plain, else the quote or block indicator -- and
+# None for a sequence or mapping value
+_Fields = dict[str, Optional[tuple[str, Optional[str]]]]
 
 
 def extract_frontmatter(lines: list[str]) -> tuple[str, int]:
@@ -377,6 +392,22 @@ def strip_blank_lines(frontmatter: str) -> str:
     return '\n'.join(result)
 
 
+def _valueless(indicator: str, body: str, *, nulls: tuple[str, ...]) -> bool:
+    """Return whether a field's ``indicator`` line and indented ``body`` carry no value.
+
+    A trailing ``# comment`` on the indicator line is not a value, so
+    ``null # why`` resets like ``null`` and ``| # note`` is an empty
+    block like ``|``; the field is valueless when what remains is one
+    of the ``nulls`` spellings or a bare block header over no body.
+    """
+    value = indicator.split(':', 1)[1].strip()
+    # a hash leading the value or following whitespace opens a comment
+    value = re.sub(r'(?:^|\s)#.*', '', value).strip()
+    no_value = value in nulls
+    bare_indicator = bool(re.fullmatch(r'[|>][-+0-9]*', value))
+    return not body.strip() and (no_value or bare_indicator)
+
+
 def repair_frontmatter(
     frontmatter: str,
     *,
@@ -423,9 +454,9 @@ def repair_frontmatter(
         # backslash-digit in the name is not read as a group reference
         fresh = f'name: {quote(name)}\n'
         value = name_field.group(1).strip()
-        if value.startswith(('|', '>')) or not value:
-            # block scalar (or bare key, folding like >): the whole indented
-            # body goes -- a `#` line or a blank inside it is content
+        if value.startswith(('|', '>')):
+            # block scalar: the whole indented body goes -- a `#` line or a
+            # blank inside it is content
             frontmatter = re.sub(
                 pattern=r'^name:.*\n(?:[ \t]+.*\n|[ \t]*\n)*',
                 repl=lambda _: fresh,
@@ -434,12 +465,12 @@ def repair_frontmatter(
                 flags=re.MULTILINE,
             )
         else:
-            # plain value: every continuation line is value text and goes -- blank
-            # lines included, since strip_blank_lines keeps a blank whose next line
-            # stays indented and a paragraph break belongs to the stale value being
-            # replaced -- while the `# comment` lines among them re-emit under the
-            # fresh name; consuming the full extent means nothing strands as a
-            # continuation of the fresh one-liner
+            # plain value or bare key: every continuation line is value text and
+            # goes -- blank lines included, since strip_blank_lines keeps a blank
+            # whose next line stays indented and a paragraph break belongs to the
+            # stale value being replaced -- while the `# comment` lines among them
+            # re-emit under the fresh name; consuming the full extent means
+            # nothing strands as a continuation of the fresh one-liner
             def keep_comments(match: re.Match[str]) -> str:
                 lines = match.group(1).splitlines(keepends=True)
                 comments = [line for line in lines if line.lstrip().startswith('#')]
@@ -466,10 +497,7 @@ def repair_frontmatter(
     )
     if desc_match:
         indicator, _, body = desc_match.group(0).partition('\n')
-        value = indicator.split(':', 1)[1].strip()
-        no_value = value in ('', "''", '""')
-        bare_indicator = bool(re.fullmatch(r'[|>][-+0-9]*', value))
-        if not body.strip() and (no_value or bare_indicator):
+        if _valueless(indicator, body, nulls=('', "''", '""')):
             frontmatter = (
                 frontmatter[: desc_match.start()]
                 + 'desc: ...\n'
@@ -483,9 +511,15 @@ def repair_frontmatter(
             count=1,
             flags=re.MULTILINE,
         )
-    # add created/updated if missing; stamp a present-but-blank key
-    # in place so a duplicate is never appended
-    if re.search(r'^created:[^\S\n]*$', frontmatter, re.MULTILINE):
+    # add created/updated if missing; stamp a present-but-blank key in
+    # place so a duplicate is never appended -- a bare key over an indented
+    # body is a value (lint judges it), never a blank to stamp over
+    created = re.search(
+        pattern=r'^created:[^\S\n]*\n((?:[ \t]+.*\n|[ \t]*\n)*)',
+        string=frontmatter,
+        flags=re.MULTILINE,
+    )
+    if created and not created.group(1).strip():
         frontmatter = re.sub(
             pattern=r'^created:[^\S\n]*$',
             # a callable repl, so a backslash in a user timestamp.format is
@@ -499,7 +533,12 @@ def repair_frontmatter(
         match = re.search(r'^updated:', frontmatter, re.MULTILINE)
         pos = match.start() if match else frontmatter.rfind('---')
         frontmatter = frontmatter[:pos] + f'created: {now}\n' + frontmatter[pos:]
-    if re.search(r'^updated:[^\S\n]*$', frontmatter, re.MULTILINE):
+    updated = re.search(
+        pattern=r'^updated:[^\S\n]*\n((?:[ \t]+.*\n|[ \t]*\n)*)',
+        string=frontmatter,
+        flags=re.MULTILINE,
+    )
+    if updated and not updated.group(1).strip():
         frontmatter = re.sub(
             pattern=r'^updated:[^\S\n]*$',
             repl=lambda _: f'updated: {now}',
@@ -524,10 +563,7 @@ def repair_frontmatter(
         )
         if match:
             indicator, _, body = match.group(0).partition('\n')
-            value = indicator.split(':', 1)[1].strip()
-            no_value = value in ('', 'null')
-            bare_indicator = bool(re.fullmatch(r'[|>][-+0-9]*', value))
-            if not body.strip() and (no_value or bare_indicator):
+            if _valueless(indicator, body, nulls=('', 'null')):
                 frontmatter = frontmatter[: match.start()] + frontmatter[match.end() :]
     # drop an unset title the same way (the first occurrence wins,
     # matching every reader); an authored title's slot under name: is
@@ -540,10 +576,7 @@ def repair_frontmatter(
         )
         if match:
             indicator, _, body = match.group(0).partition('\n')
-            value = indicator.split(':', 1)[1].strip()
-            no_value = value in ('', 'null')
-            bare_indicator = bool(re.fullmatch(r'[|>][-+0-9]*', value))
-            if not body.strip() and (no_value or bare_indicator):
+            if _valueless(indicator, body, nulls=('', 'null')):
                 frontmatter = frontmatter[: match.start()] + frontmatter[match.end() :]
     # enforce the canonical field order LAST: the insertions above anchor
     # on schema neighbors and authored fields start anywhere, so the full
@@ -647,20 +680,132 @@ def replace_heading(content: str, name: str) -> str:
     return content
 
 
-def read_frontmatter_field(frontmatter: str, key: str) -> Optional[str]:
-    """Read a scalar frontmatter ``key``, resolving block scalars.
+@functools.lru_cache(maxsize=_SCALAR_CACHE_SIZE)
+def _compose_fields(frontmatter: str) -> tuple[str, _Fields]:
+    """Compose a frontmatter block into its top-level scalar fields.
 
-    A plain ``key: value`` returns the stripped value, with one pair of
-    matching surrounding YAML quotes stripped (a desc containing ``: ``
-    must be quoted to stay valid YAML). A block scalar (``|``/``>`` with
-    optional chomping/indentation indicators, e.g. ``|-``, ``>+``, ``|2``)
-    resolves to its body: a literal ``|`` keeps line breaks, a folded
-    ``>`` joins consecutive non-empty lines with a single space (a blank
-    line is a paragraph break). Inline text on the indicator line
-    (``key: > one liner.``) is taken as the value when no indented body
-    follows. A bare ``key:`` over an indented body is a plain multi-line
-    scalar and folds the same way ``>`` does. Returns ``None`` if the
-    field is absent; an empty block body resolves to an empty string.
+    Returns ``(kind, fields)``. ``kind`` is ``'mapping'`` when the body
+    is a YAML mapping -- ``fields`` then maps each key, first occurrence
+    winning, to its scalar text and style (``None`` for plain, else the
+    quote or block indicator), or to ``None`` for a sequence or mapping
+    value -- ``'empty'`` for a body with no content, ``'nonmapping'``
+    for valid YAML that is not a mapping, and ``'invalid'`` when the
+    parser rejects the body or a key is not a scalar. Only the body
+    between the fences reaches the parser: the fences are the wiki's
+    grammar and document markers to YAML. The node graph is composed,
+    never constructed, so a stamp stays its source text and a
+    typed-looking title stays a string.
+    """
+    import yaml
+
+    # feed the parser the body between the fences (a fenceless body reads as is)
+    lines = frontmatter.split('\n')
+    if lines and (lines[0].lstrip('﻿').strip() == '---'):
+        lines = lines[1:]
+    if lines and (lines[-1].rstrip() == '---'):
+        lines = lines[:-1]
+    body = '\n'.join(lines) + '\n'
+    # the C loader is a build-time option of the PyYAML wheel; values and
+    # styles match the pure loader's, which raises RecursionError on nesting
+    # the C loader composes
+    loader = getattr(yaml, 'CSafeLoader', yaml.SafeLoader)
+    try:
+        root = yaml.compose(body, Loader=loader)
+    except (yaml.YAMLError, RecursionError):
+        return 'invalid', {}
+    if root is None:
+        return 'empty', {}
+    if not isinstance(root, yaml.MappingNode):
+        return 'nonmapping', {}
+    # walk the pairs in order; the first occurrence of a key wins
+    fields: _Fields = {}
+    for key_node, value_node in root.value:
+        if not isinstance(key_node, yaml.ScalarNode):
+            return 'invalid', {}
+        if key_node.value in fields:
+            continue
+        if isinstance(value_node, yaml.ScalarNode):
+            # the C loader reports a plain style as '', the pure loader as None
+            fields[key_node.value] = (value_node.value, value_node.style or None)
+        else:
+            fields[key_node.value] = None
+    return 'mapping', fields
+
+
+def _scalar_fields(frontmatter: str) -> Optional[_Fields]:
+    """Return the block's scalar fields, or ``None`` to defer to the line grammar.
+
+    A block the parser rejects, a body that is not a mapping, and a
+    non-scalar key all read through the line grammar, so the reader
+    never fails on input the writer tolerates.
+    """
+    kind, fields = _compose_fields(frontmatter)
+    if kind == 'mapping':
+        return fields
+    if kind == 'empty':
+        return {}
+    return None
+
+
+def nonmapping_frontmatter(frontmatter: str) -> bool:
+    """Return whether the block is valid YAML that is not a ``key: value`` mapping.
+
+    A bare sentence or a list between the fences has no fields to read
+    or repair; the planners keep such a page as written and report it
+    rather than append fields under the text.
+    """
+    kind, _ = _compose_fields(frontmatter)
+    return kind == 'nonmapping'
+
+
+def read_frontmatter_field(frontmatter: str, key: str) -> Optional[str]:
+    """Read a scalar frontmatter ``key`` as a strict YAML reader sees it.
+
+    The value is the scalar text a YAML parser resolves -- a plain scalar
+    folded across its continuation lines, a quoted scalar decoded, a
+    block scalar's body without its final line breaks (every consumer
+    wants the text, not the chomping) -- and never a coerced type: a
+    stamp stays its source text. The first occurrence of a duplicated
+    key wins. Returns ``None`` when the field is absent or a bare
+    ``key:`` has no body. A sequence or mapping value, a block the
+    parser rejects, and a body that is not a mapping fall back to the
+    line grammar (:func:`_read_field_lines`), so the wiki's leniencies --
+    an unquoted ``: `` inside a one-line value, conflict markers -- read
+    as before.
+    """
+    fields = _scalar_fields(frontmatter)
+    if fields is None:
+        return _read_field_lines(frontmatter, key)
+    if key not in fields:
+        return None
+    entry = fields[key]
+    if entry is None:
+        return _read_field_lines(frontmatter, key)
+    value, style = entry
+    # a block scalar's final breaks are chomping, not content
+    if style in ('|', '>'):
+        return value.rstrip('\n')
+    # a bare key with no body reads as an absent value
+    if (style is None) and (value == ''):
+        return None
+    return value
+
+
+def _read_field_lines(frontmatter: str, key: str) -> Optional[str]:
+    """Read a scalar frontmatter ``key`` with the line grammar.
+
+    The fallback behind :func:`read_frontmatter_field` for a block a
+    strict parser rejects. A plain ``key: value`` returns the stripped
+    value, with one pair of matching surrounding YAML quotes stripped. A
+    block scalar (``|``/``>`` with optional chomping/indentation
+    indicators, e.g. ``|-``, ``>+``, ``|2``) resolves to its body: a
+    literal ``|`` keeps line breaks, a folded ``>`` joins consecutive
+    non-empty lines with a single space (a blank line is a paragraph
+    break). Inline text on the indicator line (``key: > one liner.``) is
+    taken as the value when no indented body follows. A bare ``key:``
+    over an indented body is a plain multi-line scalar and folds the
+    same way ``>`` does. Returns ``None`` if the field is absent; an
+    empty block body resolves to an empty string.
     """
     # single-line value
     match = re.search(rf'^{key}:[^\S\n]*(.+)$', frontmatter, re.MULTILINE)
@@ -720,6 +865,22 @@ def read_frontmatter_name(frontmatter: str) -> Optional[str]:
     return join_lines(value)
 
 
+def _unset_field(frontmatter: str, key: str) -> bool:
+    """Return whether ``key`` is absent or carries the plain ``null`` reset idiom.
+
+    A plain lowercase ``null`` -- with or without a trailing comment --
+    is the one reset spelling; a quoted or block-scalar ``null`` is
+    authored text. Under the line grammar the check reads the raw
+    spelling, since unquoting first would collapse an authored
+    ``'null'`` into the idiom.
+    """
+    fields = _scalar_fields(frontmatter)
+    if fields is not None:
+        return (key not in fields) or (fields[key] == ('null', None))
+    match = re.search(rf'^{key}:[^\S\n]*(.*)$', frontmatter, re.MULTILINE)
+    return (match is None) or (match.group(1).strip() == 'null')
+
+
 def read_frontmatter_title(frontmatter: str) -> str:
     """Return the ``title`` field from frontmatter text.
 
@@ -733,12 +894,9 @@ def read_frontmatter_title(frontmatter: str) -> str:
     growth (authored frontmatter is user input; this is boundary
     validation).
     """
-    # the unset check reads the raw spelling: unquoting first would
-    # collapse an authored 'null' into the reset idiom; a bare 'title:'
-    # defers to the delegate, which resolves an indented body as a plain
-    # multi-line scalar and no body as an absent value
-    match = re.search(r'^title:[^\S\n]*(.*)$', frontmatter, re.MULTILINE)
-    if (match is None) or (match.group(1).strip() == 'null'):
+    # a bare 'title:' defers to the delegate, which resolves an indented
+    # body as a plain multi-line scalar and no body as an absent value
+    if _unset_field(frontmatter, 'title'):
         return ''
     value = read_frontmatter_field(frontmatter, 'title')
     return join_lines(value or '')
@@ -766,12 +924,9 @@ def read_frontmatter_category(frontmatter: str) -> str:
     raw newline would break the row on every parse (authored frontmatter
     is user input; this is boundary validation).
     """
-    # the unset check reads the raw spelling: unquoting first would
-    # collapse an authored 'null' into the reset idiom; a bare
-    # 'category:' defers to the delegate, which resolves an indented
+    # a bare 'category:' defers to the delegate, which resolves an indented
     # body as a plain multi-line scalar and no body as an absent value
-    match = re.search(r'^category:[^\S\n]*(.*)$', frontmatter, re.MULTILINE)
-    if (match is None) or (match.group(1).strip() == 'null'):
+    if _unset_field(frontmatter, 'category'):
         return ''
     value = read_frontmatter_field(frontmatter, 'category')
     return join_lines(value or '')
@@ -972,22 +1127,40 @@ def fold_lines(text: str) -> str:
     return '\n'.join(paragraphs)
 
 
-def quote(value: str) -> str:
-    """YAML-quote a scalar when writing it plain would break the mapping.
+def _plain_safe(value: str) -> bool:
+    """Return whether a strict YAML reader reads ``value`` back verbatim when plain.
 
     A value containing ``': '`` (or ending with ``:``) reads as a nested
-    mapping in YAML, one opening with a block-scalar indicator (``|``/``>``)
-    reads as a block scalar (:func:`read_frontmatter_field` diverts it there
-    and eats the indicator), and one wrapped in matching quote chars would
-    lose its quotes to :func:`unquote` on read, so each is written
-    single-quoted with embedded single quotes doubled; any other value
-    passes through unquoted. Inverse of :func:`unquote` for the values
-    the wiki writes.
+    mapping, one containing ``' #'`` loses everything from the hash (a
+    comment), one opening with an indicator character or ``- ``/``? ``/
+    ``: `` reads as structure, a node property, or a quoted scalar, and
+    leading or trailing whitespace (a tab anywhere) is dropped or
+    rejected -- so none of them may be written plain.
     """
-    mapping_shaped = ': ' in value or value.endswith(':')
-    block_shaped = value.startswith(('|', '>'))
-    quote_wrapped = unquote(value) != value
-    if mapping_shaped or block_shaped or quote_wrapped:
+    if not value:
+        return True
+    if value != value.strip():
+        return False
+    if (': ' in value) or value.endswith(':') or (' #' in value) or ('\t' in value):
+        return False
+    if value[0] in _INDICATOR_CHARS:
+        return False
+    if (value in ('-', '?', ':')) or (value[:2] in ('- ', '? ', ': ')):
+        return False
+    return True
+
+
+def quote(value: str) -> str:
+    """YAML-quote a scalar when writing it plain would misread.
+
+    A value a strict reader would not read back verbatim as plain text
+    (:func:`_plain_safe`) -- one shaped like a mapping, carrying a
+    comment start, opening with an indicator, or wrapped in quote chars
+    that :func:`unquote` would strip on read -- is written single-quoted
+    with embedded single quotes doubled; any other value passes through
+    unquoted. Inverse of :func:`unquote` for the values the wiki writes.
+    """
+    if not _plain_safe(value):
         escaped = value.replace("'", "''")
         return f"'{escaped}'"
     return value

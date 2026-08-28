@@ -21,7 +21,7 @@ __all__ = []
 _CACHE_NAME = 'search.db'
 # any change to the notes_fts columns, tokenizer, or field extraction
 # must bump this so stale indexes drop and rebuild on the next query
-_SCHEMA_VERSION = '2'
+_SCHEMA_VERSION = '3'
 # ATX headings at any depth, harvested into the weighted headings field
 _HEADING = re.compile(r'^#{1,6}\s+(.*)$', re.MULTILINE)
 # BM25 weights for (title, desc, headings, tags, body): curated metadata

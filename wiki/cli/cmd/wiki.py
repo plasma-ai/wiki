@@ -130,10 +130,10 @@ _UPDATE_CATEGORIES = [
     ),
     (
         FrontmatterMalformedEvent,
-        '1 page with malformed frontmatter (no closing ---)',
-        '{n} pages with malformed frontmatter (no closing ---)',
-        '1 page with malformed frontmatter (no closing ---)',
-        '{n} pages with malformed frontmatter (no closing ---)',
+        '1 page with malformed frontmatter',
+        '{n} pages with malformed frontmatter',
+        '1 page with malformed frontmatter',
+        '{n} pages with malformed frontmatter',
     ),
     (
         IndexTruncatedEvent,

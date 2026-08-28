@@ -28,6 +28,7 @@ from ._helpers import (
     _make_wiki,
     page_index,
 )
+from ._oracle import field_lines, grammar
 
 __all__ = [
     'test_update_full_workflow',
@@ -63,6 +64,7 @@ __all__ = [
     'test_update_preserves_authored_yaml_values',
     'test_update_refreshes_any_name_shape_to_the_path',
     'test_update_folds_and_preserves_inline_desc',
+    'test_update_propagates_every_multi_line_desc_shape',
     'test_update_preserves_prose_above_delimiter',
     'test_update_preserves_prose_below_delimiter_above_h1',
     'test_update_broken_links',
@@ -75,15 +77,18 @@ __all__ = [
     'test_update_rewrapped_desc_converges_quietly',
     'test_update_blank_line_in_desc_row_converges_quietly',
     'test_update_converges_on_wrap_mangled_desc',
+    'test_update_converges_on_every_grammar_shape',
     'test_update_scoped',
     'test_reclaimed_index_keeps_link_shaped_continuation',
     'test_body_edits_never_dirty_the_tree',
     'test_update_fills_blank_frontmatter_values',
+    'test_update_keeps_a_bare_key_stamp_body',
     'test_update_inserts_timestamps_in_canonical_order',
     'test_update_inserts_desc_in_schema_order',
     'test_update_enforces_canonical_field_order',
     'test_read_frontmatter_category',
     'test_quoted_desc_propagates_and_lints_clean',
+    'test_update_reads_category_and_title_per_yaml',
     'test_update_category_labels',
     'test_category_propagates_and_clears',
     'test_sort_unlisted_category',
@@ -741,20 +746,28 @@ def test_update_drops_block_scalar_name_body(tmp_path: pathlib.Path) -> None:
     assert Wiki(tmp_path).update() == []
 
 
-def test_update_keeps_a_comment_under_name(tmp_path: pathlib.Path) -> None:
-    """An indented ``# comment`` under a one-line ``name:`` survives the refresh.
+@pytest.mark.parametrize(
+    argnames='field',
+    argvalues=[
+        'name: core/design\n  # named for the design doc',
+        'name:\n  core/design\n  # named for the design doc',
+    ],
+    ids=['plain-value', 'bare-key-body'],
+)
+def test_update_keeps_a_comment_under_name(tmp_path: pathlib.Path, field: str) -> None:
+    """An indented ``# comment`` under ``name:`` survives the refresh.
 
-    Under a plain value an indented hash line is a YAML comment, not a
-    continuation -- the refresh consumes value lines and blanks only, so
-    an authored annotation is neither folded into the name nor deleted.
+    Under a plain value -- on the key line or as a bare key's indented
+    body -- an indented hash line is a YAML comment, not a continuation:
+    the refresh consumes value lines and blanks only, so an authored
+    annotation is neither folded into the name nor deleted.
     """
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
 
     # author a child page annotating its (already canonical) name
     page = tmp_path / 'core' / 'design.md'
     page.write_text(
-        '---\nname: core/design\n  # named for the design doc\ndesc: A page.\n'
-        '---\n\n# design\n\nBody.\n',
+        f'---\n{field}\ndesc: A page.\n---\n\n# design\n\nBody.\n',
         encoding='utf-8',
     )
 
@@ -1147,6 +1160,56 @@ def test_update_folds_and_preserves_inline_desc(tmp_path: pathlib.Path) -> None:
     assert 'inline summary here.' in core_index
 
 
+@pytest.mark.parametrize(
+    argnames='shape',
+    argvalues=[
+        'desc: Explains the first half.\n  And the second half.',
+        "desc: 'Explains the first half.\n  And the second half.'",
+        'desc: "Explains the first half.\n  And the second half."',
+        'desc:\n  Explains the first half.\n  And the second half.\n  # authored note',
+        'desc:  \n  Explains the first half.\n  And the second half.',
+        'desc: |\n  Explains the first half.\n  And the second half.',
+    ],
+    ids=[
+        'inline-continuation',
+        'single-quoted-spanning',
+        'double-quoted-spanning',
+        'bare-key-with-comment',
+        'bare-key-trailing-spaces',
+        'literal-block',
+    ],
+)
+def test_update_propagates_every_multi_line_desc_shape(
+    tmp_path: pathlib.Path,
+    shape: str,
+) -> None:
+    """Every multi-line desc shape propagates its whole text to the parent row.
+
+    A plain scalar continuing below the key line, a quoted scalar spanning
+    lines, a bare key over a body (with a trailing comment or trailing
+    spaces on the key line) and a literal block all carry the same two
+    sentences; the parent row reads both, no comment text leaks into it,
+    lint is clean, and the second update is a no-op.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        f'---\nname: core/design\n{shape}\ntags: []\n---\n\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # the parent row carries both sentences (one line or two) and no comment
+    wiki.update()
+    index = (tmp_path / 'core' / '_index.md').read_text(encoding='utf-8')
+    rows = ' '.join(index.split('\n\n***')[0].split())
+    assert (
+        '[[core/design|design]]: Explains the first half. And the second half.' in rows
+    )
+    assert 'authored note' not in index
+    assert Wiki(tmp_path).lint() == []
+    assert Wiki(tmp_path).update() == []
+
+
 def test_update_preserves_prose_above_delimiter(tmp_path: pathlib.Path) -> None:
     """Prose placed above the '***' delimiter is preserved, not silently dropped.
 
@@ -1518,6 +1581,34 @@ def test_update_converges_on_wrap_mangled_desc(tmp_path: pathlib.Path) -> None:
     assert any(issue.startswith('core/_index.md: Hyphen dangle') for issue in issues)
 
 
+def test_update_converges_on_every_grammar_shape(tmp_path: pathlib.Path) -> None:
+    """Every grammar shape of every authored field converges in one update.
+
+    Churn as an engine property: a page whose ``name``, ``title``,
+    ``desc``, and ``category`` all take one scalar shape is repaired
+    once, the second run is a byte no-op, and lint reports no repair
+    still pending -- so no shape makes the reader and the repair disagree
+    about what the page says.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': []})
+    for shape in grammar():
+        stem = '-'.join(shape).replace('|', 'literal').replace('>', 'folded')
+        stem = stem.replace('+', 'plus')
+        lines = ['---']
+        for key in ('name', 'title', 'desc', 'category'):
+            lines.extend(field_lines(key, *shape))
+        lines.extend(['---', '', f'# {stem}', '', 'Body.', ''])
+        (tmp_path / 'core' / f'{stem}.md').write_text(
+            '\n'.join(lines), encoding='utf-8'
+        )
+
+    # one update repairs every page; the second is a no-op with nothing pending
+    wiki.update()
+    assert Wiki(tmp_path).update() == []
+    pending = {'requires_update', 'malformed_frontmatter', 'truncated_index'}
+    assert [issue for issue in Wiki(tmp_path).lint() if issue.kind in pending] == []
+
+
 def test_update_scoped(tmp_path: pathlib.Path) -> None:
     """Scoped update only modifies the specified subtree."""
     # build a populated wiki with two sibling folders
@@ -1664,6 +1755,38 @@ def test_update_fills_blank_frontmatter_values(
 
     # the fill is idempotent
     assert wiki.update() == []
+
+
+@pytest.mark.parametrize('field', ['created', 'updated'])
+def test_update_keeps_a_bare_key_stamp_body(tmp_path: pathlib.Path, field: str) -> None:
+    """A stamp continued on an indented line is a value, never a blank to stamp over.
+
+    ``created:`` over an indented stamp is a plain multi-line scalar; a
+    repair that read the bare key line as blank would stamp the run's
+    clock onto it and strand the authored stamp below, where a strict
+    reader folds both into one unparseable value. ``created:`` keeps its
+    body, and ``updated:`` -- re-stamped on every real write -- is
+    replaced as one line, body included.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    stamp = '2026-07-24T20:35:56Z'
+    page.write_text(
+        f'---\nname: core/design\ndesc: A page.\n{field}:\n  {stamp}\n---\n\n'
+        '# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # the authored stamp is kept whole or replaced whole, never split
+    wiki.update()
+    frontmatter = page.read_text(encoding='utf-8').split('---\n')[1]
+    if field == 'created':
+        assert f'created:\n  {stamp}\n' in frontmatter
+    else:
+        assert re.search(r'^updated: \S+\n(?![ \t])', frontmatter, re.M)
+        assert stamp not in frontmatter
+    assert Wiki(tmp_path).lint() == []
+    assert Wiki(tmp_path).update() == []
 
 
 @pytest.mark.parametrize(
@@ -1858,6 +1981,49 @@ def test_quoted_desc_propagates_and_lints_clean(
     # the parent link line carries the desc without the quotes
     core_index = (tmp_path / 'core' / '_index.md').read_text(encoding='utf-8')
     assert f'[[core/design|design]]: {desc}' in core_index
+
+
+@pytest.mark.parametrize(
+    argnames=('field', 'label', 'heading'),
+    argvalues=[
+        ('category: Foo\n  Bar', '[Foo Bar] design', '# core/design'),
+        ('category:  \n  Foo', '[Foo] design', '# core/design'),
+        ('title: Draft\n  heading', 'design', '# Draft heading'),
+        ('title:  \n  Draft heading', 'design', '# Draft heading'),
+    ],
+    ids=[
+        'category-continuation',
+        'category-bare-key-trailing-spaces',
+        'title-continuation',
+        'title-bare-key-trailing-spaces',
+    ],
+)
+def test_update_reads_category_and_title_per_yaml(
+    tmp_path: pathlib.Path,
+    field: str,
+    label: str,
+    heading: str,
+) -> None:
+    """A category or title continued on an indented line reads whole, per YAML.
+
+    The parent row's ``[category]`` label and the page's H1 are built
+    from the reader's value, so a continuation line read as absent, or
+    dropped, would silently mislabel the row or shorten the heading.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        f'---\nname: core/design\ndesc: A page.\n{field}\n---\n\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # the label and the heading carry the whole value
+    wiki.update()
+    index = (tmp_path / 'core' / '_index.md').read_text(encoding='utf-8')
+    assert f'[[core/design|{label}]]' in index
+    assert f'\n{heading}\n' in page.read_text(encoding='utf-8')
+    assert Wiki(tmp_path).lint() == []
+    assert Wiki(tmp_path).update() == []
 
 
 def test_update_category_labels(tmp_path: pathlib.Path) -> None:
@@ -2534,6 +2700,8 @@ def test_quoted_colon_title_renders_unquoted_heading(
         ('﻿# The L25 Wall\n\nBody prose.\n', 'title: The L25 Wall'),
         ('Body prose only.\n', None),
         ('﻿Body prose only.\n', None),
+        ('# TODO #123\n\nBody prose.\n', "title: 'TODO #123'"),
+        ('# [Draft] X\n\nBody prose.\n', "title: '[Draft] X'"),
     ],
     ids=[
         'h1',
@@ -2543,6 +2711,8 @@ def test_quoted_colon_title_renders_unquoted_heading(
         'bom-h1',
         'no-h1',
         'bom-no-h1',
+        'hash-h1',
+        'indicator-h1',
     ],
 )
 def test_update_adopts_bare_page_seeding_title(
@@ -2556,8 +2726,10 @@ def test_update_adopts_bare_page_seeding_title(
     the author wrote -- the seeded title wins the H1 rewrite, a heading
     reading ``null`` is seeded quoted so it survives as text, and a
     heading wrapped in quote chars is seeded re-quoted so the read does
-    not strip the authored quotes -- while a page with no H1 gains the
-    path-joined heading, title-less. A UTF-8 BOM is dropped, so it
+    not strip the authored quotes, and a heading a strict reader would
+    misread plain (a ``' #'`` comment start, a leading indicator) is
+    seeded quoted so it reads back whole -- while a page with no H1 gains
+    the path-joined heading, title-less. A UTF-8 BOM is dropped, so it
     neither hides the authored H1 nor lands mid-file under the fresh
     frontmatter.
     """

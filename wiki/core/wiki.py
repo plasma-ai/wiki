@@ -46,6 +46,11 @@ _DESC_NOTE_CHARS = 500
 # plants above the first conflict marker (_assets/git/merge_index.sh)
 _MERGE_HINT_TAIL = 'delete this line when resolving -->'
 
+# the malformed-frontmatter reason for a body that is valid YAML but not a
+# key: value mapping (a bare sentence, a list); the planners keep such a
+# page as written
+_NONMAPPING = 'not a key: value mapping'
+
 # str.is* predicates a policy may require (applied to the name minus allow chars)
 _NAMING_PREDICATES = {
     'ascii': str.isascii,
@@ -3771,10 +3776,12 @@ class Wiki:
             # re.sub would rewrite an authored body line the parse left as body
             if (current is None) or (content != current):
                 content = re.sub(
-                    pattern=r'^updated:.*$',
+                    # the field's whole extent, so a stamp continued on indented
+                    # lines is replaced rather than stranded under the fresh one
+                    pattern=r'^updated:.*\n(?:[ \t]+.*\n|[ \t]*\n)*',
                     # a callable repl, so a backslash in a user timestamp.format
                     # is emitted verbatim, not parsed as a group reference
-                    repl=lambda _: f'updated: {now}',
+                    repl=lambda _: f'updated: {now}\n',
                     string=content,
                     count=1,
                     flags=re.MULTILINE,
@@ -3870,7 +3877,14 @@ class Wiki:
                 text,
                 delimiter=self.index_delimiter,
             )
-            if frontmatter:
+            if frontmatter and format.nonmapping_frontmatter(frontmatter):
+                # a body that is valid YAML but not a key: value mapping has no
+                # fields to repair: keep the index as-is and report it rather
+                # than append fields under the text
+                relpath = path.relative_to(self._root)
+                event = FrontmatterMalformedEvent(path=str(relpath), reason=_NONMAPPING)
+                return text, [event]
+            elif frontmatter:
                 # refresh the name from the folder path, fill the missing
                 # or blank desc/created/updated keys, drop an unset title
                 # or category, and enforce the canonical field order
@@ -4081,6 +4095,13 @@ class Wiki:
         if not frontmatter and (first_line.strip() == '---'):
             relpath = path.relative_to(self._root)
             return text, [FrontmatterMalformedEvent(path=str(relpath))]
+        # a body that is valid YAML but not a key: value mapping (a bare
+        # sentence, a list) has no fields to repair: keep the file as-is and
+        # report it rather than append fields under the text
+        if frontmatter and format.nonmapping_frontmatter(frontmatter):
+            relpath = path.relative_to(self._root)
+            event = FrontmatterMalformedEvent(path=str(relpath), reason=_NONMAPPING)
+            return text, [event]
         # update or create frontmatter
         notices: list[Event] = []
         if frontmatter:
@@ -5043,14 +5064,15 @@ class ReadSkipEvent(Event):
 
 
 class FrontmatterMalformedEvent(Event):
-    """Emitted when a page's frontmatter never closes."""
+    """Emitted when a page's frontmatter never closes or is not a mapping."""
 
     path: str
+    reason: str = 'no closing ---'
 
     @property
     def description(self: FrontmatterMalformedEvent) -> str:
         """Return the malformed-frontmatter notice line."""
-        return f'Malformed frontmatter (no closing ---) in {self.path}'
+        return f'Malformed frontmatter ({self.reason}) in {self.path}'
 
 
 class IndexTruncatedEvent(Event):
