@@ -94,6 +94,7 @@ __all__ = [
     'test_merge_driver_no_op_without_git',
     'test_init_writes_gitattributes_without_committing',
     'test_merge_driver_merges_authored_frontmatter',
+    'test_merge_driver_moves_regenerated_keys_with_their_bodies',
     'test_merge_unions_link_rows',
     'test_merge_keeps_frontmatter_when_side_is_mangled',
     'test_merge_dispatches_on_pathname',
@@ -2034,6 +2035,87 @@ def test_merge_driver_merges_authored_frontmatter(tmp_path: pathlib.Path) -> Non
     assert 'desc: Theirs again.' in text
     assert 'title: Ours retitled' in text
     assert 'title: Theirs retitled' in text
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize('side', ['theirs', 'ours'])
+def test_merge_driver_moves_regenerated_keys_with_their_bodies(
+    tmp_path: pathlib.Path,
+    side: str,
+) -> None:
+    """A regenerated key is normalized as a whole extent, indented body included.
+
+    The driver normalizes ``name:`` to ours on every input; a value
+    written as a block scalar spans two lines, and swapping the key line
+    alone would strand the other side's body under ours' one-liner,
+    where a strict reader folds it into the name. Ours' whole extent
+    replaces theirs' whole extent -- whichever side wrote the block --
+    and ``wiki update`` then joins a surviving block onto one line.
+    """
+    root = tmp_path / 'wiki'
+    # a real repo whose wiki has the driver registered by init
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    index = root / 'core' / '_index.md'
+    base = (
+        '---\n'
+        'name: core\n'
+        'desc: Original section.\n'
+        'tags: []\n'
+        'sources: []\n'
+        'created: 2026-01-01T00:00:00Z\n'
+        'updated: 2026-01-01T00:00:00Z\n'
+        '---\n'
+        '\n'
+        '# core\n'
+        '\n'
+        '***\n'
+        '\n'
+        'Body prose.\n'
+    )
+    _write(index, base)
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # one side writes the name as a block scalar; each side edits something
+    # of its own so the merge reaches the driver
+    block = 'name: |\n  core\n'
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    theirs = base.replace('desc: Original section.', 'desc: Edited by theirs.')
+    if side == 'theirs':
+        theirs = theirs.replace('name: core\n', block)
+    _write(index, theirs)
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    ours = base.replace(
+        'updated: 2026-01-01T00:00:00Z',
+        'updated: 2026-01-03T12:00:00Z',
+    )
+    if side == 'ours':
+        ours = ours.replace('name: core\n', block)
+    _write(index, ours)
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
+
+    # the merge is clean and carries exactly ours' name extent
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    frontmatter = index.read_text(encoding='utf-8').split('---\n')[1]
+    assert frontmatter.count('name:') == 1
+    if side == 'ours':
+        assert block in frontmatter
+    else:
+        assert frontmatter.startswith('name: core\n')
+        assert '\n  core\n' not in frontmatter
+    assert 'desc: Edited by theirs.' in frontmatter
+
+    # update joins a surviving block onto one line and converges
+    assert _wiki(tmp_path, 'update', '--path', str(root)).returncode == 0
+    frontmatter = index.read_text(encoding='utf-8').split('---\n')[1]
+    assert frontmatter.startswith('name: core\n')
+    assert '\n  core\n' not in frontmatter
+    assert _wiki(tmp_path, 'update', '--path', str(root), '--check').returncode == 0
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')

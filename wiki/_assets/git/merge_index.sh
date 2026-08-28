@@ -177,21 +177,34 @@ done
 # update runs, so the stamps are churn, not authorship -- normalize it too
 [[ ! -s "$BASE" ]] && REGENERATED_KEYS+=(created)
 
-# normalize the regenerated keys to ours' lines on all three inputs, so the
-# frontmatter merge below only ever sees authored-field differences (the value
-# travels through the environment so awk never mangles a backslash in a name)
+# normalize the regenerated keys to ours' values on all three inputs, so the
+# frontmatter merge below only ever sees authored-field differences; a value
+# moves as its whole extent -- the key line plus the indented or blank lines
+# under it -- so a block-scalar or bare-key value never strands its body under
+# the other side's one-liner (the value travels through the environment so awk
+# never mangles a backslash in a name)
 for KEY in "${REGENERATED_KEYS[@]}"; do
-    OURS_LINE=$(grep -m1 "^${KEY}:" "$WORK/ours_fm" || true)
+    OURS_EXTENT=$(awk -v key="$KEY" '
+        found && /^[[:space:]]*$/ { print; next }
+        found && /^[[:space:]]/ { print; next }
+        found { exit }
+        index($0, key ":") == 1 { print; found = 1 }
+    ' "$WORK/ours_fm")
     for SIDE in base theirs; do
         FM="$WORK/${SIDE}_fm"
-        if [[ -n "$OURS_LINE" ]]; then
-            OURS_LINE="$OURS_LINE" awk -v key="$KEY" \
-                'index($0, key ":") == 1 { print ENVIRON["OURS_LINE"]; next } { print }' \
-                "$FM" >"$FM.new"
-        else
-            # ours dropped the key -- drop it from the other inputs too
-            grep -v "^${KEY}:" "$FM" >"$FM.new" || true
-        fi
+        # an empty extent (ours dropped the key) drops it from the other
+        # inputs too
+        OURS_EXTENT="$OURS_EXTENT" awk -v key="$KEY" '
+            skipping && /^[[:space:]]*$/ { next }
+            skipping && /^[[:space:]]/ { next }
+            { skipping = 0 }
+            index($0, key ":") == 1 {
+                if (ENVIRON["OURS_EXTENT"] != "") print ENVIRON["OURS_EXTENT"]
+                skipping = 1
+                next
+            }
+            { print }
+        ' "$FM" >"$FM.new"
         mv "$FM.new" "$FM"
     done
 done
