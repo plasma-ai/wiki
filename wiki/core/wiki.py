@@ -51,6 +51,18 @@ _MERGE_HINT_TAIL = 'delete this line when resolving -->'
 # page as written
 _NONMAPPING = 'not a key: value mapping'
 
+# the remedy lint appends to an invalid_yaml finding, per cause (see
+# format.frontmatter_issues)
+_YAML_ADVICE = {
+    'parse': 'a strict reader drops the whole block, so quote or rewrite the value',
+    'nonmapping': 'no strict reader finds key: value pairs in it',
+    'nonscalar_key': 'the wiki reads the block by its line grammar alone',
+    'duplicate_key': (
+        'a strict reader rejects the block or keeps the last copy, the wiki'
+        ' reads the first'
+    ),
+}
+
 # str.is* predicates a policy may require (applied to the name minus allow chars)
 _NAMING_PREDICATES = {
     'ascii': str.isascii,
@@ -3777,13 +3789,19 @@ class Wiki:
             # -- on a verbatim passthrough of an unclosed-frontmatter page the
             # re.sub would rewrite an authored body line the parse left as body
             if (current is None) or (content != current):
+                # the field's whole extent is replaced, so a stamp continued on
+                # indented lines never strands under the fresh one, while the
+                # comment lines among them ride along; a callable repl, so a
+                # backslash in a user timestamp.format is emitted verbatim,
+                # not parsed as a group reference
+                def restamp(match: re.Match[str]) -> str:
+                    lines = match.group(1).splitlines(keepends=True)
+                    comments = [line for line in lines if line.lstrip().startswith('#')]
+                    return f'updated: {format.quote(now)}\n' + ''.join(comments)
+
                 content = re.sub(
-                    # the field's whole extent, so a stamp continued on indented
-                    # lines is replaced rather than stranded under the fresh one
-                    pattern=r'^updated[ \t]*:.*\n(?:[ \t]+.*\n|[ \t]*\n)*',
-                    # a callable repl, so a backslash in a user timestamp.format
-                    # is emitted verbatim, not parsed as a group reference
-                    repl=lambda _: f'updated: {now}\n',
+                    pattern=rf'^updated[ \t]*:.*\n({format.FIELD_EXTENT})',
+                    repl=restamp,
                     string=content,
                     count=1,
                     flags=re.MULTILINE,
@@ -4525,7 +4543,7 @@ class Wiki:
             if (
                 raw
                 and (' #' in raw.group(1))
-                and not raw.group(1).startswith(("'", '"'))
+                and not raw.group(1).startswith(("'", '"', '|', '>'))
             ):
                 hint = (
                     " (the text after ' #' is a YAML comment; quote the value if"
@@ -4640,8 +4658,6 @@ class Wiki:
         value, so the fix is the author's: quote the value, drop the
         duplicate, or write ``key: value`` pairs.
         """
-        import yaml
-
         # initialize issues
         result = []
         # alias relative path
@@ -4649,88 +4665,20 @@ class Wiki:
         # an empty or unclosed block has nothing to parse (reported elsewhere)
         if not frontmatter:
             return result
-        body = '\n'.join(frontmatter.split('\n')[1:-1]) + '\n'
-        # the C loader is a build-time option of the PyYAML wheel; the pure
-        # loader raises RecursionError on nesting the C loader composes
-        loader = getattr(yaml, 'CSafeLoader', yaml.SafeLoader)
-        try:
-            node = yaml.compose(body, Loader=loader)
-        except (yaml.YAMLError, RecursionError) as error:
-            # body line 0 is file line 2 (the opening fence); a mark-less error
-            # (a control character, the recursion limit) locates by its stream
-            # position or falls back to the block's first line
-            mark = getattr(error, 'problem_mark', None)
-            position = getattr(error, 'position', None)
-            if mark is not None:
-                line = mark.line + 2
-            elif position is not None:
-                line = body.count('\n', 0, position) + 2
-            else:
-                line = 1
-            reason = getattr(error, 'problem', None) or getattr(error, 'reason', None)
-            reason = str(reason or type(error).__name__)
+        # the reader's own parse supplies the findings, so lint and update
+        # judge one composition of the block
+        for line, reason, cause in format.frontmatter_issues(frontmatter):
+            advice = _YAML_ADVICE[cause]
             result.append(
                 Issue(
-                    f'{relpath}: Invalid YAML frontmatter (line {line}):'
-                    f' {reason}; a strict reader drops the whole block, so'
-                    ' quote or rewrite the value',
+                    f'{relpath}: Invalid YAML frontmatter (line {line}): {reason};'
+                    f' {advice}',
                     kind='invalid_yaml',
                     path=str(relpath),
                     line=line,
                     reason=reason,
                 )
             )
-            return result
-        # an empty or comment-only body has no fields to judge
-        if node is None:
-            return result
-        # a body that is not a mapping has no fields at all
-        if not isinstance(node, yaml.MappingNode):
-            result.append(
-                Issue(
-                    f'{relpath}: Invalid YAML frontmatter (line 1): frontmatter'
-                    ' is not a key: value mapping; the wiki reads no fields'
-                    ' from it and leaves it untouched',
-                    kind='invalid_yaml',
-                    path=str(relpath),
-                    line=1,
-                    reason='frontmatter is not a mapping',
-                )
-            )
-            return result
-        # duplicate and non-scalar keys: compose keeps every pair in order
-        seen: dict[str, int] = {}
-        for key_node, _value_node in node.value:
-            line = key_node.start_mark.line + 2
-            if not isinstance(key_node, yaml.ScalarNode):
-                result.append(
-                    Issue(
-                        f'{relpath}: Invalid YAML frontmatter (line {line}): a'
-                        ' key is not a scalar; the wiki reads the block by its'
-                        ' line grammar alone',
-                        kind='invalid_yaml',
-                        path=str(relpath),
-                        line=line,
-                        reason='a key is not a scalar',
-                    )
-                )
-                continue
-            key = key_node.value
-            if key in seen:
-                result.append(
-                    Issue(
-                        f'{relpath}: Invalid YAML frontmatter (line {line}):'
-                        f' duplicate key {key!r} (first at line {seen[key]}); a'
-                        ' strict reader rejects the block or keeps the last'
-                        ' copy, the wiki reads the first',
-                        kind='invalid_yaml',
-                        path=str(relpath),
-                        line=line,
-                        reason=f'duplicate key {key!r}',
-                    )
-                )
-            else:
-                seen[key] = line
         return result
 
     def _lint_link_desc(

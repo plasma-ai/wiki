@@ -38,20 +38,36 @@ may include breaking changes, each listed under a Breaking heading.
 - `title: null # comment` and `desc: | # comment` are unset like `title: null`
   and `desc: |`: update removes the title line and restores the desc
   placeholder.
+- Filling or removing a valueless field keeps its comments: `desc: # note`
+  becomes `desc: ... # note`, the comment on an unset `title:` stays behind as a
+  comment line, and a comment line indented under a stamp stays under the fresh
+  stamp.
+- A sequence written at column 0 under `desc:`, `category:`, or a timestamp key
+  is that field's value: update no longer restores the placeholder or stamps the
+  key line and strands the items under the field before it.
 - A frontmatter block that is valid YAML but not `key: value` pairs is left
-  untouched with a notice instead of gaining fields appended under the text.
+  untouched with a notice instead of gaining fields appended under the text; a
+  key missing the space after its colon (`name:core/design`) is repaired rather
+  than reported as such a block.
+- A double-quoted carriage-return escape in a value reads as a line break
+  instead of carrying a bare carriage return into the H1 and the parent row.
 - Values the tool writes — an adopted heading seeded as `title:`, a `wiki new`
-  desc — are quoted whenever a plain scalar would misread them: a leading
-  indicator character, a ` #` comment start, leading or trailing whitespace.
+  desc, a timestamp — are quoted whenever a plain scalar would misread them: a
+  leading indicator character, a ` #` comment start, leading or trailing
+  whitespace; a value holding a control or line-separator character is
+  double-quoted with the character escaped.
 - The `_index.md` merge driver moves a regenerated key with its indented
   continuation lines, so a block-scalar `name:` on one side no longer strands
-  its body under the other side's one-liner.
+  its body under the other side's one-liner, leaves a blank line separating the
+  key from the next field in place on every side, and matches a key spelled with
+  a space before its colon.
 - `wiki lint`'s "Missing period in desc" names a ` #` comment as the likely
-  cause when the value's line carries one.
+  cause when the value's line carries one outside a block-scalar header.
 - `wiki match --field` sees a sequence item written at column 0 whose text holds
-  a colon (`- https://doi.org/...`) as part of its field, and a key written with
-  a space before its colon (`desc : x`) as the field it names, so `wiki update`
-  no longer inserts a duplicate `desc:` beside one.
+  a colon (`- https://doi.org/...`) and a flow-sequence continuation line
+  (`https://b]`) as part of its field, and a key written with a space before its
+  colon (`desc : x`) as the field it names, so `wiki update` no longer inserts a
+  duplicate `desc:` beside one.
 
 ### Changed
 

@@ -95,6 +95,7 @@ __all__ = [
     'test_init_writes_gitattributes_without_committing',
     'test_merge_driver_merges_authored_frontmatter',
     'test_merge_driver_moves_regenerated_keys_with_their_bodies',
+    'test_merge_driver_leaves_a_shared_blank_line_alone',
     'test_merge_unions_link_rows',
     'test_merge_keeps_frontmatter_when_side_is_mangled',
     'test_merge_dispatches_on_pathname',
@@ -2116,6 +2117,60 @@ def test_merge_driver_moves_regenerated_keys_with_their_bodies(
     assert frontmatter.startswith('name: core\n')
     assert '\n  core\n' not in frontmatter
     assert _wiki(tmp_path, 'update', '--path', str(root), '--check').returncode == 0
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_merge_driver_leaves_a_shared_blank_line_alone(tmp_path: pathlib.Path) -> None:
+    """A blank line every side shares under ``name:`` never becomes a conflict.
+
+    The normalization moves a regenerated key with the indented lines under
+    it; a blank line that separates the key from the next field is not
+    part of the value, so it must stay on every input -- dropping it from
+    base and theirs alone would make a shared line look like ours' edit.
+    """
+    root = tmp_path / 'wiki'
+    # a real repo whose wiki has the driver registered by init
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    index = root / 'core' / '_index.md'
+    base = (
+        '---\n'
+        'name: core\n'
+        '\n'
+        'desc: Original section.\n'
+        'created: 2026-01-01T00:00:00Z\n'
+        'updated: 2026-01-01T00:00:00Z\n'
+        '---\n'
+        '\n'
+        '# core\n'
+        '\n'
+        '***\n'
+        '\n'
+        'Body prose.\n'
+    )
+    _write(index, base)
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # theirs edits the desc, ours carries regenerated churn only
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    _write(index, base.replace('desc: Original section.', 'desc: Edited by theirs.'))
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    _write(
+        index,
+        base.replace('updated: 2026-01-01T00:00:00Z', 'updated: 2026-01-03T12:00:00Z'),
+    )
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
+
+    # the merge is clean, theirs' desc lands, and the blank line is still one
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    frontmatter = index.read_text(encoding='utf-8').split('---\n')[1]
+    assert frontmatter.startswith('name: core\n\ndesc: Edited by theirs.\n')
+    assert 'updated: 2026-01-03T12:00:00Z' in frontmatter
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')

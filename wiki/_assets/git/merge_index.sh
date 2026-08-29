@@ -184,26 +184,30 @@ done
 # the other side's one-liner (the value travels through the environment so awk
 # never mangles a backslash in a name)
 for KEY in "${REGENERATED_KEYS[@]}"; do
+    # the extent ends at the first dedented line; a blank run belongs to it
+    # only when an indented line follows, otherwise it separates the fields
+    # and stays where it is on every side (the key may be spelled `name :`)
     OURS_EXTENT=$(awk -v key="$KEY" '
-        found && /^[[:space:]]*$/ { print; next }
-        found && /^[[:space:]]/ { print; next }
+        found && /^[[:space:]]*$/ { pending++; next }
+        found && /^[[:space:]]/ { for (i = 0; i < pending; i++) print ""; pending = 0; print; next }
         found { exit }
-        index($0, key ":") == 1 { print; found = 1 }
+        $0 ~ "^" key "[[:blank:]]*:" { print; found = 1 }
     ' "$WORK/ours_fm")
     for SIDE in base theirs; do
         FM="$WORK/${SIDE}_fm"
         # an empty extent (ours dropped the key) drops it from the other
         # inputs too
         OURS_EXTENT="$OURS_EXTENT" awk -v key="$KEY" '
-            skipping && /^[[:space:]]*$/ { next }
-            skipping && /^[[:space:]]/ { next }
-            { skipping = 0 }
-            index($0, key ":") == 1 {
+            skipping && /^[[:space:]]*$/ { pending++; next }
+            skipping && /^[[:space:]]/ { pending = 0; next }
+            skipping { for (i = 0; i < pending; i++) print ""; pending = 0; skipping = 0 }
+            $0 ~ "^" key "[[:blank:]]*:" {
                 if (ENVIRON["OURS_EXTENT"] != "") print ENVIRON["OURS_EXTENT"]
                 skipping = 1
                 next
             }
             { print }
+            END { for (i = 0; i < pending; i++) print "" }
         ' "$FM" >"$FM.new"
         mv "$FM.new" "$FM"
     done

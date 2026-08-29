@@ -54,10 +54,12 @@ rewrites only the files that differ. It owns:
    an unset ``title:`` or ``category:`` line (blank or plain ``null``), drops
    stray blank lines, and enforces the canonical field order. Authored values
    — ``title:``, ``desc:``, ``category:``, ``tags:``, ``sources:``, and any
-   custom keys — are preserved. Values are read the way a strict YAML reader
-   reads them (a value continued on indented lines folds, a quoted value
-   decodes, ``null # comment`` unsets like ``null``); a block a strict reader
-   rejects still reads through the line grammar, as authored.
+   custom keys — are preserved, and so are the comments on a field the
+   repair fills or removes (``desc: # note`` becomes ``desc: ... # note``).
+   Values are read the way a strict YAML reader reads them (a value continued
+   on indented lines folds, a quoted value decodes, ``null # comment`` unsets
+   like ``null``); a block a strict reader rejects still reads through the
+   line grammar, as authored.
 
 **Headings.**
    The H1 of every page and index is rewritten to the authored ``title:`` when

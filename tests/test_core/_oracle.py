@@ -135,6 +135,7 @@ EXTRAS = [
 SEQUENCES = [
     ('column0-url-items', 'sources', ['sources:', '- https://doi.org/x', '- b']),
     ('indented-items', 'tags', ['tags:', '  - a', '  - b']),
+    ('flow-continuation', 'sources', ['sources: [https://a,', 'https://b]']),
 ]
 #: the repair's path-derived name and clock
 NAME = 'fixed/page'

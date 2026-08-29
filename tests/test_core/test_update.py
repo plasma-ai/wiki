@@ -82,6 +82,7 @@ __all__ = [
     'test_reclaimed_index_keeps_link_shaped_continuation',
     'test_body_edits_never_dirty_the_tree',
     'test_update_fills_blank_frontmatter_values',
+    'test_update_repairs_a_key_missing_its_space',
     'test_update_keeps_a_bare_key_stamp_body',
     'test_update_inserts_timestamps_in_canonical_order',
     'test_update_inserts_desc_in_schema_order',
@@ -1756,6 +1757,27 @@ def test_update_fills_blank_frontmatter_values(
 
     # the fill is idempotent
     assert wiki.update() == []
+
+
+def test_update_repairs_a_key_missing_its_space(tmp_path: pathlib.Path) -> None:
+    """A block whose only key lacks the space after its colon is repaired, not refused.
+
+    ``name:core/design`` composes as one plain scalar, so to a strict
+    reader the block is not a mapping -- but it is a typo, not prose, and
+    the line grammar reads the key; update rewrites it as ``name: core/design``
+    and fills the rest, instead of leaving the page untouched.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        '---\nname:core/design\n---\n\n# design\n\nBody.\n', encoding='utf-8'
+    )
+
+    # the typo is repaired and the page converges
+    wiki.update()
+    frontmatter = page.read_text(encoding='utf-8').split('---\n')[1]
+    assert frontmatter.startswith('name: core/design\ndesc: ...\n')
+    assert Wiki(tmp_path).update() == []
 
 
 @pytest.mark.parametrize('field', ['created', 'updated'])

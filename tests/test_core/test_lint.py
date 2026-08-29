@@ -56,6 +56,7 @@ __all__ = [
     'test_lint_future_stamp_is_clean',
     'test_lint_stamp_parse_follows_configured_format',
     'test_lint_flags_frontmatter_a_strict_yaml_reader_rejects',
+    'test_lint_locates_a_forbidden_character_after_non_ascii_text',
     'test_lint_reports_deep_nesting_instead_of_crashing',
     'test_lint_invalid_yaml_yields_to_merge_states',
     'test_lint_names_a_comment_truncated_desc',
@@ -994,6 +995,35 @@ def test_lint_flags_frontmatter_a_strict_yaml_reader_rejects(
     assert any(issue.kind == 'invalid_yaml' for issue in Wiki(tmp_path).lint())
 
 
+@pytest.mark.parametrize('loader', ['c', 'pure'])
+def test_lint_locates_a_forbidden_character_after_non_ascii_text(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    loader: str,
+) -> None:
+    """A forbidden character is reported on its own line, whatever precedes it.
+
+    The C loader counts stream positions in bytes and the pure loader in
+    characters; the finding must still land on the line that holds the
+    character, after accented text, under both loaders.
+    """
+    if loader == 'pure':
+        monkeypatch.delattr(yaml, 'CSafeLoader', raising=False)
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    accented = 'caf' + chr(0xE9)
+    page.write_text(
+        f'---\nname: core/design\ndesc: {accented} {accented} {accented}.\n'
+        f'category: bad{chr(12)}\n---\n\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # the finding names line 4, the line that holds the character
+    issues = [issue for issue in wiki.lint() if issue.kind == 'invalid_yaml']
+    assert [issue.fields['line'] for issue in issues] == [4]
+    assert 'characters are not allowed' in issues[0].fields['reason']
+
+
 def test_lint_reports_deep_nesting_instead_of_crashing(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1067,7 +1097,7 @@ def test_lint_names_a_comment_truncated_desc(tmp_path: pathlib.Path) -> None:
     instead of leaving the author to guess, while a comment after a
     complete sentence draws nothing.
     """
-    wiki = _make_wiki(tmp_path, folders={'core': ['cut', 'commented']})
+    wiki = _make_wiki(tmp_path, folders={'core': ['cut', 'commented', 'header']})
     (tmp_path / 'core' / 'cut.md').write_text(
         '---\nname: core/cut\ndesc: Notes on issue #3 and the fix.\n---\n\n'
         '# cut\n\nBody.\n',
@@ -1078,12 +1108,23 @@ def test_lint_names_a_comment_truncated_desc(tmp_path: pathlib.Path) -> None:
         '# commented\n\nBody.\n',
         encoding='utf-8',
     )
+    (tmp_path / 'core' / 'header.md').write_text(
+        '---\nname: core/header\ndesc: | # note\n  No period here\n---\n\n'
+        '# header\n\nBody.\n',
+        encoding='utf-8',
+    )
     wiki.update()
 
-    # the truncated desc is named with its cause; the intentional comment is silent
-    issues = [issue for issue in wiki.lint() if issue.kind == 'missing_period']
-    assert [issue.fields['path'] for issue in issues] == ['core/cut.md']
-    assert "Missing period in desc (the text after ' #' is a YAML comment" in issues[0]
+    # the truncated desc is named with its cause; the intentional comment is
+    # silent; a block header's comment truncates nothing, so no hint
+    issues = {
+        issue.fields['path']: issue
+        for issue in wiki.lint()
+        if issue.kind == 'missing_period'
+    }
+    assert sorted(issues) == ['core/cut.md', 'core/header.md']
+    assert "(the text after ' #' is a YAML comment" in issues['core/cut.md']
+    assert issues['core/header.md'] == 'core/header.md: Missing period in desc'
     index = (tmp_path / 'core' / '_index.md').read_text(encoding='utf-8')
     assert '[[core/cut|cut]]: Notes on issue\n' in index
     assert '[[core/commented|commented]]: Short summary.\n' in index

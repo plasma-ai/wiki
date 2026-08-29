@@ -44,9 +44,13 @@ __all__ = [
     'test_reader_matches_strict_yaml_on_hostile_shapes',
     'test_repair_keeps_authored_values',
     'test_repair_recognizes_a_spaced_key',
+    'test_repair_keeps_column_zero_sequences',
+    'test_repair_keeps_the_comments_of_valueless_fields',
     'test_reader_applies_the_documented_policy',
+    'test_reader_reads_a_carriage_return_escape_as_a_line_break',
     'test_title_reader_applies_the_null_idiom',
     'test_quote_round_trips_through_yaml',
+    'test_quote_escapes_characters_no_stream_may_carry',
     'test_field_ranges_match_yaml_extents',
     'test_field_ranges_match_yaml_extents_on_hostile_shapes',
 ]
@@ -184,6 +188,71 @@ def test_repair_recognizes_a_spaced_key() -> None:
     assert 'desc : A page.' in repaired
 
 
+@pytest.mark.parametrize('key', ['desc', 'category', 'created'])
+def test_repair_keeps_column_zero_sequences(key: str) -> None:
+    """A column-0 sequence under a repaired key is its value, kept whole.
+
+    YAML reads ``key:`` over ``- a`` items as a sequence; a repair that saw
+    only indented lines as the value would take the key line for a blank,
+    restore a placeholder or stamp over it, and strand the items under the
+    field before it -- turning valid YAML into a block no reader accepts.
+    """
+    text = block(key, [f'{key}:', '- a', '- b'])
+    repaired = format.repair_frontmatter(
+        text,
+        name=NAME,
+        now=NOW,
+        title=True,
+        category=True,
+        order=True,
+    )
+    assert oracle_valid(yaml_body(repaired)), repaired
+    assert oracle_mapping(yaml_body(repaired))[key] == ['a', 'b']
+
+
+def test_repair_keeps_the_comments_of_valueless_fields() -> None:
+    """Comments on a field the repair fills or removes survive the edit.
+
+    A comment-only ``desc:`` or stamp reads as empty, so the repair fills
+    it -- but the annotation the author wrote is not the repair's to
+    delete: a tail comment re-attaches after the written value, an
+    indented comment line stays under it, and the comment on an unset
+    ``title:`` stands alone once the line goes.
+    """
+    text = (
+        '---\n'
+        f'name: {NAME}\n'
+        'title: # TODO pick one\n'
+        'desc: # to be written\n'
+        'created: # stamped at birth\n'
+        'updated:\n'
+        '  # the last write\n'
+        '---'
+    )
+    repaired = format.repair_frontmatter(
+        text,
+        name=NAME,
+        now=NOW,
+        title=True,
+        category=True,
+        order=True,
+    )
+    assert oracle_valid(yaml_body(repaired)), repaired
+    assert repaired == (
+        '---\n'
+        f'name: {NAME}\n'
+        '# TODO pick one\n'
+        'desc: ... # to be written\n'
+        f'created: {NOW} # stamped at birth\n'
+        f'updated: {NOW}\n'
+        '  # the last write\n'
+        '---'
+    )
+    mapping = oracle_mapping(yaml_body(repaired))
+    assert mapping['desc'] == '...'
+    assert 'title' not in mapping
+
+
 # ------ documented policy
 
 
@@ -260,6 +329,19 @@ def test_reader_applies_the_documented_policy(
     assert format.read_frontmatter_field(text, key) == expected
 
 
+def test_reader_reads_a_carriage_return_escape_as_a_line_break() -> None:
+    """A double-quoted carriage-return escape reads as a line break, never a bare return.
+
+    Every consumer splits on newlines; a bare carriage return inside a
+    title or desc would ride into the H1 and the parent row and split the
+    line model on the next read, so update would never converge.
+    """
+    backslash = chr(92)
+    text = f'---\nname: {NAME}\ndesc: "a{backslash}rb"\ntitle: "c{backslash}rd"\n---'
+    assert format.read_frontmatter_field(text, 'desc') == 'a\nb'
+    assert format.read_frontmatter_title(text) == 'c d'
+
+
 @pytest.mark.parametrize(
     argnames=('field', 'expected'),
     argvalues=[
@@ -270,6 +352,7 @@ def test_reader_applies_the_documented_policy(
         ('title: Null', 'Null'),
         ('title: NULL', 'NULL'),
         ("title: 'null'", 'null'),
+        ('title: !!str null', 'null'),
         ('title: |\n  null', 'null'),
         ('title: Draft\n  heading', 'Draft heading'),
         ('title: |\n  Two\n  lines', 'Two lines'),
@@ -282,6 +365,7 @@ def test_reader_applies_the_documented_policy(
         'Null',
         'NULL',
         'quoted-null',
+        'tagged-null',
         'block-null',
         'continuation',
         'block-lines',
@@ -337,6 +421,32 @@ def test_quote_round_trips_through_yaml(value: str) -> None:
     node = yaml.compose(f'k: {format.quote(value)}\n', Loader=yaml.SafeLoader)
     assert node.value[0][1].value == value
     assert format.unquote(format.quote(value)) == value
+
+
+@pytest.mark.parametrize(
+    argnames='value',
+    argvalues=[
+        'line' + chr(0x2028) + 'separator',
+        'para' + chr(0x2029) + 'separator',
+        'next' + chr(0x85) + 'line',
+        'bell' + chr(7) + 'rings',
+        'carriage' + chr(13) + 'return',
+        'quoted "and' + chr(1) + 'escaped\\',
+    ],
+    ids=['line-separator', 'paragraph-separator', 'nel', 'bell', 'cr', 'mixed'],
+)
+def test_quote_escapes_characters_no_stream_may_carry(value: str) -> None:
+    """A value holding a character YAML forbids in a stream is written escaped.
+
+    Plain or single-quoted, such a character makes the whole block
+    invalid (or folds as a line break); double-quoted with an escape it
+    reads back verbatim under a strict reader and under ``unquote``.
+    """
+    written = format.quote(value)
+    assert written[0] == written[-1] == '"'
+    node = yaml.compose(f'k: {written}\n', Loader=yaml.SafeLoader)
+    assert node.value[0][1].value == value
+    assert format.unquote(written) == value
 
 
 # ------ field extents
