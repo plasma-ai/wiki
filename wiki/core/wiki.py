@@ -30,7 +30,9 @@ from wiki.constants import (
 from wiki.typing import Link, PathLike
 
 from . import _obsidian, _search, format
+from ._obsidian import _OBSIDIAN_PLUGIN_DIGESTS, _OBSIDIAN_PLUGINS
 from .event import Event
+from .format import FIELD_EXTENT
 
 __all__ = ['Wiki']
 
@@ -783,7 +785,7 @@ class Wiki:
                 target = obsidian_dir / 'plugins' / source.name
                 shutil.copytree(source, target, dirs_exist_ok=True)
                 # download pinned plugin code from its release, unless offline
-                release_url = _obsidian._OBSIDIAN_PLUGINS.get(source.name)
+                release_url = _OBSIDIAN_PLUGINS.get(source.name)
                 if release_url and offline:
                     warnings.append(
                         f'Skipped {source.name} download (OFFLINE_MODE).'
@@ -793,7 +795,7 @@ class Wiki:
                     # fetch all assets to temp paths first, then move them into
                     # place only after every fetch succeeds, so a mid-fetch
                     # failure never leaves a skewed main.js/manifest.json pair
-                    digests = _obsidian._OBSIDIAN_PLUGIN_DIGESTS[source.name]
+                    digests = _OBSIDIAN_PLUGIN_DIGESTS[source.name]
                     staged = []
                     try:
                         for asset in digests:
@@ -1020,9 +1022,8 @@ class Wiki:
             self._dispatch_notice(event)
         # dry run: report which files would change without writing (a CRLF
         # file reads equal but would be rewritten, so probe its bytes too);
-        # _current_text answers a file vanishing under the probe (a
-        # concurrent delete) as absent, reporting it as pending rather
-        # than raising
+        # _current_text answers a file vanishing under the probe (a concurrent
+        # delete) as absent, reporting it as pending rather than raising
         if check:
             return [
                 str(path.relative_to(self._root))
@@ -1115,10 +1116,9 @@ class Wiki:
             violation = self._name_violation(part)
             if violation is not None:
                 raise ValueError(f'Invalid folder name {part!r}: {violation}')
-        # a symlinked segment is excluded from every walk and may point
-        # outside the root, so writing through one would land an invisible
-        # index -- or an out-of-root file the lexical containment above
-        # cannot see
+        # a symlinked segment is excluded from every walk and may point outside
+        # the root, so writing through one would land an invisible index -- or
+        # an out-of-root file the lexical containment above cannot see
         current = self._root
         for part in folder.relative_to(self._root).parts:
             current = current / part
@@ -1186,10 +1186,9 @@ class Wiki:
             raise ValueError(
                 'Merge conflict markers in the authored input; resolve them and rerun.'
             )
-        # pre-flight the wiring sweep's refusals against the parent scope
-        # (a discarded dry plan): a refusal after the write would strand a
-        # half-adoption whose retry dead-ends on the never-overwrites
-        # guard above
+        # pre-flight the wiring sweep's refusals against the parent scope (a
+        # discarded dry plan): a refusal after the write would strand a
+        # half-adoption whose retry dead-ends on the never-overwrites guard
         parent = folder.parent
         scope = None
         if parent != self._root:
@@ -3800,16 +3799,15 @@ class Wiki:
                     return f'updated: {format.quote(now)}\n' + ''.join(comments)
 
                 content = re.sub(
-                    pattern=rf'^updated[ \t]*:.*\n({format.FIELD_EXTENT})',
+                    pattern=rf'^updated[ \t]*:.*\n({FIELD_EXTENT})',
                     repl=restamp,
                     string=content,
                     count=1,
                     flags=re.MULTILINE,
                 )
             # a folder vanishing between the plan and the write (a concurrent
-            # delete) leaves the write nowhere to land: drop the file -- the
-            # next run converges -- while a failure with the folder still
-            # present propagates
+            # delete) leaves the write nowhere to land, so drop the file and let
+            # the next run converge; a failure with the folder present propagates
             try:
                 wiki.util.fs.write_atomic(path, content)
             except FileNotFoundError:
@@ -4344,9 +4342,8 @@ class Wiki:
             else:
                 child_path = self._root / target
                 is_markdown = False
-            # a link resolving outside this folder (or to a missing file) is a
-            # dangling row (pending prune): annotate it, never recurse into
-            # another subtree
+            # a link resolving outside this folder (or to a missing file) is a dangling
+            # row (pending prune): annotate it, never recurse into another subtree
             broken = unicodedata.normalize('NFC', target) not in expected_targets
             # apply markdown filter (pages only)
             if not is_folder and (markdown is not None) and (markdown != is_markdown):

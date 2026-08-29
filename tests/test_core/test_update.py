@@ -1309,7 +1309,7 @@ def test_update_emits_every_notice(tmp_path: pathlib.Path) -> None:
         for event in notices
         if event.description.startswith('Pruned link:')
     ]
-    assert len(detailed) == 8
+    assert len(detailed) == len(pages)
 
 
 def test_update_announces_created_index(tmp_path: pathlib.Path) -> None:

@@ -9,11 +9,9 @@ from __future__ import annotations
 
 import pytest
 
-from wiki.core._search import _build_match_expression
+from wiki.core import _search
 
-__all__ = [
-    'test_search_builds_deduped_match_expressions',
-]
+__all__ = ['test_search_builds_deduped_match_expressions']
 
 
 @pytest.mark.parametrize(
@@ -38,5 +36,5 @@ def test_search_builds_deduped_match_expressions(
     expression: str,
 ) -> None:
     """Safe queries dedupe exact duplicate terms; the prefix term stays exact."""
-    built = _build_match_expression(query, prefix=prefix, tag=None, raw=raw)
+    built = _search._build_match_expression(query, prefix=prefix, tag=None, raw=raw)
     assert built == expression

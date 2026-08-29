@@ -619,7 +619,7 @@ def match(
         # which the command wrapper renders and exits 2 on
         wiki = resolve(path)
         matches = wiki.match(
-            pattern,
+            pattern=pattern,
             name=name,
             field=field,
             ignore_case=ignore_case,
