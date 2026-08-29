@@ -51,8 +51,8 @@ _MERGE_HINT_TAIL = 'delete this line when resolving -->'
 # page as written
 _NONMAPPING = 'not a key: value mapping'
 
-# the remedy lint appends to an invalid_yaml finding, per cause (see
-# format.frontmatter_issues)
+# the remedy lint appends to an invalid_yaml finding, per
+# cause (see format.frontmatter_issues)
 _YAML_ADVICE = {
     'parse': 'a strict reader drops the whole block, so quote or rewrite the value',
     'nonmapping': 'no strict reader finds key: value pairs in it',
@@ -3897,7 +3897,7 @@ class Wiki:
                 text,
                 delimiter=self.index_delimiter,
             )
-            if frontmatter and format.nonmapping_frontmatter(frontmatter):
+            if frontmatter and format.is_nonmapping_frontmatter(frontmatter):
                 # a body that is valid YAML but not a key: value mapping has no
                 # fields to repair: keep the index as-is and report it rather
                 # than append fields under the text
@@ -4118,7 +4118,7 @@ class Wiki:
         # a body that is valid YAML but not a key: value mapping (a bare
         # sentence, a list) has no fields to repair: keep the file as-is and
         # report it rather than append fields under the text
-        if frontmatter and format.nonmapping_frontmatter(frontmatter):
+        if frontmatter and format.is_nonmapping_frontmatter(frontmatter):
             relpath = path.relative_to(self._root)
             event = FrontmatterMalformedEvent(path=str(relpath), reason=_NONMAPPING)
             return text, [event]
@@ -4540,15 +4540,14 @@ class Wiki:
             # comment, the likely cause of the missing period
             raw = re.search(r'^desc[ \t]*:[^\S\n]*(.*)$', frontmatter, re.MULTILINE)
             hint = ''
-            if (
-                raw
-                and (' #' in raw.group(1))
-                and not raw.group(1).startswith(("'", '"', '|', '>'))
-            ):
-                hint = (
-                    " (the text after ' #' is a YAML comment; quote the value if"
-                    ' it was meant as text)'
-                )
+            if raw:
+                value = raw.group(1)
+                plain = not value.startswith(("'", '"', '|', '>'))
+                if (' #' in value) and plain:
+                    hint = (
+                        " (the text after ' #' is a YAML comment; quote the value"
+                        ' if it was meant as text)'
+                    )
             result.append(
                 Issue(
                     f'{relpath}: Missing period in desc{hint}',

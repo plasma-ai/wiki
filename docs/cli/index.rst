@@ -485,9 +485,10 @@ keeps the tool-owned surfaces in sync with the filesystem (see
 
 ``updated:`` is re-stamped only on files whose content actually changed.
 Files the sweep cannot safely fix are left alone with a notice: pages whose
-frontmatter never closes, emptied or truncated indexes (restore from git or
-delete to rebuild), entries with policy-invalid names, symlinks, and files
-edited concurrently during the run (re-run to converge).
+frontmatter never closes or is valid YAML but not ``key: value`` pairs,
+emptied or truncated indexes (restore from git or delete to rebuild), entries
+with policy-invalid names, symlinks, and files edited concurrently during the
+run (re-run to converge).
 
 Narration goes to stderr — condensed to one count line per category by
 default (e.g. ``Created 1 new index (fill in its desc)``, ``Added 2 new
@@ -615,9 +616,8 @@ payload fields (``path`` on every issue and on most notes — the
 ``resolver_notice``, ``merge_driver_unconfigured``, and
 ``git_fence_unavailable`` notes carry none — plus e.g. ``target``/``label``
 on a broken link, ``line`` on a wrap mangle, or ``line``/``reason`` on
-invalid YAML frontmatter), the rendered prose under
-``text``, and a ``summary`` with both counts; the exit-code contract is
-unchanged.
+invalid YAML frontmatter), the rendered prose under ``text``, and a
+``summary`` with both counts; the exit-code contract is unchanged.
 
 **Issues** (hard, exit 1) cover everything ``wiki update`` would rewrite —
 each shown as ``<path>: Requires update`` with an indented unified diff — plus
@@ -626,13 +626,12 @@ shadowed by same-named folders, merge conflict markers, leftover merge repair
 hints, malformed frontmatter (no closing ``---``, or a body that is not a
 ``key: value`` mapping), frontmatter a strict YAML reader rejects (an unquoted
 ``': '`` inside a value, a duplicate key), empty or truncated indexes, nested
-wiki roots,
-formatter-damage signatures (escaped wikilinks, a missing ``***`` delimiter),
-hand-wrap mangles, authored descriptions missing their trailing period,
-unparseable ``created:``/``updated:`` stamps, broken links in the generated
-index block, prose wikilinks naming a folder rather than its ``_index`` page,
-dangling or nested region markers, and — when the ``titles.required`` setting
-is on — missing titles.
+wiki roots, formatter-damage signatures (escaped wikilinks, a missing ``***``
+delimiter), hand-wrap mangles, authored descriptions missing their trailing
+period, unparseable ``created:``/``updated:`` stamps, broken links in the
+generated index block, prose wikilinks naming a folder rather than its
+``_index`` page, dangling or nested region markers, and — when the
+``titles.required`` setting is on — missing titles.
 
 **Notes** (soft, stderr) flag placeholder (``...``) descriptions, descriptions
 over 500 characters, empty index content sections, CRLF line endings, stale

@@ -154,10 +154,11 @@ rather than authoring or auditing page by page yourself:
   only draws a soft note. Author the desc in the child page's frontmatter —
   `wiki update` copies it onto the parent index's link line. A desc containing
   `: ` or ` #` must be YAML-quoted — a strict reader rejects the unquoted colon
-  and reads ` #` as a comment, and `wiki lint` reports both; surrounding quotes
-  are stripped when the value is read. Never hand-wrap a desc mid-word or onto a
-  list-marker start — let the block scalar carry the breaks; lint fails the wrap
-  artifacts (a hyphen dangle, a phantom list item).
+  (`wiki lint` reports it as `invalid_yaml`) and reads ` #` as a comment (lint
+  names it as the likely cause only when the cut-short desc loses its period);
+  surrounding quotes are stripped when the value is read. Never hand-wrap a desc
+  mid-word or onto a list-marker start — let the block scalar carry the breaks;
+  lint fails the wrap artifacts (a hyphen dangle, a phantom list item).
 - **Fill in auto-created index descs.** `wiki update` creates a missing
   `_index.md` for every new directory with a `desc: ...` placeholder and
   announces the batch in its condensed summary

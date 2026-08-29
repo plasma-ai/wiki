@@ -345,14 +345,19 @@ its meaning:
    A page's frontmatter block never closes; update leaves the file untouched.
    Close the block by hand.
 
-``Invalid YAML frontmatter (line N): <reason>; a strict reader drops the whole block, so quote or rewrite the value``
+``Invalid YAML frontmatter (line N): <reason>; <advice>``
    A strict YAML reader rejects the block — an unquoted ``': '`` inside a
    one-line value, a value ending in ``:``, a duplicate key, a control
    character, a key that is not a scalar, or a body that is not ``key: value``
    pairs — so Obsidian and any YAML library lose every field, while the wiki
    still reads the block through its line grammar (or, for a body that is not
-   a mapping, leaves it untouched). Quote the value, drop the duplicate, or
-   rewrite the block.
+   a mapping, leaves it untouched). The advice names the cause: a parse error
+   (``a strict reader drops the whole block, so quote or rewrite the value``),
+   a duplicate key (``a strict reader rejects the block or keeps the last
+   copy, the wiki reads the first``), a key that is not a scalar (``the wiki
+   reads the block by its line grammar alone``), or a body that is not a
+   mapping (``no strict reader finds key: value pairs in it``). Quote the
+   value, drop the duplicate, or rewrite the block.
 
 ``Empty or truncated index (no frontmatter); restore it from git or delete it to rebuild``
    An emptied or truncated ``_index.md``; update keeps it as-is. Restore or

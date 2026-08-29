@@ -179,28 +179,39 @@ done
 
 # normalize the regenerated keys to ours' values on all three inputs, so the
 # frontmatter merge below only ever sees authored-field differences; a value
-# moves as its whole extent -- the key line plus the indented or blank lines
-# under it -- so a block-scalar or bare-key value never strands its body under
-# the other side's one-liner (the value travels through the environment so awk
-# never mangles a backslash in a name)
+# moves as its whole extent so a block-scalar or bare-key value never strands
+# its body under the other side's one-liner (the value travels through the
+# environment so awk never mangles a backslash in a name)
 for KEY in "${REGENERATED_KEYS[@]}"; do
     # the extent ends at the first dedented line; a blank run belongs to it
     # only when an indented line follows, otherwise it separates the fields
-    # and stays where it is on every side (the key may be spelled `name :`)
+    # and stays where it is on every side -- mirrors Python FIELD_EXTENT minus
+    # its trailing blanks (a shared separator must stay on every side) and its
+    # column-0 sequence items (a regenerated key carries a scalar); the key
+    # match mirrors the Python `^key[ \t]*:` anchor, so `name :` is `name:`
     OURS_EXTENT=$(awk -v key="$KEY" '
         found && /^[[:space:]]*$/ { pending++; next }
-        found && /^[[:space:]]/ { for (i = 0; i < pending; i++) print ""; pending = 0; print; next }
+        found && /^[[:space:]]/ {
+            for (i = 0; i < pending; i++) print ""
+            pending = 0
+            print
+            next
+        }
         found { exit }
         $0 ~ "^" key "[[:blank:]]*:" { print; found = 1 }
     ' "$WORK/ours_fm")
     for SIDE in base theirs; do
         FM="$WORK/${SIDE}_fm"
-        # an empty extent (ours dropped the key) drops it from the other
-        # inputs too
+        # an empty extent (ours dropped the key) drops it from
+        # the other inputs too
         OURS_EXTENT="$OURS_EXTENT" awk -v key="$KEY" '
             skipping && /^[[:space:]]*$/ { pending++; next }
             skipping && /^[[:space:]]/ { pending = 0; next }
-            skipping { for (i = 0; i < pending; i++) print ""; pending = 0; skipping = 0 }
+            skipping {
+                for (i = 0; i < pending; i++) print ""
+                pending = 0
+                skipping = 0
+            }
             $0 ~ "^" key "[[:blank:]]*:" {
                 if (ENVIRON["OURS_EXTENT"] != "") print ENVIRON["OURS_EXTENT"]
                 skipping = 1

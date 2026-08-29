@@ -26,8 +26,8 @@ __all__ = [
     'SEQUENCES',
     'NAME',
     'NOW',
-    'block',
     'field_lines',
+    'block',
     'frontmatter',
     'grammar',
     'yaml_body',
@@ -39,7 +39,7 @@ __all__ = [
 ]
 
 #: keys under test: the six schema keys, the optional pair, a custom key and
-#: a dotted key outside the ``[\w-]+`` field grammar
+#: a dotted key (the custom-field shapes the schema does not name)
 KEYS = [
     'name',
     'title',
@@ -152,14 +152,15 @@ _STAMPS = ['2026-07-10T02:36:41Z', '2026-07-11T00:00:00Z', '2026-07-12T00:00:00Z
 def _body_lines(body: str, text: list[str]) -> list[str]:
     """Return the unindented value lines for a body shape."""
     first, second, third = text
-    return {
+    shapes = {
         'one-line': [first],
         'two-lines': [first, second],
         'paragraph-break': [first, '', second],
         'trailing-blanks': [first, second, '', ''],
         'more-indented': [first, f'  {second}', third],
         'ws-only-over-indented': [first, '  ', second],
-    }[body]
+    }
+    return shapes[body]
 
 
 def _indent(line: str) -> str:
@@ -167,9 +168,15 @@ def _indent(line: str) -> str:
     return f'  {line}' if line else ''
 
 
+def _pad(line: str) -> str:
+    """Pad a value line with trailing spaces; a blank line stays blank."""
+    return f'{line}  ' if line.strip() else line
+
+
 def _field(key: str, style: str, body: str) -> Optional[list[str]]:
     """Render the field under test, or ``None`` for a pruned combination."""
-    lines = _body_lines(body, _STAMPS if key in ('created', 'updated') else _TEXT)
+    text = _STAMPS if key in ('created', 'updated') else _TEXT
+    lines = _body_lines(body, text)
     if style == 'plain':
         return [f'{key}: {lines[0]}'] if body == 'one-line' else None
     if style == 'plain-inline-multi':
@@ -190,14 +197,15 @@ def _field(key: str, style: str, body: str) -> Optional[list[str]]:
 
 def _decorate(lines: list[str], deco: str) -> list[str]:
     """Apply one decoration around the field lines."""
-    return {
+    decorations = {
         'none': lines,
         'comment-before': ['# authored note', *lines],
         'comment-after-indented': [*lines, '  # trailing note'],
         'blank-before': ['', *lines],
         'blank-after': [*lines, ''],
-        'trailing-spaces': [f'{line}  ' if line.strip() else line for line in lines],
-    }[deco]
+        'trailing-spaces': [_pad(line) for line in lines],
+    }
+    return decorations[deco]
 
 
 def field_lines(key: str, style: str, body: str, deco: str) -> list[str]:
@@ -244,7 +252,8 @@ def grammar() -> list[tuple[str, str, str]]:
 
 def yaml_body(text: str) -> str:
     """Return the YAML document between the fences, newline-terminated."""
-    return '\n'.join(text.split('\n')[1:-1]) + '\n'
+    lines = text.split('\n')[1:-1]
+    return '\n'.join(lines) + '\n'
 
 
 def oracle_scalar(body: str, key: str) -> Optional[str]:

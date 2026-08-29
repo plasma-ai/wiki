@@ -67,7 +67,7 @@ def test_match_field_matches_value_only(tmp_path: pathlib.Path) -> None:
         '---\nname: note: draft\ndesc: d\n---\n\n# note: draft\n\nBody.\n',
         encoding='utf-8',
     )
-    # a custom key may carry a hyphen (the field grammar is [\w-]+)
+    # a custom key may carry a hyphen (the field grammar is [\w.-]+)
     (tmp_path / 'core' / 'tracked.md').write_text(
         '---\nname: tracked\ndesc: d\nreview-status: approved\n---\n\n# t\n\nBody.\n',
         encoding='utf-8',

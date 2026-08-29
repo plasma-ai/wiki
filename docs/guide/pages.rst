@@ -42,16 +42,15 @@ indented lines folds into one, a quoted value decodes, a space followed by
 ``#`` starts a comment — and ``wiki lint`` reports a block a strict reader
 rejects (an unquoted ``': '`` inside a value, a duplicate key, a body that is
 not ``key: value`` pairs) as an ``invalid_yaml`` issue. Fresh frontmatter —
-written when a bare page is
-adopted or when ``wiki init`` or ``wiki update`` creates an index — contains
-exactly ``name``, a ``desc: ...`` placeholder, ``tags: []``, ``sources: []``,
-``created``, and ``updated``, plus a ``title:`` seeded from the authored H1
-when an adopted bare page carries one (and, when ``titles.required`` is set,
-a ``title: null`` placeholder); no ``category:`` line is ever seeded. An
-index created with ``wiki new`` has the same shape but carries its authored
-``--desc`` in place of the placeholder (``wiki new`` refuses a blank or
-``...`` desc). Everything below the frontmatter is the page body, and apart
-from the H1 heading it is entirely yours.
+written when a bare page is adopted or when ``wiki init`` or ``wiki update``
+creates an index — contains exactly ``name``, a ``desc: ...`` placeholder,
+``tags: []``, ``sources: []``, ``created``, and ``updated``, plus a ``title:``
+seeded from the authored H1 when an adopted bare page carries one (and, when
+``titles.required`` is set, a ``title: null`` placeholder); no ``category:``
+line is ever seeded. An index created with ``wiki new`` has the same shape but
+carries its authored ``--desc`` in place of the placeholder (``wiki new``
+refuses a blank or ``...`` desc). Everything below the frontmatter is the page
+body, and apart from the H1 heading it is entirely yours.
 
 ``wiki update`` keeps fields in canonical order: ``name``, ``title``,
 ``desc``, ``category``, ``tags``, ``sources``, then any custom authored keys

@@ -16,6 +16,7 @@ import shutil
 import pytest
 import yaml
 
+from wiki.core import format
 from wiki.core.wiki import Issue, Wiki
 from wiki.util import markdown
 
@@ -56,7 +57,6 @@ __all__ = [
     'test_lint_future_stamp_is_clean',
     'test_lint_stamp_parse_follows_configured_format',
     'test_lint_flags_frontmatter_a_strict_yaml_reader_rejects',
-    'test_lint_locates_a_forbidden_character_after_non_ascii_text',
     'test_lint_reports_deep_nesting_instead_of_crashing',
     'test_lint_invalid_yaml_yields_to_merge_states',
     'test_lint_names_a_comment_truncated_desc',
@@ -944,6 +944,11 @@ def test_lint_stamp_parse_follows_configured_format(
         ('desc: Ends with a colon:', 3, 'mapping values'),
         ('desc: One.\ndesc: Two.', 4, 'duplicate key'),
         ('desc: Position and\x0c routes.', 3, 'characters are not allowed'),
+        (
+            'desc: caf\xe9 caf\xe9 caf\xe9.\ncategory: bad\x0c',
+            4,
+            'characters are not allowed',
+        ),
         ('? [a, b]\n: x', 3, 'not a scalar'),
     ],
     ids=[
@@ -952,6 +957,7 @@ def test_lint_stamp_parse_follows_configured_format(
         'trailing-colon',
         'duplicate-key',
         'control-char',
+        'control-char-after-non-ascii',
         'complex-key',
     ],
 )
@@ -969,10 +975,15 @@ def test_lint_flags_frontmatter_a_strict_yaml_reader_rejects(
     the line grammar, but a strict reader (Obsidian's) drops the whole
     block; lint names the file and line as a hard issue typed for
     ``--json``, under the C loader and the pure-Python loader alike, and
-    update leaves the authored bytes alone (the fix is the author's).
+    update leaves the authored bytes alone (the fix is the author's). A
+    forbidden character after accented text still lands on its own line:
+    the C loader counts stream positions in bytes, the pure loader in
+    characters, and the finding locates the character itself.
     """
     if loader == 'pure':
+        # the memo is keyed by block text alone, so the pure loader must recompose
         monkeypatch.delattr(yaml, 'CSafeLoader', raising=False)
+        format._compose_fields.cache_clear()
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
     page = tmp_path / 'core' / 'design.md'
     desc = '' if field.startswith('desc:') else 'desc: A page.\n'
@@ -995,35 +1006,6 @@ def test_lint_flags_frontmatter_a_strict_yaml_reader_rejects(
     assert any(issue.kind == 'invalid_yaml' for issue in Wiki(tmp_path).lint())
 
 
-@pytest.mark.parametrize('loader', ['c', 'pure'])
-def test_lint_locates_a_forbidden_character_after_non_ascii_text(
-    tmp_path: pathlib.Path,
-    monkeypatch: pytest.MonkeyPatch,
-    loader: str,
-) -> None:
-    """A forbidden character is reported on its own line, whatever precedes it.
-
-    The C loader counts stream positions in bytes and the pure loader in
-    characters; the finding must still land on the line that holds the
-    character, after accented text, under both loaders.
-    """
-    if loader == 'pure':
-        monkeypatch.delattr(yaml, 'CSafeLoader', raising=False)
-    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
-    page = tmp_path / 'core' / 'design.md'
-    accented = 'caf' + chr(0xE9)
-    page.write_text(
-        f'---\nname: core/design\ndesc: {accented} {accented} {accented}.\n'
-        f'category: bad{chr(12)}\n---\n\n# design\n\nBody.\n',
-        encoding='utf-8',
-    )
-
-    # the finding names line 4, the line that holds the character
-    issues = [issue for issue in wiki.lint() if issue.kind == 'invalid_yaml']
-    assert [issue.fields['line'] for issue in issues] == [4]
-    assert 'characters are not allowed' in issues[0].fields['reason']
-
-
 def test_lint_reports_deep_nesting_instead_of_crashing(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1036,6 +1018,7 @@ def test_lint_reports_deep_nesting_instead_of_crashing(
     the exception.
     """
     monkeypatch.delattr(yaml, 'CSafeLoader', raising=False)
+    format._compose_fields.cache_clear()
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
     page = tmp_path / 'core' / 'design.md'
     nested = '[' * 2000 + ']' * 2000
@@ -1045,11 +1028,12 @@ def test_lint_reports_deep_nesting_instead_of_crashing(
         encoding='utf-8',
     )
 
-    # the sweep completes with the block named as invalid
+    # the sweep completes with the block named as invalid, and update converges
     issues = [issue for issue in wiki.lint() if issue.kind == 'invalid_yaml']
     assert [issue.fields['path'] for issue in issues] == ['core/design.md']
     assert issues[0].fields['reason'] == 'RecursionError'
-    assert wiki.update() is not None
+    wiki.update()
+    assert Wiki(tmp_path).update() == []
 
 
 def test_lint_invalid_yaml_yields_to_merge_states(tmp_path: pathlib.Path) -> None:
@@ -1099,7 +1083,7 @@ def test_lint_names_a_comment_truncated_desc(tmp_path: pathlib.Path) -> None:
     """
     wiki = _make_wiki(tmp_path, folders={'core': ['cut', 'commented', 'header']})
     (tmp_path / 'core' / 'cut.md').write_text(
-        '---\nname: core/cut\ndesc: Notes on issue #3 and the fix.\n---\n\n'
+        '---\nname: core/cut\ndesc: Notes on room #12 and the key.\n---\n\n'
         '# cut\n\nBody.\n',
         encoding='utf-8',
     )
@@ -1126,7 +1110,7 @@ def test_lint_names_a_comment_truncated_desc(tmp_path: pathlib.Path) -> None:
     assert "(the text after ' #' is a YAML comment" in issues['core/cut.md']
     assert issues['core/header.md'] == 'core/header.md: Missing period in desc'
     index = (tmp_path / 'core' / '_index.md').read_text(encoding='utf-8')
-    assert '[[core/cut|cut]]: Notes on issue\n' in index
+    assert '[[core/cut|cut]]: Notes on room\n' in index
     assert '[[core/commented|commented]]: Short summary.\n' in index
 
 

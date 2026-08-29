@@ -82,7 +82,7 @@ __all__ = [
     'test_reclaimed_index_keeps_link_shaped_continuation',
     'test_body_edits_never_dirty_the_tree',
     'test_update_fills_blank_frontmatter_values',
-    'test_update_repairs_a_key_missing_its_space',
+    'test_update_leaves_a_non_mapping_block_untouched',
     'test_update_keeps_a_bare_key_stamp_body',
     'test_update_inserts_timestamps_in_canonical_order',
     'test_update_inserts_desc_in_schema_order',
@@ -1759,25 +1759,52 @@ def test_update_fills_blank_frontmatter_values(
     assert wiki.update() == []
 
 
-def test_update_repairs_a_key_missing_its_space(tmp_path: pathlib.Path) -> None:
-    """A block whose only key lacks the space after its colon is repaired, not refused.
+@pytest.mark.parametrize(
+    argnames='body',
+    argvalues=['Just a sentence.', '- a\n- b', 'name:core/design'],
+    ids=['prose', 'list', 'missing-space'],
+)
+def test_update_leaves_a_non_mapping_block_untouched(
+    tmp_path: pathlib.Path,
+    body: str,
+) -> None:
+    """A block that is valid YAML but not ``key: value`` pairs is kept as written and named.
 
-    ``name:core/design`` composes as one plain scalar, so to a strict
-    reader the block is not a mapping -- but it is a typo, not prose, and
-    the line grammar reads the key; update rewrites it as ``name: core/design``
-    and fills the rest, instead of leaving the page untouched.
+    A bare sentence, a list, or a ``name:core/design`` typo composes to a
+    scalar or sequence root with no fields to read or repair; appending
+    ``name:``, ``desc:``, and stamps under the text would leave a block no
+    reader accepts. Update keeps the page and the index byte-identical
+    and names each with its reason, lint reports the block on its first
+    line, and the next update finds nothing to do.
     """
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
     page = tmp_path / 'core' / 'design.md'
-    page.write_text(
-        '---\nname:core/design\n---\n\n# design\n\nBody.\n', encoding='utf-8'
-    )
+    index = tmp_path / 'core' / '_index.md'
+    authored_page = f'---\n{body}\n---\n\n# design\n\nBody.\n'
+    authored_index = f'---\n{body}\n---\n\n# core\n\n***\n\nProse.\n'
+    page.write_text(authored_page, encoding='utf-8')
+    index.write_text(authored_index, encoding='utf-8')
 
-    # the typo is repaired and the page converges
+    # update names both files and rewrites neither
+    notices = _capture_notices(wiki)
     wiki.update()
-    frontmatter = page.read_text(encoding='utf-8').split('---\n')[1]
-    assert frontmatter.startswith('name: core/design\ndesc: ...\n')
+    err = '\n'.join(event.description for event in notices)
+    assert 'Malformed frontmatter (not a key: value mapping) in core/design.md' in err
+    assert 'Malformed frontmatter (not a key: value mapping) in core/_index.md' in err
+    assert page.read_text(encoding='utf-8') == authored_page
+    assert index.read_text(encoding='utf-8') == authored_index
+    # lint names each block on its first line, and the next update is a no-op
+    issues = [issue for issue in Wiki(tmp_path).lint() if issue.kind == 'invalid_yaml']
+    assert sorted(issue.fields['path'] for issue in issues) == [
+        'core/_index.md',
+        'core/design.md',
+    ]
+    for issue in issues:
+        assert issue.fields['line'] == 1
+        assert issue.fields['reason'] == 'frontmatter is not a mapping'
     assert Wiki(tmp_path).update() == []
+    assert page.read_text(encoding='utf-8') == authored_page
+    assert index.read_text(encoding='utf-8') == authored_index
 
 
 @pytest.mark.parametrize('field', ['created', 'updated'])
@@ -1789,14 +1816,15 @@ def test_update_keeps_a_bare_key_stamp_body(tmp_path: pathlib.Path, field: str) 
     clock onto it and strand the authored stamp below, where a strict
     reader folds both into one unparseable value. ``created:`` keeps its
     body, and ``updated:`` -- re-stamped on every real write -- is
-    replaced as one line, body included.
+    replaced as one line, body included, while the comment line under it
+    rides along.
     """
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
     page = tmp_path / 'core' / 'design.md'
     stamp = '2026-07-24T20:35:56Z'
     page.write_text(
-        f'---\nname: core/design\ndesc: A page.\n{field}:\n  {stamp}\n---\n\n'
-        '# design\n\nBody.\n',
+        f'---\nname: core/design\ndesc: A page.\n{field}:\n  {stamp}\n  # hand note\n'
+        '---\n\n# design\n\nBody.\n',
         encoding='utf-8',
     )
 
@@ -1804,9 +1832,9 @@ def test_update_keeps_a_bare_key_stamp_body(tmp_path: pathlib.Path, field: str) 
     wiki.update()
     frontmatter = page.read_text(encoding='utf-8').split('---\n')[1]
     if field == 'created':
-        assert f'created:\n  {stamp}\n' in frontmatter
+        assert f'created:\n  {stamp}\n  # hand note\n' in frontmatter
     else:
-        assert re.search(r'^updated: \S+\n(?![ \t])', frontmatter, re.M)
+        assert re.search(r'^updated: \S+\n  # hand note\n(?![ \t])', frontmatter, re.M)
         assert stamp not in frontmatter
     assert Wiki(tmp_path).lint() == []
     assert Wiki(tmp_path).update() == []

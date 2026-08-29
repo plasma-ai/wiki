@@ -28,6 +28,14 @@ may include breaking changes, each listed under a Breaking heading.
 - PyYAML (`pyyaml>=6,<7`) is a runtime dependency; environments synced before
   this release need a `uv sync` (or a reinstall).
 
+### Changed
+
+- A frontmatter key outside the `[\w-]+` grammar (a dotted `com.example:`) sorts
+  as a custom field, below the known fields and above the timestamps, instead of
+  riding along under the field before it.
+- The `wiki update` narration counts pages with malformed frontmatter without
+  the `(no closing ---)` suffix; each per-file notice names its reason.
+
 ### Fixed
 
 - A stamp written as a bare `created:`/`updated:` key over an indented line is a
@@ -46,9 +54,7 @@ may include breaking changes, each listed under a Breaking heading.
   is that field's value: update no longer restores the placeholder or stamps the
   key line and strands the items under the field before it.
 - A frontmatter block that is valid YAML but not `key: value` pairs is left
-  untouched with a notice instead of gaining fields appended under the text; a
-  key missing the space after its colon (`name:core/design`) is repaired rather
-  than reported as such a block.
+  untouched with a notice instead of gaining fields appended under the text.
 - A double-quoted carriage-return escape in a value reads as a line break
   instead of carrying a bare carriage return into the H1 and the parent row.
 - Values the tool writes — an adopted heading seeded as `title:`, a `wiki new`
@@ -68,14 +74,6 @@ may include breaking changes, each listed under a Breaking heading.
   (`https://b]`) as part of its field, and a key written with a space before its
   colon (`desc : x`) as the field it names, so `wiki update` no longer inserts a
   duplicate `desc:` beside one.
-
-### Changed
-
-- A frontmatter key outside the `[\w-]+` grammar (a dotted `com.example:`) sorts
-  as a custom field, below the known fields and above the timestamps, instead of
-  riding along under the field before it.
-- The `wiki update` narration counts pages with malformed frontmatter without
-  the `(no closing ---)` suffix; each per-file notice names its reason.
 
 ## [1.3.1] - 2026-08-25
 

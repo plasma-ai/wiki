@@ -2039,10 +2039,19 @@ def test_merge_driver_merges_authored_frontmatter(tmp_path: pathlib.Path) -> Non
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
-@pytest.mark.parametrize('side', ['theirs', 'ours'])
+@pytest.mark.parametrize(
+    argnames=('side', 'block'),
+    argvalues=[
+        ('theirs', 'name: |\n  core\n'),
+        ('ours', 'name: |\n  core\n'),
+        ('theirs', 'name : core\n'),
+    ],
+    ids=['theirs-block', 'ours-block', 'theirs-spaced-colon'],
+)
 def test_merge_driver_moves_regenerated_keys_with_their_bodies(
     tmp_path: pathlib.Path,
     side: str,
+    block: str,
 ) -> None:
     """A regenerated key is normalized as a whole extent, indented body included.
 
@@ -2050,8 +2059,9 @@ def test_merge_driver_moves_regenerated_keys_with_their_bodies(
     written as a block scalar spans two lines, and swapping the key line
     alone would strand the other side's body under ours' one-liner,
     where a strict reader folds it into the name. Ours' whole extent
-    replaces theirs' whole extent -- whichever side wrote the block --
-    and ``wiki update`` then joins a surviving block onto one line.
+    replaces theirs' whole extent -- whichever side wrote the block, and
+    whether theirs spells the key ``name:`` or ``name :`` -- and
+    ``wiki update`` then joins a surviving block onto one line.
     """
     root = tmp_path / 'wiki'
     # a real repo whose wiki has the driver registered by init
@@ -2080,9 +2090,8 @@ def test_merge_driver_moves_regenerated_keys_with_their_bodies(
     _git(tmp_path, 'add', '-A')
     _git(tmp_path, 'commit', '-q', '-m', 'base')
 
-    # one side writes the name as a block scalar; each side edits something
+    # one side writes the name in its own shape; each side edits something
     # of its own so the merge reaches the driver
-    block = 'name: |\n  core\n'
     _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
     theirs = base.replace('desc: Original section.', 'desc: Edited by theirs.')
     if side == 'theirs':
@@ -2103,7 +2112,7 @@ def test_merge_driver_moves_regenerated_keys_with_their_bodies(
     merge = _git(tmp_path, 'merge', 'theirs')
     assert merge.returncode == 0, merge.stdout + merge.stderr
     frontmatter = index.read_text(encoding='utf-8').split('---\n')[1]
-    assert frontmatter.count('name:') == 1
+    assert len(re.findall(r'^name[ \t]*:', frontmatter, re.M)) == 1
     if side == 'ours':
         assert block in frontmatter
     else:
@@ -2112,11 +2121,13 @@ def test_merge_driver_moves_regenerated_keys_with_their_bodies(
     assert 'desc: Edited by theirs.' in frontmatter
 
     # update joins a surviving block onto one line and converges
-    assert _wiki(tmp_path, 'update', '--path', str(root)).returncode == 0
+    update = _wiki(root, 'update', '--path', str(root))
+    assert update.returncode == 0, update.stdout + update.stderr
     frontmatter = index.read_text(encoding='utf-8').split('---\n')[1]
     assert frontmatter.startswith('name: core\n')
     assert '\n  core\n' not in frontmatter
-    assert _wiki(tmp_path, 'update', '--path', str(root), '--check').returncode == 0
+    check = _wiki(root, 'update', '--path', str(root), '--check')
+    assert check.returncode == 0, check.stdout + check.stderr
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')

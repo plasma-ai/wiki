@@ -16,7 +16,6 @@ import pathlib
 from typing import Optional
 
 import pytest
-import yaml
 
 from wiki.core import format
 
@@ -84,6 +83,7 @@ def test_plain_multiline_desc_propagates(tmp_path: pathlib.Path) -> None:
 
 # ------ differential oracle
 
+
 _shapes = pytest.mark.parametrize(
     argnames=('style', 'body', 'deco'),
     argvalues=grammar(),
@@ -107,7 +107,8 @@ def test_reader_matches_strict_yaml(style: str, body: str, deco: str) -> None:
     ids=[extra_id for extra_id, _, _ in EXTRAS],
 )
 def test_reader_matches_strict_yaml_on_hostile_shapes(
-    key: str, lines: list[str]
+    key: str,
+    lines: list[str],
 ) -> None:
     """Valid shapes off the grammar's axes read as a strict reader reads them.
 
@@ -118,7 +119,8 @@ def test_reader_matches_strict_yaml_on_hostile_shapes(
     """
     text = block(key, lines)
     expected = oracle_scalar(yaml_body(text), key)
-    assert normalize(format.read_frontmatter_field(text, key)) == normalize(expected)
+    actual = format.read_frontmatter_field(text, key)
+    assert normalize(actual) == normalize(expected)
 
 
 @_shapes
@@ -160,7 +162,7 @@ def test_repair_keeps_authored_values(style: str, body: str, deco: str) -> None:
         # scalar's body is content, which the name refresh may replace)
         values = ' '.join(map(str, before.values()))
         for line in text.split('\n'):
-            if line.lstrip().startswith('#') and line.strip() not in values:
+            if line.lstrip().startswith('#') and (line.strip() not in values):
                 assert line in repaired, (key, text, repaired)
         assert after.pop('name') == NAME, (key, text, repaired)
         before.pop('name')
@@ -207,7 +209,8 @@ def test_repair_keeps_column_zero_sequences(key: str) -> None:
         order=True,
     )
     assert oracle_valid(yaml_body(repaired)), repaired
-    assert oracle_mapping(yaml_body(repaired))[key] == ['a', 'b']
+    mapping = oracle_mapping(yaml_body(repaired))
+    assert mapping[key] == ['a', 'b']
 
 
 def test_repair_keeps_the_comments_of_valueless_fields() -> None:
@@ -390,7 +393,7 @@ def test_title_reader_applies_the_null_idiom(field: str, expected: str) -> None:
         'plain text',
         'A: colon inside',
         'ends with colon:',
-        'Notes on issue #3 and the fix.',
+        'Notes on room #12 and the key.',
         '#hashtag',
         '[Draft] X',
         '{y}',
@@ -418,8 +421,7 @@ def test_quote_round_trips_through_yaml(value: str) -> None:
     must be one a strict reader (Obsidian's included) reads back as the
     same text, or an adopted heading is rewritten on the next update.
     """
-    node = yaml.compose(f'k: {format.quote(value)}\n', Loader=yaml.SafeLoader)
-    assert node.value[0][1].value == value
+    assert oracle_scalar(f'k: {format.quote(value)}\n', 'k') == value
     assert format.unquote(format.quote(value)) == value
 
 
@@ -444,8 +446,7 @@ def test_quote_escapes_characters_no_stream_may_carry(value: str) -> None:
     """
     written = format.quote(value)
     assert written[0] == written[-1] == '"'
-    node = yaml.compose(f'k: {written}\n', Loader=yaml.SafeLoader)
-    assert node.value[0][1].value == value
+    assert oracle_scalar(f'k: {written}\n', 'k') == value
     assert format.unquote(written) == value
 
 
