@@ -3780,7 +3780,7 @@ class Wiki:
                 content = re.sub(
                     # the field's whole extent, so a stamp continued on indented
                     # lines is replaced rather than stranded under the fresh one
-                    pattern=r'^updated:.*\n(?:[ \t]+.*\n|[ \t]*\n)*',
+                    pattern=r'^updated[ \t]*:.*\n(?:[ \t]+.*\n|[ \t]*\n)*',
                     # a callable repl, so a backslash in a user timestamp.format
                     # is emitted verbatim, not parsed as a group reference
                     repl=lambda _: f'updated: {now}\n',
@@ -4520,7 +4520,7 @@ class Wiki:
         elif desc and not desc.strip().endswith('.'):
             # a plain one-line value with ' #' after it lost its tail to a YAML
             # comment, the likely cause of the missing period
-            raw = re.search(r'^desc:[^\S\n]*(.*)$', frontmatter, re.MULTILINE)
+            raw = re.search(r'^desc[ \t]*:[^\S\n]*(.*)$', frontmatter, re.MULTILINE)
             hint = ''
             if (
                 raw

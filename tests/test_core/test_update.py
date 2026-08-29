@@ -937,11 +937,12 @@ def test_update_keeps_over_indented_block_body_whitespace(
 
 
 def test_update_keeps_exotic_key_block_body_blanks(tmp_path: pathlib.Path) -> None:
-    """A block body under a key outside the schema grammar keeps its blanks.
+    """A block body under a key outside the schema keeps its blanks and its slot.
 
     Frontmatter is user-extensible, so the block-body detection is not
-    gated on the schema's field-name grammar -- a dotted or otherwise
-    exotic key opening a block scalar arms the same body handling.
+    gated on the schema's field names -- a dotted or otherwise exotic key
+    opening a block scalar arms the same body handling -- and the key
+    sorts as a custom field, below the known fields.
     """
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
 
@@ -953,10 +954,10 @@ def test_update_keeps_exotic_key_block_body_blanks(tmp_path: pathlib.Path) -> No
         encoding='utf-8',
     )
 
-    # the custom block body keeps its paragraph break
+    # the custom block body keeps its paragraph break, below the known fields
     wiki.update()
     updated = page.read_text(encoding='utf-8')
-    assert 'com.example: |\n  One.\n\n  Two.\ntags: []\n' in updated
+    assert 'tags: []\ncom.example: |\n  One.\n\n  Two.\ncreated:' in updated
     assert Wiki(tmp_path).update() == []
 
 

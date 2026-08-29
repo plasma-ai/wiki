@@ -26,10 +26,12 @@ from ._oracle import (
     KEYS,
     NAME,
     NOW,
+    SEQUENCES,
     block,
     frontmatter,
     grammar,
     normalize,
+    oracle_extent,
     oracle_mapping,
     oracle_scalar,
     oracle_valid,
@@ -41,9 +43,12 @@ __all__ = [
     'test_reader_matches_strict_yaml',
     'test_reader_matches_strict_yaml_on_hostile_shapes',
     'test_repair_keeps_authored_values',
+    'test_repair_recognizes_a_spaced_key',
     'test_reader_applies_the_documented_policy',
     'test_title_reader_applies_the_null_idiom',
     'test_quote_round_trips_through_yaml',
+    'test_field_ranges_match_yaml_extents',
+    'test_field_ranges_match_yaml_extents_on_hostile_shapes',
 ]
 
 # ------ engine cover
@@ -156,6 +161,27 @@ def test_repair_keeps_authored_values(style: str, body: str, deco: str) -> None:
         assert after.pop('name') == NAME, (key, text, repaired)
         before.pop('name')
         assert after == before, (key, text, repaired)
+
+
+def test_repair_recognizes_a_spaced_key() -> None:
+    """A key with a space before its colon is the key it names, not a stranger.
+
+    ``desc : x`` is the ``desc`` field to every YAML reader; a repair that
+    saw no ``desc:`` would insert the placeholder beside it, writing a
+    duplicate key that strict readers reject.
+    """
+    text = block('desc', ['desc : A page.'])
+    repaired = format.repair_frontmatter(
+        text,
+        name=NAME,
+        now=NOW,
+        title=True,
+        category=True,
+        order=True,
+    )
+    assert oracle_valid(yaml_body(repaired)), repaired
+    assert repaired.count('desc') == 1
+    assert 'desc : A page.' in repaired
 
 
 # ------ documented policy
@@ -311,3 +337,35 @@ def test_quote_round_trips_through_yaml(value: str) -> None:
     node = yaml.compose(f'k: {format.quote(value)}\n', Loader=yaml.SafeLoader)
     assert node.value[0][1].value == value
     assert format.unquote(format.quote(value)) == value
+
+
+# ------ field extents
+
+
+@_shapes
+def test_field_ranges_match_yaml_extents(style: str, body: str, deco: str) -> None:
+    """``field_line_ranges`` attributes lines the way a strict reader's key marks do.
+
+    The line ranges scope ``match --field`` and the wrap-mangle lint, so
+    a field that ends early (a continuation misread as a key) or late (a
+    key misread as a continuation) hides or misattributes matches.
+    """
+    for key in KEYS:
+        text = frontmatter(key, style, body, deco)
+        ranges = format.field_line_ranges(text, text.split('\n'), [key])
+        assert ranges == oracle_extent(yaml_body(text), key), (key, text)
+
+
+@pytest.mark.parametrize(
+    argnames=('key', 'lines'),
+    argvalues=[(key, lines) for _, key, lines in EXTRAS + SEQUENCES],
+    ids=[extra_id for extra_id, _, _ in EXTRAS + SEQUENCES],
+)
+def test_field_ranges_match_yaml_extents_on_hostile_shapes(
+    key: str,
+    lines: list[str],
+) -> None:
+    """Off-grammar shapes -- a column-0 item holding a colon, a spaced key -- scope right."""
+    text = block(key, lines)
+    ranges = format.field_line_ranges(text, text.split('\n'), [key])
+    assert ranges == oracle_extent(yaml_body(text), key)

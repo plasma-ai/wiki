@@ -23,6 +23,7 @@ __all__ = [
     'BODIES',
     'DECOS',
     'EXTRAS',
+    'SEQUENCES',
     'NAME',
     'NOW',
     'block',
@@ -33,6 +34,7 @@ __all__ = [
     'oracle_scalar',
     'oracle_mapping',
     'oracle_valid',
+    'oracle_extent',
     'normalize',
 ]
 
@@ -127,6 +129,12 @@ EXTRAS = [
     ('local-tag', 'desc', ['desc: !bang Alpha beta.']),
     ('bool-like', 'title', ['title: yes']),
     ('sexagesimal', 'title', ['title: 1:20']),
+]
+#: sequence-valued shapes, which the reader never resolves but whose line
+#: extents must still scope right, as ``(id, key, field lines)``
+SEQUENCES = [
+    ('column0-url-items', 'sources', ['sources:', '- https://doi.org/x', '- b']),
+    ('indented-items', 'tags', ['tags:', '  - a', '  - b']),
 ]
 #: the repair's path-derived name and clock
 NAME = 'fixed/page'
@@ -271,6 +279,28 @@ def oracle_valid(body: str) -> bool:
         return False
     keys = [key_node.value for key_node, _ in node.value]
     return len(keys) == len(set(keys))
+
+
+def oracle_extent(body: str, key: str) -> set[int]:
+    """Return the 1-based file lines a strict reader's key marks give ``key``.
+
+    The top-level keys' start marks partition the body: every line from
+    a key's line up to the line before the next key's belongs to that
+    key -- comments, blanks, and sequence items included -- and the last
+    key runs to the end of the body. Body line 0 is file line 2, after
+    the opening fence.
+    """
+    node = yaml.compose(body, Loader=_LOADER)
+    starts = sorted(key_node.start_mark.line for key_node, _ in node.value)
+    last = len(body.rstrip('\n').split('\n'))
+    for key_node, _ in node.value:
+        if key_node.value != key:
+            continue
+        start = key_node.start_mark.line
+        following = [line for line in starts if line > start]
+        end = following[0] if following else last
+        return set(range(start + 2, end + 2))
+    return set()
 
 
 def normalize(text: Optional[str]) -> str:

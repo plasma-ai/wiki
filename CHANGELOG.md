@@ -48,9 +48,16 @@ may include breaking changes, each listed under a Breaking heading.
   its body under the other side's one-liner.
 - `wiki lint`'s "Missing period in desc" names a ` #` comment as the likely
   cause when the value's line carries one.
+- `wiki match --field` sees a sequence item written at column 0 whose text holds
+  a colon (`- https://doi.org/...`) as part of its field, and a key written with
+  a space before its colon (`desc : x`) as the field it names, so `wiki update`
+  no longer inserts a duplicate `desc:` beside one.
 
 ### Changed
 
+- A frontmatter key outside the `[\w-]+` grammar (a dotted `com.example:`) sorts
+  as a custom field, below the known fields and above the timestamps, instead of
+  riding along under the field before it.
 - The `wiki update` narration counts pages with malformed frontmatter without
   the `(no closing ---)` suffix; each per-file notice names its reason.
 

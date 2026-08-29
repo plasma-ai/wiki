@@ -447,7 +447,7 @@ def repair_frontmatter(
     frontmatter = strip_blank_lines(frontmatter)
     # update name from the path-derived name (add it if the field is
     # missing, so frontmatter with no name: does not stay un-named)
-    name_field = re.search(r'^name:(.*)$', frontmatter, re.MULTILINE)
+    name_field = re.search(r'^name[ \t]*:(.*)$', frontmatter, re.MULTILINE)
     if name_field:
         # the refresh spans the field's full extent, so a multi-line value's
         # body goes with the stale value it continues; callable repls so a
@@ -458,7 +458,7 @@ def repair_frontmatter(
             # block scalar: the whole indented body goes -- a `#` line or a
             # blank inside it is content
             frontmatter = re.sub(
-                pattern=r'^name:.*\n(?:[ \t]+.*\n|[ \t]*\n)*',
+                pattern=r'^name[ \t]*:.*\n(?:[ \t]+.*\n|[ \t]*\n)*',
                 repl=lambda _: fresh,
                 string=frontmatter,
                 count=1,
@@ -477,7 +477,7 @@ def repair_frontmatter(
                 return fresh + ''.join(comments)
 
             frontmatter = re.sub(
-                pattern=r'^name:.*\n((?:[ \t]+.*\n|[ \t]*\n)*)',
+                pattern=r'^name[ \t]*:.*\n((?:[ \t]+.*\n|[ \t]*\n)*)',
                 repl=keep_comments,
                 string=frontmatter,
                 count=1,
@@ -491,7 +491,7 @@ def repair_frontmatter(
     # empty block scalar (mirrors the title branch's valueless check below),
     # all of which read as no description; a real block-scalar body is kept
     desc_match = re.search(
-        pattern=r'^desc:.*\n(?:[ \t]+.*\n|[ \t]*\n)*',
+        pattern=r'^desc[ \t]*:.*\n(?:[ \t]+.*\n|[ \t]*\n)*',
         string=frontmatter,
         flags=re.MULTILINE,
     )
@@ -503,9 +503,9 @@ def repair_frontmatter(
                 + 'desc: ...\n'
                 + frontmatter[desc_match.end() :]
             )
-    elif not re.search(r'^desc:', frontmatter, re.MULTILINE):
+    elif not re.search(r'^desc[ \t]*:', frontmatter, re.MULTILINE):
         frontmatter = re.sub(
-            pattern=r'^(name:.*\n)',
+            pattern=r'^(name[ \t]*:.*\n)',
             repl=r'\1desc: ...\n',
             string=frontmatter,
             count=1,
@@ -515,13 +515,13 @@ def repair_frontmatter(
     # place so a duplicate is never appended -- a bare key over an indented
     # body is a value (lint judges it), never a blank to stamp over
     created = re.search(
-        pattern=r'^created:[^\S\n]*\n((?:[ \t]+.*\n|[ \t]*\n)*)',
+        pattern=r'^created[ \t]*:[^\S\n]*\n((?:[ \t]+.*\n|[ \t]*\n)*)',
         string=frontmatter,
         flags=re.MULTILINE,
     )
     if created and not created.group(1).strip():
         frontmatter = re.sub(
-            pattern=r'^created:[^\S\n]*$',
+            pattern=r'^created[ \t]*:[^\S\n]*$',
             # a callable repl, so a backslash in a user timestamp.format is
             # emitted verbatim, not parsed as a group reference
             repl=lambda _: f'created: {now}',
@@ -529,24 +529,24 @@ def repair_frontmatter(
             count=1,
             flags=re.MULTILINE,
         )
-    elif not re.search(r'^created:', frontmatter, re.MULTILINE):
-        match = re.search(r'^updated:', frontmatter, re.MULTILINE)
+    elif not re.search(r'^created[ \t]*:', frontmatter, re.MULTILINE):
+        match = re.search(r'^updated[ \t]*:', frontmatter, re.MULTILINE)
         pos = match.start() if match else frontmatter.rfind('---')
         frontmatter = frontmatter[:pos] + f'created: {now}\n' + frontmatter[pos:]
     updated = re.search(
-        pattern=r'^updated:[^\S\n]*\n((?:[ \t]+.*\n|[ \t]*\n)*)',
+        pattern=r'^updated[ \t]*:[^\S\n]*\n((?:[ \t]+.*\n|[ \t]*\n)*)',
         string=frontmatter,
         flags=re.MULTILINE,
     )
     if updated and not updated.group(1).strip():
         frontmatter = re.sub(
-            pattern=r'^updated:[^\S\n]*$',
+            pattern=r'^updated[ \t]*:[^\S\n]*$',
             repl=lambda _: f'updated: {now}',
             string=frontmatter,
             count=1,
             flags=re.MULTILINE,
         )
-    elif not re.search(r'^updated:', frontmatter, re.MULTILINE):
+    elif not re.search(r'^updated[ \t]*:', frontmatter, re.MULTILINE):
         pos = frontmatter.rfind('---')
         frontmatter = frontmatter[:pos] + f'updated: {now}\n' + frontmatter[pos:]
     # drop an unset category: absence is the canonical unset form, so a
@@ -557,7 +557,7 @@ def repair_frontmatter(
     # verbatim, and the field is never inserted
     if category:
         match = re.search(
-            pattern=r'^category:.*\n(?:[ \t]+.*\n|[ \t]*\n)*',
+            pattern=r'^category[ \t]*:.*\n(?:[ \t]+.*\n|[ \t]*\n)*',
             string=frontmatter,
             flags=re.MULTILINE,
         )
@@ -570,7 +570,7 @@ def repair_frontmatter(
     # the order pass's job
     if title:
         match = re.search(
-            pattern=r'^title:.*\n(?:[ \t]+.*\n|[ \t]*\n)*',
+            pattern=r'^title[ \t]*:.*\n(?:[ \t]+.*\n|[ \t]*\n)*',
             string=frontmatter,
             flags=re.MULTILINE,
         )
@@ -608,7 +608,7 @@ def order_frontmatter(frontmatter: str) -> str:
     preamble = []
     current = None
     for line in lines[1:-1]:
-        match = re.match(r'^([\w-]+):', line)
+        match = re.match(r'^([\w.-]+)[ \t]*:', line)
         if match:
             current = (match.group(1), [line])
             extents.append(current)
@@ -646,7 +646,7 @@ def seed_frontmatter_title(frontmatter: str, title: Optional[str] = None) -> str
     carrying a ``title:`` line is returned unchanged: the field is
     authored, so a present line is never overwritten.
     """
-    if re.search(r'^title:', frontmatter, re.MULTILINE):
+    if re.search(r'^title[ \t]*:', frontmatter, re.MULTILINE):
         return frontmatter
     if title is None:
         value = 'null'
@@ -656,7 +656,7 @@ def seed_frontmatter_title(frontmatter: str, title: Optional[str] = None) -> str
         value = "'null'" if title == 'null' else quote(title)
     # callable repl so a backslash-digit in the title is not read as a group reference
     return re.sub(
-        pattern=r'^(name:.*\n)',
+        pattern=r'^(name[ \t]*:.*\n)',
         repl=lambda match: f'{match.group(1)}title: {value}\n',
         string=frontmatter,
         count=1,
@@ -808,7 +808,7 @@ def _read_field_lines(frontmatter: str, key: str) -> Optional[str]:
     empty block body resolves to an empty string.
     """
     # single-line value
-    match = re.search(rf'^{key}:[^\S\n]*(.+)$', frontmatter, re.MULTILINE)
+    match = re.search(rf'^{key}[ \t]*:[^\S\n]*(.+)$', frontmatter, re.MULTILINE)
     if match:
         value = match.group(1).strip()
         if not value.startswith(('|', '>')):
@@ -817,7 +817,7 @@ def _read_field_lines(frontmatter: str, key: str) -> Optional[str]:
         # bare key: an indented body is a plain multi-line scalar, folded
         # per the YAML plain-scalar rule; no body reads as an absent value
         match = re.search(
-            pattern=rf'^{key}:[^\S\n]*\n((?:[ \t]+.*\n|[ \t]*\n)*)',
+            pattern=rf'^{key}[ \t]*:[^\S\n]*\n((?:[ \t]+.*\n|[ \t]*\n)*)',
             string=frontmatter,
             flags=re.MULTILINE,
         )
@@ -828,7 +828,7 @@ def _read_field_lines(frontmatter: str, key: str) -> Optional[str]:
     # |- |+ >- |2 ...) plus trailing inline text, then capture the indented
     # body (blank lines inside the block are kept so a folded break survives)
     match = re.search(
-        pattern=rf'^{key}:[^\S\n]*([|>])[-+0-9]*[^\S\n]*(.*)\n((?:[ \t]+.*\n|[ \t]*\n)*)',
+        pattern=rf'^{key}[ \t]*:[^\S\n]*([|>])[-+0-9]*[^\S\n]*(.*)\n((?:[ \t]+.*\n|[ \t]*\n)*)',
         string=frontmatter,
         flags=re.MULTILINE,
     )
@@ -877,7 +877,7 @@ def _unset_field(frontmatter: str, key: str) -> bool:
     fields = _scalar_fields(frontmatter)
     if fields is not None:
         return (key not in fields) or (fields[key] == ('null', None))
-    match = re.search(rf'^{key}:[^\S\n]*(.*)$', frontmatter, re.MULTILINE)
+    match = re.search(rf'^{key}[ \t]*:[^\S\n]*(.*)$', frontmatter, re.MULTILINE)
     return (match is None) or (match.group(1).strip() == 'null')
 
 
@@ -942,7 +942,7 @@ def field_value(line: str) -> str:
     joined value of a whole field, this reads a single line so matches
     keep their line numbers.
     """
-    match = re.match(r'^([\w-]+):[^\S\n]*', line)
+    match = re.match(r'^([\w.-]+)[ \t]*:[^\S\n]*', line)
     if match:
         return unquote(line[match.end() :].strip())
     return line.strip()
@@ -985,17 +985,19 @@ def field_line_ranges(
         if lineno >= frontmatter_end:
             break
         # check for field key
-        match = re.match(r'^([\w-]+):', line)
+        match = re.match(r'^([\w.-]+)[ \t]*:', line)
         if match:
             current_field = match.group(1)
             if current_field in fields:
                 result.add(lineno)
             continue
-        # a dedented field line whose key sits outside the [\w-]+ grammar
-        # (e.g. dotted) still ends the current field -- its line and block
-        # body must not attribute to the preceding field
+        # a dedented field line whose key sits outside the key grammar (e.g.
+        # one with spaces) still ends the current field -- its line and block
+        # body must not attribute to the preceding field -- while a dedented
+        # sequence item (`- https://...`) continues it, colon and all
         dedented = line[:1] not in (' ', '\t')
-        if dedented and ':' in line and not line.startswith('#'):
+        item = re.match(r'-(?:[ \t]|$)', line) is not None
+        if dedented and (':' in line) and not line.startswith('#') and not item:
             current_field = None
             continue
         # continuation line of current field

@@ -72,10 +72,16 @@ def test_match_field_matches_value_only(tmp_path: pathlib.Path) -> None:
         '---\nname: tracked\ndesc: d\nreview-status: approved\n---\n\n# t\n\nBody.\n',
         encoding='utf-8',
     )
-    # a dotted key sits outside the field grammar but still ends its neighbor
+    # a dotted key is a field of its own and ends its neighbor
     (tmp_path / 'core' / 'foreign.md').write_text(
         '---\nname: foreign\ndesc: d\ncom.example: |\n  needle body\n---\n'
         '\n# f\n\nBody.\n',
+        encoding='utf-8',
+    )
+    # a column-0 sequence item holding a colon belongs to its field
+    (tmp_path / 'core' / 'cited.md').write_text(
+        '---\nname: cited\ndesc: d\nsources:\n- https://doi.org/10.1/x\n---\n'
+        '\n# c\n\nBody.\n',
         encoding='utf-8',
     )
     wiki.update()
@@ -100,6 +106,9 @@ def test_match_field_matches_value_only(tmp_path: pathlib.Path) -> None:
     # a dotted key's line and block body never attribute to the field
     # before it: field-scoped search must not hit foreign-key content
     assert wiki.match('needle', field='desc') == []
+    # a URL item at column 0 is part of its sequence field, colon and all
+    hits = wiki.match('doi.org', field='sources')
+    assert [relpath for relpath, _, _ in hits] == ['core/cited.md']
 
 
 def test_all_files_matches_non_markdown_whole(tmp_path: pathlib.Path) -> None:
