@@ -700,7 +700,7 @@ def _compose_fields(frontmatter: str) -> tuple[str, _Fields]:
 
     # feed the parser the body between the fences (a fenceless body reads as is)
     lines = frontmatter.split('\n')
-    if lines and (lines[0].lstrip('﻿').strip() == '---'):
+    if lines and (lines[0].lstrip('\ufeff').strip() == '---'):
         lines = lines[1:]
     if lines and (lines[-1].rstrip() == '---'):
         lines = lines[:-1]
