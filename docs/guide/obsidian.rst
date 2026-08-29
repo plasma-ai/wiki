@@ -100,7 +100,11 @@ throughout Obsidian: the file explorer (including sorting), the graph,
 bookmarks, search, link suggestions, tab titles, the inline title, and the
 window frame. A ``replace`` processor strips any path prefix from the
 displayed name, so a page named ``topics/example`` displays as ``example``
-and each ``_index.md`` displays as its folder's name.
+and each ``_index.md`` displays as its folder's name. The plugin reads
+``name:`` with Obsidian's own YAML parser, so a page whose frontmatter a
+strict reader rejects (an unquoted ``': '`` inside a value, say) displays its
+raw filename instead; ``wiki lint`` reports such a block as an
+``invalid_yaml`` issue.
 
 The plugin's settings are copied from the staged configuration, but its code
 is downloaded from the pinned upstream GitHub release at setup time — the

@@ -7,6 +7,53 @@ may include breaking changes, each listed under a Breaking heading.
 
 ## [Unreleased]
 
+### Breaking
+
+- `wiki lint` reports frontmatter a strict YAML reader rejects as a new hard
+  issue, `invalid_yaml` (with `line` and `reason` payload fields): an unquoted
+  `: ` inside a one-line value, a value ending in `:`, a duplicate key, a
+  control character, a key that is not a scalar, or a body that is not
+  `key: value` pairs. A wiki that linted clean may lint red until the offending
+  values are quoted; the fix is the author's — `wiki update` never rewrites an
+  authored value.
+- Frontmatter values are read the way a strict YAML reader reads them: a value
+  continued on indented lines folds into one, a quoted value decodes, an
+  indented `# comment` under a bare key is a comment, a bare key with trailing
+  spaces reads its body, a space followed by `#` starts a comment, and `null`
+  followed by a comment unsets like `null`. The first `wiki update` after
+  upgrading may rewrite a parent row, a `[category]` label, or an H1 once on
+  pages carrying such shapes — run `wiki update --check` after upgrading to list
+  them — and the search index rebuilds on the next `wiki search`. A block a
+  strict reader rejects still reads as before, through the line grammar.
+- PyYAML (`pyyaml>=6,<7`) is a runtime dependency; environments synced before
+  this release need a `uv sync` (or a reinstall).
+
+### Fixed
+
+- A stamp written as a bare `created:`/`updated:` key over an indented line is a
+  value: `wiki update` no longer stamps the run's clock onto the key line and
+  strands the authored stamp below it, and the `updated:` re-stamp replaces the
+  whole value.
+- Refreshing a bare-key `name:` keeps an indented `# comment` under it.
+- `title: null # comment` and `desc: | # comment` are unset like `title: null`
+  and `desc: |`: update removes the title line and restores the desc
+  placeholder.
+- A frontmatter block that is valid YAML but not `key: value` pairs is left
+  untouched with a notice instead of gaining fields appended under the text.
+- Values the tool writes — an adopted heading seeded as `title:`, a `wiki new`
+  desc — are quoted whenever a plain scalar would misread them: a leading
+  indicator character, a ` #` comment start, leading or trailing whitespace.
+- The `_index.md` merge driver moves a regenerated key with its indented
+  continuation lines, so a block-scalar `name:` on one side no longer strands
+  its body under the other side's one-liner.
+- `wiki lint`'s "Missing period in desc" names a ` #` comment as the likely
+  cause when the value's line carries one.
+
+### Changed
+
+- The `wiki update` narration counts pages with malformed frontmatter without
+  the `(no closing ---)` suffix; each per-file notice names its reason.
+
 ## [1.3.1] - 2026-08-25
 
 ### Fixed

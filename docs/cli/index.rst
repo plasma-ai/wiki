@@ -614,7 +614,8 @@ with one JSON document on stdout carrying every finding under an explicit
 payload fields (``path`` on every issue and on most notes — the
 ``resolver_notice``, ``merge_driver_unconfigured``, and
 ``git_fence_unavailable`` notes carry none — plus e.g. ``target``/``label``
-on a broken link or ``line`` on a wrap mangle), the rendered prose under
+on a broken link, ``line`` on a wrap mangle, or ``line``/``reason`` on
+invalid YAML frontmatter), the rendered prose under
 ``text``, and a ``summary`` with both counts; the exit-code contract is
 unchanged.
 
@@ -622,8 +623,10 @@ unchanged.
 each shown as ``<path>: Requires update`` with an indented unified diff — plus
 problems update cannot fix: missing indexes, invalid page/folder names, pages
 shadowed by same-named folders, merge conflict markers, leftover merge repair
-hints, malformed frontmatter
-(no closing ``---``), empty or truncated indexes, nested wiki roots,
+hints, malformed frontmatter (no closing ``---``, or a body that is not a
+``key: value`` mapping), frontmatter a strict YAML reader rejects (an unquoted
+``': '`` inside a value, a duplicate key), empty or truncated indexes, nested
+wiki roots,
 formatter-damage signatures (escaped wikilinks, a missing ``***`` delimiter),
 hand-wrap mangles, authored descriptions missing their trailing period,
 unparseable ``created:``/``updated:`` stamps, broken links in the generated

@@ -35,13 +35,15 @@ edits conflict only on authored prose; `wiki config` installs the Obsidian
 integration.
 
 `core/` decomposes into `wiki.py` (the `Wiki` engine class), `format.py`
-(functions over the on-disk page format), `event.py` (the payload-only `Event`
-base), `_obsidian.py` (the internal Obsidian integration), and `_search.py` (the
-internal SQLite FTS5 index). Engine diagnostics are typed notice events: each
-kind has an `on_<kind>` hook delegating to the `on_notice` funnel, which logs
-`event.description` through the stdlib `Wiki.logger`; hosts intercept by
-overriding hooks (the CLI swaps `on_notice` per instance to capture and condense
-narration).
+(functions over the on-disk page format; frontmatter values come from PyYAML's
+composed node graph, with the line grammar as the fallback for a block a strict
+reader rejects, and every write stays byte-level), `event.py` (the payload-only
+`Event` base), `_obsidian.py` (the internal Obsidian integration), and
+`_search.py` (the internal SQLite FTS5 index). Engine diagnostics are typed
+notice events: each kind has an `on_<kind>` hook delegating to the `on_notice`
+funnel, which logs `event.description` through the stdlib `Wiki.logger`; hosts
+intercept by overriding hooks (the CLI swaps `on_notice` per instance to capture
+and condense narration).
 
 ## Build & Development
 

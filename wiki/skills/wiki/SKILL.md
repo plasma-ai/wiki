@@ -124,6 +124,14 @@ rather than authoring or auditing page by page yourself:
   `created`, `updated` — moving each field (with its block-scalar body) verbatim
   into its slot. Custom keys are allowed: they keep their relative order below
   the known fields, above the timestamps.
+- **Frontmatter reads as YAML.** Field values are read the way a strict YAML
+  reader reads them — a value continued on indented lines folds into one, a
+  quoted value decodes, a space followed by `#` starts a comment, and
+  `null # comment` unsets like `null`. `wiki lint` reports a block a strict
+  reader rejects (an unquoted `: ` inside a value, a duplicate key, a body that
+  is not `key: value` pairs) as an `invalid_yaml` issue; `wiki update` still
+  repairs such a block through its line grammar, except a body that is not
+  `key: value` pairs, which it leaves untouched.
 - **Wikilinks stay inside the wiki.** A wikilink (`[[...]]`) must target another
   page in the same wiki. Files outside the wiki (source files, configs, another
   wiki's pages) can be referenced by name or in backticks, but never linked.
@@ -145,10 +153,11 @@ rather than authoring or auditing page by page yourself:
   link description) that lacks a trailing period; the seeded `...` placeholder
   only draws a soft note. Author the desc in the child page's frontmatter —
   `wiki update` copies it onto the parent index's link line. A desc containing
-  `: ` must be YAML-quoted; surrounding quotes are stripped when the value is
-  read. Never hand-wrap a desc mid-word or onto a list-marker start — let the
-  block scalar carry the breaks; lint fails the wrap artifacts (a hyphen dangle,
-  a phantom list item).
+  `: ` or ` #` must be YAML-quoted — a strict reader rejects the unquoted colon
+  and reads ` #` as a comment, and `wiki lint` reports both; surrounding quotes
+  are stripped when the value is read. Never hand-wrap a desc mid-word or onto a
+  list-marker start — let the block scalar carry the breaks; lint fails the wrap
+  artifacts (a hyphen dangle, a phantom list item).
 - **Fill in auto-created index descs.** `wiki update` creates a missing
   `_index.md` for every new directory with a `desc: ...` placeholder and
   announces the batch in its condensed summary

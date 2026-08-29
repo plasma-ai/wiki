@@ -54,7 +54,10 @@ rewrites only the files that differ. It owns:
    an unset ``title:`` or ``category:`` line (blank or plain ``null``), drops
    stray blank lines, and enforces the canonical field order. Authored values
    — ``title:``, ``desc:``, ``category:``, ``tags:``, ``sources:``, and any
-   custom keys — are preserved.
+   custom keys — are preserved. Values are read the way a strict YAML reader
+   reads them (a value continued on indented lines folds, a quoted value
+   decodes, ``null # comment`` unsets like ``null``); a block a strict reader
+   rejects still reads through the line grammar, as authored.
 
 **Headings.**
    The H1 of every page and index is rewritten to the authored ``title:`` when
@@ -186,6 +189,10 @@ would destroy authored content or race a concurrent editor:
 
 - **A page whose frontmatter never closes** (opening ``---`` with no closing
   ``---``) is left untouched — update cannot tell frontmatter from body.
+- **A frontmatter block that is not a mapping** (valid YAML, but a bare
+  sentence or a list between the fences) is left untouched — it has no fields
+  to repair, and appending fields under the text would leave a block no
+  reader accepts.
 - **An emptied or truncated index** (an ``_index.md`` with no closed
   frontmatter) is kept as-is rather than rebuilt; rebuilding would discard
   whatever authored content survives. Restore it from git, or delete it so
@@ -335,6 +342,15 @@ its meaning:
 ``Malformed frontmatter (no closing ---)``
    A page's frontmatter block never closes; update leaves the file untouched.
    Close the block by hand.
+
+``Invalid YAML frontmatter (line N): <reason>; a strict reader drops the whole block, so quote or rewrite the value``
+   A strict YAML reader rejects the block — an unquoted ``': '`` inside a
+   one-line value, a value ending in ``:``, a duplicate key, a control
+   character, a key that is not a scalar, or a body that is not ``key: value``
+   pairs — so Obsidian and any YAML library lose every field, while the wiki
+   still reads the block through its line grammar (or, for a body that is not
+   a mapping, leaves it untouched). Quote the value, drop the duplicate, or
+   rewrite the block.
 
 ``Empty or truncated index (no frontmatter); restore it from git or delete it to rebuild``
    An emptied or truncated ``_index.md``; update keeps it as-is. Restore or
@@ -511,8 +527,10 @@ topics/_index.md``). The condensed lines and what they mean:
      - Entries violating the naming policy were left unlinked.
    * - ``Skipped N concurrently-edited files (re-run `wiki update`)``
      - Files changed while update was planning; re-run to converge.
-   * - ``N pages with malformed frontmatter (no closing ---)``
-     - Left untouched; close the block by hand.
+   * - ``N pages with malformed frontmatter``
+     - Left untouched; the per-file notice names the reason — close an
+       unclosed block by hand, or rewrite a body that is not ``key: value``
+       pairs.
    * - ``N empty or truncated indexes (restore from git or delete to rebuild)``
      - Left untouched; restore or delete.
 

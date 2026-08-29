@@ -1444,6 +1444,7 @@ class Wiki:
                     result.extend(self._lint_desc(index_path, frontmatter))
                     result.extend(self._lint_title(index_path, frontmatter))
                     result.extend(self._lint_timestamps(index_path, frontmatter))
+                    result.extend(self._lint_frontmatter_yaml(index_path, frontmatter))
                     # the root display name has no enclosing dir to validate it
                     if folder == self._root:
                         root_name = format.read_frontmatter_name(frontmatter)
@@ -1664,6 +1665,7 @@ class Wiki:
                     result.extend(self._lint_desc(page, frontmatter))
                     result.extend(self._lint_title(page, frontmatter))
                     result.extend(self._lint_timestamps(page, frontmatter))
+                    result.extend(self._lint_frontmatter_yaml(page, frontmatter))
                 # hand-wrap artifacts in the content and raw desc lines
                 # are hard issues
                 result.extend(
@@ -4516,9 +4518,22 @@ class Wiki:
         if desc == '...':
             self.on_desc_missing(path=str(relpath))
         elif desc and not desc.strip().endswith('.'):
+            # a plain one-line value with ' #' after it lost its tail to a YAML
+            # comment, the likely cause of the missing period
+            raw = re.search(r'^desc:[^\S\n]*(.*)$', frontmatter, re.MULTILINE)
+            hint = ''
+            if (
+                raw
+                and (' #' in raw.group(1))
+                and not raw.group(1).startswith(("'", '"'))
+            ):
+                hint = (
+                    " (the text after ' #' is a YAML comment; quote the value if"
+                    ' it was meant as text)'
+                )
             result.append(
                 Issue(
-                    f'{relpath}: Missing period in desc',
+                    f'{relpath}: Missing period in desc{hint}',
                     kind='missing_period',
                     path=str(relpath),
                 )
@@ -4603,6 +4618,119 @@ class Wiki:
                         value=value,
                     )
                 )
+        return result
+
+    def _lint_frontmatter_yaml(
+        self: Wiki,
+        path: pathlib.Path,
+        frontmatter: str,
+    ) -> list[Issue]:
+        """Check the frontmatter body is a mapping a strict YAML reader accepts.
+
+        The wiki's own reader is lenient -- an unquoted ``': '`` inside a
+        one-line value still reads as the authored text through the line
+        grammar -- but a strict reader (Obsidian's, any YAML library)
+        refuses the whole block and loses every field with it, so a body
+        the parser rejects is a hard issue naming the line. A duplicate
+        top-level key (a strict reader refuses it or keeps the last copy
+        where the wiki reads the first), a key that is not a scalar, and
+        a body that is not a mapping are reported the same way. The
+        fences stay outside the parse -- they are the wiki's grammar, and
+        document markers to YAML -- and update never rewrites an authored
+        value, so the fix is the author's: quote the value, drop the
+        duplicate, or write ``key: value`` pairs.
+        """
+        import yaml
+
+        # initialize issues
+        result = []
+        # alias relative path
+        relpath = path.relative_to(self._root)
+        # an empty or unclosed block has nothing to parse (reported elsewhere)
+        if not frontmatter:
+            return result
+        body = '\n'.join(frontmatter.split('\n')[1:-1]) + '\n'
+        # the C loader is a build-time option of the PyYAML wheel; the pure
+        # loader raises RecursionError on nesting the C loader composes
+        loader = getattr(yaml, 'CSafeLoader', yaml.SafeLoader)
+        try:
+            node = yaml.compose(body, Loader=loader)
+        except (yaml.YAMLError, RecursionError) as error:
+            # body line 0 is file line 2 (the opening fence); a mark-less error
+            # (a control character, the recursion limit) locates by its stream
+            # position or falls back to the block's first line
+            mark = getattr(error, 'problem_mark', None)
+            position = getattr(error, 'position', None)
+            if mark is not None:
+                line = mark.line + 2
+            elif position is not None:
+                line = body.count('\n', 0, position) + 2
+            else:
+                line = 1
+            reason = getattr(error, 'problem', None) or getattr(error, 'reason', None)
+            reason = str(reason or type(error).__name__)
+            result.append(
+                Issue(
+                    f'{relpath}: Invalid YAML frontmatter (line {line}):'
+                    f' {reason}; a strict reader drops the whole block, so'
+                    ' quote or rewrite the value',
+                    kind='invalid_yaml',
+                    path=str(relpath),
+                    line=line,
+                    reason=reason,
+                )
+            )
+            return result
+        # an empty or comment-only body has no fields to judge
+        if node is None:
+            return result
+        # a body that is not a mapping has no fields at all
+        if not isinstance(node, yaml.MappingNode):
+            result.append(
+                Issue(
+                    f'{relpath}: Invalid YAML frontmatter (line 1): frontmatter'
+                    ' is not a key: value mapping; the wiki reads no fields'
+                    ' from it and leaves it untouched',
+                    kind='invalid_yaml',
+                    path=str(relpath),
+                    line=1,
+                    reason='frontmatter is not a mapping',
+                )
+            )
+            return result
+        # duplicate and non-scalar keys: compose keeps every pair in order
+        seen: dict[str, int] = {}
+        for key_node, _value_node in node.value:
+            line = key_node.start_mark.line + 2
+            if not isinstance(key_node, yaml.ScalarNode):
+                result.append(
+                    Issue(
+                        f'{relpath}: Invalid YAML frontmatter (line {line}): a'
+                        ' key is not a scalar; the wiki reads the block by its'
+                        ' line grammar alone',
+                        kind='invalid_yaml',
+                        path=str(relpath),
+                        line=line,
+                        reason='a key is not a scalar',
+                    )
+                )
+                continue
+            key = key_node.value
+            if key in seen:
+                result.append(
+                    Issue(
+                        f'{relpath}: Invalid YAML frontmatter (line {line}):'
+                        f' duplicate key {key!r} (first at line {seen[key]}); a'
+                        ' strict reader rejects the block or keeps the last'
+                        ' copy, the wiki reads the first',
+                        kind='invalid_yaml',
+                        path=str(relpath),
+                        line=line,
+                        reason=f'duplicate key {key!r}',
+                    )
+                )
+            else:
+                seen[key] = line
         return result
 
     def _lint_link_desc(

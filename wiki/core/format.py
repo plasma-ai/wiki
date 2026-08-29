@@ -770,7 +770,7 @@ def read_frontmatter_field(frontmatter: str, key: str) -> Optional[str]:
     ``key:`` has no body. A sequence or mapping value, a block the
     parser rejects, and a body that is not a mapping fall back to the
     line grammar (:func:`_read_field_lines`), so the wiki's leniencies --
-    an unquoted ``: `` inside a one-line value, conflict markers -- read
+    an unquoted ``': '`` inside a one-line value, conflict markers -- read
     as before.
     """
     fields = _scalar_fields(frontmatter)
@@ -1132,10 +1132,10 @@ def _plain_safe(value: str) -> bool:
 
     A value containing ``': '`` (or ending with ``:``) reads as a nested
     mapping, one containing ``' #'`` loses everything from the hash (a
-    comment), one opening with an indicator character or ``- ``/``? ``/
-    ``: `` reads as structure, a node property, or a quoted scalar, and
-    leading or trailing whitespace (a tab anywhere) is dropped or
-    rejected -- so none of them may be written plain.
+    comment), one opening with an indicator character or with ``'- '``,
+    ``'? '``, or ``': '`` reads as structure, a node property, or a quoted
+    scalar, and leading or trailing whitespace (a tab anywhere) is dropped
+    or rejected -- so none of them may be written plain.
     """
     if not value:
         return True

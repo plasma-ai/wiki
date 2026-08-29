@@ -14,6 +14,7 @@ import re
 import shutil
 
 import pytest
+import yaml
 
 from wiki.core.wiki import Issue, Wiki
 from wiki.util import markdown
@@ -54,6 +55,10 @@ __all__ = [
     'test_lint_flags_unparseable_stamp',
     'test_lint_future_stamp_is_clean',
     'test_lint_stamp_parse_follows_configured_format',
+    'test_lint_flags_frontmatter_a_strict_yaml_reader_rejects',
+    'test_lint_reports_deep_nesting_instead_of_crashing',
+    'test_lint_invalid_yaml_yields_to_merge_states',
+    'test_lint_names_a_comment_truncated_desc',
     'test_lint_hyphen_dangle',
     'test_lint_wrapped_list_marker',
     'test_lint_blank_led_list_is_clean',
@@ -278,6 +283,11 @@ def test_lint_issues_are_typed(tmp_path: pathlib.Path) -> None:
         'See [[core]] for more.\n\n<!-- start: no-lint -->\n',
         encoding='utf-8',
     )
+    # frontmatter a strict YAML reader rejects
+    (tmp_path / 'data' / 'unquoted.md').write_text(
+        '---\nname: unquoted\ndesc: A lane for X: HR, WR.\n---\n\n# unquoted\n\nBody.\n',
+        encoding='utf-8',
+    )
     # an emptied index (and, with a page to link, its missing delimiter)
     trunc = tmp_path / 'trunc'
     trunc.mkdir()
@@ -327,6 +337,7 @@ def test_lint_issues_are_typed(tmp_path: pathlib.Path) -> None:
         'invalid_folder_name',
         'invalid_page_name',
         'invalid_wiki_name',
+        'invalid_yaml',
         'malformed_frontmatter',
         'missing_delimiter',
         'missing_index',
@@ -921,6 +932,161 @@ def test_lint_stamp_parse_follows_configured_format(
         encoding='utf-8',
     )
     assert any('Unparseable created' in issue for issue in wiki.lint())
+
+
+@pytest.mark.parametrize('loader', ['c', 'pure'])
+@pytest.mark.parametrize(
+    argnames=('field', 'line', 'reason'),
+    argvalues=[
+        ('desc: Independent lane for L1: the harness.', 3, 'mapping values'),
+        ('title: Theorem for X: HR, WR', 3, 'mapping values'),
+        ('desc: Ends with a colon:', 3, 'mapping values'),
+        ('desc: One.\ndesc: Two.', 4, 'duplicate key'),
+        ('desc: Position and\x0c routes.', 3, 'characters are not allowed'),
+        ('? [a, b]\n: x', 3, 'not a scalar'),
+    ],
+    ids=[
+        'colon-space-desc',
+        'colon-space-title',
+        'trailing-colon',
+        'duplicate-key',
+        'control-char',
+        'complex-key',
+    ],
+)
+def test_lint_flags_frontmatter_a_strict_yaml_reader_rejects(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    line: int,
+    reason: str,
+    loader: str,
+) -> None:
+    """A block the wiki reads leniently but a strict YAML reader refuses is an issue.
+
+    The wiki reads an unquoted ``: `` value as the authored text through
+    the line grammar, but a strict reader (Obsidian's) drops the whole
+    block; lint names the file and line as a hard issue typed for
+    ``--json``, under the C loader and the pure-Python loader alike, and
+    update leaves the authored bytes alone (the fix is the author's).
+    """
+    if loader == 'pure':
+        monkeypatch.delattr(yaml, 'CSafeLoader', raising=False)
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    desc = '' if field.startswith('desc:') else 'desc: A page.\n'
+    page.write_text(
+        f'---\nname: core/design\n{field}\n{desc}tags: []\nsources: []\n'
+        'created: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---\n'
+        '\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # the finding names the line; the block is otherwise read leniently
+    issues = [issue for issue in wiki.lint() if issue.kind == 'invalid_yaml']
+    assert [issue.fields['path'] for issue in issues] == ['core/design.md']
+    assert issues[0].fields['line'] == line
+    assert reason in issues[0].fields['reason']
+    assert f'core/design.md: Invalid YAML frontmatter (line {line})' in issues[0]
+    # update never rewrites an authored value: the field lines stay as typed
+    wiki.update()
+    assert field in page.read_text(encoding='utf-8').split('---\n')[1]
+    assert any(issue.kind == 'invalid_yaml' for issue in Wiki(tmp_path).lint())
+
+
+def test_lint_reports_deep_nesting_instead_of_crashing(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nesting past the pure loader's recursion limit is an issue, never an abort.
+
+    The pure-Python loader recurses once per nesting level and raises
+    ``RecursionError`` -- not a YAML error -- on a deeply nested flow
+    collection; lint must report the block, not lose the whole sweep to
+    the exception.
+    """
+    monkeypatch.delattr(yaml, 'CSafeLoader', raising=False)
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    nested = '[' * 2000 + ']' * 2000
+    page.write_text(
+        f'---\nname: core/design\ndesc: A page.\nextra: {nested}\n---\n\n'
+        '# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # the sweep completes with the block named as invalid
+    issues = [issue for issue in wiki.lint() if issue.kind == 'invalid_yaml']
+    assert [issue.fields['path'] for issue in issues] == ['core/design.md']
+    assert issues[0].fields['reason'] == 'RecursionError'
+    assert wiki.update() is not None
+
+
+def test_lint_invalid_yaml_yields_to_merge_states(tmp_path: pathlib.Path) -> None:
+    """Merge debris keeps its own finding: markers win, the hint stays valid YAML.
+
+    Conflict markers inside a block make it unparseable, but the marker
+    check runs first and suppresses the per-file checks, so the file
+    reports only ``conflict_markers``; the driver's resolution hint is
+    valid YAML for every parser, so it reports only ``merge_hint``.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    index = tmp_path / 'core' / '_index.md'
+    lines = page.read_text(encoding='utf-8').split('\n')
+    lines[2:3] = [
+        '<<<<<<< ours',
+        lines[2],
+        '=======',
+        'desc: Theirs.',
+        '>>>>>>> theirs',
+    ]
+    page.write_text('\n'.join(lines), encoding='utf-8')
+    hint = (
+        '<!-- index *** separator missing on one side: likely formatter'
+        ' damage; restore the *** line (wiki update repairs it), redo the'
+        ' merge, and delete this line when resolving -->'
+    )
+    lines = index.read_text(encoding='utf-8').split('\n')
+    lines.insert(2, hint)
+    index.write_text('\n'.join(lines), encoding='utf-8')
+
+    # each file carries exactly its merge-state finding
+    kinds: dict[str, set[str]] = {}
+    for issue in wiki.lint():
+        kinds.setdefault(issue.fields['path'], set()).add(issue.kind)
+    assert kinds['core/design.md'] == {'conflict_markers'}
+    assert kinds['core/_index.md'] == {'merge_hint'}
+
+
+def test_lint_names_a_comment_truncated_desc(tmp_path: pathlib.Path) -> None:
+    """A desc cut short by a ``' #'`` comment fails the period check with the cause named.
+
+    A YAML reader stops a plain value at ``' #'``, so the parent row and
+    the period check see only the text before it; the message says so
+    instead of leaving the author to guess, while a comment after a
+    complete sentence draws nothing.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['cut', 'commented']})
+    (tmp_path / 'core' / 'cut.md').write_text(
+        '---\nname: core/cut\ndesc: Notes on issue #3 and the fix.\n---\n\n'
+        '# cut\n\nBody.\n',
+        encoding='utf-8',
+    )
+    (tmp_path / 'core' / 'commented.md').write_text(
+        '---\nname: core/commented\ndesc: Short summary.  # TODO expand\n---\n\n'
+        '# commented\n\nBody.\n',
+        encoding='utf-8',
+    )
+    wiki.update()
+
+    # the truncated desc is named with its cause; the intentional comment is silent
+    issues = [issue for issue in wiki.lint() if issue.kind == 'missing_period']
+    assert [issue.fields['path'] for issue in issues] == ['core/cut.md']
+    assert "Missing period in desc (the text after ' #' is a YAML comment" in issues[0]
+    index = (tmp_path / 'core' / '_index.md').read_text(encoding='utf-8')
+    assert '[[core/cut|cut]]: Notes on issue\n' in index
+    assert '[[core/commented|commented]]: Short summary.\n' in index
 
 
 # ------ wrap mangles
