@@ -10,30 +10,49 @@ may include breaking changes, each listed under a Breaking heading.
 ### Breaking
 
 - `wiki lint` reports frontmatter a strict YAML reader rejects as a new hard
-  issue, `invalid_yaml` (with `line` and `reason` payload fields): an unquoted
-  `: ` inside a one-line value, a value ending in `:`, a duplicate key, a
-  control character, a key that is not a scalar, or a body that is not
+  issue, `invalid_yaml` (with `line` and `reason` payload fields) — for example
+  an unquoted `: ` inside a one-line value, a value ending in `:`, a value
+  opening with an indicator character (`- % @ * | >` and the like), a duplicate
+  key, a control character, a key that is not a scalar, or a body that is not
   `key: value` pairs. A wiki that linted clean may lint red until the offending
   values are quoted; the fix is the author's — `wiki update` never rewrites an
-  authored value.
+  authored value. The verdict is the installed PyYAML build's: a wheel without
+  libyaml runs the pure-Python loader, which words its errors differently and
+  rejects a tab inside a plain value the C loader accepts (such a block then
+  reads through the line grammar). A tag no reader constructs (`!custom`,
+  `!!int` over text) is not checked: the block composes, so it lints clean and
+  reads as its text.
 - Frontmatter values are read the way a strict YAML reader reads them: a value
   continued on indented lines folds into one, a quoted value decodes, an
   indented `# comment` under a bare key is a comment, a bare key with trailing
   spaces reads its body, a space followed by `#` starts a comment, and `null`
   followed by a comment unsets like `null`. The first `wiki update` after
-  upgrading may rewrite a parent row, a `[category]` label, or an H1 once on
-  pages carrying such shapes — run `wiki update --check` after upgrading to list
-  them — and the search index rebuilds on the next `wiki search`. A block a
-  strict reader rejects still reads as before, through the line grammar.
+  upgrading may rewrite a `name:` line, a parent row, a `[category]` label, or
+  an H1 once on pages carrying such shapes — run `wiki update --check` after
+  upgrading to list them — and the search index rebuilds on the next
+  `wiki search`. A clone still on an earlier version reverts those rewrites on
+  its next `wiki update` (re-stamping `updated:`) and reads a comment-carrying
+  placeholder (`desc: ... # note`) as an authored description, so upgrade every
+  clone of a shared wiki together. A block a strict reader rejects still reads
+  through the line grammar. A UTF-8 BOM opening a page or index file is removed
+  on that first update, as one opening the block's body is.
 - PyYAML (`pyyaml>=6,<7`) is a runtime dependency; environments synced before
   this release need a `uv sync` (or a reinstall).
 
 ### Changed
 
-- A frontmatter key outside the `[\w-]+` grammar (a dotted `com.example:`) sorts
-  as a custom field, below the known fields and above the timestamps, instead of
-  riding along under the field before it.
-- The `wiki update` narration counts pages with malformed frontmatter without
+- The fields of a block a strict reader accepts are bounded by the parser's own
+  key positions, so a quoted key (`"desc": x`) is the field it names, and a
+  quoted scalar or flow collection continued at column 0 moves as one field
+  under `wiki update` and matches as one under `wiki match --field`. A block the
+  parser rejects keeps one line grammar for the repair, the field order, and
+  `match --field` alike: a column-0 `[\w.-]+` key whose colon is followed by a
+  space or the line end — so a dotted key (`com.example:`) sorts as a custom
+  field below the known fields and above the timestamps instead of riding along
+  under the field before it, and a `key:value` line with no space after the
+  colon is text to the wiki as it is to YAML (`wiki lint` names it; the fix is
+  one space).
+- The `wiki update` narration counts files with malformed frontmatter without
   the `(no closing ---)` suffix; each per-file notice names its reason.
 
 ### Fixed
@@ -41,39 +60,209 @@ may include breaking changes, each listed under a Breaking heading.
 - A stamp written as a bare `created:`/`updated:` key over an indented line is a
   value: `wiki update` no longer stamps the run's clock onto the key line and
   strands the authored stamp below it, and the `updated:` re-stamp replaces the
-  whole value.
-- Refreshing a bare-key `name:` keeps an indented `# comment` under it.
+  whole value. A quoted-empty stamp (`created: ''`) is stamped like a blank one;
+  a stamp written as a sequence is an unparseable stamp to `wiki lint`.
+- Refreshing a `name:` keeps the comment on its key line and an indented
+  `# comment` under a bare key, and reads past a UTF-8 BOM opening the body
+  instead of hiding the `name:` line behind it and drawing a duplicate.
 - `title: null # comment` and `desc: | # comment` are unset like `title: null`
   and `desc: |`: update removes the title line and restores the desc
-  placeholder.
+  placeholder. A block the parser rejects reads its fields the same way:
+  `null # comment`, a bare key over an indented `null`, and a comment-only value
+  are unset there too, so the reader and the repair agree and update converges
+  in one run.
 - Filling or removing a valueless field keeps its comments: `desc: # note`
-  becomes `desc: ... # note`, the comment on an unset `title:` stays behind as a
-  comment line, and a comment line indented under a stamp stays under the fresh
-  stamp.
+  becomes `desc: ... # note`, the comment on an unset `title:` or `category:`
+  stays behind as a column-0 comment line (never indented into a block-scalar
+  neighbor as its content), and the comment lines under a stamp stay under the
+  fresh stamp, the `updated:` re-stamp's tail comment included. Every leading
+  valueless copy of `title:`/`category:` goes in one run.
 - A sequence written at column 0 under `desc:`, `category:`, or a timestamp key
-  is that field's value: update no longer restores the placeholder or stamps the
-  key line and strands the items under the field before it.
+  is that field's value, and so is a column-0 `# comment` between a key and its
+  indented body: update no longer restores the placeholder or stamps the key
+  line and strands the lines under the field before it.
 - A frontmatter block that is valid YAML but not `key: value` pairs is left
-  untouched with a notice instead of gaining fields appended under the text.
+  untouched with a notice instead of gaining fields appended under the text; so
+  is a mapping whose keys the byte-level repair cannot place (a flow mapping, an
+  indented one, an explicit `? key`, an alias used as a key, a `<<` merge key,
+  two keys on one line broken by a NEL), which `wiki lint` reports as malformed
+  frontmatter. A block carrying an alias is never reordered, since the anchor
+  must stay above it; a re-stamped or filled stamp keeps the anchor on its key
+  line, so an alias of it keeps resolving; and a repair that would leave an
+  accepted block rejected is refused with the same notice, which `wiki lint`
+  reports too. A trailing `...` document-end marker stays the block's last line.
+- A stamp written as a flow sequence or mapping on its key line
+  (`created: [2025-01-01]`, `created: {}`) is an unparseable stamp to
+  `wiki lint`, as one written under the key is; a duplicate key inside a nested
+  mapping is an `invalid_yaml` issue on its own line; an unclosed flow
+  collection is reported on the line holding it; and a `#` inside a quoted stamp
+  is text, never a comment for the re-stamp to re-attach.
+- A block scalar opened by a sequence item or a nested key (`- k: |+`,
+  `meta:\n  inner: |+`), or behind a node property (`key: &a |+`), keeps its
+  trailing blank line, and a quoted scalar continued at column 0 keeps the blank
+  lines inside it; a double-quoted escape naming no character (past U+10FFFF, or
+  a lone surrogate) reads verbatim instead of crashing the run.
+- A node property over nothing (`created: !!str`, `desc: &d`) is a blank the
+  repair fills behind the property, and `wiki match --field` matches the value
+  past a property rather than the property itself; a `... # end` marker, or
+  comment lines after the marker, stay the block's last lines; a body that is
+  not a mapping reads no fields at all, so a `key:` spelled inside a list draws
+  no other finding and matches no field.
+- A parent index row reads its child's repaired frontmatter in the same run
+  (pages are planned before their indexes, so `wiki update` narrates page
+  notices — and their condensed count lines — before index notices), so a repair
+  that changes what the reader returns no longer leaves the row a run behind; a
+  block whose only alias sat on `updated:` is ordered by the write that replaces
+  the alias, and a UTF-8 BOM at column 0 of any block line (which the C loader
+  skips, so a `# comment` behind one is a comment) is dropped by the repair, so
+  neither takes a second run.
+- A self-referential or shared alias graph (`tags: &a [*a]`) composes in bounded
+  time instead of hanging every command on the wiki, and collections nested past
+  100 levels are an `invalid_yaml` finding on the line that passes the bound
+  instead of a recursion the C loader runs off its stack.
+- A repair that would close a quote the line grammar cannot see around the lines
+  it writes (`tags: "open` above a `name: "x` line, a stamp continued at column
+  0 above an open quote) is refused with the malformed notice — `wiki lint`
+  reports it too — instead of crashing `wiki update` or re-inserting the
+  swallowed stamps on every run.
+- Under the line grammar an unclosed `[` or `{` reads to the next key line
+  instead of through the stamps and the closing fence into the H1 and the parent
+  row; a quote left open inside a flow collection carries to the next line, so a
+  stray blank after the collection is stripped; a block scalar behind a node
+  property (`desc: &a |`) reads its body, and a collection's node property
+  (`tags: &t [a]`) is not its text; node properties separated by more than one
+  space strip as one does; and a `desc: |` or stamp header over column-0 comment
+  lines alone is an empty value the repair fills, the comments kept under it.
+- `wiki match --field` composes a block over 64 KB once per file rather than
+  once per matched line, strips a quoted key whose quotes escape or double a
+  quote from its line, keeps a flow collection whole past a `#` inside its
+  quotes (`tags: ['alpha #note', beta]`), and leaves a quoted scalar's
+  continuation line (`two: three"`) unstripped, since the composed block says it
+  opens no key.
+- The H1 and the parent row are read from the block as the write leaves it: a
+  block the parser rejects only until the `updated:` re-stamp closes its quote
+  or drops its bracket reads through the parser in the same run, so the update
+  converges in one run instead of rewriting the H1 and the row on the next.
+- A double-quoted `\0` escape in a title or desc is dropped on read instead of
+  landing as a raw NUL byte in the H1 and the parent row, which made both files
+  binary to git and aborted the merge driver.
+- A collection's `' #'` tails (`tags: [a, b] # note`, `- alpha # note`) are not
+  its text, so `wiki search --tag` no longer sees comment words as tags; under
+  the line grammar a bare key over column-0 items reads the items (as the
+  composed block does), a block scalar ends at the first line indented less than
+  its body (`title: |4` over a two-space `# note`), and a column-0 item after a
+  value on the key line (`name: x` over `- draft`) is text outside the field,
+  kept in place rather than deleted with the refreshed name.
+- A value a strict reader resolves as a number and cannot construct (`0x_`,
+  `0b_`) is written quoted, as a date no calendar has is; `strip_blank_lines`
+  reads a block header behind a quoted key spelled with a space before its colon
+  (`"desc" : |+`), so its trailing blank survives; and a tab on a trailing
+  whitespace-only line of the block is reported on that line.
+- `wiki update` and `wiki lint` recognize conflict markers of any length git's
+  `conflict-marker-size` attribute lengthens them to, not only the
+  seven-character default the driver forwards.
+- The `_index.md` merge driver normalizes `created:` whenever the base index
+  lacks the stamp (a hand-written or imported index, not only an empty add/add
+  base) and gives a side lacking a regenerated key the current branch's copy of
+  it where `wiki update` places the key, so two branches that each ran
+  `wiki update` over such an index merge clean; and a link row both sides carry
+  takes the other side's text when only that side changed it against the base
+  (however the rows are spaced on each side), so an authored desc on an asset
+  row or a placeholder-desc child is no longer lost to the current branch's
+  copy. An add/add merge of two indexes keeps both sides' rows, the H1, and the
+  `***` line.
+- Under the line grammar a quoted value closing on a later line folds its lines
+  up to the closing quote (a hand-wrapped `title: "..."` reads whole instead of
+  as its first line with a stray quote), a flow collection's `' #'` tail is not
+  its text, a node property over nothing is an absent value, and a `: ` on the
+  third or later line of a plain value is reported on its own line. The nesting
+  bound counts a bracket only where a value opens with one — a block scalar's
+  body, a plain value's text (`rock 'n roll`, `a [b`), and its continuation
+  lines are never collections — so a valid block never lints red for its
+  brackets.
+- Under the line grammar a quote mid-text is content: `title: 'Bob's Page'`
+  reads whole instead of truncating at the apostrophe and rewriting the H1 and
+  the parent row to `Bob` (the close is the quote nothing but whitespace or a
+  comment follows), and `wiki match --field` sees the same value. A quoted item
+  or scalar wrapped across lines keeps a `#` inside its span
+  (`tags: ['a wrapped\n  item #x', beta]` reads whole, so `search --tag` sees
+  every item), and a comment line after a quoted stamp's closing quote
+  (`updated: "..."` over `# todo: verify`) no longer refuses the repair. The
+  `_index.md` merge driver's row rule compares rows without their trailing blank
+  lines under CRLF and whitespace-only separators too, so such an index does not
+  lose the other side's row edit to a re-spaced current branch.
+- Under `titles.required`, a page or index with a duplicated `name:` line
+  converges in one run: the plan orders the block after seeding `title: null`,
+  as the write does. Under the line grammar a bare `desc:`/`title:` over an
+  indented quoted body reads the quoted scalar (`desc:` over `'A: colon here.'`
+  reads `A: colon here.`), a quoted item keeps its `#` (`- 'notes #draft'`), and
+  `wiki match --field` matches a quoted value continued on the next line from
+  its first character. The `_index.md` merge driver treats a bare or
+  quoted-empty `created:` in the base as no stamp, so two branches that each
+  filled it merge clean.
+- A repair that would fold an authored key line into a quoted value it closes
+  (`zebra: 27"` moved under `desc: "open`, or a `desc: D.` line inside a quoted
+  `name:` the refresh rewrites) is refused with the malformed notice instead of
+  written; a `[category]` label reads the block as the write leaves it, like the
+  H1 and the row; and a blank line an unclosed quote or bracket in `updated:`
+  kept as content goes with the re-stamp that closes it, so neither takes a
+  second run.
+- A sequence or mapping value reads as its source lines joined (comment lines
+  dropped), so `wiki search --tag` sees a tag written at column 0 or on the
+  second line of a flow sequence, and a `' #'` inside a quoted item stays; under
+  the line grammar a plain value folds its indented continuation lines, node
+  properties before a key or value are not the value, and `wiki match --field`
+  strips a key spelled with spaces from its line. A date-shaped value no
+  calendar has (`2024-02-30`) is written quoted, since a strict reader cannot
+  construct it plain.
+- The `_index.md` merge driver treats every comment under a regenerated key as
+  authored: a deletion or rewording on one side lands through the ordinary
+  three-way merge instead of ours' copy resurrecting it or a conflict. A comment
+  between the key and its indented value belongs to the value's extent, so it
+  moves with the value rather than stranding the value lines under the other
+  side's one-liner.
+- `wiki new` (`NAME`, `--desc`, `--content`) and `wiki init` (`NAME`) refuse an
+  argument holding a byte no UTF-8 decodes, before anything lands on disk; the
+  `_index.md` merge driver merges such a byte verbatim instead of aborting.
+- Under the line grammar a quoted value ends at its closing quote, a `null` on
+  the key line over an indented `null` is the text `null null`, and a
+  `key:value` typo is reported on its own line rather than the line after it (a
+  blank line between them included), while a `: ` on a key line after a
+  multi-line field is reported on the key line; a duplicate anchor names the
+  first occurrence, and nested duplicate keys are listed in line order. The tool
+  writes `<<` and `=` quoted, as a strict reader constructs them as merge and
+  value indicators otherwise.
 - A double-quoted carriage-return escape in a value reads as a line break
   instead of carrying a bare carriage return into the H1 and the parent row.
-- Values the tool writes — an adopted heading seeded as `title:`, a `wiki new`
-  desc, a timestamp — are quoted whenever a plain scalar would misread them: a
-  leading indicator character, a ` #` comment start, leading or trailing
-  whitespace; a value holding a control or line-separator character is
-  double-quoted with the character escaped.
+- Values the tool writes — a `name:`, an adopted heading seeded as `title:`, a
+  `wiki new` desc, a timestamp — are quoted whenever a plain scalar would
+  misread them: a leading indicator character, a ` #` comment start, leading or
+  trailing whitespace; a value holding a control, C1, line-separator, or
+  noncharacter code point is double-quoted with it escaped, a multi-line
+  `wiki new` desc included, and `wiki match --field` decodes every double-quoted
+  escape a strict reader decodes.
 - The `_index.md` merge driver moves a regenerated key with its indented
   continuation lines, so a block-scalar `name:` on one side no longer strands
-  its body under the other side's one-liner, leaves a blank line separating the
-  key from the next field in place on every side, and matches a key spelled with
-  a space before its colon.
+  its body under the other side's one-liner; leaves a blank line separating the
+  key from the next field in place on every side, byte for byte (a CRLF or
+  whitespace-only separator no longer conflicts); keeps a `# comment` the other
+  side wrote under the key; matches a key spelled with a space before its colon;
+  and handles an extent of any size.
 - `wiki lint`'s "Missing period in desc" names a ` #` comment as the likely
-  cause when the value's line carries one outside a block-scalar header.
+  cause when a plain value's lines carry one, the key line or a continuation
+  line, in a block the parser accepts.
+- `wiki lint`'s `invalid_yaml` line is the offending line whatever precedes it:
+  a NEL, LS, or PS the parser counts as a line break no longer shifts it, an
+  unterminated quote or a stray line is reported where it starts rather than
+  where the parser gave up, and a second document's reason reads as a sentence.
 - `wiki match --field` sees a sequence item written at column 0 whose text holds
-  a colon (`- https://doi.org/...`) and a flow-sequence continuation line
-  (`https://b]`) as part of its field, and a key written with a space before its
-  colon (`desc : x`) as the field it names, so `wiki update` no longer inserts a
-  duplicate `desc:` beside one.
+  a colon (`- https://doi.org/...`) and, in a block the parser accepts, a
+  flow-sequence continuation line (`https://b]`) as part of its field, and a key
+  written with a space before its colon (`desc : x`) as the field it names, so
+  `wiki update` no longer inserts a duplicate `desc:` beside one.
+- `wiki update` keeps a whitespace-only line indented past a block scalar's body
+  and the trailing blank of a keep-chomping block inside a column-0 sequence
+  item, both of which are content.
 
 ## [1.3.1] - 2026-08-25
 

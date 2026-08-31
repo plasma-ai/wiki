@@ -52,13 +52,16 @@ The driver splits each side of the merge — ours, base, and theirs — at the
 
 Frontmatter
    The tool-owned keys ``name:`` and ``updated:`` are normalized to the
-   current branch's lines before merging, so their churn never conflicts. On
-   an add/add merge (both branches created the index independently),
-   ``created:`` joins the normalized keys — both sides seeded the stamp from
-   their own ``wiki update`` runs, so it is churn, not authorship. The
-   remaining, authored keys — ``title:``, ``desc:``, ``category:``,
-   ``tags:``, ``sources:``, ``created:`` (ordinarily), and any custom keys —
-   get a normal three-way merge that can conflict.
+   current branch's lines before merging, so their churn never conflicts; a
+   side that lacks one of them gains the current branch's copy, so the other
+   side adding the key is no change to merge. When the base index carries no
+   ``created:`` — an add/add merge (both branches created the index
+   independently), a hand-written or imported index — ``created:`` joins the
+   normalized keys: both sides seeded the stamp from their own ``wiki update``
+   runs, so it is churn, not authorship. The remaining, authored keys —
+   ``title:``, ``desc:``, ``category:``, ``tags:``, ``sources:``,
+   ``created:`` (ordinarily), and any custom keys — get a normal three-way
+   merge that can conflict.
 
    A side whose frontmatter block cannot be detected at all — a formatter
    mangled or left unclosed the ``---`` delimiters of a block the base had —
@@ -75,7 +78,12 @@ Link block
    ``***`` line, resolve to the union of both sides' rows: the current
    branch's layout wins, and each row present only on the other side rides
    over — desc continuations included — appended above the closing ``***``.
-   No row is silently dropped; ``wiki update`` owns this region, and the
+   A row both sides carry keeps the current branch's text, unless only the
+   other side changed it against the base — an authored desc on a row
+   ``wiki update`` does not regenerate, such as an asset's — in which case
+   the other side's text lands. No row is silently dropped, and an edit only
+   one side made is never lost; when both sides edit the same row, the
+   current branch's text wins. ``wiki update`` owns this region, and the
    post-merge run re-sorts the block and prunes whatever carried rows have
    no target on the merged filesystem.
 
@@ -142,7 +150,9 @@ Lost delimiter
    edits are indistinguishable. The driver refuses to guess and emits a
    whole-file conflict, with a hint to restore the ``***`` line
    (``wiki update`` repairs it), redo the merge, and delete the hint when
-   resolving.
+   resolving. A side whose authored prose holds its own ``***`` thematic
+   break cannot be told apart this way: the driver takes the first ``***``
+   as the delimiter, so restore the delimiter line before merging.
 
 After the merge
 ---------------

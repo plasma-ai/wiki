@@ -404,9 +404,11 @@ frontmatter, which includes the H1 and an index's generated link block — and
 the default output is the matching file paths, deduplicated, in match order.
 ``--field`` switches to frontmatter matching: the pattern runs against each
 named field's value (the ``key:`` prefix and YAML quotes are stripped;
-block-scalar continuation lines are included). An empty ``--field ""`` is an
-explicit empty field set that matches nothing — it does not fall back to a
-body match.
+block-scalar continuation lines are included). A flow mapping, or a mapping
+indented as a whole, has no field lines to match; other mappings the repair
+refuses still match through the line grammar. An empty
+``--field ""`` is an explicit empty field set that matches nothing — it does
+not fall back to a body match.
 
 .. list-table::
    :header-rows: 1
@@ -485,10 +487,11 @@ keeps the tool-owned surfaces in sync with the filesystem (see
 
 ``updated:`` is re-stamped only on files whose content actually changed.
 Files the sweep cannot safely fix are left alone with a notice: pages whose
-frontmatter never closes or is valid YAML but not ``key: value`` pairs,
-emptied or truncated indexes (restore from git or delete to rebuild), entries
-with policy-invalid names, symlinks, and files edited concurrently during the
-run (re-run to converge).
+frontmatter never closes, is valid YAML but not ``key: value`` pairs, is a
+mapping with no column-0 ``key:`` lines, or would be left rejected by its own
+repair; emptied or truncated indexes (restore from git or delete to rebuild);
+entries with policy-invalid names; symlinks; and files edited concurrently
+during the run (re-run to converge).
 
 Narration goes to stderr — condensed to one count line per category by
 default (e.g. ``Created 1 new index (fill in its desc)``, ``Added 2 new
@@ -579,7 +582,8 @@ nothing on disk.
    * - ``--desc``
      - required
      - Authored frontmatter description (multi-line values write as a block
-       scalar).
+       scalar, or double-quoted with escapes when a line holds a character no
+       block may carry).
    * - ``--content``
      - required
      - Authored content for the section below the ``***`` delimiter.
@@ -623,9 +627,11 @@ invalid YAML frontmatter), the rendered prose under ``text``, and a
 each shown as ``<path>: Requires update`` with an indented unified diff — plus
 problems update cannot fix: missing indexes, invalid page/folder names, pages
 shadowed by same-named folders, merge conflict markers, leftover merge repair
-hints, malformed frontmatter (no closing ``---``, or a body that is not a
-``key: value`` mapping), frontmatter a strict YAML reader rejects (an unquoted
-``': '`` inside a value, a duplicate key), empty or truncated indexes, nested
+hints, malformed frontmatter (no closing ``---``, a mapping with no column-0
+``key:`` lines, or a block its own repair would leave rejected), frontmatter a
+strict YAML reader rejects (an unquoted ``': '``
+inside a value, a duplicate key, a body that is not ``key: value`` pairs),
+empty or truncated indexes, nested
 wiki roots, formatter-damage signatures (escaped wikilinks, a missing ``***``
 delimiter), hand-wrap mangles, authored descriptions missing their trailing
 period, unparseable ``created:``/``updated:`` stamps, broken links in the

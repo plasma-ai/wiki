@@ -90,7 +90,9 @@ Frontmatter fields
      - Free-form list, seeded ``[]``.
    * - custom keys
      - author
-     - Preserved verbatim between the known fields and the timestamps.
+     - Preserved verbatim between the known fields and the timestamps, when
+       named with word characters, dots, and dashes (``com.example``); a key
+       spelled any other way (one with spaces) stays with the field above it.
    * - ``created``
      - tool
      - Stamped when the file gains frontmatter, kept from then on.
@@ -160,8 +162,11 @@ Authored descriptions must end in a period (``wiki lint`` fails one that does
 not); the seeded ``...`` placeholder only draws a soft note until it is filled
 in. A description containing a colon followed by a space, or a space followed
 by ``#`` (the start of a YAML comment), must be YAML-quoted: ``wiki lint``
-reports the unquoted colon as invalid YAML, and names the comment as the
-likely cause when a description it truncated fails the period check. Do not
+reports the unquoted colon on a one-line description, or on a continuation
+line of one, as invalid YAML — though under a bare ``desc:`` key an indented
+``Key: value`` line nests a mapping instead, which no strict reader shows as
+text and lint does not report — and names the comment as the likely cause
+when a description it truncated fails the period check. Do not
 hand-wrap a description mid-word — let the YAML block scalar carry any line
 breaks.
 
@@ -274,7 +279,11 @@ a warning rather than risk consuming the body. Likewise an index emptied of
 its frontmatter is preserved as-is — restore it from git, or delete it and let
 ``wiki update`` rebuild it. A block that is valid YAML but not ``key: value``
 pairs — a bare sentence, a list — has no fields: ``wiki update`` leaves it
-untouched with a notice and ``wiki lint`` reports it.
+untouched with a notice and ``wiki lint`` reports it. A mapping whose keys are
+not column-0 ``key:`` lines (a flow mapping, an indented one) is read but left
+untouched the same way, as is a block whose repair would leave a strict reader
+worse off — an accepted block rejected, or authored lines folded into a quoted
+value the repair closes.
 
 Region directives
 -----------------

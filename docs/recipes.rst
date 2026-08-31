@@ -301,8 +301,9 @@ indexes (fill in each new ``desc:``), prunes index rows whose target is gone
 or unindexable (excluded, gitignored, or symlinked), and repairs a mangled
 ``***`` delimiter. Everything else needs a human: names that violate the
 naming policy, pages shadowed by a same-named folder, merge conflict markers
-and leftover merge-repair hint comments, malformed frontmatter, truncated
-indexes, escaped wikilinks in page prose and hyphen dangles or wrapped list
+and leftover merge-repair hint comments, malformed frontmatter, frontmatter a
+strict YAML reader rejects, truncated indexes, escaped wikilinks in page prose
+and hyphen dangles or wrapped list
 markers (formatter and line-wrap damage), descriptions missing their trailing
 period, prose wikilinks naming a folder rather than its ``_index`` page,
 unparseable ``created:``/``updated:`` stamps, a nested ``.wiki/settings.json``
