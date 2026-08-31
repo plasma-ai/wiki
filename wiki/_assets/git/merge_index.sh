@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# the driver's grammar is ASCII and the file's bytes are the user's: keep awk,
-# grep, and sed byte-oriented, so a byte no UTF-8 decodes merges verbatim
-# instead of aborting a multibyte-aware awk
-export LC_ALL=C
 
 # Custom git merge driver for _index.md files
 # -------------------------------------------
@@ -21,10 +17,11 @@ export LC_ALL=C
 # is authored (update never invents a value), so it must stay out of
 # REGENERATED_KEYS -- normalizing it to ours would silently discard
 # theirs' titles; the H1 rides ours' link-block layout, so a merged-in
-# title shows in the H1 only after the post-merge wiki update. On
-# add/add merges (empty base) created joins the regenerated keys: both
-# sides seed it from independent wiki update runs, so the stamps are
-# churn, not authorship. A side whose frontmatter is undetectable
+# title shows in the H1 only after the post-merge wiki update. When the
+# base carries no created: stamp (an add/add merge's empty base, a
+# hand-written index) created joins the regenerated keys: both sides
+# seed it from independent wiki update runs, so the stamps are churn,
+# not authorship. A side whose frontmatter is undetectable
 # (formatter-mangled or unclosed) is treated as unchanged from base,
 # never as a deletion of the block; a side missing the *** separator
 # entirely cannot be split into regions at all, so it surfaces a
@@ -50,6 +47,15 @@ OURS="$1"
 BASE="$2"
 THEIRS="$3"
 MARKER_SIZE="${4:-7}"
+
+# the driver's grammar is ASCII and the file's bytes are the user's: keep awk,
+# grep, and sed byte-oriented, so a byte no UTF-8 decodes merges verbatim
+# instead of aborting a multibyte-aware awk
+export LC_ALL=C
+
+# a literal carriage return for grep bracket expressions, where \r is the
+# two characters backslash and r
+CR=$'\r'
 
 # keys wiki update owns, normalized to ours before the frontmatter merge
 REGENERATED_KEYS=(name updated)
@@ -183,8 +189,8 @@ done
 # authorship -- normalize it too, in the canonical order, so a side gaining
 # both stamps takes them as ours lays them out; a stamp is a plain token or a
 # non-empty quoted scalar after the colon
-grep -Eq "^created[[:blank:]]*:[[:blank:]]+([^[:space:]#\"']|\"[^\"\r]|'[^'\r])" "$WORK/base_fm" \
-    || REGENERATED_KEYS=(name created updated)
+grep -Eq "^created[[:blank:]]*:[[:blank:]]+([^[:space:]#\"']|\"[^\"$CR]|'[^'$CR])" \
+    "$WORK/base_fm" || REGENERATED_KEYS=(name created updated)
 
 # normalize the regenerated keys to ours' values on all three inputs, so the
 # frontmatter merge below only ever sees authored-field differences; a value
@@ -208,6 +214,10 @@ for KEY in "${REGENERATED_KEYS[@]}"; do
     # key still matches; the extent travels through a file, as the
     # environment caps a value's size
     awk -v key="$KEY" '
+        BEGIN {
+            header = "^" key "[[:blank:]]*:[[:blank:]]*" \
+                "([&!][^[:blank:]]*[[:blank:]]+)*[|>]"
+        }
         found && /^[[:space:]]*$/ { pending = pending $0 "\n"; next }
         found && !block && /^[[:space:]]*#/ { pending = pending $0 "\n"; next }
         found && /^[[:space:]]/ {
@@ -218,11 +228,13 @@ for KEY in "${REGENERATED_KEYS[@]}"; do
         }
         found { exit }
         $0 ~ "^" key "[[:blank:]]*:([[:blank:]\r]|$)" {
-            block = ($0 ~ ("^" key "[[:blank:]]*:[[:blank:]]*([&!][^[:blank:]]*[[:blank:]]+)*[|>]"))
+            block = ($0 ~ header)
             print
             found = 1
         }
     ' "$WORK/ours_fm" >"$WORK/extent"
+    # 0/1 flags for awk -v, whose truth test is numeric -- any non-empty
+    # string, "false" included, would read as true
     HAVE_EXTENT=0
     [[ -s "$WORK/extent" ]] && HAVE_EXTENT=1
     for SIDE in base theirs; do
@@ -236,9 +248,13 @@ for KEY in "${REGENERATED_KEYS[@]}"; do
         # closing one -- so the other side adding the key is no change to
         # merge; the extent path travels through the environment, as awk -v
         # would decode a backslash in it
-        HAS_KEY=$(grep -Ec "^${KEY}[[:blank:]]*:([[:space:]]|$)" "$FM" || true)
+        HAS_KEY=$(grep -Ec "^${KEY}[[:blank:]]*:([[:blank:]$CR]|$)" "$FM" || true)
         EXTENT="$WORK/extent" awk -v key="$KEY" -v have_extent="$HAVE_EXTENT" \
             -v has_key="$HAS_KEY" '
+            BEGIN {
+                header = "^" key "[[:blank:]]*:[[:blank:]]*" \
+                    "([&!][^[:blank:]]*[[:blank:]]+)*[|>]"
+            }
             skipping && /^[[:space:]]*$/ { pending = pending $0 "\n"; next }
             skipping && !block && /^[[:space:]]*#/ { pending = pending $0 "\n"; next }
             skipping && /^[[:space:]]/ {
@@ -261,7 +277,7 @@ for KEY in "${REGENERATED_KEYS[@]}"; do
                 close(ENVIRON["EXTENT"])
             }
             $0 ~ "^" key "[[:blank:]]*:([[:blank:]\r]|$)" {
-                block = ($0 ~ ("^" key "[[:blank:]]*:[[:blank:]]*([&!][^[:blank:]]*[[:blank:]]+)*[|>]"))
+                block = ($0 ~ header)
                 while ((getline line < ENVIRON["EXTENT"]) > 0) print line
                 close(ENVIRON["EXTENT"])
                 skipping = 1
@@ -289,7 +305,7 @@ if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
     # rows key on their [[target| prefix (mirrors Python _LINK_ROW);
     # continuation and blank lines ride with the row that precedes them,
     # and a side's heading/preamble (before its first row) is never
-    # collected. Ours' rows stream through in ours' layout; a row both
+    # collected -- ours' rows stream through in ours' layout; a row both
     # sides carry keeps ours' text unless ours left base's text alone while
     # theirs changed it -- an authored desc edit on a row wiki update does
     # not regenerate (an asset, a child still on the placeholder) -- and

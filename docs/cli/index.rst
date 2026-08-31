@@ -406,9 +406,9 @@ the default output is the matching file paths, deduplicated, in match order.
 named field's value (the ``key:`` prefix and YAML quotes are stripped;
 block-scalar continuation lines are included). A flow mapping, or a mapping
 indented as a whole, has no field lines to match; other mappings the repair
-refuses still match through the line grammar. An empty
-``--field ""`` is an explicit empty field set that matches nothing — it does
-not fall back to a body match.
+refuses still match through the line grammar. An empty ``--field ""`` is an
+explicit empty field set that matches nothing — it does not fall back to a
+body match.
 
 .. list-table::
    :header-rows: 1
@@ -629,10 +629,10 @@ problems update cannot fix: missing indexes, invalid page/folder names, pages
 shadowed by same-named folders, merge conflict markers, leftover merge repair
 hints, malformed frontmatter (no closing ``---``, a mapping with no column-0
 ``key:`` lines, or a block its own repair would leave rejected), frontmatter a
-strict YAML reader rejects (an unquoted ``': '``
-inside a value, a duplicate key, a body that is not ``key: value`` pairs),
-empty or truncated indexes, nested
-wiki roots, formatter-damage signatures (escaped wikilinks, a missing ``***``
+strict YAML reader rejects (an unquoted ``': '`` inside a value, a duplicate
+key, a body that is not ``key: value`` pairs), empty or truncated indexes,
+nested wiki roots, formatter-damage signatures (escaped wikilinks, a missing
+``***``
 delimiter), hand-wrap mangles, authored descriptions missing their trailing
 period, unparseable ``created:``/``updated:`` stamps, broken links in the
 generated index block, prose wikilinks naming a folder rather than its

@@ -811,14 +811,16 @@ def repair_breaks_frontmatter(before: str, after: str) -> bool:
             text = field_text(before, key) or ''
             span_lines = text.split('\n')
             value = re.sub(
-                r'^(?:[&!]\S*(?:\s+|$))+', '', span_lines[0].split(':', 1)[1].strip()
+                pattern=r'^(?:[&!]\S*(?:\s+|$))+',
+                repl='',
+                string=span_lines[0].split(':', 1)[1].strip(),
             )
             if (value[:1] not in ('"', "'")) or (_quote_close(value) != -1):
                 continue
             for line in span_lines[1:]:
-                if re.match(r'^(?:\S.*?)?:(?:[ \t]|$)', line) or re.match(
-                    r'-(?:[ \t]|$)', line
-                ):
+                keyed = re.match(r'^(?:\S.*?)?:(?:[ \t]|$)', line) is not None
+                item = re.match(r'-(?:[ \t]|$)', line) is not None
+                if keyed or item:
                     return True
                 if _quote_close(value[0] + line.strip()) != -1:
                     break
@@ -1791,9 +1793,10 @@ def _field_span(frontmatter: str, key: str) -> Optional[tuple[int, int]]:
         for position, (name, line) in enumerate(keys):
             if name != key:
                 continue
-            end = (
-                keys[position + 1][1] if position + 1 < len(keys) else _end_line(lines)
-            )
+            if position + 1 < len(keys):
+                end = keys[position + 1][1]
+            else:
+                end = _end_line(lines)
             start_offset = sum(len(text) + 1 for text in lines[:line])
             end_offset = sum(len(text) + 1 for text in lines[:end])
             return start_offset, end_offset
@@ -2062,10 +2065,8 @@ def _parse_issue(error: Exception, body: str, offset: int) -> _Issue:
                 # a scalar under a key line is that key's value, so the colon
                 # on the error line is the fault; one opening the block, or
                 # following a comment or item, is a typo named on its first line
-                keyed = (above > 0) and re.match(
-                    r'^(?:\S.*?)?:(?:[ \t]|$)', lines[above - 1]
-                )
-                if not keyed:
+                opener = re.match(r'^(?:\S.*?)?:(?:[ \t]|$)', lines[above - 1])
+                if (above == 0) or (opener is None):
                     body_line = first
         line = body_line + offset + 1
     elif forbidden is not None:
@@ -2080,12 +2081,11 @@ def _parse_issue(error: Exception, body: str, offset: int) -> _Issue:
         reason = type(error).__name__
     elif context and str(reason).startswith('but '):
         reason = f'{context}, {reason}'
-    elif (
-        context and (str(reason) == 'second occurrence') and (context_mark is not None)
-    ):
+    elif context and (str(reason) == 'second occurrence') and context_mark:
         # a duplicate anchor is worded as its context plus where the first is
         first = body.count('\n', 0, context_mark.index) + offset + 1
-        reason = f'{str(context).split(";")[0]} (first at line {first})'
+        context_head = str(context).split(';')[0]
+        reason = f'{context_head} (first at line {first})'
     return line, str(reason), 'parse'
 
 

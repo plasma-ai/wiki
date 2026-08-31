@@ -43,6 +43,8 @@ __all__ = [
     'test_update_narrations_condense_by_default',
     'test_update_condenses_batch_adoption',
     'test_new_requires_authored_desc_and_content',
+    'test_new_refuses_an_argument_that_is_not_utf8',
+    'test_update_counts_files_with_malformed_frontmatter',
     'test_new_refuses_interior_path',
     'test_read_only_commands_are_deterministic',
     'test_path_inside_wiki_resolves_upward',
@@ -103,8 +105,6 @@ __all__ = [
     'test_merge_driver_carries_separators_and_comments_verbatim',
     'test_merge_driver_merges_comments_as_authored_lines',
     'test_merge_driver_replaces_a_block_body_whole',
-    'test_update_counts_files_with_malformed_frontmatter',
-    'test_new_refuses_an_argument_that_is_not_utf8',
     'test_merge_unions_link_rows',
     'test_merge_keeps_frontmatter_when_side_is_mangled',
     'test_merge_dispatches_on_pathname',
@@ -694,6 +694,67 @@ def test_new_requires_authored_desc_and_content(tmp_path: pathlib.Path) -> None:
     )
     assert again.returncode == 2
     assert 'Index already exists' in again.stderr
+
+
+@pytest.mark.parametrize(
+    argnames=('command', 'option'),
+    argvalues=[
+        ('new', 'NAME'),
+        ('new', '--desc'),
+        ('new', '--content'),
+        ('init', 'NAME'),
+    ],
+    ids=['new-name', 'new-desc', 'new-content', 'init-name'],
+)
+def test_new_refuses_an_argument_that_is_not_utf8(
+    tmp_path: pathlib.Path,
+    command: str,
+    option: str,
+) -> None:
+    """An argv byte no UTF-8 decodes is refused, by option name, before anything lands on disk."""
+    root = tmp_path / 'wiki'
+    bad = 'Caf' + chr(0xDCE9) + ' au lait.'
+    if command == 'init':
+        args = ['init', bad, '--path', str(root)]
+    else:
+        assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+        values = {'NAME': 'latin', '--desc': 'A desc.', '--content': 'Body.'}
+        values[option] = bad
+        args = ['new', values['NAME'], '--desc', values['--desc']]
+        args += ['--content', values['--content'], '--path', str(root)]
+
+    # the refusal names the option and creates nothing
+    result = _wiki(tmp_path, *args)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert f'{option} is not valid UTF-8' in result.stderr
+    assert not (root / 'latin').exists()
+    if command == 'init':
+        assert not root.exists()
+
+
+def test_update_counts_files_with_malformed_frontmatter(tmp_path: pathlib.Path) -> None:
+    """Pages and indexes update cannot repair are counted as files, each reason under ``--full``."""
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    (root / 'core').mkdir()
+    (root / 'core' / 'unclosed.md').write_text(
+        '---\nname: core/unclosed\ndesc: Never closes.\n\nBody.\n', encoding='utf-8'
+    )
+    (root / 'core' / 'listed.md').write_text(
+        '---\n- a\n- b\n---\n\n# listed\n\nBody.\n', encoding='utf-8'
+    )
+
+    # the condensed run counts both; the full run names each reason
+    condensed = _wiki(root, 'update', '--path', str(root))
+    assert condensed.returncode == 0, condensed.stdout + condensed.stderr
+    assert '2 files with malformed frontmatter' in condensed.stderr
+    full = _wiki(root, 'update', '--path', str(root), '--full')
+    assert full.returncode == 0, full.stdout + full.stderr
+    assert 'Malformed frontmatter (no closing ---) in core/unclosed.md' in full.stderr
+    assert (
+        'Malformed frontmatter (not a key: value mapping) in core/listed.md'
+        in full.stderr
+    )
 
 
 def test_new_refuses_interior_path(tmp_path: pathlib.Path) -> None:
@@ -2623,67 +2684,6 @@ def test_merge_driver_replaces_a_block_body_whole(tmp_path: pathlib.Path) -> Non
     frontmatter = index.read_text(encoding='utf-8').split('---\n')[1]
     assert frontmatter.startswith('name: core\ndesc: Edited by theirs.\n')
     assert '# note' not in frontmatter
-
-
-@pytest.mark.parametrize(
-    argnames=('command', 'option'),
-    argvalues=[
-        ('new', 'NAME'),
-        ('new', '--desc'),
-        ('new', '--content'),
-        ('init', 'NAME'),
-    ],
-    ids=['new-name', 'new-desc', 'new-content', 'init-name'],
-)
-def test_new_refuses_an_argument_that_is_not_utf8(
-    tmp_path: pathlib.Path,
-    command: str,
-    option: str,
-) -> None:
-    """An argv byte no UTF-8 decodes is refused, by option name, before anything lands on disk."""
-    root = tmp_path / 'wiki'
-    bad = 'Caf' + chr(0xDCE9) + ' au lait.'
-    if command == 'init':
-        args = ['init', bad, '--path', str(root)]
-    else:
-        assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
-        values = {'NAME': 'latin', '--desc': 'A desc.', '--content': 'Body.'}
-        values[option] = bad
-        args = ['new', values['NAME'], '--desc', values['--desc']]
-        args += ['--content', values['--content'], '--path', str(root)]
-
-    # the refusal names the option and creates nothing
-    result = _wiki(tmp_path, *args)
-    assert result.returncode == 2, result.stdout + result.stderr
-    assert f'{option} is not valid UTF-8' in result.stderr
-    assert not (root / 'latin').exists()
-    if command == 'init':
-        assert not root.exists()
-
-
-def test_update_counts_files_with_malformed_frontmatter(tmp_path: pathlib.Path) -> None:
-    """Pages and indexes update cannot repair are counted as files, each reason under ``--full``."""
-    root = tmp_path / 'wiki'
-    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
-    (root / 'core').mkdir()
-    (root / 'core' / 'unclosed.md').write_text(
-        '---\nname: core/unclosed\ndesc: Never closes.\n\nBody.\n', encoding='utf-8'
-    )
-    (root / 'core' / 'listed.md').write_text(
-        '---\n- a\n- b\n---\n\n# listed\n\nBody.\n', encoding='utf-8'
-    )
-
-    # the condensed run counts both; the full run names each reason
-    condensed = _wiki(root, 'update', '--path', str(root))
-    assert condensed.returncode == 0, condensed.stdout + condensed.stderr
-    assert '2 files with malformed frontmatter' in condensed.stderr
-    full = _wiki(root, 'update', '--path', str(root), '--full')
-    assert full.returncode == 0, full.stdout + full.stderr
-    assert 'Malformed frontmatter (no closing ---) in core/unclosed.md' in full.stderr
-    assert (
-        'Malformed frontmatter (not a key: value mapping) in core/listed.md'
-        in full.stderr
-    )
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')

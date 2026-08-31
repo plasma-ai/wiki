@@ -80,6 +80,8 @@ __all__ = [
     'test_quote_round_trips_through_yaml',
     'test_quote_escapes_characters_no_stream_may_carry',
     'test_unquote_decodes_every_double_quoted_escape',
+    'test_field_value_strips_keys_quotes_and_comments',
+    'test_line_keys_names_composed_key_lines',
     'test_field_ranges_match_yaml_extents',
     'test_field_ranges_match_yaml_extents_on_hostile_shapes',
 ]
@@ -769,18 +771,22 @@ def test_compose_walks_an_alias_graph_once(body: str) -> None:
     assert format.read_frontmatter_name(text) == NAME
 
 
+# one level past the nesting bound, however the collections nest
+_DEEP = format._MAX_NESTING * 2
+
+
 @pytest.mark.parametrize(
     argnames=('body', 'line'),
     argvalues=[
-        ('desc: ' + '[' * 200 + 'x' + ']' * 200, 3),
-        ('desc: ' + '{a: ' * 200 + 'x' + '}' * 200, 3),
-        ('tags:\n' + '- ' * 200 + 'x', 4),
-        ('tags: ' + '[' * 100 + 'x' + ']' * 100, None),
-        ("desc: rock 'n roll\ntags: " + '[' * 200 + 'x' + ']' * 200, 4),
-        ('desc: a ' + '[' * 200, None),
-        ('desc: |\n' + '\n'.join('  [ x' for _ in range(120)), None),
-        ('desc: |\n  ' + '- ' * 200 + 'x', None),
-        ('desc: plain\n  ' + '[' * 200, None),
+        ('desc: ' + '[' * _DEEP + 'x' + ']' * _DEEP, 3),
+        ('desc: ' + '{a: ' * _DEEP + 'x' + '}' * _DEEP, 3),
+        ('tags:\n' + '- ' * _DEEP + 'x', 4),
+        ('tags: ' + '[' * format._MAX_NESTING + 'x' + ']' * format._MAX_NESTING, None),
+        ("desc: rock 'n roll\ntags: " + '[' * _DEEP + 'x' + ']' * _DEEP, 4),
+        ('desc: a ' + '[' * _DEEP, None),
+        ('desc: |\n' + '\n'.join('  [ x' for _ in range(_DEEP)), None),
+        ('desc: |\n  ' + '- ' * _DEEP + 'x', None),
+        ('desc: plain\n  ' + '[' * _DEEP, None),
     ],
     ids=[
         'flow-sequence',
@@ -804,10 +810,11 @@ def test_compose_refuses_nesting_past_the_bound(body: str, line: Optional[int]) 
     """
     text = f'---\nname: {NAME}\n{body}\n---'
     issues = format.frontmatter_issues(text)
+    reason = f'collections nested deeper than {format._MAX_NESTING} levels'
     if line is None:
         assert issues == []
     else:
-        assert issues == [(line, 'collections nested deeper than 100 levels', 'parse')]
+        assert issues == [(line, reason, 'parse')]
 
 
 @pytest.mark.usefixtures('_loader')
@@ -1409,19 +1416,36 @@ def test_unquote_decodes_every_double_quoted_escape(
     assert oracle_scalar(f'k: {escaped}\n', 'k') == expected
     assert format.unquote('"a\\U00110000b\\uD800c"') == 'a\\U00110000b\\uD800c'
     assert format.field_value("desc: 'a #b' # c") == 'a #b'
+
+
+def test_field_value_strips_keys_quotes_and_comments() -> None:
+    """``field_value`` yields the line's value however its key and quotes are spelled.
+
+    Node properties and comment tails are not the value; a composed key
+    (``line_keys``) strips whatever its spelling, ``''`` marks a line the
+    composed block says opens no key, and a quote mid-text or one closing
+    on a later line is content.
+    """
+    # the line grammar's key shapes strip; a spaced key stays without help
     assert format.field_value('desc: &d !!str Verbatim.') == 'Verbatim.'
     assert format.field_value('desc: Alpha # note') == 'Alpha'
+    assert format.field_value('my key: v') == 'my key: v'
+    # a composed key strips whatever its spelling
     assert format.field_value('my key: v', key='my key') == 'v'
     assert format.field_value('"my key": v', key='my key') == 'v'
-    assert format.field_value('my key: v') == 'my key: v'
     assert format.field_value('"a\\"b": v', key='a"b') == 'v'
     assert format.field_value("'it''s': v", key="it's") == 'v'
+    # quotes decode: mid-text quotes are content, an open quote is not value text
     assert format.field_value("tags: ['alpha #note', beta]", key='tags') == (
         "['alpha #note', beta]"
     )
     assert format.field_value('two: three"', key='') == 'two: three"'
     assert format.field_value('desc: "Alpha continued', key='desc') == 'Alpha continued'
     assert format.field_value("desc: 'It's here'") == "It's here"
+
+
+def test_line_keys_names_composed_key_lines() -> None:
+    """``line_keys`` maps file lines to composed keys, empty where the line grammar rules."""
     assert format.line_keys(f'---\nname: {NAME}\nmy key: v\n---') == {
         2: 'name',
         3: 'my key',

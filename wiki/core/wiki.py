@@ -1870,6 +1870,8 @@ class Wiki:
                     continue
                 field_lines = format.field_line_ranges(frontmatter, lines, fields)
                 keys = format.line_keys(frontmatter)
+                # the line grammar strips only where the composed block names no keys
+                default = '' if keys else None
                 for lineno, line in enumerate(lines, 1):
                     if lineno not in field_lines:
                         continue
@@ -1880,7 +1882,7 @@ class Wiki:
                     # and the reported line text stays raw; a composed block
                     # names its key lines, so its other lines are value text
                     # whatever their shape
-                    key = keys.get(lineno, '' if keys else None)
+                    key = keys.get(lineno, default)
                     value = format.field_value(line, key=key)
                     if regex.search(value):
                         result.append((relpath, lineno, line))
@@ -3928,7 +3930,8 @@ class Wiki:
                 # indented one) has nothing the byte-level repair can edit
                 relpath = path.relative_to(self._root)
                 event = FrontmatterMalformedEvent(
-                    path=str(relpath), reason=_UNADDRESSABLE
+                    path=str(relpath),
+                    reason=_UNADDRESSABLE,
                 )
                 return text, [event]
             elif frontmatter:
@@ -3948,7 +3951,8 @@ class Wiki:
                 if format.repair_breaks_frontmatter(frontmatter, restamped):
                     relpath = path.relative_to(self._root)
                     event = FrontmatterMalformedEvent(
-                        path=str(relpath), reason=_UNREPAIRABLE
+                        path=str(relpath),
+                        reason=_UNREPAIRABLE,
                     )
                     return text, [event]
                 frontmatter = repaired
@@ -4192,7 +4196,8 @@ class Wiki:
             if format.repair_breaks_frontmatter(frontmatter, restamped):
                 relpath = path.relative_to(self._root)
                 event = FrontmatterMalformedEvent(
-                    path=str(relpath), reason=_UNREPAIRABLE
+                    path=str(relpath),
+                    reason=_UNREPAIRABLE,
                 )
                 return text, [event]
             frontmatter = repaired

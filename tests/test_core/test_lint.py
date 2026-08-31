@@ -15,6 +15,7 @@ import shutil
 
 import pytest
 
+from wiki.core import format
 from wiki.core.wiki import Issue, Wiki
 from wiki.util import markdown
 
@@ -1147,7 +1148,8 @@ def test_lint_reports_deep_nesting_instead_of_crashing(tmp_path: pathlib.Path) -
     # the sweep completes with the block named as invalid, and update converges
     issues = [issue for issue in wiki.lint() if issue.kind == 'invalid_yaml']
     assert [issue.fields['path'] for issue in issues] == ['core/design.md']
-    assert issues[0].fields['reason'] == 'collections nested deeper than 100 levels'
+    reason = f'collections nested deeper than {format._MAX_NESTING} levels'
+    assert issues[0].fields['reason'] == reason
     assert issues[0].fields['line'] == 4
     wiki.update()
     assert Wiki(tmp_path).update() == []
