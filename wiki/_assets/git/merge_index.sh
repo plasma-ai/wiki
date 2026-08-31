@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# the driver's grammar is ASCII and the file's bytes are the user's: keep awk,
+# grep, and sed byte-oriented, so a byte no UTF-8 decodes merges verbatim
+# instead of aborting a multibyte-aware awk
+export LC_ALL=C
 
 # Custom git merge driver for _index.md files
 # -------------------------------------------
@@ -173,9 +177,14 @@ for SIDE in ours theirs; do
 done
 
 # ------ normalize regenerated keys
-# add/add (empty base file): both sides seed created: from their own wiki
-# update runs, so the stamps are churn, not authorship -- normalize it too
-[[ ! -s "$BASE" ]] && REGENERATED_KEYS+=(created)
+# a base without a created: stamp (an empty add/add base, a hand-written or
+# imported index, a bare or quoted-empty created: key): both sides seed
+# created: from their own wiki update runs, so the stamps are churn, not
+# authorship -- normalize it too, in the canonical order, so a side gaining
+# both stamps takes them as ours lays them out; a stamp is a plain token or a
+# non-empty quoted scalar after the colon
+grep -Eq "^created[[:blank:]]*:[[:blank:]]+([^[:space:]#\"']|\"[^\"\r]|'[^'\r])" "$WORK/base_fm" \
+    || REGENERATED_KEYS=(name created updated)
 
 # normalize the regenerated keys to ours' values on all three inputs, so the
 # frontmatter merge below only ever sees authored-field differences; a value
@@ -183,42 +192,83 @@ done
 # its body under the other side's one-liner (the value travels through the
 # environment so awk never mangles a backslash in a name)
 for KEY in "${REGENERATED_KEYS[@]}"; do
-    # the extent ends at the first dedented line; a blank run belongs to it
-    # only when an indented line follows, otherwise it separates the fields
-    # and stays where it is on every side -- mirrors Python FIELD_EXTENT minus
-    # its trailing blanks (a shared separator must stay on every side) and its
-    # column-0 sequence items (a regenerated key carries a scalar); the key
-    # match mirrors the Python `^key[ \t]*:` anchor, so `name :` is `name:`
-    OURS_EXTENT=$(awk -v key="$KEY" '
-        found && /^[[:space:]]*$/ { pending++; next }
+    # the extent is the key line plus the indented lines that continue its
+    # value: every indented line under a block-scalar header (`|`/`>`, node
+    # properties allowed before it), else the indented non-comment lines of
+    # a plain value; a comment (indented or not) is authored, so it merges as
+    # an ordinary line, and, like a blank run, belongs to the extent only
+    # when a value line follows (a comment between a key and its indented
+    # value must not strand the value under the other side's one-liner),
+    # otherwise it separates the fields and stays where it is on every side,
+    # byte for byte (a CRLF or whitespace-only separator included) -- mirrors
+    # Python FIELD_EXTENT minus its trailing blanks, its column-0 sequence
+    # items (a regenerated key carries a scalar), and its trailing comments;
+    # the key match mirrors the Python `^key[ \t]*:(?:[ \t]|$)` anchor, so
+    # `name :` is `name:` while a `name:core` typo is text, and a CRLF bare
+    # key still matches; the extent travels through a file, as the
+    # environment caps a value's size
+    awk -v key="$KEY" '
+        found && /^[[:space:]]*$/ { pending = pending $0 "\n"; next }
+        found && !block && /^[[:space:]]*#/ { pending = pending $0 "\n"; next }
         found && /^[[:space:]]/ {
-            for (i = 0; i < pending; i++) print ""
-            pending = 0
+            printf "%s", pending
+            pending = ""
             print
             next
         }
         found { exit }
-        $0 ~ "^" key "[[:blank:]]*:" { print; found = 1 }
-    ' "$WORK/ours_fm")
+        $0 ~ "^" key "[[:blank:]]*:([[:blank:]\r]|$)" {
+            block = ($0 ~ ("^" key "[[:blank:]]*:[[:blank:]]*([&!][^[:blank:]]*[[:blank:]]+)*[|>]"))
+            print
+            found = 1
+        }
+    ' "$WORK/ours_fm" >"$WORK/extent"
+    HAVE_EXTENT=0
+    [[ -s "$WORK/extent" ]] && HAVE_EXTENT=1
     for SIDE in base theirs; do
         FM="$WORK/${SIDE}_fm"
-        # an empty extent (ours dropped the key) drops it from
-        # the other inputs too
-        OURS_EXTENT="$OURS_EXTENT" awk -v key="$KEY" '
-            skipping && /^[[:space:]]*$/ { pending++; next }
-            skipping && /^[[:space:]]/ { pending = 0; next }
+        # an empty extent (ours dropped the key) drops it from the other
+        # inputs too; the value lines of this side go, with the comments and
+        # blank run a value line follows, while those trailing the value
+        # stay; a side without the key (a base index written by hand, a side
+        # that never ran wiki update) gains ours' extent where wiki update
+        # puts the key -- name: under the opening fence, a stamp above the
+        # closing one -- so the other side adding the key is no change to
+        # merge; the extent path travels through the environment, as awk -v
+        # would decode a backslash in it
+        HAS_KEY=$(grep -Ec "^${KEY}[[:blank:]]*:([[:space:]]|$)" "$FM" || true)
+        EXTENT="$WORK/extent" awk -v key="$KEY" -v have_extent="$HAVE_EXTENT" \
+            -v has_key="$HAS_KEY" '
+            skipping && /^[[:space:]]*$/ { pending = pending $0 "\n"; next }
+            skipping && !block && /^[[:space:]]*#/ { pending = pending $0 "\n"; next }
+            skipping && /^[[:space:]]/ {
+                pending = ""
+                next
+            }
             skipping {
-                for (i = 0; i < pending; i++) print ""
-                pending = 0
+                printf "%s", pending
+                pending = ""
                 skipping = 0
             }
-            $0 ~ "^" key "[[:blank:]]*:" {
-                if (ENVIRON["OURS_EXTENT"] != "") print ENVIRON["OURS_EXTENT"]
+            NR == 1 && key == "name" && have_extent && !has_key {
+                print
+                while ((getline line < ENVIRON["EXTENT"]) > 0) print line
+                close(ENVIRON["EXTENT"])
+                next
+            }
+            NR > 1 && key != "name" && have_extent && !has_key && /^---[[:space:]\r]*$/ {
+                while ((getline line < ENVIRON["EXTENT"]) > 0) print line
+                close(ENVIRON["EXTENT"])
+            }
+            $0 ~ "^" key "[[:blank:]]*:([[:blank:]\r]|$)" {
+                block = ($0 ~ ("^" key "[[:blank:]]*:[[:blank:]]*([&!][^[:blank:]]*[[:blank:]]+)*[|>]"))
+                while ((getline line < ENVIRON["EXTENT"]) > 0) print line
+                close(ENVIRON["EXTENT"])
                 skipping = 1
                 next
             }
             { print }
-            END { for (i = 0; i < pending; i++) print "" }
+            END { printf "%s", pending }
         ' "$FM" >"$FM.new"
         mv "$FM.new" "$FM"
     done
@@ -238,35 +288,69 @@ git merge-file --marker-size="$MARKER_SIZE" -p -L ours -L base -L theirs \
 if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
     # rows key on their [[target| prefix (mirrors Python _LINK_ROW);
     # continuation and blank lines ride with the row that precedes them,
-    # and theirs' heading/preamble (before its first row) is never collected
+    # and a side's heading/preamble (before its first row) is never
+    # collected. Ours' rows stream through in ours' layout; a row both
+    # sides carry keeps ours' text unless ours left base's text alone while
+    # theirs changed it -- an authored desc edit on a row wiki update does
+    # not regenerate (an asset, a child still on the placeholder) -- and
+    # then theirs' text lands, as a three-way merge would land it; a row
+    # only theirs has rides over, appended directly above ours' closing ***
+    # (the region ends at its first ***, so the anchor is unambiguous)
     awk '
-        FNR == 1 { part++ }
-        part == 1 {
+        # a row block without its trailing blank lines (CRLF and
+        # whitespace-only ones included): the text a side edited, whatever
+        # separated the rows on that side
+        function body(s) {
+            while (s ~ /\r?\n[[:blank:]]*\r?\n$/) sub(/[[:blank:]]*\r?\n$/, "", s)
+            return s
+        }
+        function flush() {
+            if (row == "") return
+            if (((2, row) in text) && ((1, row) in text) \
+                && body(held) == body(text[1, row]) \
+                && body(text[2, row]) != body(text[1, row]))
+                printf "%s%s", body(text[2, row]), substr(held, length(body(held)) + 1)
+            else
+                printf "%s", held
+            row = ""
+            held = ""
+        }
+        # the parts are the input files in order: an empty base (add/add)
+        # yields no record, so the file name, not the record count, says
+        # which part a line belongs to
+        { part = (FILENAME == ARGV[3]) ? 3 : (FILENAME == ARGV[2]) ? 2 : 1 }
+        FNR == 1 { key = "" }
+        part < 3 {
+            if ($0 ~ /^\*\*\*[[:space:]]*$/) { key = ""; next }
             if ($0 ~ /^\[\[.*\|/) {
                 key = $0
                 sub(/\|.*$/, "", key)
-                ours[key] = 1
+                if (part == 2 && !((2, key) in text)) order[++count] = key
             }
+            if (key != "") text[part, key] = text[part, key] $0 "\n"
             next
         }
-        /^\*\*\*[[:space:]]*$/ { exit }
-        /^\[\[.*\|/ {
-            key = $0
-            sub(/\|.*$/, "", key)
-            keep = !(key in ours)
-        }
-        keep { print }
-    ' "$WORK/ours_links" "$WORK/theirs_links" >"$WORK/extra_links"
-    # insert the extras directly above ours' closing *** (the region ends
-    # at its first ***, so the anchor is unambiguous); the extras path
-    # travels through the environment so awk never mangles it
-    EXTRAS="$WORK/extra_links" awk '
         /^\*\*\*[[:space:]]*$/ && !done {
-            while ((getline line < ENVIRON["EXTRAS"]) > 0) print line
+            flush()
+            for (i = 1; i <= count; i++)
+                if (!(order[i] in ours)) printf "%s", text[2, order[i]]
             done = 1
+            print
+            next
         }
+        done { print; next }
+        /^\[\[.*\|/ {
+            flush()
+            row = $0
+            sub(/\|.*$/, "", row)
+            ours[row] = 1
+            held = $0 "\n"
+            next
+        }
+        row != "" { held = held $0 "\n"; next }
         { print }
-    ' "$WORK/ours_links" >"$WORK/result_links"
+        END { flush() }
+    ' "$WORK/base_links" "$WORK/theirs_links" "$WORK/ours_links" >"$WORK/result_links"
 else
     # ours lost its closing *** (an empty above region): nothing anchors
     # an insertion, so take ours as-is
