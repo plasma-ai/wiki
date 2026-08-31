@@ -130,10 +130,10 @@ _UPDATE_CATEGORIES = [
     ),
     (
         FrontmatterMalformedEvent,
-        '1 page with malformed frontmatter',
-        '{n} pages with malformed frontmatter',
-        '1 page with malformed frontmatter',
-        '{n} pages with malformed frontmatter',
+        '1 file with malformed frontmatter',
+        '{n} files with malformed frontmatter',
+        '1 file with malformed frontmatter',
+        '{n} files with malformed frontmatter',
     ),
     (
         IndexTruncatedEvent,
@@ -294,6 +294,7 @@ def init(app: typer.Typer) -> typer.Typer:
         # initialize wiki, streaming its notices to stderr
         wiki = Wiki(path)
         wiki.on_notice = _echo_notice
+        _require_utf8('NAME', name)
         wiki.init(name, settings=settings)
         # materialize Obsidian config (downloads community plugins)
         warnings = wiki.update_config()
@@ -784,6 +785,10 @@ def new(
         folder), so pending maintenance in that scope -- adoptions,
         prunes -- lands in the same run.
         """
+        # the inputs land in frontmatter and prose, which every writer encodes
+        # as UTF-8: an argv byte no UTF-8 decodes is refused at the boundary
+        for option, value in (('NAME', name), ('--desc', desc), ('--content', content)):
+            _require_utf8(option, value)
         wiki = resolve(path)
         # the scoped sweep narrates like update: condensed count lines
         notices: list[Event] = []
@@ -1178,6 +1183,19 @@ def _condense(notices: list[Event], check: bool) -> list[str]:
         line = one if n == 1 else many.format(n=n)
         lines.append((position, line))
     return [line for _position, line in sorted(lines)]
+
+
+def _require_utf8(option: str, value: str) -> None:
+    """Refuse an argument holding a byte no UTF-8 decodes.
+
+    The shell hands such a byte over as a lone surrogate, which every
+    writer's UTF-8 encoding rejects; refusing at the boundary keeps it
+    out of a frontmatter block that would then fail every later run.
+    """
+    try:
+        value.encode('utf-8')
+    except UnicodeEncodeError:
+        raise typer.BadParameter(f'{option} is not valid UTF-8') from None
 
 
 def _echo_notice(event: Event, **kwargs: Any) -> Event:

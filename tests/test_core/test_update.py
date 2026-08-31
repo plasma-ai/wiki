@@ -51,6 +51,9 @@ __all__ = [
     'test_update_accepts_block_scalar_name',
     'test_update_joins_multiline_block_scalar_name',
     'test_update_drops_block_scalar_name_body',
+    'test_update_refuses_a_repair_a_quote_would_swallow',
+    'test_update_keeps_a_comment_behind_a_column_zero_bom',
+    'test_update_reads_the_block_as_the_restamp_leaves_it',
     'test_update_keeps_a_comment_under_name',
     'test_update_drops_plain_name_continuations',
     'test_update_drops_stray_frontmatter_blanks',
@@ -83,6 +86,13 @@ __all__ = [
     'test_body_edits_never_dirty_the_tree',
     'test_update_fills_blank_frontmatter_values',
     'test_update_leaves_a_non_mapping_block_untouched',
+    'test_update_leaves_an_unaddressable_block_untouched',
+    'test_update_stamps_keep_their_anchors',
+    'test_update_rows_read_the_repaired_child',
+    'test_update_converges_when_the_restamp_drops_the_only_alias',
+    'test_update_drops_a_bom_opening_the_body',
+    'test_update_converges_on_a_key_missing_its_space',
+    'test_update_restamps_with_the_stamp_comments',
     'test_update_keeps_a_bare_key_stamp_body',
     'test_update_inserts_timestamps_in_canonical_order',
     'test_update_inserts_desc_in_schema_order',
@@ -114,6 +124,7 @@ __all__ = [
     'test_quoted_colon_title_renders_unquoted_heading',
     'test_update_adopts_bare_page_seeding_title',
     'test_required_titles_seed_lint_and_flip_off',
+    'test_required_titles_converge_over_a_duplicated_name',
     'test_required_titles_adopts_no_h1_page',
     'test_update_materializes_missing_settings',
     'test_update_skips_symlinked_page',
@@ -488,7 +499,8 @@ def test_update_ignores_wikis_above_the_root(tmp_path: pathlib.Path) -> None:
     assert wiki.lint() == []
 
 
-def test_update_refuses_conflict_markers(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize('width', [7, 8], ids=['default-markers', 'marker-size-8'])
+def test_update_refuses_conflict_markers(tmp_path: pathlib.Path, width: int) -> None:
     """Conflict-marked files refuse the sweep before anything mutates.
 
     A half-resolved merge would otherwise ride the rewrite -- the plan
@@ -496,11 +508,12 @@ def test_update_refuses_conflict_markers(tmp_path: pathlib.Path) -> None:
     regenerated files. Update refuses, naming every marked file, and
     the dry run refuses alike rather than previewing the damage; a
     well-formed ``no-lint`` region sanctions marker-shaped lines (e.g.
-    a git tutorial).
+    a git tutorial). Markers lengthened by git's ``conflict-marker-size``
+    attribute count too.
     """
     wiki = _make_wiki(tmp_path, folders={'core': ['design', 'api']})
     # plant a real conflict in a page and an index
-    conflict = '\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\n'
+    conflict = f'\n{"<" * width} HEAD\nours\n=======\ntheirs\n{">" * width} branch\n'
     marked = {}
     for rel in ('core/design.md', 'core/_index.md'):
         path = tmp_path / rel
@@ -734,16 +747,145 @@ def test_update_drops_block_scalar_name_body(tmp_path: pathlib.Path) -> None:
     # author a child page whose name uses a multi-line block scalar
     page = tmp_path / 'core' / 'design.md'
     page.write_text(
-        '---\nname: |\n  old\n  broken\ndesc: A page.\n---\n\n# design\n\nBody.\n',
+        '---\nname: |\n  old\n  # note\n  broken\ndesc: A page.\n---\n\n# design\n\nBody.\n',
         encoding='utf-8',
     )
 
-    # the path-derived name lands as a one-line scalar, body lines gone
+    # the path-derived name lands as a one-line scalar, body lines gone -- an
+    # indented hash line inside the block is body, not a comment to keep
     wiki.update()
     updated = page.read_text(encoding='utf-8')
     assert 'name: core/design\n' in updated
     assert '  old' not in updated
+    assert '# note' not in updated
     assert '  broken' not in updated
+    assert Wiki(tmp_path).update() == []
+
+
+@pytest.mark.parametrize(
+    argnames='body',
+    argvalues=[
+        'tags: "open\nname: "x\ncustom: y"',
+        "category: 'open\n'name': x\ndesc: d\n'",
+        'updated: "quoted\ncontinued"\n\ntags: "open',
+    ],
+    ids=['quote-closes-around-name', 'quote-closes-around-insert', 'stamp-strands'],
+)
+def test_update_refuses_a_repair_a_quote_would_swallow(
+    tmp_path: pathlib.Path,
+    body: str,
+) -> None:
+    """A block whose repair lands inside a quote the line grammar cannot see is kept as written.
+
+    The parser rejects the block, so the line grammar refreshes the
+    ``name:`` line or stamps ``updated:`` it finds at column 0 -- inside a
+    quoted scalar left open above, which the edit then closes around the
+    written lines. The block composes with no ``name``, ``desc``, or stamp
+    key, so writing it would lose the fields and never converge; update
+    refuses it with the malformed notice, lint reports it, and every other
+    page is still repaired.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design', 'other']})
+    page = tmp_path / 'core' / 'design.md'
+    authored = f'---\n{body}\n---\n\n# design\n\nBody.\n'
+    page.write_text(authored, encoding='utf-8')
+    other = tmp_path / 'core' / 'other.md'
+    other.write_text('---\nname: stale\ndesc: Other.\n---\n\n# other\n\nBody.\n')
+
+    # the page is named and kept byte-identical; its sibling is repaired
+    notices = _capture_notices(wiki)
+    wiki.update()
+    err = '\n'.join(event.description for event in notices)
+    assert (
+        'Malformed frontmatter (its repair would break the YAML) in core/design.md'
+        in err
+    )
+    assert page.read_text(encoding='utf-8') == authored
+    assert 'name: core/other\n' in other.read_text(encoding='utf-8')
+    kinds = [
+        issue.kind
+        for issue in Wiki(tmp_path).lint()
+        if issue.fields['path'] == 'core/design.md'
+    ]
+    assert 'malformed_frontmatter' in kinds
+    assert Wiki(tmp_path).update() == []
+
+
+def test_update_keeps_a_comment_behind_a_column_zero_bom(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A BOM at column 0 goes, and the ``# comment`` it hid stays a comment.
+
+    The C loader skips a BOM at column 0 on any line, so a strict reader
+    saw a comment; the repair drops the BOM rather than take the line for
+    a value's content and delete it with the field it rewrites.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        '---\nname: stale\ndesc: A page.\n\n\ufeff# keep me\n---\n\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+    wiki.update()
+    text = page.read_text(encoding='utf-8')
+    assert '\n# keep me\n' in text
+    assert '\ufeff' not in text
+    assert Wiki(tmp_path).update() == []
+
+
+@pytest.mark.parametrize(
+    argnames=('field', 'stamp', 'expected'),
+    argvalues=[
+        ('title: "Quoted\n  Title"', 'updated: "unclosed', '# Quoted Title\n'),
+        (
+            'desc: "Alpha\n  beta."',
+            'updated: [a,',
+            '[[core/design|design]]: Alpha beta.\n',
+        ),
+        (
+            'desc: !!str |\n  Folded text.',
+            'updated: "open',
+            '[[core/design|design]]: Folded text.\n',
+        ),
+        (
+            'desc: "Multi\ncategory: fake\nend."\ncategory: real',
+            'updated: "unclosed',
+            '[[core/design|[real] design]]: Multi category: fake end.\n',
+        ),
+        ('desc: Fixed desc.', 'updated: "open\n\n- item', 'Z\n- item\n---\n'),
+    ],
+    ids=[
+        'title-quoted-multiline',
+        'desc-quoted-multiline',
+        'desc-tagged-block',
+        'category-inside-quoted-desc',
+        'stamp-quote-blank-item',
+    ],
+)
+def test_update_reads_the_block_as_the_restamp_leaves_it(
+    tmp_path: pathlib.Path,
+    field: str,
+    stamp: str,
+    expected: str,
+) -> None:
+    """The H1 and the parent row read the block the write lands, so the update converges in one run.
+
+    An ``updated:`` value the parser rejects sends the block through the
+    line grammar; the re-stamp replaces that value and the block composes,
+    so a read before the re-stamp -- through a grammar that may resolve a
+    tagged block or a mid-value key line differently -- lags the write by
+    a run.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        f'---\nname: core/design\n{field}\n{stamp}\n---\n\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+    wiki.update()
+    page_text = page.read_text(encoding='utf-8')
+    index_text = (tmp_path / 'core' / '_index.md').read_text(encoding='utf-8')
+    assert expected in page_text + index_text
     assert Wiki(tmp_path).update() == []
 
 
@@ -1597,7 +1739,7 @@ def test_update_converges_on_every_grammar_shape(tmp_path: pathlib.Path) -> None
         stem = '-'.join(shape).replace('|', 'literal').replace('>', 'folded')
         stem = stem.replace('+', 'plus')
         lines = ['---']
-        for key in ('name', 'title', 'desc', 'category'):
+        for key in ('name', 'title', 'desc', 'category', 'created', 'updated'):
             lines.extend(field_lines(key, *shape))
         lines.extend(['---', '', f'# {stem}', '', 'Body.', ''])
         (tmp_path / 'core' / f'{stem}.md').write_text(
@@ -1605,9 +1747,15 @@ def test_update_converges_on_every_grammar_shape(tmp_path: pathlib.Path) -> None
         )
 
     # one update repairs every page; the second is a no-op with nothing pending
+    # and no block the tool left in a shape a strict reader rejects
     wiki.update()
     assert Wiki(tmp_path).update() == []
-    pending = {'requires_update', 'malformed_frontmatter', 'truncated_index'}
+    pending = {
+        'requires_update',
+        'malformed_frontmatter',
+        'truncated_index',
+        'invalid_yaml',
+    }
     assert [issue for issue in Wiki(tmp_path).lint() if issue.kind in pending] == []
 
 
@@ -1761,8 +1909,13 @@ def test_update_fills_blank_frontmatter_values(
 
 @pytest.mark.parametrize(
     argnames='body',
-    argvalues=['Just a sentence.', '- a\n- b', 'name:core/design'],
-    ids=['prose', 'list', 'missing-space'],
+    argvalues=[
+        'Just a sentence.',
+        '- a\n- b',
+        'name:core/design',
+        '[a,\ndesc: no period]',
+    ],
+    ids=['prose', 'list', 'missing-space', 'flow-list-with-key-text'],
 )
 def test_update_leaves_a_non_mapping_block_untouched(
     tmp_path: pathlib.Path,
@@ -1802,9 +1955,249 @@ def test_update_leaves_a_non_mapping_block_untouched(
     for issue in issues:
         assert issue.fields['line'] == 1
         assert issue.fields['reason'] == 'frontmatter is not a mapping'
+        assert 'no strict reader finds key: value pairs in it' in issue
+    # a body with no fields reads none: no other finding, no field match
+    kinds = {
+        issue.kind
+        for issue in Wiki(tmp_path).lint()
+        if 'design' in issue.fields['path']
+    }
+    assert kinds == {'invalid_yaml'}
+    assert Wiki(tmp_path).match('period', field='desc') == []
     assert Wiki(tmp_path).update() == []
     assert page.read_text(encoding='utf-8') == authored_page
     assert index.read_text(encoding='utf-8') == authored_index
+
+
+@pytest.mark.parametrize(
+    argnames=('body', 'desc'),
+    argvalues=[
+        ('{name: x, desc: Flow.}', 'Flow.'),
+        ('  name: x\n  desc: Indented.', 'Indented.'),
+        ('? name\n: x\ndesc: Explicit.', 'Explicit.'),
+        ('&k desc: Aliased.\n*k : Second.', 'Aliased.'),
+        ('desc: Merged.\n<<: {tags: []}', 'Merged.'),
+        ('desc: Broken' + chr(0x85) + 'title: T', 'Broken'),
+    ],
+    ids=[
+        'flow-mapping',
+        'indented-mapping',
+        'explicit-key',
+        'alias-key',
+        'merge-key',
+        'two-keys-one-line',
+    ],
+)
+def test_update_leaves_an_unaddressable_block_untouched(
+    tmp_path: pathlib.Path,
+    body: str,
+    desc: str,
+) -> None:
+    """A mapping whose key lines the writers cannot place is kept as written, named, and linted.
+
+    The byte-level repair refreshes, fills, and reorders column-0 key
+    lines; a flow mapping, an indented mapping, an explicit key, an alias
+    used as a key, a merge key, or two keys on one line (a NEL the parser
+    breaks on) leaves it none to edit safely, so appending fields would
+    leave a block no reader accepts. Update keeps the page byte-identical
+    and names it, lint reports it as malformed, and the parser still reads
+    its fields into the parent row.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    authored = f'---\n{body}\n---\n\n# design\n\nBody.\n'
+    page.write_text(authored, encoding='utf-8')
+
+    # update names the page and rewrites nothing; lint reports it
+    notices = _capture_notices(wiki)
+    wiki.update()
+    err = '\n'.join(event.description for event in notices)
+    assert (
+        'Malformed frontmatter (keys are not column-0 key: value lines) in core/design.md'
+        in err
+    )
+    assert page.read_text(encoding='utf-8') == authored
+    kinds = [
+        issue.kind
+        for issue in Wiki(tmp_path).lint()
+        if issue.fields['path'] == 'core/design.md'
+    ]
+    assert 'malformed_frontmatter' in kinds
+    index = (tmp_path / 'core' / '_index.md').read_text(encoding='utf-8')
+    assert f'[[core/design|design]]: {desc}' in index
+    assert Wiki(tmp_path).update() == []
+
+
+@pytest.mark.parametrize(
+    argnames=('stamp', 'expected'),
+    argvalues=[
+        ('updated: &u 2026-01-01T00:00:00Z\nzz: *u', r'^updated: &u \S+\nzz: \*u$'),
+        ('created: \'\'\nupdated: "" # c', r'^created: \S+Z\nupdated: \S+Z # c$'),
+        (
+            'created: &c\nupdated: 2026-01-01T00:00:00Z',
+            r'^created: &c \S+\nupdated: \S+$',
+        ),
+    ],
+    ids=['anchored-restamp', 'quoted-empty', 'anchored-null'],
+)
+def test_update_stamps_keep_their_anchors(
+    tmp_path: pathlib.Path, stamp: str, expected: str
+) -> None:
+    """A stamp's anchor stays on the fresh value, and a quoted-empty or anchored-null stamp is filled.
+
+    Dropping the anchor from a re-stamped ``updated:`` would strand every
+    alias of it; the properties ride onto the new stamp instead, and the
+    block a strict reader accepted stays accepted.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        f'---\nname: wrong\ndesc: A page.\n{stamp}\n---\n\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # one update converges on a block every strict reader still accepts
+    wiki.update()
+    frontmatter = page.read_text(encoding='utf-8').split('---\n')[1]
+    assert re.search(expected, frontmatter, re.M), frontmatter
+    assert format.frontmatter_issues(f'---\n{frontmatter}---') == []
+    assert Wiki(tmp_path).update() == []
+
+
+def test_update_rows_read_the_repaired_child(tmp_path: pathlib.Path) -> None:
+    """A parent row reads the child's repaired frontmatter, so it converges in the same run.
+
+    A child whose repair changes what the reader returns -- a block the
+    name refresh makes parseable, a stray blank the repair drops under an
+    inline value -- would otherwise feed the parent its pre-repair text
+    and the row would catch up a run late.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['flip', 'blank']})
+    (tmp_path / 'core' / 'flip.md').write_text(
+        "---\nname: 'it's gamma.'\ndesc: D.\ncategory: # head note\n  Cat.\n---\n\n"
+        '# flip\n\nBody.\n',
+        encoding='utf-8',
+    )
+    (tmp_path / 'core' / 'blank.md').write_text(
+        "---\nname: blank\ndesc: >gt it's.\n   \n---\n\n# blank\n\nBody.\n",
+        encoding='utf-8',
+    )
+
+    # the first update writes the rows the repaired children read as
+    wiki.update()
+    index = (tmp_path / 'core' / '_index.md').read_text(encoding='utf-8')
+    assert '[[core/flip|[Cat.] flip]]: D.' in index
+    assert Wiki(tmp_path).update() == []
+
+
+def test_update_converges_when_the_restamp_drops_the_only_alias(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An alias sitting alone on ``updated:`` pins the order only until the re-stamp replaces it.
+
+    The written block carries no alias, so the write orders it as the
+    next run would have, and the next run is a no-op.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        '---\ncreated: &c 2026-01-01T00:00:00Z\nupdated: *c\ndesc: A.\n---\n\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # one update lands the canonical order with a plain stamp
+    wiki.update()
+    frontmatter = page.read_text(encoding='utf-8').split('---\n')[1]
+    assert re.match(
+        r'name: core/design\ndesc: A.\ncreated: &c \S+\nupdated: \S+\n$', frontmatter
+    )
+    assert Wiki(tmp_path).update() == []
+
+
+def test_update_drops_a_bom_opening_the_body(tmp_path: pathlib.Path) -> None:
+    """A UTF-8 BOM after the opening fence goes, so the key it rode on stays a top-level key.
+
+    Left on its line, the order pass could move the BOM mid-block, where
+    the C loader nests the key under its neighbor.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    bom = chr(0xFEFF)
+    page.write_text(
+        f'---\n{bom}created: 2026-01-01T00:00:00Z\na.b: x\ndesc: A.\n---\n\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # one update converges with created a top-level stamp and no BOM
+    wiki.update()
+    text = page.read_text(encoding='utf-8')
+    assert bom not in text
+    assert format.frontmatter_issues(text.split('\n---\n')[0] + '\n---') == []
+    assert format.read_frontmatter_field(text.split('\n---\n')[0] + '\n---', 'created')
+    assert Wiki(tmp_path).update() == []
+
+
+@pytest.mark.parametrize(
+    argnames='line',
+    argvalues=['updated:X', 'desc:needle text', 'name:core/design'],
+    ids=['stamp', 'desc', 'name'],
+)
+def test_update_converges_on_a_key_missing_its_space(
+    tmp_path: pathlib.Path, line: str
+) -> None:
+    """A ``key:value`` line with no space after the colon is not a key to any grammar.
+
+    YAML reads it as text, and so does the wiki's line grammar for the
+    repair, the field order, and ``match --field`` alike, so the repair
+    inserts the field it does not see and the block converges in one
+    update -- lint names the invalid line, and the author's fix is one
+    space.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        f'---\nname: core/design\n{line}\ncreated: 2026-01-01T00:00:00Z\n---\n\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # one update converges; lint keeps naming the line as invalid YAML
+    wiki.update()
+    assert Wiki(tmp_path).update() == []
+    kinds = {
+        issue.kind
+        for issue in Wiki(tmp_path).lint()
+        if issue.fields['path'] == 'core/design.md'
+    }
+    assert 'invalid_yaml' in kinds
+    assert 'requires_update' not in kinds
+
+
+def test_update_restamps_with_the_stamp_comments(tmp_path: pathlib.Path) -> None:
+    """The ``updated:`` re-stamp keeps the key line's tail comment and the comment lines under it.
+
+    A comment carrying a Unicode line separator is one comment line to
+    the wiki (a strict reader breaks the line there, which lint names),
+    so the re-stamp never splits it and swallows the closing fence.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    separator = chr(0x2028)
+    page.write_text(
+        '---\nname: wrong\ndesc: A page.\nupdated: 2026-01-01T00:00:00Z # by hand\n'
+        f'  # note{separator}more\n---\n\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # the rewrite re-stamps and both comments ride along; the block stays closed
+    wiki.update()
+    frontmatter, body = page.read_text(encoding='utf-8').split('\n---\n')
+    assert re.search(
+        rf'^updated: \S+ # by hand\n  # note{separator}more$', frontmatter, re.M
+    )
+    assert body.startswith('\n# core/design\n')
+    kinds = {issue.kind for issue in Wiki(tmp_path).lint()}
+    assert kinds <= {'invalid_yaml'}
+    assert Wiki(tmp_path).update() == []
 
 
 @pytest.mark.parametrize('field', ['created', 'updated'])
@@ -2856,6 +3249,33 @@ def test_required_titles_seed_lint_and_flip_off(tmp_path: pathlib.Path) -> None:
     assert 'title:' not in files[-1].read_text(encoding='utf-8')
     assert wiki.lint() == []
     assert wiki.update() == []
+
+
+def test_required_titles_converge_over_a_duplicated_name(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Seeding ``title: null`` under a duplicated ``name:`` converges in one run.
+
+    The seed lands under the first ``name:`` extent and the write orders
+    the block, which sorts both ``name:`` copies above the title; the plan
+    orders the block the same way, or every run would move the title back.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    settings = tmp_path / '.wiki' / 'settings.json'
+    settings.write_text(
+        json.dumps({'titles': {'required': True}}) + '\n', encoding='utf-8'
+    )
+    for path in (tmp_path / 'core' / 'design.md', tmp_path / 'core' / '_index.md'):
+        text = path.read_text(encoding='utf-8')
+        path.write_text(text.replace('name: ', 'name: a\nname: ', 1), encoding='utf-8')
+
+    # one update seeds the placeholder and lands the block in its final order
+    wiki = Wiki(tmp_path)
+    wiki.update()
+    for path in (tmp_path / 'core' / 'design.md', tmp_path / 'core' / '_index.md'):
+        text = path.read_text(encoding='utf-8')
+        assert re.search(r'^name: .*\nname: .*\ntitle: null\n', text, re.M)
+    assert Wiki(tmp_path).update() == []
 
 
 def test_required_titles_adopts_no_h1_page(tmp_path: pathlib.Path) -> None:

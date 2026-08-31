@@ -72,6 +72,11 @@ def test_match_field_matches_value_only(tmp_path: pathlib.Path) -> None:
         '---\nname: tracked\ndesc: d\nreview-status: approved\n---\n\n# t\n\nBody.\n',
         encoding='utf-8',
     )
+    # a key outside the grammar is still stripped when it opens the matched field
+    (tmp_path / 'core' / 'spaced.md').write_text(
+        '---\nname: spaced\ndesc: d\nmy key: inner space value\n---\n\n# s\n\nBody.\n',
+        encoding='utf-8',
+    )
     # a dotted key is a field of its own and ends its neighbor
     (tmp_path / 'core' / 'foreign.md').write_text(
         '---\nname: foreign\ndesc: d\ncom.example: |\n  needle body\n---\n'
@@ -82,6 +87,17 @@ def test_match_field_matches_value_only(tmp_path: pathlib.Path) -> None:
     (tmp_path / 'core' / 'cited.md').write_text(
         '---\nname: cited\ndesc: d\nsources:\n- https://doi.org/10.1/x\n---\n'
         '\n# c\n\nBody.\n',
+        encoding='utf-8',
+    )
+    # ... under the line grammar too, when a neighbor line spoils the block
+    (tmp_path / 'core' / 'typo.md').write_text(
+        '---\nname: typo\ndesc: A: b\nsources:\n- https://doi.org/10.1/y\n---\n'
+        '\n# t\n\nBody.\n',
+        encoding='utf-8',
+    )
+    # a quoted scalar's continuation line is value text, however key-shaped
+    (tmp_path / 'core' / 'quoted.md').write_text(
+        '---\nname: quoted\ndesc: "one\ntwo: three"\n---\n\n# q\n\nBody.\n',
         encoding='utf-8',
     )
     wiki.update()
@@ -108,7 +124,19 @@ def test_match_field_matches_value_only(tmp_path: pathlib.Path) -> None:
     assert wiki.match('needle', field='desc') == []
     # a URL item at column 0 is part of its sequence field, colon and all
     hits = wiki.match('doi.org', field='sources')
-    assert [relpath for relpath, _, _ in hits] == ['core/cited.md']
+    assert [relpath for relpath, _, _ in hits] == ['core/cited.md', 'core/typo.md']
+    # a key spelled with a space is stripped from its line like any other
+    hits = wiki.match('^inner', field='my key')
+    assert [relpath for relpath, _, _ in hits] == ['core/spaced.md']
+    assert wiki.match('my key', field='my key') == []
+    # a quoted desc continued below matches from its first character on both
+    # lines: the opening quote is not value text, and neither is a key shape
+    # on the continuation line
+    hits = wiki.match('^one', field='desc')
+    assert [relpath for relpath, _, _ in hits] == ['core/quoted.md']
+    hits = wiki.match('^two', field='desc')
+    assert [relpath for relpath, _, _ in hits] == ['core/quoted.md']
+    assert wiki.match('^three', field='desc') == []
 
 
 def test_all_files_matches_non_markdown_whole(tmp_path: pathlib.Path) -> None:

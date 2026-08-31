@@ -32,6 +32,7 @@ __all__ = [
     'grammar',
     'yaml_body',
     'oracle_scalar',
+    'oracle_scalars',
     'oracle_mapping',
     'oracle_valid',
     'oracle_extent',
@@ -76,6 +77,7 @@ BODIES = [
     'trailing-blanks',
     'more-indented',
     'ws-only-over-indented',
+    'trailing-ws-only-over-indented',
 ]
 #: decorations around the field: comments, stray blanks, trailing spaces
 DECOS = [
@@ -125,10 +127,15 @@ EXTRAS = [
     ('plain-inline-multi-hash-no-space', 'desc', ['desc: Alpha beta.', '  #tag line']),
     ('plain-hash-in-value', 'desc', ['desc: Use #1 approach.']),
     ('key-space-colon', 'desc', ['desc : Alpha beta.']),
+    ('quoted-key', 'desc', ['"desc": Alpha beta.']),
     ('anchor-alias', 'desc', ['custom_key: &note Alpha beta.', 'desc: *note']),
     ('local-tag', 'desc', ['desc: !bang Alpha beta.']),
     ('bool-like', 'title', ['title: yes']),
     ('sexagesimal', 'title', ['title: 1:20']),
+    ('dq-column0-continuation', 'desc', ['desc: "Alpha beta.', 'Gamma delta."']),
+    ('sq-column0-continuation', 'desc', ["desc: 'Alpha beta.", "Gamma delta.'"]),
+    ('column0-comment-mid-field', 'desc', ['desc:', '# a comment', '  Alpha beta.']),
+    ('null-null-title', 'title', ['title: null', '  null']),
 ]
 #: sequence-valued shapes, which the reader never resolves but whose line
 #: extents must still scope right, as ``(id, key, field lines)``
@@ -136,6 +143,7 @@ SEQUENCES = [
     ('column0-url-items', 'sources', ['sources:', '- https://doi.org/x', '- b']),
     ('indented-items', 'tags', ['tags:', '  - a', '  - b']),
     ('flow-continuation', 'sources', ['sources: [https://a,', 'https://b]']),
+    ('flow-seq-blank-inside', 'tags', ['tags: ["a', '', 'b"]']),
 ]
 #: the repair's path-derived name and clock
 NAME = 'fixed/page'
@@ -159,6 +167,7 @@ def _body_lines(body: str, text: list[str]) -> list[str]:
         'trailing-blanks': [first, second, '', ''],
         'more-indented': [first, f'  {second}', third],
         'ws-only-over-indented': [first, '  ', second],
+        'trailing-ws-only-over-indented': [first, second, '  '],
     }
     return shapes[body]
 
@@ -267,6 +276,22 @@ def oracle_scalar(body: str, key: str) -> Optional[str]:
         if key_node.value == key and isinstance(value_node, yaml.ScalarNode):
             return value_node.value
     return None
+
+
+def oracle_scalars(body: str) -> dict[str, Optional[str]]:
+    """Return every top-level key's scalar text (first occurrence), ``None`` for a collection.
+
+    Composed, not constructed, so a value carrying a local tag no
+    constructor knows still compares as its text.
+    """
+    node = yaml.compose(body, Loader=_LOADER)
+    result: dict[str, Optional[str]] = {}
+    for key_node, value_node in node.value:
+        if key_node.value in result:
+            continue
+        scalar = isinstance(value_node, yaml.ScalarNode)
+        result[key_node.value] = value_node.value if scalar else None
+    return result
 
 
 def oracle_mapping(body: str) -> dict[str, Any]:

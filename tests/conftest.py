@@ -9,9 +9,11 @@ import sys
 from collections.abc import Iterator
 
 import pytest
+import yaml
 
 import wiki
 from wiki.constants import OFFLINE_MODE
+from wiki.core import format
 
 # the CLI suite drives the installed wiki console script as a subprocess,
 # which coverage's in-process tracer cannot see; under --cov, point both the
@@ -44,6 +46,34 @@ def _isolate_trust_store(
     """
     home = tmp_path_factory.mktemp('wiki_config')
     monkeypatch.setenv('WIKI_CONFIG_DIR', str(home))
+
+
+@pytest.fixture(params=['c', 'pure'])
+def _loader(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[str]:
+    """Run the test under the C loader and again under the pure-Python loader.
+
+    The C loader is a build-time option of the PyYAML wheel, so the reader
+    falls back to the pure loader where it is missing; the ``pure`` axis
+    removes it the same way. The compose memo is keyed by block text alone,
+    so it is cleared on both axes -- before, so this loader recomposes, and
+    after, so the next test's loader does.
+    """
+    format._compose_cached.cache_clear()
+    if request.param == 'pure':
+        monkeypatch.delattr(yaml, 'CSafeLoader', raising=False)
+    yield request.param
+    format._compose_cached.cache_clear()
+
+
+@pytest.fixture
+def _pure_loader(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Run the test under the pure-Python loader alone (see ``_loader``)."""
+    format._compose_cached.cache_clear()
+    monkeypatch.delattr(yaml, 'CSafeLoader', raising=False)
+    yield
+    format._compose_cached.cache_clear()
 
 
 @pytest.fixture(scope='session', autouse=True)
