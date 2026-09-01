@@ -23,6 +23,7 @@ from wiki.cli.utils import (
     parse_settings,
     parse_slice,
     refuse_nested_init,
+    require_utf8,
     resolve_wiki,
     resolve_wiki_root,
     trust_root,
@@ -282,6 +283,8 @@ def init(app: typer.Typer) -> typer.Typer:
         else:
             path = pathlib.Path.cwd() / DEFAULT_WIKI_NAME
             name = name or pathlib.Path.cwd().name
+        # a name byte no UTF-8 decodes is refused before any work starts
+        require_utf8('NAME', name)
         # parse the optional settings JSON
         settings = parse_settings(settings)
         # refuse to scaffold inside an enclosing wiki
@@ -294,7 +297,6 @@ def init(app: typer.Typer) -> typer.Typer:
         # initialize wiki, streaming its notices to stderr
         wiki = Wiki(path)
         wiki.on_notice = _echo_notice
-        _require_utf8('NAME', name)
         wiki.init(name, settings=settings)
         # materialize Obsidian config (downloads community plugins)
         warnings = wiki.update_config()
@@ -788,7 +790,7 @@ def new(
         # the inputs land in frontmatter and prose, which every writer encodes
         # as UTF-8: an argv byte no UTF-8 decodes is refused at the boundary
         for option, value in (('NAME', name), ('--desc', desc), ('--content', content)):
-            _require_utf8(option, value)
+            require_utf8(option, value)
         wiki = resolve(path)
         # the scoped sweep narrates like update: condensed count lines
         notices: list[Event] = []
@@ -1183,19 +1185,6 @@ def _condense(notices: list[Event], check: bool) -> list[str]:
         line = one if n == 1 else many.format(n=n)
         lines.append((position, line))
     return [line for _position, line in sorted(lines)]
-
-
-def _require_utf8(option: str, value: str) -> None:
-    """Refuse an argument holding a byte no UTF-8 decodes.
-
-    The shell hands such a byte over as a lone surrogate, which every
-    writer's UTF-8 encoding rejects; refusing at the boundary keeps it
-    out of a frontmatter block that would then fail every later run.
-    """
-    try:
-        value.encode('utf-8')
-    except UnicodeEncodeError:
-        raise typer.BadParameter(f'{option} is not valid UTF-8') from None
 
 
 def _echo_notice(event: Event, **kwargs: Any) -> Event:

@@ -995,7 +995,7 @@ def test_lint_stamp_parse_follows_configured_format(
         'stray-line',
     ],
 )
-@pytest.mark.usefixtures('_loader')
+@pytest.mark.usefixtures('_vary_loader')
 def test_lint_flags_frontmatter_a_strict_yaml_reader_rejects(
     tmp_path: pathlib.Path,
     field: str,
@@ -1126,7 +1126,7 @@ def test_lint_flags_an_unaddressable_block_as_malformed(tmp_path: pathlib.Path) 
     assert all('keys are not column-0 key: value lines' in issue for issue in issues)
 
 
-@pytest.mark.usefixtures('_loader')
+@pytest.mark.usefixtures('_vary_loader')
 def test_lint_reports_deep_nesting_instead_of_crashing(tmp_path: pathlib.Path) -> None:
     """Nesting past the composer's bound is an issue, never an abort or a crash.
 
@@ -1155,7 +1155,7 @@ def test_lint_reports_deep_nesting_instead_of_crashing(tmp_path: pathlib.Path) -
     assert Wiki(tmp_path).update() == []
 
 
-@pytest.mark.usefixtures('_loader')
+@pytest.mark.usefixtures('_vary_loader')
 @pytest.mark.parametrize(
     argnames='escape',
     argvalues=['\\U00110000', '\\uD800'],

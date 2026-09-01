@@ -11,7 +11,7 @@ from wiki.core import format
 
 
 @pytest.fixture(params=['c', 'pure'])
-def _loader(
+def _vary_loader(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 ) -> Iterator[None]:
     """Run the test under the C loader and again under the pure-Python loader.

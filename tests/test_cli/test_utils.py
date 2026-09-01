@@ -411,8 +411,9 @@ def test_trust_root_concurrent_writes_keep_every_entry(
     barrier = threading.Barrier(workers)
 
     def trust(root: pathlib.Path) -> None:
-        # release all workers into the critical section together
-        barrier.wait()
+        # release all workers into the critical section together; the bound
+        # turns a worker dying before the barrier into a failure, not a hang
+        barrier.wait(timeout=60)
         trust_root(root)
 
     with cf.ThreadPoolExecutor(max_workers=workers) as pool:

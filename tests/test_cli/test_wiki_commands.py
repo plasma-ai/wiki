@@ -1362,25 +1362,26 @@ def test_lint_details_issues_and_count_condenses(
     root = tmp_path / 'wiki'
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     _write(root / 'core' / '_index.md', _index('Core', 'Core concepts.', 'Text.'))
-    pages = [f'page{i}' for i in range(8)]
+    page_count = 8  # one dangling row per deleted page
+    pages = [f'page{i}' for i in range(page_count)]
     for page in pages:
         _write(root / 'core' / f'{page}.md', _page(page, f'The {page} page.', 'Body.'))
     assert _wiki(root, 'update', '--path', str(root)).returncode == 0
-    # delete every page: eight dangling rows plus the pending prune diff
+    # delete every page: one dangling row each plus the pending prune diff
     for page in pages:
         (root / 'core' / f'{page}.md').unlink()
 
     # the default (detailed) view lists every broken link plus the summary
     default = _wiki(root, 'lint', '--path', str(root))
     assert default.returncode == 1
-    assert default.stdout.count('Broken link [[') == 8
-    assert '9 issues' in default.stdout
+    assert default.stdout.count('Broken link [[') == page_count
+    assert f'{page_count + 1} issues' in default.stdout
 
     # --count condenses to the summary; the notes leave stderr too
     count = _wiki(root, 'lint', '--path', str(root), '--count')
     assert count.returncode == 1
     assert count.stdout.count('Broken link [[') == 0
-    assert '9 issues' in count.stdout
+    assert f'{page_count + 1} issues' in count.stdout
     assert 'Needs desc' not in count.stderr
 
     # --full is the explicit default; combining the modes is a usage error

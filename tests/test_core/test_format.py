@@ -61,6 +61,7 @@ __all__ = [
     'test_frontmatter_issues_locate_an_unclosed_flow_collection',
     'test_frontmatter_issues_name_a_nested_duplicate_key',
     'test_unaddressable_blocks_are_refused_not_crashed',
+    'test_strip_blank_lines_keeps_content_blanks_at_any_depth',
     'test_fallback_repair_sees_a_quoted_key',
     'test_colon_error_names_the_line_the_scalar_started_on',
     'test_compose_walks_an_alias_graph_once',
@@ -70,9 +71,9 @@ __all__ = [
     'test_repair_fills_an_empty_block_over_column_zero_comments',
     'test_field_ranges_end_at_a_typo_line_under_the_line_grammar',
     'test_build_frontmatter_escapes_a_multi_line_desc',
+    'test_build_frontmatter_pins_a_padded_first_line',
     'test_field_ranges_end_at_a_foreign_key_under_the_line_grammar',
     'test_repair_breaks_frontmatter_names_a_breaking_repair',
-    'test_strip_blank_lines_keeps_content_blanks_at_any_depth',
     'test_reader_applies_the_documented_policy',
     'test_reader_reads_a_carriage_return_escape_as_a_line_break',
     'test_fallback_reader_agrees_with_the_repair',
@@ -215,9 +216,9 @@ def test_repair_keeps_authored_values_on_hostile_shapes(
     A quoted key is the field it names, a quoted scalar continued at
     column 0 is one value, an alias keeps its anchor above it, and a
     column-0 comment inside a field stays where it is: the repair rewrites
-    only the name, converges, and leaves a block every strict reader
-    accepts -- with the same authored mapping, minus the valueless title
-    or category it drops.
+    only the name, converges, and leaves a block the installed strict
+    reader accepts -- with the same authored mapping, minus the valueless
+    title or category it drops.
     """
     text = block(key, lines)
     repaired = format.repair_frontmatter(
@@ -737,7 +738,7 @@ def test_fallback_repair_sees_a_quoted_key(line: str) -> None:
         'typo-line-after-comment',
     ],
 )
-@pytest.mark.usefixtures('_loader')
+@pytest.mark.usefixtures('_vary_loader')
 def test_colon_error_names_the_line_the_scalar_started_on(body: str, line: int) -> None:
     """A colon the parser trips over is reported where the plain scalar holding it began.
 
@@ -800,7 +801,7 @@ _DEEP = format._MAX_NESTING * 2
         'brackets-in-continuation',
     ],
 )
-@pytest.mark.usefixtures('_loader')
+@pytest.mark.usefixtures('_vary_loader')
 def test_compose_refuses_nesting_past_the_bound(body: str, line: Optional[int]) -> None:
     """Collections nested past the bound are a strict-reader finding, not a recursion the composer runs.
 
@@ -817,7 +818,7 @@ def test_compose_refuses_nesting_past_the_bound(body: str, line: Optional[int]) 
         assert issues == [(line, reason, 'parse')]
 
 
-@pytest.mark.usefixtures('_loader')
+@pytest.mark.usefixtures('_vary_loader')
 def test_tab_on_the_last_block_line_is_named() -> None:
     """A tab on a whitespace-only line closing the block is reported on that line, not the one above."""
     issues = format.frontmatter_issues(f'---\nname: {NAME}\ndesc: D.\n\t\n---')
@@ -886,6 +887,20 @@ def test_build_frontmatter_escapes_a_multi_line_desc(desc: str) -> None:
     assert oracle_valid(yaml_body(text)), text
     assert oracle_scalar(yaml_body(text), 'desc') == desc
     assert 'desc: "' in text
+
+
+@pytest.mark.parametrize(
+    argnames='desc',
+    argvalues=['  padded\nplain', '\ttabbed\nplain', '\n  padded\nplain'],
+    ids=['space-first', 'tab-first', 'blank-then-padded'],
+)
+@pytest.mark.usefixtures('_vary_loader')
+def test_build_frontmatter_pins_a_padded_first_line(desc: str) -> None:
+    """A multi-line desc whose first content line opens with whitespace still writes a block a strict reader accepts."""
+    text = format.build_frontmatter(name='x', created=NOW, updated=NOW, desc=desc)
+    assert oracle_valid(yaml_body(text)), text
+    assert normalize(oracle_scalar(yaml_body(text), 'desc')) == desc
+    assert format.read_frontmatter_desc(text) == desc
 
 
 def test_field_ranges_end_at_a_foreign_key_under_the_line_grammar() -> None:
@@ -1060,7 +1075,7 @@ def test_repair_breaks_frontmatter_names_a_breaking_repair(
         'invalid-neighbor',
     ],
 )
-@pytest.mark.usefixtures('_loader')
+@pytest.mark.usefixtures('_vary_loader')
 def test_reader_applies_the_documented_policy(
     field: str,
     key: str,
@@ -1278,7 +1293,7 @@ def test_fallback_reader_agrees_with_the_repair(
         'block-lines',
     ],
 )
-@pytest.mark.usefixtures('_loader')
+@pytest.mark.usefixtures('_vary_loader')
 def test_title_reader_applies_the_null_idiom(field: str, expected: str) -> None:
     """Only the plain lowercase ``null`` unsets a title; every other spelling is text.
 

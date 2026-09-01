@@ -2056,7 +2056,7 @@ def test_update_stamps_keep_their_anchors(
         encoding='utf-8',
     )
 
-    # one update converges on a block every strict reader still accepts
+    # one update converges on a block the installed strict reader still accepts
     wiki.update()
     frontmatter = page.read_text(encoding='utf-8').split('---\n')[1]
     assert re.search(expected, frontmatter, re.M), frontmatter

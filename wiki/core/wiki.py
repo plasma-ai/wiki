@@ -2985,7 +2985,7 @@ class Wiki:
         and files the enclosing repo's gitignore fences
         (:meth:`_is_gitignored`).
         """
-        if path.name == WIKI_INDEX or path.name.startswith('.') or path.is_symlink():
+        if (path.name == WIKI_INDEX) or path.name.startswith('.') or path.is_symlink():
             return True
         if self._excluded_by(path) is not None:
             return True

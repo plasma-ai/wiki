@@ -413,10 +413,15 @@ def build_frontmatter(
 
     """
     # a multi-line desc writes as a literal block, unless a line holds a
-    # character no block may carry, which only a double-quoted scalar escapes
+    # character no block may carry, which only a double-quoted scalar escapes;
+    # a first content line opening with whitespace skews (a space) or refuses
+    # (a tab, to libyaml) the auto-detected indentation, so the two-space
+    # indent is pinned explicitly
     if ('\n' in desc) and not _ESCAPED_CHARS.search(desc.replace('\n', '')):
         body = '\n'.join(f'  {line}'.rstrip() for line in desc.split('\n'))
-        desc_lines = ['desc: |', *body.split('\n')]
+        content = next((line for line in desc.split('\n') if line.strip()), '')
+        indicator = '|2' if content[:1] in (' ', '\t') else '|'
+        desc_lines = [f'desc: {indicator}', *body.split('\n')]
     else:
         desc_lines = [f'desc: {quote(desc)}']
     lines = [
@@ -753,7 +758,7 @@ def replace_heading(content: str, name: str) -> str:
     return content
 
 
-def is_nonmapping_frontmatter(frontmatter: str) -> bool:
+def is_nonmapping_frontmatter(frontmatter: str, /) -> bool:
     """Return whether the block is valid YAML that is not a ``key: value`` mapping.
 
     A bare sentence or a list between the fences has no fields to read
@@ -764,7 +769,7 @@ def is_nonmapping_frontmatter(frontmatter: str) -> bool:
     return kind == 'nonmapping'
 
 
-def is_unaddressable_frontmatter(frontmatter: str) -> bool:
+def is_unaddressable_frontmatter(frontmatter: str, /) -> bool:
     """Return whether the block is a mapping whose keys no byte-level writer can reach.
 
     A flow mapping (``{name: x}``) or a mapping indented as a whole has
@@ -778,7 +783,7 @@ def is_unaddressable_frontmatter(frontmatter: str) -> bool:
 
 
 def repair_breaks_frontmatter(before: str, after: str) -> bool:
-    """Return whether a repair turned a block every strict reader accepts into one they reject, or wrote its fields where none finds them.
+    """Return whether a repair turned a block the installed strict reader accepts into one it rejects, or wrote its fields where it finds none.
 
     The byte-level repair edits by line grammar; a block it cannot
     address safely is kept as written by the planners rather than
@@ -838,8 +843,10 @@ def frontmatter_issues(frontmatter: str) -> list[_Issue]:
     Each is ``(line, reason, cause)``: the 1-based file line, the
     parser's problem or the wiki's description, and the cause -- a
     ``'parse'`` error, a ``'nonmapping'`` body, a ``'nonscalar_key'``,
-    or a ``'duplicate_key'``. An empty list is a block every strict
-    reader accepts as a mapping with unique scalar keys.
+    or a ``'duplicate_key'``. An empty list is a block the installed
+    PyYAML build accepts as a mapping with unique scalar keys -- the
+    verdict is that build's, so a pure-Python wheel rejects a tab
+    inside a plain value the C loader accepts.
     """
     _, _, issues, _, _ = _compose_fields(frontmatter)
     return list(issues)
@@ -858,7 +865,7 @@ def field_text(frontmatter: str, key: str) -> Optional[str]:
     return frontmatter[start:end]
 
 
-def is_collection_field(frontmatter: str, key: str) -> bool:
+def is_collection_field(frontmatter: str, /, key: str) -> bool:
     """Return whether ``key`` carries a sequence or mapping in a block the parser accepts."""
     fields = _scalar_fields(frontmatter)
     return bool(fields) and (key in fields) and (fields[key] is None)
@@ -1019,7 +1026,7 @@ def read_frontmatter_category(frontmatter: str) -> str:
     return join_lines(value or '')
 
 
-def field_value(line: str, key: Optional[str] = None) -> str:
+def field_value(line: str, *, key: Optional[str] = None) -> str:
     """Extract one frontmatter line's value for per-line matching.
 
     Strips a ``key:`` prefix and surrounding YAML quotes
@@ -1640,7 +1647,9 @@ def _line_value(line: str) -> str:
         return ''
     text = re.sub(r'^(?:-[ \t]+)+', '', text)
     return re.sub(
-        r'^(?:"[^"]*"|\'[^\']*\'|[^\s#"\'][^:]*)[ \t]*:(?:[ \t]+|$)', '', text
+        pattern=r'^(?:"[^"]*"|\'[^\']*\'|[^\s#"\'][^:]*)[ \t]*:(?:[ \t]+|$)',
+        repl='',
+        string=text,
     )
 
 
@@ -2262,7 +2271,7 @@ def _closing_quote(value: str, start: int = 0) -> int:
             index += 2
             continue
         if char == quote_char:
-            if (quote_char == "'") and value[index + 1 : index + 2] == "'":
+            if (quote_char == "'") and (value[index + 1 : index + 2] == "'"):
                 index += 2
                 continue
             return index
@@ -2306,7 +2315,7 @@ def _quote_close(value: str) -> int:
             index += 2
             continue
         if char == quote_char:
-            if (quote_char == "'") and value[index + 1 : index + 2] == "'":
+            if (quote_char == "'") and (value[index + 1 : index + 2] == "'"):
                 index += 2
                 continue
             if re.fullmatch(r'[ \t]*(?:#.*)?', value[index + 1 :]):
@@ -2365,7 +2374,8 @@ def _is_plain_safe(value: str) -> bool:
         return False
     # a value a strict reader resolves as a typed scalar and then cannot
     # construct -- a date no calendar has (2024-02-30), a numeral of
-    # underscores alone (0x_) -- is one it rejects
+    # underscores alone (0x_) -- is one it rejects; yaml loads here, after
+    # the cheap tests above, so the common plain value stays import-free
     import yaml
 
     resolved = yaml.resolver.Resolver().resolve(yaml.ScalarNode, value, (True, False))

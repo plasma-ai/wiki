@@ -263,6 +263,10 @@ may include breaking changes, each listed under a Breaking heading.
 - `wiki update` keeps a whitespace-only line indented past a block scalar's body
   and the trailing blank of a keep-chomping block inside a column-0 sequence
   item, both of which are content.
+- A multi-line desc whose first content line opens with a space or a tab writes
+  its block scalar with an explicit indentation indicator (`desc: |2`), so a
+  strict reader takes the leading whitespace as content instead of mis-detecting
+  the block's indentation and rejecting it.
 
 ## [1.3.1] - 2026-08-25
 
