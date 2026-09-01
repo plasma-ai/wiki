@@ -30,6 +30,7 @@ from wiki.constants import (
 from wiki.typing import Link, PathLike
 
 from . import _obsidian, _search, format
+from ._obsidian import _OBSIDIAN_PLUGIN_DIGESTS, _OBSIDIAN_PLUGINS
 from .event import Event
 
 __all__ = ['Wiki']
@@ -45,6 +46,26 @@ _DESC_NOTE_CHARS = 500
 # closing words shared by the index merge driver's repair hints, which it
 # plants above the first conflict marker (_assets/git/merge_index.sh)
 _MERGE_HINT_TAIL = 'delete this line when resolving -->'
+
+# the malformed-frontmatter reasons the planners keep a page as written for:
+# a body that is valid YAML but not a key: value mapping (a bare sentence, a
+# list), a mapping whose keys open off column 0 (a flow or indented mapping),
+# and a block whose byte-level repair would leave it invalid
+_NONMAPPING = 'not a key: value mapping'
+_UNADDRESSABLE = 'keys are not column-0 key: value lines'
+_UNREPAIRABLE = 'its repair would break the YAML'
+
+# the remedy lint appends to an invalid_yaml finding, per
+# cause (see format.frontmatter_issues)
+_YAML_ADVICE = {
+    'parse': 'a strict reader drops the whole block, so quote or rewrite the value',
+    'nonmapping': 'no strict reader finds key: value pairs in it',
+    'nonscalar_key': 'the wiki reads the block by its line grammar alone',
+    'duplicate_key': (
+        'a strict reader rejects the block or keeps the last copy, the wiki'
+        ' reads the first'
+    ),
+}
 
 # str.is* predicates a policy may require (applied to the name minus allow chars)
 _NAMING_PREDICATES = {
@@ -766,7 +787,7 @@ class Wiki:
                 target = obsidian_dir / 'plugins' / source.name
                 shutil.copytree(source, target, dirs_exist_ok=True)
                 # download pinned plugin code from its release, unless offline
-                release_url = _obsidian._OBSIDIAN_PLUGINS.get(source.name)
+                release_url = _OBSIDIAN_PLUGINS.get(source.name)
                 if release_url and offline:
                     warnings.append(
                         f'Skipped {source.name} download (OFFLINE_MODE).'
@@ -776,7 +797,7 @@ class Wiki:
                     # fetch all assets to temp paths first, then move them into
                     # place only after every fetch succeeds, so a mid-fetch
                     # failure never leaves a skewed main.js/manifest.json pair
-                    digests = _obsidian._OBSIDIAN_PLUGIN_DIGESTS[source.name]
+                    digests = _OBSIDIAN_PLUGIN_DIGESTS[source.name]
                     staged = []
                     try:
                         for asset in digests:
@@ -1003,9 +1024,8 @@ class Wiki:
             self._dispatch_notice(event)
         # dry run: report which files would change without writing (a CRLF
         # file reads equal but would be rewritten, so probe its bytes too);
-        # _current_text answers a file vanishing under the probe (a
-        # concurrent delete) as absent, reporting it as pending rather
-        # than raising
+        # _current_text answers a file vanishing under the probe (a concurrent
+        # delete) as absent, reporting it as pending rather than raising
         if check:
             return [
                 str(path.relative_to(self._root))
@@ -1098,10 +1118,9 @@ class Wiki:
             violation = self._name_violation(part)
             if violation is not None:
                 raise ValueError(f'Invalid folder name {part!r}: {violation}')
-        # a symlinked segment is excluded from every walk and may point
-        # outside the root, so writing through one would land an invisible
-        # index -- or an out-of-root file the lexical containment above
-        # cannot see
+        # a symlinked segment is excluded from every walk and may point outside
+        # the root, so writing through one would land an invisible index -- or
+        # an out-of-root file the lexical containment above cannot see
         current = self._root
         for part in folder.relative_to(self._root).parts:
             current = current / part
@@ -1169,10 +1188,9 @@ class Wiki:
             raise ValueError(
                 'Merge conflict markers in the authored input; resolve them and rerun.'
             )
-        # pre-flight the wiring sweep's refusals against the parent scope
-        # (a discarded dry plan): a refusal after the write would strand a
-        # half-adoption whose retry dead-ends on the never-overwrites
-        # guard above
+        # pre-flight the wiring sweep's refusals against the parent scope (a
+        # discarded dry plan): a refusal after the write would strand a
+        # half-adoption whose retry dead-ends on the never-overwrites guard
         parent = folder.parent
         scope = None
         if parent != self._root:
@@ -1436,9 +1454,15 @@ class Wiki:
                                 path=str(index_relpath),
                             )
                         )
+                    else:
+                        name = self._path_to_name(folder)
+                        result.extend(
+                            self._lint_unrepairable(index_path, frontmatter, name)
+                        )
                     result.extend(self._lint_desc(index_path, frontmatter))
                     result.extend(self._lint_title(index_path, frontmatter))
                     result.extend(self._lint_timestamps(index_path, frontmatter))
+                    result.extend(self._lint_frontmatter_yaml(index_path, frontmatter))
                     # the root display name has no enclosing dir to validate it
                     if folder == self._root:
                         root_name = format.read_frontmatter_name(frontmatter)
@@ -1646,6 +1670,9 @@ class Wiki:
                             path=str(page_relpath),
                         )
                     )
+                elif frontmatter:
+                    name = self._path_to_name(page)
+                    result.extend(self._lint_unrepairable(page, frontmatter, name))
                 elif not frontmatter:
                     result.append(
                         Issue(
@@ -1659,6 +1686,7 @@ class Wiki:
                     result.extend(self._lint_desc(page, frontmatter))
                     result.extend(self._lint_title(page, frontmatter))
                     result.extend(self._lint_timestamps(page, frontmatter))
+                    result.extend(self._lint_frontmatter_yaml(page, frontmatter))
                 # hand-wrap artifacts in the content and raw desc lines
                 # are hard issues
                 result.extend(
@@ -1841,6 +1869,9 @@ class Wiki:
                 if not frontmatter:
                     continue
                 field_lines = format.field_line_ranges(frontmatter, lines, fields)
+                keys = format.line_keys(frontmatter)
+                # the line grammar strips only where the composed block names no keys
+                default = '' if keys else None
                 for lineno, line in enumerate(lines, 1):
                     if lineno not in field_lines:
                         continue
@@ -1848,8 +1879,11 @@ class Wiki:
                     # continuation indentation) would defeat value anchors and
                     # match key names; surrounding YAML quotes are stripped so
                     # anchors see the value the wiki writes via format.quote,
-                    # and the reported line text stays raw
-                    value = format.field_value(line)
+                    # and the reported line text stays raw; a composed block
+                    # names its key lines, so its other lines are value text
+                    # whatever their shape
+                    key = keys.get(lineno, default)
+                    value = format.field_value(line, key=key)
                     if regex.search(value):
                         result.append((relpath, lineno, line))
             else:
@@ -2951,7 +2985,7 @@ class Wiki:
         and files the enclosing repo's gitignore fences
         (:meth:`_is_gitignored`).
         """
-        if path.name == WIKI_INDEX or path.name.startswith('.') or path.is_symlink():
+        if (path.name == WIKI_INDEX) or path.name.startswith('.') or path.is_symlink():
             return True
         if self._excluded_by(path) is not None:
             return True
@@ -3585,6 +3619,7 @@ class Wiki:
         self: Wiki,
         folder: pathlib.Path,
         overlay: Optional[dict[pathlib.Path, str]] = None,
+        now: Optional[str] = None,
     ) -> dict[str, str]:
         """Read categorized labels from child frontmatter.
 
@@ -3592,11 +3627,13 @@ class Wiki:
         ``_index.md`` and each child ``.md`` page, producing a
         ``[category]`` prefix for the parent's link label. Cross-file
         reads route through :meth:`_current_text`, so staged plan
-        content (``overlay``) is honored during a plan.
+        content (``overlay``) is honored during a plan, and read the
+        block as the write leaves it (``now``, see :func:`_as_written`).
 
         Args:
             folder: Parent folder to scan.
             overlay: Staged ``{path: content}`` from earlier passes.
+            now: The run's timestamp, to read each block re-stamped.
 
         Returns:
             Dict mapping wikilink targets to categorized labels.
@@ -3619,6 +3656,8 @@ class Wiki:
             text = self._current_text(child_index, overlay)
             if text is not None:
                 frontmatter, _ = format.parse_page(text)
+                if now is not None:
+                    frontmatter = _as_written(frontmatter, now)
                 category = format.read_frontmatter_category(frontmatter)
             else:
                 category = ''
@@ -3634,6 +3673,8 @@ class Wiki:
             text = self._current_text(page, overlay)
             if text is not None:
                 frontmatter, _ = format.parse_page(text)
+                if now is not None:
+                    frontmatter = _as_written(frontmatter, now)
                 category = format.read_frontmatter_category(frontmatter)
             else:
                 category = ''
@@ -3661,7 +3702,7 @@ class Wiki:
     ]:
         """Compute corrected content for every file under ``folder``.
 
-        Runs the two update passes (indexes bottom-up, then pages) into
+        Runs the two update passes (pages, then indexes bottom-up) into
         an in-memory overlay without writing to disk. The overlay maps
         each file path to its corrected content
         carrying the file's *original* ``updated:`` value, so a caller
@@ -3689,6 +3730,23 @@ class Wiki:
         overlay: dict[pathlib.Path, str] = {}
         baseline: dict[pathlib.Path, Optional[str]] = {}
         notices = []
+        # plan pages first: a page reads no other file, and an index reads
+        # its pages' repaired frontmatter from the overlay, so a row never
+        # lags a repair by one run
+        for folder in folders:
+            for page in self._find_pages(folder):
+                if page.suffix == '.md':
+                    # a page vanishing between the walk and the read (a
+                    # concurrent delete) plans as absent from the walk; the
+                    # next run prunes its stale index row
+                    try:
+                        text = self._read_text(page)
+                    except FileNotFoundError:
+                        continue
+                    baseline[page] = text
+                    content, page_notices = self._plan_page(page, now, text=text)
+                    overlay[page] = content
+                    notices.extend(page_notices)
         # plan indexes (bottom-up so child categories
         # exist before parents read them)
         for folder in reversed(folders):
@@ -3706,21 +3764,6 @@ class Wiki:
             )
             overlay[index_path] = content
             notices.extend(index_notices)
-        # plan pages
-        for folder in folders:
-            for page in self._find_pages(folder):
-                if page.suffix == '.md':
-                    # a page vanishing between the walk and the read (a
-                    # concurrent delete) plans as absent from the walk; the
-                    # next run prunes its stale index row
-                    try:
-                        text = self._read_text(page)
-                    except FileNotFoundError:
-                        continue
-                    baseline[page] = text
-                    content, page_notices = self._plan_page(page, now, text=text)
-                    overlay[page] = content
-                    notices.extend(page_notices)
         # return overlay, baseline, and notices
         return overlay, baseline, notices
 
@@ -3770,19 +3813,24 @@ class Wiki:
             # -- on a verbatim passthrough of an unclosed-frontmatter page the
             # re.sub would rewrite an authored body line the parse left as body
             if (current is None) or (content != current):
-                content = re.sub(
-                    pattern=r'^updated:.*$',
-                    # a callable repl, so a backslash in a user timestamp.format
-                    # is emitted verbatim, not parsed as a group reference
-                    repl=lambda _: f'updated: {now}',
-                    string=content,
-                    count=1,
-                    flags=re.MULTILINE,
-                )
+                # the stamp lives in the frontmatter block alone, so a body
+                # line spelled like one is never touched, and a passthrough
+                # page (no closed block) is not stamped at all
+                block, _ = format.extract_frontmatter(content.split('\n'))
+                if block:
+                    # the re-stamp may drop the alias that pinned the field
+                    # order, or close the quote or bracket that kept a blank
+                    # line as content: order the block and strip the stray
+                    # now, as the next run's repair would, so the write
+                    # converges in one run
+                    stamped = format.restamp_updated(block, now)
+                    stamped = format.strip_blank_lines(
+                        format.order_frontmatter(stamped)
+                    )
+                    content = stamped + content[len(block) :]
             # a folder vanishing between the plan and the write (a concurrent
-            # delete) leaves the write nowhere to land: drop the file -- the
-            # next run converges -- while a failure with the folder still
-            # present propagates
+            # delete) leaves the write nowhere to land, so drop the file and let
+            # the next run converge; a failure with the folder present propagates
             try:
                 wiki.util.fs.write_atomic(path, content)
             except FileNotFoundError:
@@ -3870,11 +3918,28 @@ class Wiki:
                 text,
                 delimiter=self.index_delimiter,
             )
-            if frontmatter:
+            if frontmatter and format.is_nonmapping_frontmatter(frontmatter):
+                # a body that is valid YAML but not a key: value mapping has no
+                # fields to repair: keep the index as-is and report it rather
+                # than append fields under the text
+                relpath = path.relative_to(self._root)
+                event = FrontmatterMalformedEvent(path=str(relpath), reason=_NONMAPPING)
+                return text, [event]
+            elif frontmatter and format.is_unaddressable_frontmatter(frontmatter):
+                # a mapping with no column-0 key lines (a flow mapping, an
+                # indented one) has nothing the byte-level repair can edit
+                relpath = path.relative_to(self._root)
+                event = FrontmatterMalformedEvent(
+                    path=str(relpath),
+                    reason=_UNADDRESSABLE,
+                )
+                return text, [event]
+            elif frontmatter:
                 # refresh the name from the folder path, fill the missing
                 # or blank desc/created/updated keys, drop an unset title
-                # or category, and enforce the canonical field order
-                frontmatter = format.repair_frontmatter(
+                # or category, and enforce the canonical field order; a
+                # repair that would leave a valid block invalid is refused
+                repaired = format.repair_frontmatter(
                     frontmatter,
                     name=name,
                     now=now,
@@ -3882,6 +3947,15 @@ class Wiki:
                     category=True,
                     order=True,
                 )
+                restamped = format.restamp_updated(repaired, now)
+                if format.repair_breaks_frontmatter(frontmatter, restamped):
+                    relpath = path.relative_to(self._root)
+                    event = FrontmatterMalformedEvent(
+                        path=str(relpath),
+                        reason=_UNREPAIRABLE,
+                    )
+                    return text, [event]
+                frontmatter = repaired
             else:
                 # an existing index with no (closed) frontmatter is an emptied or
                 # truncated file: rebuilding it fresh would permanently discard its
@@ -3899,9 +3973,14 @@ class Wiki:
         # enrich frontmatter (hook for subclass tag enrichment)
         frontmatter = self._enrich_frontmatter(path, frontmatter)
         # required-titles mode: seed the null placeholder lint holds open
-        # until a title is authored
+        # until a title is authored; the seed lands under the first name:
+        # line, and the write orders the block, so the plan orders it too --
+        # or a duplicated name: would part the two on every run
         if self._titles_required:
             frontmatter = format.seed_frontmatter_title(frontmatter)
+            frontmatter = format.strip_blank_lines(
+                format.order_frontmatter(frontmatter)
+            )
         # build expected links from filesystem
         expected = self._build_expected_links(folder)
         # drop links for filesystem entries whose stem/name fails the naming
@@ -3919,7 +3998,7 @@ class Wiki:
         invalid_targets = {target for target, _, _ in invalid}
         expected = [(t, label) for t, label in expected if t not in invalid_targets]
         # enrich new entries from child frontmatter
-        labels = self._read_child_labels(folder, overlay)
+        labels = self._read_child_labels(folder, overlay, now)
         # merge and sort
         links, broken, new = self._merge_links(
             existing=existing,
@@ -3983,7 +4062,9 @@ class Wiki:
                 propagated.append((target, label, link_desc))
                 continue
             child_frontmatter, _ = format.parse_page(child_text)
-            child_desc = format.read_frontmatter_desc(child_frontmatter)
+            child_desc = format.read_frontmatter_desc(
+                _as_written(child_frontmatter, now)
+            )
             if child_desc and (child_desc != '...'):
                 # child desc is source of truth; rstrip each line first
                 # (format.parse_index never preserves trailing spaces, so an
@@ -4023,8 +4104,9 @@ class Wiki:
             else:
                 propagated.append((target, label, link_desc))
         links = propagated
-        # resolve the H1: an authored title wins over the path-derived name
-        title = format.read_frontmatter_title(frontmatter)
+        # resolve the H1: an authored title wins over the path-derived name,
+        # read from the block as the write leaves it
+        title = format.read_frontmatter_title(_as_written(frontmatter, now))
         # render the corrected index
         content = format.render_index(
             heading=title or name,
@@ -4081,14 +4163,28 @@ class Wiki:
         if not frontmatter and (first_line.strip() == '---'):
             relpath = path.relative_to(self._root)
             return text, [FrontmatterMalformedEvent(path=str(relpath))]
+        # a body that is valid YAML but not a key: value mapping (a bare
+        # sentence, a list) has no fields to repair: keep the file as-is and
+        # report it rather than append fields under the text
+        if frontmatter and format.is_nonmapping_frontmatter(frontmatter):
+            relpath = path.relative_to(self._root)
+            event = FrontmatterMalformedEvent(path=str(relpath), reason=_NONMAPPING)
+            return text, [event]
+        # a mapping with no column-0 key lines (a flow mapping, an indented
+        # one) has nothing the byte-level repair can edit: keep it as-is too
+        if frontmatter and format.is_unaddressable_frontmatter(frontmatter):
+            relpath = path.relative_to(self._root)
+            event = FrontmatterMalformedEvent(path=str(relpath), reason=_UNADDRESSABLE)
+            return text, [event]
         # update or create frontmatter
         notices: list[Event] = []
         if frontmatter:
             # refresh the name from the file path, fill the missing or
             # blank desc/created/updated keys, drop an unset title or
-            # category, and enforce the canonical field order
+            # category, and enforce the canonical field order; a repair
+            # that would leave a valid block invalid is refused
             page_name = self._path_to_name(path)
-            frontmatter = format.repair_frontmatter(
+            repaired = format.repair_frontmatter(
                 frontmatter,
                 name=page_name,
                 now=now,
@@ -4096,6 +4192,15 @@ class Wiki:
                 category=True,
                 order=True,
             )
+            restamped = format.restamp_updated(repaired, now)
+            if format.repair_breaks_frontmatter(frontmatter, restamped):
+                relpath = path.relative_to(self._root)
+                event = FrontmatterMalformedEvent(
+                    path=str(relpath),
+                    reason=_UNREPAIRABLE,
+                )
+                return text, [event]
+            frontmatter = repaired
         else:
             # use the path-joined name (not the bare stem), so a fresh page
             # converges in one pass instead of two
@@ -4124,11 +4229,17 @@ class Wiki:
             relpath = path.relative_to(self._root)
             notices.append(PageAdoptEvent(path=str(relpath), title=adopted_title))
         # required-titles mode: seed the null placeholder lint holds open
-        # until a title is authored
+        # until a title is authored; the seed lands under the first name:
+        # line, and the write orders the block, so the plan orders it too --
+        # or a duplicated name: would part the two on every run
         if self._titles_required:
             frontmatter = format.seed_frontmatter_title(frontmatter)
-        # rewrite the H1: an authored title wins over the path-joined name
-        title = format.read_frontmatter_title(frontmatter)
+            frontmatter = format.strip_blank_lines(
+                format.order_frontmatter(frontmatter)
+            )
+        # rewrite the H1: an authored title wins over the path-joined name,
+        # read from the block as the write leaves it
+        title = format.read_frontmatter_title(_as_written(frontmatter, now))
         content = format.replace_heading(content, title or page_name)
         # render the corrected page
         result = format.render_page(frontmatter, content)
@@ -4303,9 +4414,8 @@ class Wiki:
             else:
                 child_path = self._root / target
                 is_markdown = False
-            # a link resolving outside this folder (or to a missing file) is a
-            # dangling row (pending prune): annotate it, never recurse into
-            # another subtree
+            # a link resolving outside this folder (or to a missing file) is a dangling
+            # row (pending prune): annotate it, never recurse into another subtree
             broken = unicodedata.normalize('NFC', target) not in expected_targets
             # apply markdown filter (pages only)
             if not is_folder and (markdown is not None) and (markdown != is_markdown):
@@ -4495,9 +4605,17 @@ class Wiki:
         if desc == '...':
             self.on_desc_missing(path=str(relpath))
         elif desc and not desc.strip().endswith('.'):
+            # a plain value with ' #' in its lines lost its tail to a YAML
+            # comment, the likely cause of the missing period
+            hint = ''
+            if format.comment_cuts_desc(frontmatter):
+                hint = (
+                    " (the text after ' #' is a YAML comment; quote the value"
+                    ' if it was meant as text)'
+                )
             result.append(
                 Issue(
-                    f'{relpath}: Missing period in desc',
+                    f'{relpath}: Missing period in desc{hint}',
                     kind='missing_period',
                     path=str(relpath),
                 )
@@ -4564,6 +4682,16 @@ class Wiki:
         policy = self._timestamp_policy
         for field in ('created', 'updated'):
             value = format.read_frontmatter_field(frontmatter, field)
+            # a sequence or mapping under the key is a value no format parses,
+            # spelled by its lines below the key or by the key line's own text
+            if format.is_collection_field(frontmatter, field):
+                text = format.field_text(frontmatter, field)
+                # a key line the line grammar cannot place (an indented
+                # mapping) is the unaddressable check's finding, not this one
+                if text is None:
+                    continue
+                key_line, _, body = text.partition('\n')
+                value = body.strip() or key_line.split(':', 1)[1].strip()
             if not value:
                 continue
             try:
@@ -4582,6 +4710,93 @@ class Wiki:
                         value=value,
                     )
                 )
+        return result
+
+    def _lint_unrepairable(
+        self: Wiki,
+        path: pathlib.Path,
+        frontmatter: str,
+        name: str,
+    ) -> list[Issue]:
+        """Check the block is one the planners repair rather than keep as written.
+
+        A mapping with no column-0 key lines, and a block whose repair
+        (the re-stamp included) would leave a strict reader rejecting
+        it, are left untouched by update with a notice on every run (see
+        ``_plan_page``); lint surfaces the same refusal as a hard issue,
+        with the same reason, so the page does not stay stale in silence.
+        """
+        # initialize issues
+        result = []
+        # alias relative path
+        relpath = path.relative_to(self._root)
+        # the same refusals the planners apply, judged on the same block
+        if format.is_unaddressable_frontmatter(frontmatter):
+            reason = _UNADDRESSABLE
+        else:
+            now = self._utc_now()
+            repaired = format.repair_frontmatter(
+                frontmatter,
+                name=name,
+                now=now,
+                title=True,
+                category=True,
+                order=True,
+            )
+            restamped = format.restamp_updated(repaired, now)
+            if not format.repair_breaks_frontmatter(frontmatter, restamped):
+                return result
+            reason = _UNREPAIRABLE
+        result.append(
+            Issue(
+                f'{relpath}: Malformed frontmatter ({reason})',
+                kind='malformed_frontmatter',
+                path=str(relpath),
+            )
+        )
+        return result
+
+    def _lint_frontmatter_yaml(
+        self: Wiki,
+        path: pathlib.Path,
+        frontmatter: str,
+    ) -> list[Issue]:
+        """Check the frontmatter body is a mapping a strict YAML reader accepts.
+
+        The wiki's own reader is lenient -- an unquoted ``': '`` inside a
+        one-line value still reads as the authored text through the line
+        grammar -- but a strict reader (Obsidian's, any YAML library)
+        refuses the whole block and loses every field with it, so a body
+        the parser rejects is a hard issue naming the line. A duplicate
+        top-level key (a strict reader refuses it or keeps the last copy
+        where the wiki reads the first), a key that is not a scalar, and
+        a body that is not a mapping are reported the same way. The
+        fences stay outside the parse -- they are the wiki's grammar, and
+        document markers to YAML -- and update never rewrites an authored
+        value, so the fix is the author's: quote the value, drop the
+        duplicate, or write ``key: value`` pairs.
+        """
+        # initialize issues
+        result = []
+        # alias relative path
+        relpath = path.relative_to(self._root)
+        # an empty or unclosed block has nothing to parse (reported elsewhere)
+        if not frontmatter:
+            return result
+        # the reader's own parse supplies the findings, so lint and update
+        # judge one composition of the block
+        for line, reason, cause in format.frontmatter_issues(frontmatter):
+            advice = _YAML_ADVICE[cause]
+            result.append(
+                Issue(
+                    f'{relpath}: Invalid YAML frontmatter (line {line}): {reason};'
+                    f' {advice}',
+                    kind='invalid_yaml',
+                    path=str(relpath),
+                    line=line,
+                    reason=reason,
+                )
+            )
         return result
 
     def _lint_link_desc(
@@ -5043,14 +5258,15 @@ class ReadSkipEvent(Event):
 
 
 class FrontmatterMalformedEvent(Event):
-    """Emitted when a page's frontmatter never closes."""
+    """Emitted when a page's frontmatter never closes or is not a mapping."""
 
     path: str
+    reason: str = 'no closing ---'
 
     @property
     def description(self: FrontmatterMalformedEvent) -> str:
         """Return the malformed-frontmatter notice line."""
-        return f'Malformed frontmatter (no closing ---) in {self.path}'
+        return f'Malformed frontmatter ({self.reason}) in {self.path}'
 
 
 class IndexTruncatedEvent(Event):
@@ -5197,20 +5413,33 @@ _NOTICE_HOOKS = {
 # ------ helper functions
 
 
+def _as_written(frontmatter: str, now: str) -> str:
+    """Return the block as a write leaves it -- re-stamped -- when a strict reader accepts that, else as written.
+
+    The ``updated:`` re-stamp can turn a block the parser rejects into one
+    it accepts (a quote it closes, a bracket it drops), so a value read
+    before the re-stamp lags the write by a run; a block the re-stamp would
+    leave rejected reads as written, since the write leaves it so too.
+    """
+    stamped = format.restamp_updated(frontmatter, now)
+    return frontmatter if format.frontmatter_issues(stamped) else stamped
+
+
 def _conflict_marker_lines(text: str) -> list[int]:
     """Return 1-based line numbers of git merge conflict markers.
 
     Scans the RAW text, deliberately bypassing the code masking every
     other rule uses: a real merge conflict can land entirely inside a
     fenced block, where a masked scan goes blind, and git's marker shape
-    -- a line starting with exactly seven ``<``/``>`` then a space or end
+    -- a line starting with seven or more ``<``/``>`` (the
+    ``conflict-marker-size`` attribute lengthens them) then a space or end
     of line -- is never legitimate rendered content. The rare page that
     must show marker lines (e.g. a git tutorial) wraps them in a
     ``no-lint`` region instead.
     """
     result = []
     for lineno, line in enumerate(text.split('\n'), 1):
-        if re.match(r'^(<{7}|>{7})( |$)', line):
+        if re.match(r'^(<{7,}|>{7,})( |$)', line):
             result.append(lineno)
     return result
 

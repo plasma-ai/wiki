@@ -23,6 +23,7 @@ from wiki.cli.utils import (
     parse_settings,
     parse_slice,
     refuse_nested_init,
+    require_utf8,
     resolve_wiki,
     resolve_wiki_root,
     trust_root,
@@ -130,10 +131,10 @@ _UPDATE_CATEGORIES = [
     ),
     (
         FrontmatterMalformedEvent,
-        '1 page with malformed frontmatter (no closing ---)',
-        '{n} pages with malformed frontmatter (no closing ---)',
-        '1 page with malformed frontmatter (no closing ---)',
-        '{n} pages with malformed frontmatter (no closing ---)',
+        '1 file with malformed frontmatter',
+        '{n} files with malformed frontmatter',
+        '1 file with malformed frontmatter',
+        '{n} files with malformed frontmatter',
     ),
     (
         IndexTruncatedEvent,
@@ -282,6 +283,8 @@ def init(app: typer.Typer) -> typer.Typer:
         else:
             path = pathlib.Path.cwd() / DEFAULT_WIKI_NAME
             name = name or pathlib.Path.cwd().name
+        # a name byte no UTF-8 decodes is refused before any work starts
+        require_utf8('NAME', name)
         # parse the optional settings JSON
         settings = parse_settings(settings)
         # refuse to scaffold inside an enclosing wiki
@@ -619,7 +622,7 @@ def match(
         # which the command wrapper renders and exits 2 on
         wiki = resolve(path)
         matches = wiki.match(
-            pattern,
+            pattern=pattern,
             name=name,
             field=field,
             ignore_case=ignore_case,
@@ -784,6 +787,10 @@ def new(
         folder), so pending maintenance in that scope -- adoptions,
         prunes -- lands in the same run.
         """
+        # the inputs land in frontmatter and prose, which every writer encodes
+        # as UTF-8: an argv byte no UTF-8 decodes is refused at the boundary
+        for option, value in (('NAME', name), ('--desc', desc), ('--content', content)):
+            require_utf8(option, value)
         wiki = resolve(path)
         # the scoped sweep narrates like update: condensed count lines
         notices: list[Event] = []

@@ -122,8 +122,21 @@ rather than authoring or auditing page by page yourself:
 - **Frontmatter order is tool-enforced.** `wiki update` keeps every block in
   canonical order — `name`, `title`, `desc`, `category`, `tags`, `sources`,
   `created`, `updated` — moving each field (with its block-scalar body) verbatim
-  into its slot. Custom keys are allowed: they keep their relative order below
-  the known fields, above the timestamps.
+  into its slot. Custom keys are allowed: one named like `com.example` (word
+  characters, dots, dashes) keeps its relative order below the known fields,
+  above the timestamps; a key spelled any other way (one with spaces) stays with
+  the field above it.
+- **Frontmatter reads as YAML.** Field values are read the way a strict YAML
+  reader reads them — a value continued on indented lines folds into one, a
+  quoted value decodes, a space followed by `#` starts a comment, and
+  `null # comment` unsets like `null`. `wiki lint` reports a block a strict
+  reader rejects (an unquoted `: ` inside a value, a duplicate key, a body that
+  is not `key: value` pairs) as an `invalid_yaml` issue; `wiki update` still
+  repairs such a block through its line grammar, except a body that is not
+  `key: value` pairs, a mapping whose keys are not column-0 `key:` lines, or a
+  block whose repair would leave a strict reader worse off (an accepted block
+  rejected, or authored lines folded into a quoted value), which it leaves
+  untouched.
 - **Wikilinks stay inside the wiki.** A wikilink (`[[...]]`) must target another
   page in the same wiki. Files outside the wiki (source files, configs, another
   wiki's pages) can be referenced by name or in backticks, but never linked.
@@ -145,10 +158,15 @@ rather than authoring or auditing page by page yourself:
   link description) that lacks a trailing period; the seeded `...` placeholder
   only draws a soft note. Author the desc in the child page's frontmatter —
   `wiki update` copies it onto the parent index's link line. A desc containing
-  `: ` must be YAML-quoted; surrounding quotes are stripped when the value is
-  read. Never hand-wrap a desc mid-word or onto a list-marker start — let the
-  block scalar carry the breaks; lint fails the wrap artifacts (a hyphen dangle,
-  a phantom list item).
+  `: ` or ` #` must be YAML-quoted — a strict reader rejects the unquoted colon
+  on a one-line desc or on a continuation line of one (`wiki lint` reports it as
+  `invalid_yaml`; under a bare `desc:` key an indented `Key: value` line nests a
+  mapping instead, which no strict reader shows as text and lint does not
+  report) and reads ` #` as a comment (lint names it as the likely cause only
+  when the cut-short desc loses its period); surrounding quotes are stripped
+  when the value is read. Never hand-wrap a desc mid-word or onto a list-marker
+  start — let the block scalar carry the breaks; lint fails the wrap artifacts
+  (a hyphen dangle, a phantom list item).
 - **Fill in auto-created index descs.** `wiki update` creates a missing
   `_index.md` for every new directory with a `desc: ...` placeholder and
   announces the batch in its condensed summary
@@ -189,10 +207,13 @@ rather than authoring or auditing page by page yourself:
   prettier) exclude the wiki root instead (`wiki/` in `.prettierignore`).
 - **The git merge driver resolves only the generated region.** For `_index.md`
   files it normalizes the regenerated `name`/`updated` keys to *ours* (plus
-  `created` on an add/add merge, where both sides seeded it), resolves the link
-  block to the union of both sides' rows — ours' layout wins and rows present
-  only in theirs ride over with their desc continuations, appended above the
-  closing `***`, so a merge never drops one side's additions — and three-way
+  `created` whenever the base index carries no real stamp — an add/add merge, a
+  hand-written or imported index), resolves the link block to the union of both
+  sides' rows — ours' layout wins, rows present only in theirs ride over with
+  their desc continuations, appended above the closing `***`, and a row both
+  sides carry keeps ours' text unless only theirs changed it against the base,
+  so a merge never drops one side's additions, and an edit only one side made is
+  never lost (when both sides edit the same row, ours wins) — and three-way
   merges everything authored — the remaining frontmatter fields
   (`title`/`desc`/`created`/`category`/`tags`/`sources`) and the user content
   below `***` — which can still conflict for hand-resolution. A side missing its

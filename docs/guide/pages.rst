@@ -35,17 +35,22 @@ A page looks like this:
 
    Authored body content.
 
-Frontmatter is YAML between two ``---`` lines, and the opening ``---`` must be
-the first line of the file. Fresh frontmatter — written when a bare page is
-adopted or when ``wiki init`` or ``wiki update`` creates an index — contains
-exactly ``name``, a ``desc: ...`` placeholder, ``tags: []``, ``sources: []``,
-``created``, and ``updated``, plus a ``title:`` seeded from the authored H1
-when an adopted bare page carries one (and, when ``titles.required`` is set,
-a ``title: null`` placeholder); no ``category:`` line is ever seeded. An
-index created with ``wiki new`` has the same shape but carries its authored
-``--desc`` in place of the placeholder (``wiki new`` refuses a blank or
-``...`` desc). Everything below the frontmatter is the page body, and apart
-from the H1 heading it is entirely yours.
+Frontmatter is a YAML mapping between two ``---`` lines, and the opening
+``---`` must be the first line of the file. Field values are read the way a
+strict YAML reader (Obsidian's included) reads them — a value continued on
+indented lines folds into one, a quoted value decodes, a space followed by
+``#`` starts a comment — and ``wiki lint`` reports a block a strict reader
+rejects (an unquoted ``': '`` inside a value, a duplicate key, a body that is
+not ``key: value`` pairs) as an ``invalid_yaml`` issue. Fresh frontmatter —
+written when a bare page is adopted or when ``wiki init`` or ``wiki update``
+creates an index — contains exactly ``name``, a ``desc: ...`` placeholder,
+``tags: []``, ``sources: []``, ``created``, and ``updated``, plus a ``title:``
+seeded from the authored H1 when an adopted bare page carries one (and, when
+``titles.required`` is set, a ``title: null`` placeholder); no ``category:``
+line is ever seeded. An index created with ``wiki new`` has the same shape but
+carries its authored ``--desc`` in place of the placeholder (``wiki new``
+refuses a blank or ``...`` desc). Everything below the frontmatter is the page
+body, and apart from the H1 heading it is entirely yours.
 
 ``wiki update`` keeps fields in canonical order: ``name``, ``title``,
 ``desc``, ``category``, ``tags``, ``sources``, then any custom authored keys
@@ -85,7 +90,9 @@ Frontmatter fields
      - Free-form list, seeded ``[]``.
    * - custom keys
      - author
-     - Preserved verbatim between the known fields and the timestamps.
+     - Preserved verbatim between the known fields and the timestamps, when
+       named with word characters, dots, and dashes (``com.example``); a key
+       spelled any other way (one with spaces) stays with the field above it.
    * - ``created``
      - tool
      - Stamped when the file gains frontmatter, kept from then on.
@@ -153,9 +160,15 @@ propagates nothing at all: its row keeps what it has until the page's own
 
 Authored descriptions must end in a period (``wiki lint`` fails one that does
 not); the seeded ``...`` placeholder only draws a soft note until it is filled
-in. A description containing a colon followed by a space must be YAML-quoted.
-Do not hand-wrap a description mid-word — let the YAML block scalar carry any
-line breaks.
+in. A description containing a colon followed by a space, or a space followed
+by ``#`` (the start of a YAML comment), must be YAML-quoted: ``wiki lint``
+reports the unquoted colon on a one-line description, or on a continuation
+line of one, as invalid YAML — though under a bare ``desc:`` key an indented
+``Key: value`` line nests a mapping instead, which no strict reader shows as
+text and lint does not report — and names the comment as the likely cause
+when a description it truncated fails the period check. Do not
+hand-wrap a description mid-word — let the YAML block scalar carry any line
+breaks.
 
 Categories
 ~~~~~~~~~~
@@ -264,7 +277,13 @@ Frontmatter that opens with ``---`` but never closes is malformed: the file
 parses as having no frontmatter, and ``wiki update`` leaves it untouched with
 a warning rather than risk consuming the body. Likewise an index emptied of
 its frontmatter is preserved as-is — restore it from git, or delete it and let
-``wiki update`` rebuild it.
+``wiki update`` rebuild it. A block that is valid YAML but not ``key: value``
+pairs — a bare sentence, a list — has no fields: ``wiki update`` leaves it
+untouched with a notice and ``wiki lint`` reports it. A mapping whose keys are
+not column-0 ``key:`` lines (a flow mapping, an indented one) is read but left
+untouched the same way, as is a block whose repair would leave a strict reader
+worse off — an accepted block rejected, or authored lines folded into a quoted
+value the repair closes.
 
 Region directives
 -----------------

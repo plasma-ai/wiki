@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import bisect
+import functools
 import re
 import textwrap
 from typing import Optional
@@ -34,6 +36,96 @@ _FRONTMATTER_TAIL = (
     'created',
     'updated',
 )
+
+# per-process memo of composed frontmatter blocks: an update reads each block
+# a few times and a lint a few more, and a run over a few thousand pages fits
+# one cache at about a kilobyte per block; a block past the byte bound is
+# composed on every read rather than pinned for the run
+_SCALAR_CACHE_SIZE = 4_096
+_SCALAR_CACHE_BYTES = 65_536
+
+# the deepest collection nesting handed to the composer, which recurses per
+# level: the pure loader raises RecursionError a few hundred levels down, and
+# the C loader, its recursion unchecked, overruns the C stack on older
+# interpreters -- far past any authored block either way
+_MAX_NESTING = 100
+
+# characters that open a YAML indicator (flow collection, comment, node
+# property, block scalar, quote, directive, reserved) when they lead a value
+_INDICATOR_CHARS = ',[]{}#&*!|>\'"%@`'
+
+# the scalar fields of one block: key -> (value text, style, resolved tag) for
+# a scalar value -- the style None for plain, else the quote or block
+# indicator -- and None for a sequence or mapping value
+_Fields = dict[str, Optional[tuple[str, Optional[str], str]]]
+
+# a strict-reader finding on a block: (1-based file line, reason, cause), the
+# cause one of 'parse', 'nonmapping', 'nonscalar_key', 'duplicate_key'
+_Issue = tuple[int, str, str]
+
+# the top-level keys of a block in document order, each with the 0-based line
+# of its key line within the block (a non-scalar key spells as '')
+_Keys = tuple[tuple[str, int], ...]
+
+# characters no YAML stream may carry plain or single-quoted -- the C0 and C1
+# controls (a tab excepted), the DEL, the line separators LS and PS, and the
+# noncharacters U+FFFE and U+FFFF -- plus lone surrogates; a value holding one
+# is written double-quoted with escapes
+_ESCAPED_CHARS = re.compile(
+    r'[\x00-\x08\x0a-\x1f\x7f-\x9f\u2028\u2029\ud800-\udfff\ufffe\uffff]'
+)
+
+# the single-character escapes of a double-quoted scalar, by the letter after
+# the backslash (YAML 1.1 section 5.7)
+_ESCAPES = {
+    '0': '\x00',
+    'a': '\x07',
+    'b': '\x08',
+    't': '\t',
+    '\t': '\t',
+    'n': '\n',
+    'v': '\x0b',
+    'f': '\x0c',
+    'r': '\r',
+    'e': '\x1b',
+    ' ': ' ',
+    '"': '"',
+    '/': '/',
+    '\\': '\\',
+    'N': '\x85',
+    '_': '\xa0',
+    'L': '\u2028',
+    'P': '\u2029',
+}
+
+# the characters the writer spells with a one-letter escape rather than \uXXXX
+_SHORT_ESCAPES = {
+    char: letter
+    for letter, char in _ESCAPES.items()
+    if letter not in ('\t', ' ', '"', '/', '\\')
+}
+
+# lone surrogates: text no UTF-8 writer can emit
+_SURROGATES = re.compile(r'[\ud800-\udfff]')
+
+# the line grammar's key line, the fallback for a block the parser rejects: a
+# bare or dotted key at column 0, quoted or not, behind optional node
+# properties, its colon followed by a space or the line end; _key_of names the
+# key whichever group matched
+_KEY_LINE = (
+    r'^(?:[&!]\S*[ \t]+)*(?:"([\w.-]+)"|\'([\w.-]+)\'|([\w.-]+))[ \t]*:(?:[ \t]|$)'
+)
+
+#: the lines continuing a frontmatter field below its key line under the line
+#: grammar: indented lines, blank lines, column-0 sequence items (``- item``,
+#: the value of a bare key alone -- see :func:`_field_span`), and column-0
+#: comments; mirrored, minus the trailing blanks, the items, and the comments
+#: (authored lines it merges as such), by the merge driver's awk extent
+FIELD_EXTENT = r'(?:[ \t]+.*\n|[ \t]*\n|-(?:[ \t].*)?\n|#.*\n)*'
+
+# the extent below a key line carrying a value: a column-0 item after a value
+# is text to YAML, outside the field
+_VALUED_EXTENT = r'(?:[ \t]+.*\n|[ \t]*\n|#.*\n)*'
 
 
 def extract_frontmatter(lines: list[str]) -> tuple[str, int]:
@@ -320,9 +412,16 @@ def build_frontmatter(
         Complete frontmatter block including ``---`` delimiters.
 
     """
-    if '\n' in desc:
+    # a multi-line desc writes as a literal block, unless a line holds a
+    # character no block may carry, which only a double-quoted scalar escapes;
+    # a first content line opening with whitespace skews (a space) or refuses
+    # (a tab, to libyaml) the auto-detected indentation, so the two-space
+    # indent is pinned explicitly
+    if ('\n' in desc) and not _ESCAPED_CHARS.search(desc.replace('\n', '')):
         body = '\n'.join(f'  {line}'.rstrip() for line in desc.split('\n'))
-        desc_lines = ['desc: |', *body.split('\n')]
+        content = next((line for line in desc.split('\n') if line.strip()), '')
+        indicator = '|2' if content[:1] in (' ', '\t') else '|'
+        desc_lines = [f'desc: {indicator}', *body.split('\n')]
     else:
         desc_lines = [f'desc: {quote(desc)}']
     lines = [
@@ -331,8 +430,8 @@ def build_frontmatter(
         *desc_lines,
         'tags: []',
         'sources: []',
-        f'created: {created}',
-        f'updated: {updated}',
+        f'created: {quote(created)}',
+        f'updated: {quote(updated)}',
         '---',
     ]
     return '\n'.join(lines)
@@ -345,33 +444,89 @@ def strip_blank_lines(frontmatter: str) -> str:
     are repaired away -- but inside a multi-line value it is content: a
     paragraph break in a block (``|``/``>``), plain, or quoted scalar
     that spans lines. A blank run is kept whenever the value continues
-    after it (the next line stays indented), and kept at the end of a
-    keep-chomping block (``|+``/``>+``), whose trailing newlines are
-    themselves the value. Blanks re-emit verbatim, so an over-indented
-    whitespace-only body line keeps its content spaces.
+    after it (the next line stays indented, or a quoted scalar is still
+    open), and kept at the end of a keep-chomping block (``|+``/``>+``),
+    whose trailing newlines are themselves the value -- at any nesting
+    depth, so a ``- k: |+`` item keeps its blank too. Blanks re-emit
+    verbatim, so an over-indented whitespace-only body line keeps its
+    content spaces.
     """
     result = []
     pending = []  # blank lines held verbatim until the next line reveals them
+    in_block = False
+    header_indent = 0
+    block_indent = None  # the body indentation of the open block scalar, once set
     keep_chomp = False
+    quote_char = None  # the quote opening a scalar not yet closed
+    flow_depth = 0  # the brackets of a flow collection not yet closed
+    flow_quote = None  # the quote a line of the open flow collection left open
     for line in frontmatter.split('\n'):
+        # every line of an open quoted scalar or flow collection is content,
+        # blank or not, up to the line that closes it -- or, for a bracket
+        # never closed, up to the key line the line grammar reads next
+        if quote_char is not None:
+            result.extend(pending)
+            pending = []
+            result.append(line)
+            if _quote_close(quote_char + line) != -1:
+                quote_char = None
+            continue
+        if flow_depth and (_key_of(line) is None):
+            if not line.strip():
+                pending.append(line)
+                continue
+            result.extend(pending)
+            pending = []
+            result.append(line)
+            flow_depth, flow_quote = _flow_depth(line, flow_depth, flow_quote)
+            continue
+        flow_depth, flow_quote = 0, None
+        # inside a block scalar a whitespace-only line indented past the body
+        # is content (its extra spaces), so it re-emits with the blanks it ends
         if not line.strip():
-            pending.append(line)
+            if in_block and (block_indent is not None) and (len(line) > block_indent):
+                result.extend(pending)
+                pending = []
+                result.append(line)
+            else:
+                pending.append(line)
             continue
         # an indented line continues a multi-line value, so a preceding blank
         # run is a paragraph break; a keep-chomping block keeps its trailing
         # blanks even where the next line dedents to the following field
-        if line[:1] in (' ', '\t') or keep_chomp:
+        indent = len(line) - len(line.lstrip())
+        if indent or keep_chomp:
             result.extend(pending)
         pending = []
         result.append(line)
-        if line[:1] not in (' ', '\t'):
-            # only a field opening a keep-chomping block owns the blank run
-            # that trails it; every other dedent ends the value
-            key, sep, value = line.partition(':')
-            value = value.strip()
-            field = bool(sep) and not key.strip().startswith('#')
-            block = field and value[:1] in ('|', '>')
-            keep_chomp = block and '+' in value.partition('#')[0]
+        # a line inside the open block's body sets the body indentation
+        if in_block and (indent > header_indent):
+            if block_indent is None:
+                block_indent = indent
+            continue
+        # every other line ends the block; a field or sequence item at any
+        # depth may open a block scalar (only a keep-chomping one owns the
+        # blank run that trails it), a quoted scalar spanning lines, or a
+        # flow collection spanning lines -- a continuation line of a plain
+        # value opens nothing
+        in_block = False
+        keep_chomp = False
+        value = re.sub(r'^(?:[&!]\S*\s+)+', '', _line_value(line))
+        opens = (indent == 0) or (value != line.strip())
+        header = re.fullmatch(r'([|>][-+]?([0-9])?[-+]?)(?:[ \t]+#.*)?', value)
+        if not opens:
+            continue
+        if header is not None:
+            in_block = True
+            header_indent = indent
+            keep_chomp = '+' in header.group(1)
+            # an explicit indentation indicator fixes the body indentation up front
+            digit = header.group(2)
+            block_indent = header_indent + int(digit) if digit else None
+        elif (value[:1] in ('"', "'")) and (_quote_close(value) == -1):
+            quote_char = value[0]
+        elif value[:1] in ('[', '{'):
+            flow_depth, flow_quote = _flow_depth(value, 0)
     # blanks past the closing delimiter sit outside the frontmatter block
     result.extend(pending)
     return '\n'.join(result)
@@ -411,145 +566,89 @@ def repair_frontmatter(
             after all other repairs.
 
     """
+    # a BOM at column 0 is no field's text -- the C loader skips it on any
+    # line, and the line tests below would read a `# comment` behind one as
+    # content -- so it goes, as a file BOM goes on adoption, rather than ride
+    # on a key line the order pass may move
+    frontmatter = re.sub(r'^\ufeff', '', frontmatter, flags=re.MULTILINE)
     # a blank line is never frontmatter structure -- drop strays before
     # any field surgery (block-scalar bodies keep theirs)
     frontmatter = strip_blank_lines(frontmatter)
-    # update name from the path-derived name (add it if the field is
-    # missing, so frontmatter with no name: does not stay un-named)
-    name_field = re.search(r'^name:(.*)$', frontmatter, re.MULTILINE)
-    if name_field:
-        # the refresh spans the field's full extent, so a multi-line value's
-        # body goes with the stale value it continues; callable repls so a
-        # backslash-digit in the name is not read as a group reference
-        fresh = f'name: {quote(name)}\n'
-        value = name_field.group(1).strip()
-        if value.startswith(('|', '>')) or not value:
-            # block scalar (or bare key, folding like >): the whole indented
-            # body goes -- a `#` line or a blank inside it is content
-            frontmatter = re.sub(
-                pattern=r'^name:.*\n(?:[ \t]+.*\n|[ \t]*\n)*',
-                repl=lambda _: fresh,
-                string=frontmatter,
-                count=1,
-                flags=re.MULTILINE,
-            )
-        else:
-            # plain value: every continuation line is value text and goes -- blank
-            # lines included, since strip_blank_lines keeps a blank whose next line
-            # stays indented and a paragraph break belongs to the stale value being
-            # replaced -- while the `# comment` lines among them re-emit under the
-            # fresh name; consuming the full extent means nothing strands as a
-            # continuation of the fresh one-liner
-            def keep_comments(match: re.Match[str]) -> str:
-                lines = match.group(1).splitlines(keepends=True)
-                comments = [line for line in lines if line.lstrip().startswith('#')]
-                return fresh + ''.join(comments)
-
-            frontmatter = re.sub(
-                pattern=r'^name:.*\n((?:[ \t]+.*\n|[ \t]*\n)*)',
-                repl=keep_comments,
-                string=frontmatter,
-                count=1,
-                flags=re.MULTILINE,
-            )
+    # refresh name: from the path-derived name (added if the field is
+    # missing, so frontmatter with no name: does not stay un-named); the
+    # whole extent goes with the stale value, so nothing strands as a
+    # continuation of the fresh one-liner -- a block scalar's indented body
+    # is content, so only a column-0 comment among its lines survives, while
+    # a plain value's continuation lines are value text, so every comment
+    # line among them re-emits under the fresh name
+    span = _field_span(frontmatter, 'name')
+    if span:
+        start, end = span
+        indicator, _, body = frontmatter[start:end].partition('\n')
+        value = _uncommented(indicator.split(':', 1)[1])
+        block = re.sub(r'^(?:[&!]\S*\s+)+', '', value).startswith(('|', '>'))
+        tail, _ = _field_comments(indicator, '')
+        fresh = f'name: {quote(name)}{tail}\n' + _comment_lines(
+            body, indented=not block
+        )
     else:
-        pos = frontmatter.rfind('---')
-        frontmatter = frontmatter[:pos] + f'name: {quote(name)}\n---'
-    # add desc field if missing (after name line); restore the placeholder on
-    # a present-but-valueless key -- a bare key, a quoted-empty value, or an
-    # empty block scalar (mirrors the title branch's valueless check below),
-    # all of which read as no description; a real block-scalar body is kept
-    desc_match = re.search(
-        pattern=r'^desc:.*\n(?:[ \t]+.*\n|[ \t]*\n)*',
-        string=frontmatter,
-        flags=re.MULTILINE,
-    )
-    if desc_match:
-        indicator, _, body = desc_match.group(0).partition('\n')
-        value = indicator.split(':', 1)[1].strip()
-        no_value = value in ('', "''", '""')
-        bare_indicator = bool(re.fullmatch(r'[|>][-+0-9]*', value))
-        if not body.strip() and (no_value or bare_indicator):
+        start = _block_end(frontmatter)
+        end = start
+        fresh = f'name: {quote(name)}\n'
+    frontmatter = frontmatter[:start] + fresh + frontmatter[end:]
+    name_end = start + len(fresh)
+    # add desc field if missing (after the name field just written -- whose
+    # span is not read back, since a refresh closing a quote left open above
+    # it can leave a strict reader no name key to find); restore the
+    # placeholder on a present-but-valueless key -- a bare key, a
+    # quoted-empty value, or an empty block scalar (mirrors the title
+    # branch's valueless check below), all of which read as no description;
+    # a real block-scalar body is kept
+    span = _field_span(frontmatter, 'desc')
+    if span:
+        start, end = span
+        indicator, _, body = frontmatter[start:end].partition('\n')
+        if _is_valueless(indicator, body, nulls=('', "''", '""')):
+            # the field's properties and comments ride along with the placeholder
+            tail, comments = _field_comments(indicator, body)
+            placeholder = f'desc: {_properties(indicator)}...{tail}\n{comments}'
+            frontmatter = frontmatter[:start] + placeholder + frontmatter[end:]
+    else:
+        frontmatter = frontmatter[:name_end] + 'desc: ...\n' + frontmatter[name_end:]
+    # add created/updated if missing; stamp a present-but-valueless key in
+    # place so a duplicate is never appended (created slots before updated)
+    frontmatter = _fill_stamp(frontmatter, 'created', now, before='updated')
+    frontmatter = _fill_stamp(frontmatter, 'updated', now, before=None)
+    # drop an unset category and title: absence is the canonical unset form,
+    # so a provably valueless field -- a blank value, the plain lowercase null
+    # spelling, or an empty block scalar -- removes its whole extent while its
+    # comments stay behind at column 0, where they are comments after every
+    # neighbor (a block-scalar desc included); a quoted or block-scalar 'null'
+    # is authored text, kept verbatim, and neither field is ever inserted;
+    # every leading valueless copy goes, since the first occurrence wins for
+    # every reader and the run stops at the first copy carrying a value
+    for key, unset in (('category', category), ('title', title)):
+        if not unset:
+            continue
+        while span := _field_span(frontmatter, key):
+            start, end = span
+            indicator, _, body = frontmatter[start:end].partition('\n')
+            if not _is_valueless(indicator, body, nulls=('', 'null')):
+                break
+            tail, comments = _field_comments(indicator, body)
+            kept = [tail.strip()] if tail else []
+            kept.extend(line.lstrip() for line in comments.split('\n') if line)
             frontmatter = (
-                frontmatter[: desc_match.start()]
-                + 'desc: ...\n'
-                + frontmatter[desc_match.end() :]
+                frontmatter[:start]
+                + ''.join(f'{line}\n' for line in kept)
+                + frontmatter[end:]
             )
-    elif not re.search(r'^desc:', frontmatter, re.MULTILINE):
-        frontmatter = re.sub(
-            pattern=r'^(name:.*\n)',
-            repl=r'\1desc: ...\n',
-            string=frontmatter,
-            count=1,
-            flags=re.MULTILINE,
-        )
-    # add created/updated if missing; stamp a present-but-blank key
-    # in place so a duplicate is never appended
-    if re.search(r'^created:[^\S\n]*$', frontmatter, re.MULTILINE):
-        frontmatter = re.sub(
-            pattern=r'^created:[^\S\n]*$',
-            # a callable repl, so a backslash in a user timestamp.format is
-            # emitted verbatim, not parsed as a group reference
-            repl=lambda _: f'created: {now}',
-            string=frontmatter,
-            count=1,
-            flags=re.MULTILINE,
-        )
-    elif not re.search(r'^created:', frontmatter, re.MULTILINE):
-        match = re.search(r'^updated:', frontmatter, re.MULTILINE)
-        pos = match.start() if match else frontmatter.rfind('---')
-        frontmatter = frontmatter[:pos] + f'created: {now}\n' + frontmatter[pos:]
-    if re.search(r'^updated:[^\S\n]*$', frontmatter, re.MULTILINE):
-        frontmatter = re.sub(
-            pattern=r'^updated:[^\S\n]*$',
-            repl=lambda _: f'updated: {now}',
-            string=frontmatter,
-            count=1,
-            flags=re.MULTILINE,
-        )
-    elif not re.search(r'^updated:', frontmatter, re.MULTILINE):
-        pos = frontmatter.rfind('---')
-        frontmatter = frontmatter[:pos] + f'updated: {now}\n' + frontmatter[pos:]
-    # drop an unset category: absence is the canonical unset form, so a
-    # provably valueless field -- a blank value, the plain lowercase null
-    # spelling, or an empty block scalar -- removes its whole extent
-    # (indicator line plus indented/blank body, so a block scalar goes as
-    # one unit); a quoted or block-scalar 'null' is authored text, kept
-    # verbatim, and the field is never inserted
-    if category:
-        match = re.search(
-            pattern=r'^category:.*\n(?:[ \t]+.*\n|[ \t]*\n)*',
-            string=frontmatter,
-            flags=re.MULTILINE,
-        )
-        if match:
-            indicator, _, body = match.group(0).partition('\n')
-            value = indicator.split(':', 1)[1].strip()
-            no_value = value in ('', 'null')
-            bare_indicator = bool(re.fullmatch(r'[|>][-+0-9]*', value))
-            if not body.strip() and (no_value or bare_indicator):
-                frontmatter = frontmatter[: match.start()] + frontmatter[match.end() :]
-    # drop an unset title the same way (the first occurrence wins,
-    # matching every reader); an authored title's slot under name: is
-    # the order pass's job
-    if title:
-        match = re.search(
-            pattern=r'^title:.*\n(?:[ \t]+.*\n|[ \t]*\n)*',
-            string=frontmatter,
-            flags=re.MULTILINE,
-        )
-        if match:
-            indicator, _, body = match.group(0).partition('\n')
-            value = indicator.split(':', 1)[1].strip()
-            no_value = value in ('', 'null')
-            bare_indicator = bool(re.fullmatch(r'[|>][-+0-9]*', value))
-            if not body.strip() and (no_value or bare_indicator):
-                frontmatter = frontmatter[: match.start()] + frontmatter[match.end() :]
     # enforce the canonical field order LAST: the insertions above anchor
     # on schema neighbors and authored fields start anywhere, so the full
-    # reorder must have the final word
+    # reorder must have the final word -- and a blank an open quote above it
+    # kept is a stray once the move puts the quote below it
     if order:
-        frontmatter = order_frontmatter(frontmatter)
+        frontmatter = strip_blank_lines(order_frontmatter(frontmatter))
     return frontmatter
 
 
@@ -559,25 +658,42 @@ def order_frontmatter(frontmatter: str) -> str:
     Fields land as ``name``, ``title``, ``desc``, ``category``,
     ``tags``, ``sources``, then any unrecognized authored keys in their
     original relative order, with the tool-owned ``created``/``updated``
-    tail closing the block. Each field moves as its full extent --
-    indicator line plus indented/blank body -- byte-verbatim, so a block
-    scalar never strands its continuation lines. Duplicate keys stay
-    adjacent in original order, so a first-occurrence read resolves to
-    the same value after the move. Non-field lines above the first key
-    stay above it.
+    tail closing the block. Each field moves as its full extent -- its
+    key line through the line before the next key (:func:`_field_span`)
+    -- byte-verbatim, so a block scalar, a quoted scalar continued at
+    column 0, or a flow collection spanning lines never strands its
+    continuation lines. Duplicate keys stay adjacent in original order,
+    so a first-occurrence read resolves to the same value after the
+    move. Non-field lines above the first key stay above it, and a
+    document-end ``...`` marker above the closing delimiter stays there.
+    A block carrying an alias is returned as written: an alias must
+    follow its anchor, so moving either would break the block.
     """
+    _, _, _, _, aliased = _compose_fields(frontmatter)
+    if aliased:
+        return frontmatter
     lines = frontmatter.split('\n')
+    end = _end_line(lines)
     # group the body (between the delimiters) into per-field extents: a
-    # key line opens an extent, every other line continues the open one
-    # (the field_line_ranges grammar), and lines before the first key
-    # hold as a preamble
+    # key line opens an extent, every other line continues the open one,
+    # and lines before the first key hold as a preamble
+    key_at = _key_at(frontmatter)
     extents: list[tuple[str, list[str]]] = []
     preamble = []
     current = None
-    for line in lines[1:-1]:
-        match = re.match(r'^([\w-]+):', line)
-        if match:
-            current = (match.group(1), [line])
+    for index in range(1, end):
+        line = lines[index]
+        if key_at is not None:
+            key = key_at.get(index)
+            # a key spelled outside the line grammar (one with spaces, the
+            # merge driver's repair hint) rides with the field before it
+            # rather than moving as a field of its own
+            if (key is not None) and not re.fullmatch(r'[\w.-]+', key):
+                key = None
+        else:
+            key = _key_of(line)
+        if key is not None:
+            current = (key, [line])
             extents.append(current)
         elif current is not None:
             current[1].append(line)
@@ -600,20 +716,20 @@ def order_frontmatter(frontmatter: str) -> str:
     result = [lines[0], *preamble]
     for _, extent_lines in extents:
         result.extend(extent_lines)
-    result.append(lines[-1])
+    result.extend(lines[end:])
     return '\n'.join(result)
 
 
 def seed_frontmatter_title(frontmatter: str, title: Optional[str] = None) -> str:
-    """Seed a ``title:`` line directly under ``name:`` when none exists.
+    """Seed a ``title:`` line directly under the ``name:`` field when none exists.
 
     ``title`` is the value to seed -- adopting a bare page preserves its
     authored H1 this way -- and ``None`` seeds the ``title: null``
     placeholder required-titles mode demands. Frontmatter already
-    carrying a ``title:`` line is returned unchanged: the field is
+    carrying a ``title`` field is returned unchanged: the field is
     authored, so a present line is never overwritten.
     """
-    if re.search(r'^title:', frontmatter, re.MULTILINE):
+    if _field_span(frontmatter, 'title') is not None:
         return frontmatter
     if title is None:
         value = 'null'
@@ -621,14 +737,9 @@ def seed_frontmatter_title(frontmatter: str, title: Optional[str] = None) -> str
         # quote the reserved lowercase null spelling: an authored H1
         # reading "null" must read back as text, not the placeholder
         value = "'null'" if title == 'null' else quote(title)
-    # callable repl so a backslash-digit in the title is not read as a group reference
-    return re.sub(
-        pattern=r'^(name:.*\n)',
-        repl=lambda match: f'{match.group(1)}title: {value}\n',
-        string=frontmatter,
-        count=1,
-        flags=re.MULTILINE,
-    )
+    span = _field_span(frontmatter, 'name')
+    pos = span[1] if span else _block_end(frontmatter)
+    return frontmatter[:pos] + f'title: {value}\n' + frontmatter[pos:]
 
 
 def replace_heading(content: str, name: str) -> str:
@@ -647,57 +758,201 @@ def replace_heading(content: str, name: str) -> str:
     return content
 
 
-def read_frontmatter_field(frontmatter: str, key: str) -> Optional[str]:
-    """Read a scalar frontmatter ``key``, resolving block scalars.
+def is_nonmapping_frontmatter(frontmatter: str, /) -> bool:
+    """Return whether the block is valid YAML that is not a ``key: value`` mapping.
 
-    A plain ``key: value`` returns the stripped value, with one pair of
-    matching surrounding YAML quotes stripped (a desc containing ``: ``
-    must be quoted to stay valid YAML). A block scalar (``|``/``>`` with
-    optional chomping/indentation indicators, e.g. ``|-``, ``>+``, ``|2``)
-    resolves to its body: a literal ``|`` keeps line breaks, a folded
-    ``>`` joins consecutive non-empty lines with a single space (a blank
-    line is a paragraph break). Inline text on the indicator line
-    (``key: > one liner.``) is taken as the value when no indented body
-    follows. A bare ``key:`` over an indented body is a plain multi-line
-    scalar and folds the same way ``>`` does. Returns ``None`` if the
-    field is absent; an empty block body resolves to an empty string.
+    A bare sentence or a list between the fences has no fields to read
+    or repair; the planners keep such a page as written and report it
+    rather than append fields under the text.
     """
-    # single-line value
-    match = re.search(rf'^{key}:[^\S\n]*(.+)$', frontmatter, re.MULTILINE)
-    if match:
-        value = match.group(1).strip()
-        if not value.startswith(('|', '>')):
-            return unquote(value)
+    kind, _, _, _, _ = _compose_fields(frontmatter)
+    return kind == 'nonmapping'
+
+
+def is_unaddressable_frontmatter(frontmatter: str, /) -> bool:
+    """Return whether the block is a mapping whose keys no byte-level writer can reach.
+
+    A flow mapping (``{name: x}``) or a mapping indented as a whole has
+    no column-0 ``key:`` lines for the repair to refresh, fill, or
+    reorder, so appending fields under it would break the block; the
+    planners keep such a page as written and report it, while the
+    reader still reads its fields through the parser.
+    """
+    kind, _, _, keys, _ = _compose_fields(frontmatter)
+    return (kind == 'mapping') and not keys
+
+
+def repair_breaks_frontmatter(before: str, after: str) -> bool:
+    """Return whether a repair turned a block the installed strict reader accepts into one it rejects, or wrote its fields where it finds none.
+
+    The byte-level repair edits by line grammar; a block it cannot
+    address safely is kept as written by the planners rather than
+    rewritten into a parse error -- or, when the block it leaves
+    composes, into a scalar that swallowed the ``name``, ``desc``,
+    ``created``, or ``updated`` line the repair wrote, or an authored key
+    line the line grammar read (a quote the grammar cannot see closing
+    around them). A tool-owned field whose composed extent holds a
+    key-shaped line is refused too: the rewrite of its extent would
+    delete the line a strict reader folded into the value.
+    """
+    before_kind, _, before_issues, _, _ = _compose_fields(before)
+    kind, fields, issues, _, _ = _compose_fields(after)
+    if issues and not before_issues:
+        return True
+    if kind == 'invalid':
+        return False
+    # the repair writes every one of these keys: a block that composes without
+    # one took the write inside a scalar
+    required = {'name', 'desc', *_FRONTMATTER_TAIL}
+    if before_kind == 'mapping':
+        # a key-shaped or item-shaped line folded into a quoted tool-owned
+        # value is authored structure the extent rewrite would delete; the
+        # scan spans the open quote alone -- a comment line after the closing
+        # quote is one the repair re-emits, no reason to refuse
+        for key in ('name', *_FRONTMATTER_TAIL):
+            field = _compose_fields(before)[1].get(key)
+            if (field is None) or (field[1] not in ('"', "'")):
+                continue
+            text = field_text(before, key) or ''
+            span_lines = text.split('\n')
+            value = re.sub(
+                pattern=r'^(?:[&!]\S*(?:\s+|$))+',
+                repl='',
+                string=span_lines[0].split(':', 1)[1].strip(),
+            )
+            if (value[:1] not in ('"', "'")) or (_quote_close(value) != -1):
+                continue
+            for line in span_lines[1:]:
+                keyed = re.match(r'^(?:\S.*?)?:(?:[ \t]|$)', line) is not None
+                item = re.match(r'-(?:[ \t]|$)', line) is not None
+                if keyed or item:
+                    return True
+                if _quote_close(value[0] + line.strip()) != -1:
+                    break
     else:
-        # bare key: an indented body is a plain multi-line scalar, folded
-        # per the YAML plain-scalar rule; no body reads as an absent value
-        match = re.search(
-            pattern=rf'^{key}:[^\S\n]*\n((?:[ \t]+.*\n|[ \t]*\n)*)',
-            string=frontmatter,
-            flags=re.MULTILINE,
-        )
-        if match and match.group(1).strip():
-            return fold_lines(match.group(1))
+        # every key the line grammar read must survive, bar the unset title
+        # and category the repair removes
+        grammar = {key for line in before.split('\n') if (key := _key_of(line))}
+        required |= grammar - {'title', 'category'}
+    return any(key not in fields for key in required)
+
+
+def frontmatter_issues(frontmatter: str) -> list[_Issue]:
+    """Return the findings a strict YAML reader raises on the block.
+
+    Each is ``(line, reason, cause)``: the 1-based file line, the
+    parser's problem or the wiki's description, and the cause -- a
+    ``'parse'`` error, a ``'nonmapping'`` body, a ``'nonscalar_key'``,
+    or a ``'duplicate_key'``. An empty list is a block the installed
+    PyYAML build accepts as a mapping with unique scalar keys -- the
+    verdict is that build's, so a pure-Python wheel rejects a tab
+    inside a plain value the C loader accepts.
+    """
+    _, _, issues, _, _ = _compose_fields(frontmatter)
+    return list(issues)
+
+
+def field_text(frontmatter: str, key: str) -> Optional[str]:
+    """Return the raw text of ``key``'s field -- its key line and continuation lines -- or ``None``.
+
+    The extent :func:`_field_span` bounds: the composed marks' when the
+    block composes, the line grammar's otherwise.
+    """
+    span = _field_span(frontmatter, key)
+    if span is None:
         return None
-    # block scalar: tolerate any header (chomping/indentation indicators
-    # |- |+ >- |2 ...) plus trailing inline text, then capture the indented
-    # body (blank lines inside the block are kept so a folded break survives)
-    match = re.search(
-        pattern=rf'^{key}:[^\S\n]*([|>])[-+0-9]*[^\S\n]*(.*)\n((?:[ \t]+.*\n|[ \t]*\n)*)',
-        string=frontmatter,
-        flags=re.MULTILINE,
-    )
-    if not match:
-        return None
-    indicator, inline, body = match.group(1), match.group(2), match.group(3)
-    # no indented body: the inline text on the header line is the value
-    if not body:
-        return inline.strip()
-    body = textwrap.dedent(body)
-    # folded scalar (>): join non-empty lines with a space, blank line breaks
-    if indicator == '>':
-        return fold_lines(body)
-    return body.strip()
+    start, end = span
+    return frontmatter[start:end]
+
+
+def is_collection_field(frontmatter: str, /, key: str) -> bool:
+    """Return whether ``key`` carries a sequence or mapping in a block the parser accepts."""
+    fields = _scalar_fields(frontmatter)
+    return bool(fields) and (key in fields) and (fields[key] is None)
+
+
+def comment_cuts_desc(frontmatter: str) -> bool:
+    """Return whether a ``' #'`` comment shortened a plain ``desc`` a strict reader accepts.
+
+    Only a plain scalar loses text to a comment, and only a block the
+    parser accepts reads through the parser; the field's raw extent is
+    searched for the comment start, key line and continuation lines
+    alike.
+    """
+    fields = _scalar_fields(frontmatter)
+    if not fields or (fields.get('desc') is None):
+        return False
+    _, style, _ = fields['desc']
+    if style is not None:
+        return False
+    text = field_text(frontmatter, 'desc') or ''
+    # only a comment start after value text on a value line cuts anything
+    lines = [line for line in text.split('\n') if not line.lstrip().startswith('#')]
+    return re.search(r'\S[ \t]+#', '\n'.join(lines)) is not None
+
+
+def restamp_updated(frontmatter: str, now: str) -> str:
+    """Rewrite the ``updated`` stamp to ``now``, its comments riding along.
+
+    The field's whole extent is replaced, so a stamp continued on
+    indented lines never strands under the fresh one; the key line's
+    tail comment re-attaches after the stamp, an anchor on it stays on
+    the stamp (an alias of it elsewhere keeps resolving), and the
+    comment lines under it stay. A block without the field gains it
+    before the closing delimiter.
+    """
+    span = _field_span(frontmatter, 'updated')
+    if span is None:
+        return _fill_stamp(frontmatter, 'updated', now, before=None)
+    start, end = span
+    indicator, _, body = frontmatter[start:end].partition('\n')
+    tail, comments = _field_comments(indicator, body)
+    stamp = f'updated: {_properties(indicator)}{quote(now)}{tail}\n{comments}'
+    return frontmatter[:start] + stamp + frontmatter[end:]
+
+
+def read_frontmatter_field(frontmatter: str, key: str) -> Optional[str]:
+    """Read a scalar frontmatter ``key`` as a strict YAML reader sees it.
+
+    The value is the scalar text a YAML parser resolves -- a plain scalar
+    folded across its continuation lines, a quoted scalar decoded, a
+    block scalar's body without its final line breaks (every consumer
+    wants the text, not the chomping) -- and never a coerced type: a
+    stamp stays its source text. The first occurrence of a duplicated
+    key wins. Returns ``None`` when the field is absent or a bare
+    ``key:`` has no body. A sequence or mapping value reads as its
+    source lines joined; a body that is not a mapping has no fields; a
+    block the parser rejects falls back to the line grammar
+    (:func:`_read_field_lines`), so the wiki's leniencies -- an unquoted
+    ``': '`` inside a one-line value, conflict markers -- still read
+    through it.
+    """
+    fields = _scalar_fields(frontmatter)
+    if fields is None:
+        value = _read_field_lines(frontmatter, key)
+    elif key not in fields:
+        value = None
+    elif fields[key] is None:
+        # a sequence or mapping is never resolved: its source lines, comments
+        # dropped, join into the text the search index tokenizes (a mapping
+        # the line grammar cannot place has no lines to give)
+        text = field_text(frontmatter, key)
+        value = _collection_text(text) if text is not None else None
+    else:
+        value, style, _ = fields[key]
+        # a block scalar's final breaks are chomping, not content
+        if style in ('|', '>'):
+            value = value.rstrip('\n')
+        # a bare key with no body reads as an absent value
+        elif (style is None) and (value == ''):
+            value = None
+    # a carriage return (a "\r" escape) would split the line model every
+    # consumer relies on, so it reads as the line break it is; a NUL (a "\0"
+    # escape) would turn every markdown surface it lands on binary to git, so
+    # it goes
+    if value is not None:
+        value = value.replace('\r\n', '\n').replace('\r', '\n').replace('\x00', '')
+    return value
 
 
 def read_frontmatter_name(frontmatter: str) -> Optional[str]:
@@ -733,12 +988,9 @@ def read_frontmatter_title(frontmatter: str) -> str:
     growth (authored frontmatter is user input; this is boundary
     validation).
     """
-    # the unset check reads the raw spelling: unquoting first would
-    # collapse an authored 'null' into the reset idiom; a bare 'title:'
-    # defers to the delegate, which resolves an indented body as a plain
-    # multi-line scalar and no body as an absent value
-    match = re.search(r'^title:[^\S\n]*(.*)$', frontmatter, re.MULTILINE)
-    if (match is None) or (match.group(1).strip() == 'null'):
+    # a bare 'title:' defers to the delegate, which resolves an indented
+    # body as a plain multi-line scalar and no body as an absent value
+    if _is_unset_field(frontmatter, 'title'):
         return ''
     value = read_frontmatter_field(frontmatter, 'title')
     return join_lines(value or '')
@@ -766,18 +1018,15 @@ def read_frontmatter_category(frontmatter: str) -> str:
     raw newline would break the row on every parse (authored frontmatter
     is user input; this is boundary validation).
     """
-    # the unset check reads the raw spelling: unquoting first would
-    # collapse an authored 'null' into the reset idiom; a bare
-    # 'category:' defers to the delegate, which resolves an indented
+    # a bare 'category:' defers to the delegate, which resolves an indented
     # body as a plain multi-line scalar and no body as an absent value
-    match = re.search(r'^category:[^\S\n]*(.*)$', frontmatter, re.MULTILINE)
-    if (match is None) or (match.group(1).strip() == 'null'):
+    if _is_unset_field(frontmatter, 'category'):
         return ''
     value = read_frontmatter_field(frontmatter, 'category')
     return join_lines(value or '')
 
 
-def field_value(line: str) -> str:
+def field_value(line: str, *, key: Optional[str] = None) -> str:
     """Extract one frontmatter line's value for per-line matching.
 
     Strips a ``key:`` prefix and surrounding YAML quotes
@@ -785,12 +1034,48 @@ def field_value(line: str) -> str:
     per-line field-mode extraction, kept beside the quoting rules it
     inverts. Unlike :func:`read_frontmatter_field`, which resolves the
     joined value of a whole field, this reads a single line so matches
-    keep their line numbers.
+    keep their line numbers. ``key`` is the composed key the line opens
+    (:func:`line_keys`), so a key spelled outside the line grammar (one
+    with spaces, one whose quotes escape or double a quote) strips too;
+    ``''`` says the composed block opens no key on the line (a quoted
+    scalar's continuation, whatever its shape), so nothing strips; ``None``
+    leaves the line grammar's key shape to strip.
     """
-    match = re.match(r'^([\w-]+):[^\S\n]*', line)
-    if match:
-        return unquote(line[match.end() :].strip())
-    return line.strip()
+    if key == '':
+        return line.strip()
+    if key is None:
+        opener = r'(?:"[^"]*"|\'[^\']*\'|[\w.-]+)'
+    else:
+        # the line is known to open the key: any quoted spelling at its
+        # start is that key, however the quotes decode
+        spelled = re.escape(key)
+        opener = (
+            rf'(?:"{spelled}"|\'{spelled}\'|{spelled}'
+            r'|"(?:[^"\\]|\\.)*"|\'(?:[^\']|\'\')*\')'
+        )
+    match = re.match(rf'^(?:[&!]\S*[ \t]+)*{opener}[ \t]*:(?:[^\S\n]+|$)', line)
+    if not match:
+        return line.strip()
+    # a node property is not the value, and neither is a comment after it:
+    # past the closing quote of a quoted one, from the ' #' of a plain one
+    value = re.sub(r'^(?:[&!]\S*[ \t]+)+', '', line[match.end() :].strip())
+    if value[:1] in ('"', "'"):
+        # a quote closing on a later line: the opening quote is not value
+        # text; one mid-text (an apostrophe) is content
+        close = _quote_close(value)
+        return unquote(value + value[0] if close == -1 else value[: close + 1])
+    return unquote(_uncommented(value))
+
+
+def line_keys(frontmatter: str) -> dict[int, str]:
+    """Return the composed key opening each 1-based file line of the block.
+
+    The block opens the file, so its line ``n`` is file line ``n + 1``;
+    a block the parser rejects, or one whose keys the line grammar
+    cannot place, names no key here and reads through the line grammar.
+    """
+    key_at = _key_at(frontmatter) or {}
+    return {line + 1: key for line, key in key_at.items()}
 
 
 def body_words(text: str) -> int:
@@ -814,7 +1099,9 @@ def field_line_ranges(
 
     Walks the frontmatter region of ``lines`` and collects line
     numbers for each field key line and its continuation lines
-    (multi-line block scalars).
+    (multi-line block scalars). The composed marks say which lines
+    open a field when the block composes; the line grammar does
+    otherwise.
 
     Args:
         frontmatter: Parsed frontmatter string (including delimiters).
@@ -824,25 +1111,34 @@ def field_line_ranges(
     """
     # initialize result
     result = set()
-    frontmatter_end = len(frontmatter.split('\n'))
+    end = _end_line(frontmatter.split('\n'))
+    key_at = _key_at(frontmatter)
     current_field = None
-    for lineno, line in enumerate(lines, 1):
-        if lineno >= frontmatter_end:
-            break
+    for index in range(1, end):
+        line = lines[index]
+        lineno = index + 1
         # check for field key
-        match = re.match(r'^([\w-]+):', line)
-        if match:
-            current_field = match.group(1)
+        if key_at is not None:
+            key = key_at.get(index)
+        else:
+            key = _key_of(line)
+        if key is not None:
+            current_field = key
             if current_field in fields:
                 result.add(lineno)
             continue
-        # a dedented field line whose key sits outside the [\w-]+ grammar
-        # (e.g. dotted) still ends the current field -- its line and block
-        # body must not attribute to the preceding field
-        dedented = line[:1] not in (' ', '\t')
-        if dedented and ':' in line and not line.startswith('#'):
-            current_field = None
-            continue
+        # under the line grammar a dedented field line whose key sits outside
+        # the key grammar (e.g. one with spaces) still ends the current field
+        # -- its line and block body must not attribute to the preceding
+        # field -- while a dedented sequence item (`- https://...`) or a flow
+        # continuation (`https://b]`) continues it, colon and all: only a
+        # colon followed by a space or the line end makes a key
+        if key_at is None:
+            dedented = line[:1] not in (' ', '\t')
+            item = re.match(r'-(?:[ \t]|$)', line) is not None
+            if dedented and line.strip() and not line.startswith('#') and not item:
+                current_field = None
+                continue
         # continuation line of current field
         if current_field in fields:
             result.add(lineno)
@@ -973,21 +1269,23 @@ def fold_lines(text: str) -> str:
 
 
 def quote(value: str) -> str:
-    """YAML-quote a scalar when writing it plain would break the mapping.
+    """YAML-quote a scalar when writing it plain would misread.
 
-    A value containing ``': '`` (or ending with ``:``) reads as a nested
-    mapping in YAML, one opening with a block-scalar indicator (``|``/``>``)
-    reads as a block scalar (:func:`read_frontmatter_field` diverts it there
-    and eats the indicator), and one wrapped in matching quote chars would
-    lose its quotes to :func:`unquote` on read, so each is written
-    single-quoted with embedded single quotes doubled; any other value
-    passes through unquoted. Inverse of :func:`unquote` for the values
-    the wiki writes.
+    A value a strict reader would not read back verbatim as plain text
+    (:func:`_is_plain_safe`) -- one shaped like a mapping, carrying a
+    comment start, opening with an indicator, or wrapped in quote chars
+    that :func:`unquote` would strip on read -- is written single-quoted
+    with embedded single quotes doubled; one carrying a character no
+    stream may hold (a control, a line separator) is written
+    double-quoted with those characters escaped; any other value passes
+    through unquoted. Inverse of :func:`unquote` for the values the wiki
+    writes.
     """
-    mapping_shaped = ': ' in value or value.endswith(':')
-    block_shaped = value.startswith(('|', '>'))
-    quote_wrapped = unquote(value) != value
-    if mapping_shaped or block_shaped or quote_wrapped:
+    if _ESCAPED_CHARS.search(value):
+        escaped = value.replace('\\', '\\\\').replace('"', '\\"')
+        escaped = _ESCAPED_CHARS.sub(repl=_escape, string=escaped)
+        return f'"{escaped}"'
+    if not _is_plain_safe(value):
         escaped = value.replace("'", "''")
         return f"'{escaped}'"
     return value
@@ -997,14 +1295,19 @@ def unquote(value: str) -> str:
     """Strip one pair of matching surrounding YAML quotes from a scalar.
 
     A quoted scalar (``"..."`` / ``'...'``) resolves to its body, with the
-    YAML escapes undone -- doubled single quotes in a single-quoted value,
-    backslash-escaped quotes/backslashes in a double-quoted one. An
-    unquoted value is returned unchanged.
+    YAML escapes undone -- doubled single quotes in a single-quoted value;
+    the backslash escapes for quotes, backslashes, line breaks, tabs, and
+    hex or unicode code points in a double-quoted one. An unquoted value
+    is returned unchanged.
     """
     if (len(value) >= 2) and (value[0] == value[-1]) and (value[0] in ('"', "'")):
         body = value[1:-1]
         if value[0] == '"':
-            return body.replace('\\"', '"').replace('\\\\', '\\')
+            return re.sub(
+                pattern=r'\\(?:U([0-9a-fA-F]{8})|u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|(.))',
+                repl=_unescape,
+                string=body,
+            )
         return body.replace("''", "'")
     return value
 
@@ -1175,3 +1478,933 @@ def wrapped_marker_lines(masked: str, text: str) -> list[int]:
         if marker:
             open_items.append(indent)
     return result
+
+
+# ------ helper functions
+
+
+def _uncommented(text: str, quote: Optional[str] = None) -> str:
+    """Return ``text`` without a ``# comment`` -- one leading it or following whitespace.
+
+    A ``#`` inside a quoted scalar (one opening where a value starts, closed
+    or not) is text; a quote inside a plain value (``rock 'n roll``) opens
+    nothing. ``quote`` carries a span a previous line left open -- its
+    content, ``#`` included, is text up to the closing quote.
+    """
+    index = 0
+    prev = None  # the last non-whitespace character; None where a value starts
+    if quote is not None:
+        close = _flow_close(quote + text)
+        if close == -1:
+            return text.strip()
+        index = close
+        prev = quote
+    while index < len(text):
+        char = text[index]
+        if (char in ('"', "'")) and ((prev is None) or (prev in '[{,:-?')):
+            close = _flow_close(text, index)
+            if close == -1:
+                break
+            index = close + 1
+            prev = char
+            continue
+        if (char == '#') and ((index == 0) or text[index - 1].isspace()):
+            return text[:index].strip()
+        if not char.isspace():
+            prev = char
+        index += 1
+    return text.strip()
+
+
+def _properties(indicator: str) -> str:
+    """Return the ``&anchor``/``!tag`` properties leading a key line's value, trailing space included."""
+    match = re.match(r'\s*((?:[&!]\S*\s*)+)', indicator.split(':', 1)[1])
+    if match is None:
+        return ''
+    return ' '.join(match.group(1).split()) + ' '
+
+
+def _flow_depth(
+    text: str,
+    depth: int,
+    quote: Optional[str] = None,
+    *,
+    bound: Optional[int] = None,
+) -> tuple[int, Optional[str]]:
+    """Return the flow-collection nesting depth after ``text`` and the quote it leaves open.
+
+    ``[`` and ``{`` open a level, ``]`` and ``}`` close one; a quoted
+    scalar -- one opening where a value starts on this line (the line
+    start, or after ``[``, ``{``, ``,``, ``:``, ``-``, ``?``), or
+    ``quote`` left open by the line above -- is text up to its closing
+    quote, and a ``#`` after whitespace ends the line as a comment. With
+    ``bound`` the walk stops at the first bracket nesting past it, depth
+    past the bound returned.
+    """
+    index = 0
+    prev = None  # the last non-whitespace character; None where a value starts
+    if quote is not None:
+        close = _flow_close(quote + text)
+        if close == -1:
+            return depth, quote
+        index = close
+        prev = quote
+    while index < len(text):
+        char = text[index]
+        if (char in ('"', "'")) and ((prev is None) or (prev in '[{,:-?')):
+            close = _flow_close(text, index)
+            if close == -1:
+                return depth, char
+            index = close + 1
+            prev = char
+            continue
+        if (char == '#') and ((index == 0) or text[index - 1].isspace()):
+            return depth, None
+        if char in ('[', '{'):
+            depth += 1
+            if (bound is not None) and (depth > bound):
+                return depth, None
+        elif char in (']', '}'):
+            depth = max(depth - 1, 0)
+        if not char.isspace():
+            prev = char
+        index += 1
+    return depth, None
+
+
+def _nested_too_deep(body: str) -> Optional[int]:
+    """Return the body line where collections nest past :data:`_MAX_NESTING`, or ``None``.
+
+    Flow brackets nest from a value opening with one, across the lines
+    that continue it (quoted spans and comments skipped); a run of
+    ``- ``/``? `` indicators opening a line nests within it. A block
+    scalar's body and the continuation lines of a plain or quoted value
+    are text, whatever they hold.
+    """
+    depth = 0
+    quote = None
+    body_indent = None  # the header indentation of an open block scalar
+    value_indent = None  # the indentation of a key whose value continues below
+    for lineno, line in enumerate(body.split('\n')):
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip())
+        if (body_indent is not None) and (indent > body_indent):
+            continue
+        body_indent = None
+        if (value_indent is not None) and (indent > value_indent):
+            continue
+        value_indent = None
+        # inside an open flow collection every line continues it
+        if depth:
+            depth, quote = _flow_depth(line, depth, quote, bound=_MAX_NESTING)
+            if depth > _MAX_NESTING:
+                return lineno
+            continue
+        chain = re.match(r'\s*((?:[-?]\s+)*)', line)
+        if len(chain.group(1).split()) > _MAX_NESTING:
+            return lineno
+        value = re.sub(r'^(?:[&!]\S*(?:\s+|$))+', '', _line_value(line))
+        if re.fullmatch(r'[|>][-+0-9]*(?:[ \t]+#.*)?', value):
+            body_indent = indent
+        elif value[:1] in ('[', '{'):
+            depth, quote = _flow_depth(value, 0, bound=_MAX_NESTING)
+            if depth > _MAX_NESTING:
+                return lineno
+        elif value:
+            value_indent = indent
+    return None
+
+
+def _collection_text(text: str) -> Optional[str]:
+    """Join a collection field's source lines into one text: the key line's value, then the lines under it.
+
+    Comment lines and ``' #'`` tails drop (a ``#`` inside a quoted item
+    stays, the quote carried across the lines it wraps over), as do the
+    node properties before the collection; the rest joins with single
+    spaces, so the search index tokenizes every item wherever the
+    collection's lines break.
+    """
+    key_line, _, body = text.partition('\n')
+    value = re.sub(r'^(?:[&!]\S*(?:\s+|$))+', '', key_line.split(':', 1)[1].strip())
+    kept = []
+    quote = None
+    for line in (value, *body.split('\n')):
+        if (quote is None) and line.lstrip().startswith('#'):
+            continue
+        kept.append(_uncommented(line, quote))
+        _, quote = _flow_depth(line, 0, quote)
+    return ' '.join(line for line in kept if line) or None
+
+
+def _line_value(line: str) -> str:
+    """Return the value text a frontmatter line opens: past its ``- `` markers and its ``key: ``.
+
+    A comment line opens nothing.
+    """
+    text = line.strip()
+    if text.startswith('#'):
+        return ''
+    text = re.sub(r'^(?:-[ \t]+)+', '', text)
+    return re.sub(
+        pattern=r'^(?:"[^"]*"|\'[^\']*\'|[^\s#"\'][^:]*)[ \t]*:(?:[ \t]+|$)',
+        repl='',
+        string=text,
+    )
+
+
+def _is_valueless(indicator: str, body: str, *, nulls: tuple[str, ...]) -> bool:
+    """Return whether a field's ``indicator`` line and ``body`` carry no value.
+
+    Comments are not a value: ``null # why`` resets like ``null``,
+    ``| # note`` is an empty block like ``|``, and a body of comment lines
+    is no body; neither is a node property over nothing (``&c`` alone
+    anchors a null, ``!!str`` alone tags an empty string), while a tag
+    over a spelled value types it as text (``!!str null`` is the word).
+    The field is valueless when what remains -- on the indicator line, or
+    continued in the body -- is one of the ``nulls`` spellings, or a bare
+    block header over no body at all (a block's indented body is content,
+    comment-shaped lines included; a column-0 comment ends the block).
+    """
+    properties = _properties(indicator)
+    value = _uncommented(indicator.split(':', 1)[1])
+    value = re.sub(r'^(?:[&!]\S*(?:\s+|$))+', '', value)
+    if re.fullmatch(r'[|>][-+0-9]*', value):
+        content = [line for line in body.split('\n') if not line.startswith('#')]
+        return not ''.join(content).strip()
+    if ('!' in properties) and (value not in ('', "''", '""')):
+        return False
+    # the indicator's text and the body fold into one plain scalar, so
+    # `null` over `null` is the text "null null", not the idiom
+    content = ' '.join(_uncommented(line) for line in body.split('\n')).strip()
+    folded = ' '.join(part for part in (value, content) if part)
+    return folded in nulls
+
+
+def _comment_lines(body: str, *, indented: bool = True) -> str:
+    """Return the comment lines of a field body, newline-terminated and in order.
+
+    Beside a plain or quoted value every line opening with ``#`` after
+    optional indentation is a comment; inside a block scalar an indented
+    one is content, so ``indented=False`` keeps the column-0 ones alone.
+    Lines split on newlines only: a Unicode line separator inside a
+    comment is comment text.
+    """
+    lines = body.split('\n')
+    comments = [line for line in lines if line.lstrip().startswith('#')]
+    if not indented:
+        comments = [line for line in comments if line.startswith('#')]
+    return ''.join(f'{line}\n' for line in comments)
+
+
+def _field_comments(indicator: str, body: str) -> tuple[str, str]:
+    """Return the comments a valueless field carries: the indicator's tail, the body's lines.
+
+    The tail keeps a leading space so it re-attaches after a written value;
+    the lines keep their indentation and breaks so they re-emit under it.
+    A ``#`` inside a quoted value is text: the tail starts past the
+    closing quote.
+    """
+    value = indicator.split(':', 1)[1]
+    # the quote test looks past the node properties leading the value
+    stripped = re.sub(r'^(?:[&!]\S*\s+)+', '', value.lstrip())
+    start = 0
+    if stripped[:1] in ('"', "'"):
+        close = _quote_close(stripped)
+        if close != -1:
+            start = len(value) - len(stripped) + close + 1
+    match = re.search(r'(?:^|\s)(#.*)$', value[start:])
+    tail = f' {match.group(1)}' if match else ''
+    return tail, _comment_lines(body)
+
+
+def _fill_stamp(frontmatter: str, key: str, now: str, *, before: Optional[str]) -> str:
+    """Stamp a missing or valueless ``key`` with ``now``.
+
+    A present key is stamped in place -- so a duplicate is never appended
+    -- when its value is blank, quoted-empty, or comments only, and the
+    comments ride along; a key over a real value (a stamp continued on an
+    indented line, a sequence) stays for lint to judge. A missing key is
+    inserted before ``before`` when that key is present, else at the
+    block's end. ``now`` is quoted whenever a plain scalar would misread
+    it, and spliced rather than substituted so a backslash in a user
+    ``timestamp.format`` is emitted verbatim; an anchor on the key line
+    stays on the stamp, so an alias of it elsewhere keeps resolving.
+    """
+    # stamp a present-but-valueless key in place
+    span = _field_span(frontmatter, key)
+    if span:
+        start, end = span
+        indicator, _, body = frontmatter[start:end].partition('\n')
+        if _is_valueless(indicator, body, nulls=('', "''", '""')):
+            tail, comments = _field_comments(indicator, body)
+            stamp = f'{key}: {_properties(indicator)}{quote(now)}{tail}\n{comments}'
+            frontmatter = frontmatter[:start] + stamp + frontmatter[end:]
+        return frontmatter
+    # insert a missing key before its schema neighbor, else at the block's end
+    anchor = _field_span(frontmatter, before) if before is not None else None
+    pos = anchor[0] if anchor else _block_end(frontmatter)
+    return frontmatter[:pos] + f'{key}: {quote(now)}\n' + frontmatter[pos:]
+
+
+def _key_at(frontmatter: str) -> Optional[dict[int, str]]:
+    """Map each key line's 0-based block line to its key, or ``None`` to defer to the line grammar.
+
+    The composed marks partition a block that composes as a mapping the
+    writers can address; a block the parser rejects and a mapping with no
+    column-0 keys read through the line grammar, while a body that is not
+    a mapping has no key lines at all.
+    """
+    kind, _, _, keys, _ = _compose_fields(frontmatter)
+    if kind == 'nonmapping':
+        return {}
+    if (kind != 'mapping') or not keys:
+        return None
+    return {line: key for key, line in keys}
+
+
+def _end_line(lines: list[str]) -> int:
+    """Return the block line where appended fields go: the closing fence, or the epilogue above it.
+
+    A ``...`` document-end marker (a comment after it allowed) and the
+    comment lines below it stay the block's last lines, outside every
+    field.
+    """
+    end = len(lines) - 1
+    index = end - 1
+    while (index > 0) and re.match(r'[ \t]*#', lines[index]):
+        index -= 1
+    if (index > 0) and re.fullmatch(r'\.\.\.(?:[ \t]+#.*)?[ \t]*', lines[index]):
+        return index
+    return end
+
+
+def _block_end(frontmatter: str) -> int:
+    """Return the character offset of :func:`_end_line`."""
+    lines = frontmatter.split('\n')
+    return sum(len(line) + 1 for line in lines[: _end_line(lines)])
+
+
+def _field_span(frontmatter: str, key: str) -> Optional[tuple[int, int]]:
+    """Return the character span of ``key``'s first field, or ``None`` when absent.
+
+    A field is its key line through the line before the next key. The
+    composed marks bound it when the block composes as a mapping the
+    writers can address, so a quoted key, a quoted scalar continued at
+    column 0, and a flow collection spanning lines each stay one field;
+    otherwise the line grammar does -- the key line plus its
+    :data:`FIELD_EXTENT`. The last field runs to the block's end, a
+    trailing document-end marker excluded.
+    """
+    kind, _, _, keys, _ = _compose_fields(frontmatter)
+    if (kind == 'mapping') and keys:
+        lines = frontmatter.split('\n')
+        for position, (name, line) in enumerate(keys):
+            if name != key:
+                continue
+            if position + 1 < len(keys):
+                end = keys[position + 1][1]
+            else:
+                end = _end_line(lines)
+            start_offset = sum(len(text) + 1 for text in lines[:line])
+            end_offset = sum(len(text) + 1 for text in lines[:end])
+            return start_offset, end_offset
+        return None
+    match = re.search(
+        pattern=rf'{_key_pattern(key)}(.*)\n{FIELD_EXTENT}',
+        string=frontmatter,
+        flags=re.MULTILINE,
+    )
+    if match is None:
+        return None
+    # a column-0 item is the value of a bare key alone (properties and a
+    # comment aside): after a value on the key line it is text, outside the field
+    value = re.sub(r'^(?:[&!]\S*(?:\s+|$))+', '', _uncommented(match.group(1)))
+    if value:
+        match = re.search(
+            pattern=rf'{_key_pattern(key)}.*\n{_VALUED_EXTENT}',
+            string=frontmatter,
+            flags=re.MULTILINE,
+        )
+    return match.span()
+
+
+def _key_pattern(key: str) -> str:
+    """Return the line grammar's regex for ``key``'s key line, quoted or not, up to its colon."""
+    spelled = re.escape(key)
+    return (
+        rf'^(?:[&!]\S*[ \t]+)*(?:"{spelled}"|\'{spelled}\'|{spelled})[ \t]*:(?=[ \t]|$)'
+    )
+
+
+def _key_of(line: str) -> Optional[str]:
+    """Return the key a line opens under the line grammar, or ``None``."""
+    match = re.match(_KEY_LINE, line)
+    if match is None:
+        return None
+    return next(group for group in match.groups() if group is not None)
+
+
+def _compose_fields(
+    frontmatter: str,
+) -> tuple[str, _Fields, tuple[_Issue, ...], _Keys, bool]:
+    """Compose a frontmatter block, through the memo for a block of ordinary size.
+
+    See :func:`_compose_cached` for the result; a block past
+    :data:`_SCALAR_CACHE_BYTES` composes on every read rather than pin
+    its text in the memo for the run.
+    """
+    if len(frontmatter) > _SCALAR_CACHE_BYTES:
+        return _compose_cached.__wrapped__(frontmatter)
+    return _compose_cached(frontmatter)
+
+
+@functools.lru_cache(maxsize=_SCALAR_CACHE_SIZE)
+def _compose_cached(
+    frontmatter: str,
+) -> tuple[str, _Fields, tuple[_Issue, ...], _Keys, bool]:
+    """Compose a frontmatter block into its top-level scalar fields.
+
+    Returns ``(kind, fields, issues, keys, aliased)``. ``kind`` is
+    ``'mapping'`` when the body is a YAML mapping -- ``fields`` then
+    maps each key, first occurrence winning, to its scalar text, style
+    (``None`` for plain, else the quote or block indicator), and
+    resolved tag, or to ``None`` for a sequence or mapping value --
+    ``'empty'`` for a body with no content, ``'nonmapping'`` for valid
+    YAML that is not a mapping, and ``'invalid'`` when the parser
+    rejects the body or a key is not a scalar. ``issues`` are the
+    findings a strict reader raises -- the parse error, the non-mapping
+    body, each non-scalar key, each duplicate key -- as ``(line, reason,
+    cause)`` with 1-based file lines. ``keys`` are the top-level keys in
+    document order with the block line of each key line, empty unless
+    the root is a block mapping whose keys all open at column 0 -- the
+    lines the byte-level writers can address. ``aliased`` is whether the
+    graph reaches a node twice (an alias), which pins its lines' order.
+    Only the body between the fences reaches the parser: the fences are
+    the wiki's grammar and document markers to YAML. The node graph is
+    composed, never constructed, so a stamp stays its source text and a
+    typed-looking title stays a string.
+    """
+    import yaml
+
+    # feed the parser the body between the fences (a fenceless body reads as is)
+    lines = frontmatter.split('\n')
+    offset = 0
+    if lines and (lines[0].lstrip('\ufeff').strip() == '---'):
+        lines = lines[1:]
+        offset = 1
+    if lines and (lines[-1].rstrip() == '---'):
+        lines = lines[:-1]
+    # a BOM at column 0 is skipped by the C loader on any line but by the pure
+    # reader only at the stream start, so they go before the parse and both
+    # loaders mark the same stream (a line count the marks index by)
+    body = re.sub(r'^\ufeff', '', '\n'.join(lines) + '\n', flags=re.MULTILINE)
+    # nesting past the bound is refused before it reaches either loader's
+    # recursion (see _MAX_NESTING), on the line that passes it
+    deep = _nested_too_deep(body)
+    if deep is not None:
+        reason = f'collections nested deeper than {_MAX_NESTING} levels'
+        return 'invalid', {}, ((deep + offset + 1, reason, 'parse'),), (), False
+    # the C loader is a build-time option of the PyYAML wheel; values and
+    # styles match the pure loader's, which raises RecursionError on nesting
+    # the C loader composes, while the C loader raises UnicodeEncodeError,
+    # not a YAML error, encoding a lone surrogate for libyaml, and an escape
+    # past U+10FFFF raises ValueError from the pure loader's chr()
+    loader = getattr(yaml, 'CSafeLoader', yaml.SafeLoader)
+    try:
+        root = yaml.compose(body, Loader=loader)
+    except (yaml.YAMLError, RecursionError, UnicodeEncodeError, ValueError) as e:
+        return 'invalid', {}, (_parse_issue(e, body, offset),), (), False
+    if root is None:
+        return 'empty', {}, (), (), False
+    if not isinstance(root, yaml.MappingNode):
+        issue = (1, 'frontmatter is not a mapping', 'nonmapping')
+        return 'nonmapping', {}, (issue,), (), False
+    # walk the pairs in order: the first occurrence of a key wins, and a
+    # repeat or a non-scalar key is a strict-reader finding; a key's line
+    # comes from its mark's character offset, since a mark's own line count
+    # treats NEL, LS, and PS as line breaks
+    kind = 'mapping'
+    fields: _Fields = {}
+    issues: list[_Issue] = []
+    keys: list[tuple[str, int]] = []
+    seen: dict[str, int] = {}
+    addressable = not root.flow_style
+    starts = [0, *(match.end() for match in re.finditer('\n', body))]
+    reached: set[int] = set()
+    for key_node, value_node in root.value:
+        scalar_key = isinstance(key_node, yaml.ScalarNode)
+        key = key_node.value if scalar_key else ''
+        # an alias key is the anchored node reached again: its own position is
+        # not the composer's to give, so no writer can address the block, and
+        # the value's mark names its line
+        if id(key_node) in reached:
+            alias_line = (
+                bisect.bisect_right(starts, value_node.start_mark.index) + offset
+            )
+            anchor_line = (
+                bisect.bisect_right(starts, key_node.start_mark.index) + offset
+            )
+            reason = f'key {key!r} is an alias of the node at line {anchor_line}'
+            issues.append((alias_line, reason, 'duplicate_key'))
+            addressable = False
+            continue
+        # every node of the pair, nested ones included, may be aliased later;
+        # a node reached twice within the pair is an alias, walked once
+        subtree = [key_node, value_node]
+        while subtree:
+            node = subtree.pop()
+            if id(node) in reached:
+                continue
+            reached.add(id(node))
+            if isinstance(node, yaml.SequenceNode):
+                subtree.extend(node.value)
+            elif isinstance(node, yaml.MappingNode):
+                for nested_key, nested_value in node.value:
+                    subtree.extend((nested_key, nested_value))
+        line = bisect.bisect_right(starts, key_node.start_mark.index) - 1 + offset
+        file_line = line + 1
+        # a merge key folds another mapping in, and two keys on one line (a
+        # NEL, LS, or PS the parser breaks on) share the line: neither leaves
+        # a key line of its own for the writers to address
+        merge_key = scalar_key and (key_node.tag == 'tag:yaml.org,2002:merge')
+        shared_line = bool(keys) and (keys[-1][1] == line)
+        if merge_key or shared_line or (key_node.start_mark.column != 0):
+            addressable = False
+        keys.append((key, line))
+        if not scalar_key:
+            issues.append((file_line, 'a key is not a scalar', 'nonscalar_key'))
+            kind = 'invalid'
+            continue
+        if key in seen:
+            reason = f'duplicate key {key!r} (first at line {seen[key]})'
+            issues.append((file_line, reason, 'duplicate_key'))
+            continue
+        seen[key] = file_line
+        if isinstance(value_node, yaml.ScalarNode):
+            # the C loader reports a plain style as '', the pure loader as None
+            fields[key] = (value_node.value, value_node.style or None, value_node.tag)
+            # a lone surrogate the pure loader lets through an escape is text no
+            # writer can emit, so the block reads as the C loader rejects it
+            if _SURROGATES.search(value_node.value):
+                reason = 'found invalid Unicode character escape code'
+                return 'invalid', {}, ((file_line, reason, 'parse'),), (), False
+        else:
+            fields[key] = None
+    # an alias composes as the anchored node object reached a second time; a
+    # duplicate key inside a nested mapping is a strict-reader finding too
+    visited: set[int] = set()
+    pending = [root]
+    aliased = False
+    while pending:
+        node = pending.pop()
+        if id(node) in visited:
+            aliased = True
+            continue
+        visited.add(id(node))
+        if isinstance(node, yaml.SequenceNode):
+            pending.extend(node.value)
+        elif isinstance(node, yaml.MappingNode):
+            nested: set[str] = set()
+            for key_node, value_node in node.value:
+                pending.extend((key_node, value_node))
+                if (node is root) or not isinstance(key_node, yaml.ScalarNode):
+                    continue
+                if key_node.value in nested:
+                    nested_line = (
+                        bisect.bisect_right(starts, key_node.start_mark.index) + offset
+                    )
+                    reason = f'duplicate key {key_node.value!r} in a nested mapping'
+                    issues.append((nested_line, reason, 'duplicate_key'))
+                nested.add(key_node.value)
+    issues.sort(key=lambda issue: issue[0])
+    return kind, fields, tuple(issues), tuple(keys) if addressable else (), aliased
+
+
+def _parse_issue(error: Exception, body: str, offset: int) -> _Issue:
+    """Locate and word a parser error as a strict-reader finding on the file's lines.
+
+    A mark's character offset locates its line (a mark's own line count
+    treats NEL, LS, and PS as line breaks); an error at the end of the
+    stream, or one raised while scanning a key, points past the construct
+    at fault, so its context mark names the offending line instead; an
+    error without a mark (a character YAML forbids, the recursion limit)
+    locates by the first forbidden character, else names the block's
+    first line. A problem worded as a fragment ("but found another
+    document") keeps the context it continues.
+    """
+    import yaml
+
+    mark = getattr(error, 'problem_mark', None)
+    context = getattr(error, 'context', None)
+    context_mark = getattr(error, 'context_mark', None)
+    if (mark is not None) and (context_mark is not None):
+        past_end = mark.index >= len(body.rstrip('\n'))
+        opened = str(context).startswith(
+            ('while scanning a simple key', 'while parsing a flow')
+        )
+        if past_end or opened:
+            mark = context_mark
+    forbidden = yaml.reader.Reader.NON_PRINTABLE.search(body)
+    reason = getattr(error, 'problem', None)
+    if mark is not None:
+        # a mark still past the end (an unclosed flow collection with no
+        # context) names the last line holding content; one on a trailing
+        # whitespace-only line (a tab there) stays on that line
+        if mark.index < len(body.rstrip('\n')):
+            index = mark.index
+        else:
+            index = len(body.rstrip())
+        body_line = body.count('\n', 0, index)
+        # a colon the parser finds inside a plain scalar it is still reading
+        # points at the line where the scalar started: a `key:value` typo
+        # above, whose lines are neither key lines, items, nor comments (the
+        # blank lines between fold in) -- unless a key on the error line
+        # itself opened the scalar
+        if str(reason).startswith('mapping values are not allowed'):
+            lines = body.split('\n')
+            before = body[body.rfind('\n', 0, index) + 1 : index]
+            if re.match(r'^(?:\S.*?)?:(?:[ \t]|$)', before) is None:
+                above = body_line
+                first = body_line
+                while (above > 0) and _continues_a_scalar(lines[above - 1]):
+                    above -= 1
+                    if lines[above].strip():
+                        first = above
+                # a scalar under a key line is that key's value, so the colon
+                # on the error line is the fault; one opening the block, or
+                # following a comment or item, is a typo named on its first line
+                opener = re.match(r'^(?:\S.*?)?:(?:[ \t]|$)', lines[above - 1])
+                if (above == 0) or (opener is None):
+                    body_line = first
+        line = body_line + offset + 1
+    elif forbidden is not None:
+        line = body.count('\n', 0, forbidden.start()) + offset + 1
+    else:
+        line = 1
+    if reason is None:
+        reason = getattr(error, 'reason', None)
+    if isinstance(error, RecursionError):
+        reason = 'collections nested too deep to read'
+    elif reason is None:
+        reason = type(error).__name__
+    elif context and str(reason).startswith('but '):
+        reason = f'{context}, {reason}'
+    elif context and (str(reason) == 'second occurrence') and context_mark:
+        # a duplicate anchor is worded as its context plus where the first is
+        first = body.count('\n', 0, context_mark.index) + offset + 1
+        context_head = str(context).split(';')[0]
+        reason = f'{context_head} (first at line {first})'
+    return line, str(reason), 'parse'
+
+
+def _continues_a_scalar(line: str) -> bool:
+    """Return whether a body line can only be the inside of a plain scalar: a blank, or no key, item, comment, or marker."""
+    if not line.strip():
+        return True
+    if line.startswith(('#', '-', '---', '...')):
+        return False
+    return re.match(r'^(?:\S.*?)?:(?:[ \t]|$)', line) is None
+
+
+def _scalar_fields(frontmatter: str) -> Optional[_Fields]:
+    """Return the block's scalar fields, or ``None`` to defer to the line grammar.
+
+    A block the parser rejects and a non-scalar key read through the line
+    grammar, so the reader never fails on input the writer tolerates; a
+    body with no content, or one that is not a mapping, has no fields at
+    all -- a ``key:`` spelled inside a list is list text.
+    """
+    kind, fields, _, _, _ = _compose_fields(frontmatter)
+    if kind == 'mapping':
+        return fields
+    if kind in ('empty', 'nonmapping'):
+        return {}
+    return None
+
+
+def _read_field_lines(frontmatter: str, key: str) -> Optional[str]:
+    """Read a scalar frontmatter ``key`` with the line grammar.
+
+    The fallback behind :func:`read_frontmatter_field` for a block a
+    strict parser rejects. A plain ``key: value`` returns the stripped
+    value, with one pair of matching surrounding YAML quotes stripped. A
+    block scalar (``|``/``>`` with optional chomping/indentation
+    indicators, e.g. ``|-``, ``>+``, ``|2``) resolves to its body: a
+    literal ``|`` keeps line breaks, a folded ``>`` joins consecutive
+    non-empty lines with a single space (a blank line is a paragraph
+    break). Inline text on the indicator line (``key: > one liner.``) is
+    taken as the value when no indented body follows. A bare ``key:``
+    over an indented body is a plain multi-line scalar and folds the
+    same way ``>`` does. Returns ``None`` if the field is absent; an
+    empty block body resolves to an empty string.
+    """
+    # the key line: its colon followed by a space or the line end, as the
+    # whole line grammar has it
+    key_line = _key_pattern(key)
+    match = re.search(rf'{key_line}[^\S\n]*(.*)$', frontmatter, re.MULTILINE)
+    if match is None:
+        return None
+    # node properties are not the value
+    value = re.sub(r'^(?:[&!]\S*(?:[ \t]+|$))+', '', match.group(1).strip())
+    lines = frontmatter.split('\n')
+    first = frontmatter.count('\n', 0, match.start()) + 1
+    # a quoted value: a comment after it starts past its closing quote (a
+    # quote mid-text, an apostrophe, is content); a quote closing on a later
+    # line folds the lines up to it like a plain value's, stopping at the
+    # next key line or the block's end
+    if value.startswith(("'", '"')):
+        close = _quote_close(value)
+        if close != -1:
+            return unquote(value[: close + 1])
+        parts = [value]
+        for line in lines[first : _end_line(lines)]:
+            if _key_of(line) is not None:
+                break
+            text = line.strip()
+            close = _quote_close(value[0] + text)
+            if close != -1:
+                parts.append(text[:close])
+                break
+            parts.append(text)
+        return unquote(fold_lines('\n'.join(parts)))
+    # a flow collection: its source text up to the closing bracket, a ' #'
+    # inside its quotes included and the comment tails outside them dropped;
+    # a bracket never closed reads to the next key line or the block's end,
+    # where the line grammar places the lines
+    if value[:1] in ('[', '{'):
+        depth, quote = _flow_depth(value, 0)
+        parts = [_uncommented(value)]
+        for line in lines[first : _end_line(lines)]:
+            if (depth == 0) or (_key_of(line) is not None):
+                break
+            parts.append(_uncommented(line, quote))
+            depth, quote = _flow_depth(line, depth, quote)
+        return ' '.join(part for part in parts if part)
+    if not value.startswith(('|', '>')):
+        # a plain value, on the key line, continued on indented lines, or under
+        # a bare key -- whose column-0 items are its value, as the composed
+        # path reads them: the lines fold per the YAML plain-scalar rule,
+        # comment lines and ' #' tails (outside quotes) dropped; nothing left
+        # reads as an absent value, and a bare key over a quoted body reads
+        # the quoted scalar, as the key-line spelling does
+        items = r'|-(?:[ \t].*)?\n' if not value else ''
+        body_match = re.search(
+            pattern=rf'{key_line}[^\S\n]*(.*)\n((?:[ \t]+.*\n|[ \t]*\n|#.*\n{items})*)',
+            string=frontmatter,
+            flags=re.MULTILINE,
+        )
+        body = body_match.group(2) if body_match else ''
+        kept = []
+        span = None  # the quote a line leaves open: its lines are content
+        for line in (value, *body.split('\n')):
+            if (span is None) and line.lstrip().startswith('#'):
+                continue
+            kept.append(_uncommented(line, span))
+            _, span = _flow_depth(line, 0, span)
+        text = '\n'.join(kept)
+        if not text.strip():
+            return None
+        if not value and (text.lstrip()[:1] in ('"', "'")):
+            # the close counts only at a line's end (a quote mid-text, an
+            # apostrophe, is content), walked line by line as the key-line
+            # quoted branch walks its continuations
+            quote_lines = text.lstrip().split('\n')
+            parts = []
+            for index, quoted in enumerate(quote_lines):
+                opened = quoted if index == 0 else quote_lines[0][0] + quoted
+                close = _quote_close(opened)
+                if close != -1:
+                    parts.append(opened[: close + 1] if index == 0 else quoted[:close])
+                    break
+                parts.append(quoted)
+            return unquote(fold_lines('\n'.join(parts)))
+        return fold_lines(text)
+    # block scalar: tolerate any header (node properties, chomping/indentation
+    # indicators |- |+ >- |2 ...) plus trailing inline text, then capture the
+    # indented body (blank lines inside the block are kept so a folded break
+    # survives)
+    match = re.search(
+        pattern=rf'{key_line}[^\S\n]*(?:[&!]\S*[ \t]+)*([|>])([-+0-9]*)[^\S\n]*(.*)\n((?:[ \t]+.*\n|[ \t]*\n)*)',
+        string=frontmatter,
+        flags=re.MULTILINE,
+    )
+    if not match:
+        return None
+    indicator, header, inline, body = match.groups()
+    # no indented body: the inline text on the header line is the value,
+    # unless it is a comment
+    if not body:
+        return '' if inline.strip().startswith('#') else inline.strip()
+    # the block ends at the first line indented less than its body -- the
+    # explicit indentation indicator's depth, else the first content line's
+    lines = body.split('\n')
+    digit = re.search(r'[0-9]', header)
+    content = [line for line in lines if line.strip()]
+    if digit is not None:
+        indent = int(digit.group())
+    else:
+        indent = len(content[0]) - len(content[0].lstrip()) if content else 0
+    kept = []
+    for line in lines:
+        if line.strip() and (len(line) - len(line.lstrip()) < indent):
+            break
+        kept.append(line)
+    body = textwrap.dedent('\n'.join(kept))
+    # folded scalar (>): join non-empty lines with a space, blank line breaks
+    if indicator == '>':
+        return fold_lines(body)
+    return body.strip()
+
+
+def _closing_quote(value: str, start: int = 0) -> int:
+    """Return the index of the quote closing the quoted scalar opening at ``start``, or ``-1`` when it never closes.
+
+    A doubled ``''`` inside a single-quoted scalar and a backslash-escaped
+    character inside a double-quoted one are content, not the close.
+    """
+    quote_char = value[start]
+    index = start + 1
+    while index < len(value):
+        char = value[index]
+        if (quote_char == '"') and (char == '\\'):
+            index += 2
+            continue
+        if char == quote_char:
+            if (quote_char == "'") and (value[index + 1 : index + 2] == "'"):
+                index += 2
+                continue
+            return index
+        index += 1
+    return -1
+
+
+def _flow_close(value: str, start: int = 0) -> int:
+    """Return the index closing the quoted span opening at ``start`` of flow text, or ``-1``.
+
+    Inside a flow collection a close is followed by the end, whitespace,
+    ``,``, ``]``, ``}``, or ``:``; a quote followed by more text (an
+    apostrophe in ``'Bob's #1 hit'``) is content, so the ``#`` after it
+    never starts a comment.
+    """
+    index = start
+    while True:
+        close = _closing_quote(value, index)
+        if close == -1:
+            return -1
+        if value[close + 1 : close + 2] in ('', ' ', '\t', ',', ']', '}', ':'):
+            return close
+        index = close
+
+
+def _quote_close(value: str) -> int:
+    """Return the index of the quote closing the scalar opening ``value``, or ``-1``.
+
+    A candidate close counts only when nothing but whitespace or a
+    ``' #'`` comment follows it on the line -- no reading closes a quoted
+    scalar mid-text, so the apostrophe in ``'Bob's Page'`` is content and
+    the final quote is the close. Doubled ``''`` and backslash escapes
+    are content, as in :func:`_closing_quote`.
+    """
+    quote_char = value[0]
+    index = 1
+    close = -1
+    while index < len(value):
+        char = value[index]
+        if (quote_char == '"') and (char == '\\'):
+            index += 2
+            continue
+        if char == quote_char:
+            if (quote_char == "'") and (value[index + 1 : index + 2] == "'"):
+                index += 2
+                continue
+            if re.fullmatch(r'[ \t]*(?:#.*)?', value[index + 1 :]):
+                close = index
+        index += 1
+    return close
+
+
+def _is_unset_field(frontmatter: str, key: str) -> bool:
+    """Return whether ``key`` is absent or carries the plain ``null`` reset idiom.
+
+    A plain lowercase ``null`` -- with or without a trailing comment --
+    is the one reset spelling; a quoted or block-scalar ``null`` is
+    authored text. Under the line grammar the check is the repair's own
+    valueless test on the raw field, since unquoting first would
+    collapse an authored ``'null'`` into the idiom.
+    """
+    fields = _scalar_fields(frontmatter)
+    if fields is not None:
+        if key not in fields:
+            return True
+        entry = fields[key]
+        if entry is None:
+            return False
+        value, style, tag = entry
+        # plain and resolved as null: an explicit !!str tag makes it text
+        return (value == 'null') and (style is None) and tag.endswith(':null')
+    text = field_text(frontmatter, key)
+    if text is None:
+        return True
+    indicator, _, body = text.partition('\n')
+    return _is_valueless(indicator, body, nulls=('', 'null'))
+
+
+def _is_plain_safe(value: str) -> bool:
+    """Return whether a strict YAML reader reads ``value`` back verbatim when plain.
+
+    A value containing ``': '`` (or ending with ``:``) reads as a nested
+    mapping, one containing ``' #'`` loses everything from the hash (a
+    comment), one opening with an indicator character or with ``'- '``,
+    ``'? '``, or ``': '`` reads as structure, a node property, or a quoted
+    scalar, and leading or trailing whitespace (a tab anywhere) is dropped
+    or rejected -- so none of them may be written plain.
+    """
+    if not value:
+        return True
+    if value != value.strip():
+        return False
+    if (': ' in value) or value.endswith(':') or (' #' in value) or ('\t' in value):
+        return False
+    if _ESCAPED_CHARS.search(value):
+        return False
+    if value[0] in _INDICATOR_CHARS:
+        return False
+    if (value in ('-', '?', ':', '<<', '=')) or (value[:2] in ('- ', '? ', ': ')):
+        return False
+    # a value a strict reader resolves as a typed scalar and then cannot
+    # construct -- a date no calendar has (2024-02-30), a numeral of
+    # underscores alone (0x_) -- is one it rejects; yaml loads here, after
+    # the cheap tests above, so the common plain value stays import-free
+    import yaml
+
+    resolved = yaml.resolver.Resolver().resolve(yaml.ScalarNode, value, (True, False))
+    if resolved != 'tag:yaml.org,2002:str':
+        try:
+            yaml.safe_load(f'k: {value}\n')
+        except (yaml.YAMLError, ValueError):
+            return False
+    return True
+
+
+def _escape(match: re.Match[str]) -> str:
+    """Spell one character no stream may carry as its double-quoted escape."""
+    char = match.group(0)
+    if char in _SHORT_ESCAPES:
+        return f'\\{_SHORT_ESCAPES[char]}'
+    return f'\\u{ord(char):04x}'
+
+
+def _unescape(match: re.Match[str]) -> str:
+    """Resolve one double-quoted YAML escape; an unknown one stays verbatim.
+
+    A code point past U+10FFFF or inside the surrogate range is no
+    character, so its escape stays verbatim too, as libyaml reads it.
+    """
+    wide, code, byte, char = match.groups()
+    if wide or code or byte:
+        code_point = int(wide or code or byte, 16)
+        if (code_point > 0x10FFFF) or (0xD800 <= code_point <= 0xDFFF):
+            return match.group(0)
+        return chr(code_point)
+    return _ESCAPES.get(char, f'\\{char}')

@@ -34,6 +34,7 @@ __all__ = [
     'command',
     'parse_slice',
     'parse_settings',
+    'require_utf8',
     'is_trusted',
     'trust_root',
     'load_wiki_class',
@@ -123,6 +124,19 @@ def parse_settings(value: Optional[str]) -> Optional[dict]:
     if not isinstance(result, dict):
         raise typer.BadParameter('--settings must be a JSON object.')
     return result
+
+
+def require_utf8(option: str, value: str) -> None:
+    """Refuse an argument holding a byte no UTF-8 decodes.
+
+    The shell hands such a byte over as a lone surrogate, which every
+    writer's UTF-8 encoding rejects; refusing at the boundary keeps it
+    out of a frontmatter block that would then fail every later run.
+    """
+    try:
+        value.encode('utf-8')
+    except UnicodeEncodeError:
+        raise typer.BadParameter(f'{option} is not valid UTF-8.') from None
 
 
 def is_trusted(root: pathlib.Path, /) -> bool:

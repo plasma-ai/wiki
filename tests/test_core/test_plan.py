@@ -268,16 +268,16 @@ def test_update_survives_page_deleted_mid_page_pass(
             doomed.unlink()
         return real(self, path, now, **kwargs)
 
-    # the mid-pass deletion is handled, not crashed on
+    # the mid-pass deletion is handled, not crashed on, and the vanished
+    # page's row is pruned with the ordinary notice -- in this run, since the
+    # indexes plan after the pages, and never again
     monkeypatch.setattr(Wiki, '_plan_page', racy)
-    wiki.update()
-
-    # the next run prunes the vanished page's row with the ordinary notice
     notices = _capture_notices(wiki)
     wiki.update()
     err = '\n'.join(event.description for event in notices)
     assert 'Pruned link' in err
     assert 'doomed' in err
+    assert Wiki(tmp_path).update() == []
 
 
 def test_update_survives_page_deleted_mid_read(
@@ -301,16 +301,15 @@ def test_update_survives_page_deleted_mid_read(
             doomed.unlink()
         return real(self, path)
 
-    # the mid-read deletion is handled, not crashed on
+    # the mid-read deletion is handled, not crashed on, and the vanished
+    # page's row is pruned with the ordinary notice in this run
     monkeypatch.setattr(Wiki, '_read_text', racy)
-    wiki.update()
-
-    # the next run prunes the vanished page's row with the ordinary notice
     notices = _capture_notices(wiki)
     wiki.update()
     err = '\n'.join(event.description for event in notices)
     assert 'Pruned link' in err
     assert 'doomed' in err
+    assert Wiki(tmp_path).update() == []
 
 
 def test_update_survives_folder_deleted_mid_walk(

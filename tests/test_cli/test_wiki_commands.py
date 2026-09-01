@@ -43,6 +43,8 @@ __all__ = [
     'test_update_narrations_condense_by_default',
     'test_update_condenses_batch_adoption',
     'test_new_requires_authored_desc_and_content',
+    'test_new_refuses_an_argument_that_is_not_utf8',
+    'test_update_counts_files_with_malformed_frontmatter',
     'test_new_refuses_interior_path',
     'test_read_only_commands_are_deterministic',
     'test_path_inside_wiki_resolves_upward',
@@ -94,6 +96,15 @@ __all__ = [
     'test_merge_driver_no_op_without_git',
     'test_init_writes_gitattributes_without_committing',
     'test_merge_driver_merges_authored_frontmatter',
+    'test_merge_driver_moves_regenerated_keys_with_their_bodies',
+    'test_merge_driver_takes_the_other_sides_row_edit',
+    'test_merge_driver_normalizes_created_over_a_stampless_base',
+    'test_merge_driver_keeps_a_row_edit_on_a_crlf_index',
+    'test_merge_driver_unions_rows_of_an_add_add_merge',
+    'test_merge_driver_leaves_a_shared_blank_line_alone',
+    'test_merge_driver_carries_separators_and_comments_verbatim',
+    'test_merge_driver_merges_comments_as_authored_lines',
+    'test_merge_driver_replaces_a_block_body_whole',
     'test_merge_unions_link_rows',
     'test_merge_keeps_frontmatter_when_side_is_mangled',
     'test_merge_dispatches_on_pathname',
@@ -683,6 +694,67 @@ def test_new_requires_authored_desc_and_content(tmp_path: pathlib.Path) -> None:
     )
     assert again.returncode == 2
     assert 'Index already exists' in again.stderr
+
+
+@pytest.mark.parametrize(
+    argnames=('command', 'option'),
+    argvalues=[
+        ('new', 'NAME'),
+        ('new', '--desc'),
+        ('new', '--content'),
+        ('init', 'NAME'),
+    ],
+    ids=['new-name', 'new-desc', 'new-content', 'init-name'],
+)
+def test_new_refuses_an_argument_that_is_not_utf8(
+    tmp_path: pathlib.Path,
+    command: str,
+    option: str,
+) -> None:
+    """An argv byte no UTF-8 decodes is refused, by option name, before anything lands on disk."""
+    root = tmp_path / 'wiki'
+    bad = 'Caf' + chr(0xDCE9) + ' au lait.'
+    if command == 'init':
+        args = ['init', bad, '--path', str(root)]
+    else:
+        assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+        values = {'NAME': 'latin', '--desc': 'A desc.', '--content': 'Body.'}
+        values[option] = bad
+        args = ['new', values['NAME'], '--desc', values['--desc']]
+        args += ['--content', values['--content'], '--path', str(root)]
+
+    # the refusal names the option and creates nothing
+    result = _wiki(tmp_path, *args)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert f'{option} is not valid UTF-8' in result.stderr
+    assert not (root / 'latin').exists()
+    if command == 'init':
+        assert not root.exists()
+
+
+def test_update_counts_files_with_malformed_frontmatter(tmp_path: pathlib.Path) -> None:
+    """Pages and indexes update cannot repair are counted as files, each reason under ``--full``."""
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    (root / 'core').mkdir()
+    (root / 'core' / 'unclosed.md').write_text(
+        '---\nname: core/unclosed\ndesc: Never closes.\n\nBody.\n', encoding='utf-8'
+    )
+    (root / 'core' / 'listed.md').write_text(
+        '---\n- a\n- b\n---\n\n# listed\n\nBody.\n', encoding='utf-8'
+    )
+
+    # the condensed run counts both; the full run names each reason
+    condensed = _wiki(root, 'update', '--path', str(root))
+    assert condensed.returncode == 0, condensed.stdout + condensed.stderr
+    assert '2 files with malformed frontmatter' in condensed.stderr
+    full = _wiki(root, 'update', '--path', str(root), '--full')
+    assert full.returncode == 0, full.stdout + full.stderr
+    assert 'Malformed frontmatter (no closing ---) in core/unclosed.md' in full.stderr
+    assert (
+        'Malformed frontmatter (not a key: value mapping) in core/listed.md'
+        in full.stderr
+    )
 
 
 def test_new_refuses_interior_path(tmp_path: pathlib.Path) -> None:
@@ -1290,25 +1362,26 @@ def test_lint_details_issues_and_count_condenses(
     root = tmp_path / 'wiki'
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     _write(root / 'core' / '_index.md', _index('Core', 'Core concepts.', 'Text.'))
-    pages = [f'page{i}' for i in range(8)]
+    page_count = 8  # one dangling row per deleted page
+    pages = [f'page{i}' for i in range(page_count)]
     for page in pages:
         _write(root / 'core' / f'{page}.md', _page(page, f'The {page} page.', 'Body.'))
     assert _wiki(root, 'update', '--path', str(root)).returncode == 0
-    # delete every page: eight dangling rows plus the pending prune diff
+    # delete every page: one dangling row each plus the pending prune diff
     for page in pages:
         (root / 'core' / f'{page}.md').unlink()
 
     # the default (detailed) view lists every broken link plus the summary
     default = _wiki(root, 'lint', '--path', str(root))
     assert default.returncode == 1
-    assert default.stdout.count('Broken link [[') == 8
-    assert '9 issues' in default.stdout
+    assert default.stdout.count('Broken link [[') == page_count
+    assert f'{page_count + 1} issues' in default.stdout
 
     # --count condenses to the summary; the notes leave stderr too
     count = _wiki(root, 'lint', '--path', str(root), '--count')
     assert count.returncode == 1
     assert count.stdout.count('Broken link [[') == 0
-    assert '9 issues' in count.stdout
+    assert f'{page_count + 1} issues' in count.stdout
     assert 'Needs desc' not in count.stderr
 
     # --full is the explicit default; combining the modes is a usage error
@@ -2034,6 +2107,584 @@ def test_merge_driver_merges_authored_frontmatter(tmp_path: pathlib.Path) -> Non
     assert 'desc: Theirs again.' in text
     assert 'title: Ours retitled' in text
     assert 'title: Theirs retitled' in text
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
+    argnames=('side', 'block'),
+    argvalues=[
+        ('theirs', 'name: |\n  core\n'),
+        ('ours', 'name: |\n  core\n'),
+        ('theirs', 'name : core\n'),
+        ('theirs', 'name:\n  # which name\n  core\n'),
+        ('ours', 'name:\n  # which name\n  core\n'),
+    ],
+    ids=[
+        'theirs-block',
+        'ours-block',
+        'theirs-spaced-colon',
+        'theirs-comment-then-body',
+        'ours-comment-then-body',
+    ],
+)
+def test_merge_driver_moves_regenerated_keys_with_their_bodies(
+    tmp_path: pathlib.Path,
+    side: str,
+    block: str,
+) -> None:
+    """A regenerated key is normalized as a whole extent, indented body included.
+
+    The driver normalizes ``name:`` to ours on every input; a value
+    written as a block scalar spans two lines, and swapping the key line
+    alone would strand the other side's body under ours' one-liner,
+    where a strict reader folds it into the name. Ours' whole extent
+    replaces theirs' whole extent -- whichever side wrote the block, and
+    whether theirs spells the key ``name:`` or ``name :`` -- and
+    ``wiki update`` then joins a surviving block onto one line.
+    """
+    root = tmp_path / 'wiki'
+    # a real repo whose wiki has the driver registered by init
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    index = root / 'core' / '_index.md'
+    base = (
+        '---\n'
+        'name: core\n'
+        'desc: Original section.\n'
+        'tags: []\n'
+        'sources: []\n'
+        'created: 2026-01-01T00:00:00Z\n'
+        'updated: 2026-01-01T00:00:00Z\n'
+        '---\n'
+        '\n'
+        '# core\n'
+        '\n'
+        '***\n'
+        '\n'
+        'Body prose.\n'
+    )
+    _write(index, base)
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # one side writes the name in its own shape; each side edits something
+    # of its own so the merge reaches the driver
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    theirs = base.replace('desc: Original section.', 'desc: Edited by theirs.')
+    if side == 'theirs':
+        theirs = theirs.replace('name: core\n', block)
+    _write(index, theirs)
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    ours = base.replace(
+        'updated: 2026-01-01T00:00:00Z',
+        'updated: 2026-01-03T12:00:00Z',
+    )
+    if side == 'ours':
+        ours = ours.replace('name: core\n', block)
+    _write(index, ours)
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
+
+    # the merge is clean and carries exactly ours' name extent
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    frontmatter = index.read_text(encoding='utf-8').split('---\n')[1]
+    assert len(re.findall(r'^name[ \t]*:', frontmatter, re.M)) == 1
+    if side == 'ours':
+        assert block in frontmatter
+    else:
+        assert frontmatter.startswith('name: core\n')
+        assert '\n  core\n' not in frontmatter
+    assert 'desc: Edited by theirs.' in frontmatter
+
+    # update joins a surviving block onto one line and converges
+    update = _wiki(root, 'update', '--path', str(root))
+    assert update.returncode == 0, update.stdout + update.stderr
+    frontmatter = index.read_text(encoding='utf-8').split('---\n')[1]
+    assert frontmatter.startswith('name: core\n')
+    assert '\n  core\n' not in frontmatter
+    check = _wiki(root, 'update', '--path', str(root), '--check')
+    assert check.returncode == 0, check.stdout + check.stderr
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_merge_driver_takes_the_other_sides_row_edit(tmp_path: pathlib.Path) -> None:
+    """A row both sides carry takes theirs' text when only theirs changed it against the base.
+
+    An asset row's desc is authored in the index alone -- ``wiki update``
+    regenerates no desc for it -- so ours' unchanged copy must not win over
+    theirs' edit, or the edit is lost with a clean merge.
+    """
+    root = tmp_path / 'wiki'
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    (root / 'core').mkdir()
+    (root / 'core' / 'diagram.png').write_bytes(b'\x89PNG\r\n')
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    index = root / 'core' / '_index.md'
+    base = index.read_text(encoding='utf-8')
+    row = '[[core/diagram.png|diagram.png]]: ...'
+    assert row in base
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # theirs authors the asset row's desc; ours adds a row directly under it
+    # (no blank between the rows) and edits the prose below ***
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    _write(index, base.replace(row, '[[core/diagram.png|diagram.png]]: The diagram.'))
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    (root / 'core' / 'zeta.png').write_bytes(b'\x89PNG\r\n')
+    ours = base.replace(f'{row}\n\n', f'{row}\n[[core/zeta.png|zeta.png]]: Zeta.\n\n')
+    _write(index, ours + '\nOurs wrote prose.\n')
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'ours')
+
+    # the merge is clean and carries theirs' desc on the shared row, in
+    # ours' layout
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    merged = index.read_text(encoding='utf-8')
+    assert (
+        '[[core/diagram.png|diagram.png]]: The diagram.\n[[core/zeta.png|zeta.png]]: Zeta.\n\n'
+        in merged
+    )
+    assert 'Ours wrote prose.' in merged
+    # update re-spaces the rows and keeps the authored asset desc
+    update = _wiki(root, 'update', '--path', str(root))
+    assert update.returncode == 0, update.stdout + update.stderr
+    assert '[[core/diagram.png|diagram.png]]: The diagram.' in index.read_text(
+        encoding='utf-8'
+    )
+    check = _wiki(root, 'update', '--path', str(root), '--check')
+    assert check.returncode == 0, check.stdout + check.stderr
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
+    argnames=('base_block', 'crlf'),
+    argvalues=[
+        ('name: core\ndesc: Original section.', False),
+        ('desc: Original section.', False),
+        ('name: core\ndesc: Original section.\ncreated:\nupdated:', False),
+        ('name: core\ndesc: Original section.\ncreated:\nupdated:', True),
+    ],
+    ids=['stampless', 'nameless', 'valueless-stamps', 'valueless-stamps-crlf'],
+)
+def test_merge_driver_normalizes_created_over_a_stampless_base(
+    tmp_path: pathlib.Path,
+    base_block: str,
+    crlf: bool,
+) -> None:
+    """A base index without stamps (or a name) gets them from each side's own update: churn, not a conflict.
+
+    A side lacking a regenerated key gains ours' copy where ``wiki
+    update`` puts it -- ``name:`` under the opening fence, the stamps
+    above the closing one -- so the other side adding the key is no
+    change beside its authored edit.
+    """
+    root = tmp_path / 'wiki'
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    index = root / 'core' / '_index.md'
+    base = f'---\n{base_block}\n---\n\n# core\n\n***\n\nBody prose.\n'
+    if crlf:
+        index.parent.mkdir(parents=True, exist_ok=True)
+        index.write_bytes(base.replace('\n', '\r\n').encode('utf-8'))
+    else:
+        _write(index, base)
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # each side's wiki update names and stamps the block on its own clock
+    def updated(text: str, clock: str) -> str:
+        stamps = f'created: {clock}\nupdated: {clock}\n'
+        if 'created:' in text:
+            text = text.replace('created:\nupdated:\n', stamps)
+        else:
+            text = text.replace('---\n\n# core', f'{stamps}---\n\n# core')
+        if 'name:' not in text:
+            text = text.replace('---\n', '---\nname: core\n', 1)
+        return text
+
+    # a CRLF base is normalized to LF by both sides' updates identically, so
+    # only the stamps differ there (an authored edit beside re-ended lines is
+    # an ordinary three-way conflict); an LF base carries authored edits too
+    edit = 'Original section.' if crlf else 'Edited by theirs.'
+    prose = '' if crlf else 'Ours wrote prose.\n'
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    theirs = updated(base.replace('Original section.', edit), '2026-01-01T00:00:07Z')
+    _write(index, theirs)
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    _write(index, updated(base, '2026-01-01T00:00:00Z') + prose)
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
+
+    # the merge is clean: ours' name and stamps, theirs' desc, both bodies
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    merged = index.read_text(encoding='utf-8')
+    assert merged.startswith('---\nname: core\n')
+    assert 'created: 2026-01-01T00:00:00Z\n' in merged
+    assert merged.count('created:') == 1
+    assert merged.count('name:') == 1
+    assert f'desc: {edit}' in merged
+    if prose:
+        assert prose in merged
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
+    argnames=('endings', 'blank'),
+    argvalues=[('\r\n', '\r\n'), ('\n', ' \n')],
+    ids=['crlf', 'whitespace-separator'],
+)
+def test_merge_driver_keeps_a_row_edit_on_a_crlf_index(
+    tmp_path: pathlib.Path,
+    endings: str,
+    blank: str,
+) -> None:
+    r"""The row rule compares rows without their trailing blanks, CRLF and whitespace-only ones too.
+
+    A CRLF blank line is ``\r\n`` and a whitespace-only separator holds
+    spaces: a strip that only knows ``\n`` leaves ours' re-spaced block
+    unequal to base's, and theirs' authored row edit silently loses to
+    ours' unchanged text.
+    """
+    root = tmp_path / 'wiki'
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    (root / 'core').mkdir()
+    index = root / 'core' / '_index.md'
+    row = '[[core/diagram.png|diagram.png]]: Base diagram.'
+    base = (
+        '---\nname: core\ndesc: Core.\ncreated: 2026-01-01T00:00:00Z\n'
+        f'updated: 2026-01-01T00:00:00Z\n---\n\n# core\n\n{row}\n***\n'
+    ).replace('\n', endings)
+    index.write_bytes(base.encode('utf-8'))
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # theirs edits the row's desc; ours only re-spaces the block
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    index.write_bytes(base.replace('Base diagram.', 'Theirs diagram.').encode('utf-8'))
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    index.write_bytes(
+        base.replace(f'{row}{endings}', f'{row}{endings}{blank}').encode('utf-8')
+    )
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
+
+    # the merge is clean and theirs' edit lands in ours' spacing
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    merged = index.read_bytes().decode('utf-8')
+    assert (
+        f'[[core/diagram.png|diagram.png]]: Theirs diagram.{endings}{blank}' in merged
+    )
+    assert 'Base diagram.' not in merged
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_merge_driver_unions_rows_of_an_add_add_merge(tmp_path: pathlib.Path) -> None:
+    """Two indexes created independently merge to both sides' rows, the H1, and the ``***`` line kept.
+
+    With no base file the driver's first input is empty; the parts must
+    still be told apart, or ours' link block is read as a side to
+    collect and never printed.
+    """
+    root = tmp_path / 'wiki'
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+    index = root / 'core' / '_index.md'
+    frontmatter = (
+        '---\nname: core\ndesc: Core section.\ntags: []\nsources: []\n'
+        'created: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---\n\n# core\n\n'
+    )
+
+    # each side creates the index with its own child row
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    _write(index, frontmatter + '[[core/beta|beta]]: Beta page.\n\n***\n')
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    _write(index, frontmatter + '[[core/alpha|alpha]]: Alpha page.\n\n***\n')
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'ours')
+
+    # the merge keeps the H1, both rows, and the delimiter
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    merged = index.read_text(encoding='utf-8')
+    assert '\n# core\n' in merged
+    assert '[[core/alpha|alpha]]: Alpha page.' in merged
+    assert '[[core/beta|beta]]: Beta page.' in merged
+    assert merged.rstrip().endswith('***')
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_merge_driver_leaves_a_shared_blank_line_alone(tmp_path: pathlib.Path) -> None:
+    """A blank line every side shares under ``name:`` never becomes a conflict.
+
+    The normalization moves a regenerated key with the indented lines under
+    it; a blank line that separates the key from the next field is not
+    part of the value, so it must stay on every input -- dropping it from
+    base and theirs alone would make a shared line look like ours' edit.
+    """
+    root = tmp_path / 'wiki'
+    # a real repo whose wiki has the driver registered by init
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    index = root / 'core' / '_index.md'
+    base = (
+        '---\n'
+        'name: core\n'
+        '\n'
+        'desc: Original section.\n'
+        'created: 2026-01-01T00:00:00Z\n'
+        'updated: 2026-01-01T00:00:00Z\n'
+        '---\n'
+        '\n'
+        '# core\n'
+        '\n'
+        '***\n'
+        '\n'
+        'Body prose.\n'
+    )
+    _write(index, base)
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # theirs edits the desc, ours carries regenerated churn only
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    _write(index, base.replace('desc: Original section.', 'desc: Edited by theirs.'))
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    _write(
+        index,
+        base.replace('updated: 2026-01-01T00:00:00Z', 'updated: 2026-01-03T12:00:00Z'),
+    )
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
+
+    # the merge is clean, theirs' desc lands, and the blank line is still one
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    frontmatter = index.read_text(encoding='utf-8').split('---\n')[1]
+    assert frontmatter.startswith('name: core\n\ndesc: Edited by theirs.\n')
+    assert 'updated: 2026-01-03T12:00:00Z' in frontmatter
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
+    argnames=('separator', 'theirs_extra', 'ours_name', 'survives'),
+    argvalues=[
+        ('\r\n', '', 'name: core\r\n', 'name: core\r\n\r\ndesc: Edited by theirs.\r\n'),
+        (
+            '\n',
+            '  # note\n',
+            'name: core\n',
+            'name: core\n  # note\n\ndesc: Edited by theirs.\n',
+        ),
+        ('\n', '', 'name: |\n' + '  core\n' * 40_000, 'name: |\n  core\n  core\n'),
+        (
+            '\n',
+            '# section\n',
+            'name: core\n# section\n',
+            'name: core\n# section\n\ndesc: Edited by theirs.\n',
+        ),
+    ],
+    ids=['crlf-separator', 'theirs-comment', 'huge-extent', 'shared-comment'],
+)
+def test_merge_driver_carries_separators_and_comments_verbatim(
+    tmp_path: pathlib.Path,
+    separator: str,
+    theirs_extra: str,
+    ours_name: str,
+    survives: str,
+) -> None:
+    """The normalization moves bytes verbatim and keeps what is authored.
+
+    A shared separator line keeps its CRLF ending on every side, so it
+    never reads as ours' edit; a comment theirs wrote under a regenerated
+    key is authored and reaches the merge; and an extent of any size
+    travels through a file, not the environment.
+    """
+    root = tmp_path / 'wiki'
+    # a real repo whose wiki has the driver registered by init
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    index = root / 'core' / '_index.md'
+    index.parent.mkdir()
+    base = separator.join(
+        [
+            '---',
+            'name: core',
+            '',
+            'desc: Original section.',
+            'created: 2026-01-01T00:00:00Z',
+            'updated: 2026-01-01T00:00:00Z',
+            '---',
+            '',
+            '# core',
+            '',
+            '***',
+            '',
+            'Body prose.',
+            '',
+        ]
+    )
+    index.write_bytes(base.encode('utf-8'))
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # theirs edits the desc (and may annotate the name); ours regenerates
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    theirs = base.replace('desc: Original section.', 'desc: Edited by theirs.')
+    theirs = theirs.replace(
+        f'name: core{separator}', f'name: core{separator}{theirs_extra}'
+    )
+    index.write_bytes(theirs.encode('utf-8'))
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    ours = base.replace(
+        'updated: 2026-01-01T00:00:00Z', 'updated: 2026-01-03T12:00:00Z'
+    )
+    ours = ours.replace(f'name: core{separator}', ours_name)
+    index.write_bytes(ours.encode('utf-8'))
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
+
+    # the merge is clean and the bytes that must survive do
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    merged = index.read_bytes().decode('utf-8')
+    assert survives in merged
+    assert 'desc: Edited by theirs.' in merged
+    assert 'updated: 2026-01-03T12:00:00Z' in merged
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
+    argnames=('theirs_comment', 'present', 'absent'),
+    argvalues=[
+        ('', 'name: core\ndesc: Edited by theirs.\n', '# section slug'),
+        (
+            '# section renamed\n',
+            'name: core\n# section renamed\ndesc:',
+            '# section slug',
+        ),
+        ('  # section slug\n', 'name: core\n  # section slug\ndesc:', '\n\n'),
+    ],
+    ids=['deleted', 'reworded', 'indented-shared'],
+)
+def test_merge_driver_merges_comments_as_authored_lines(
+    tmp_path: pathlib.Path,
+    theirs_comment: str,
+    present: str,
+    absent: str,
+) -> None:
+    """A comment under a regenerated key is authored: a deletion or rewording on one side lands.
+
+    The driver normalizes the key's value lines alone; a comment line
+    (indented or not) is outside the extent, so a side that deletes or
+    rewords it wins the ordinary three-way merge instead of having ours'
+    copy resurrect it or a spurious conflict raised.
+    """
+    root = tmp_path / 'wiki'
+    # a real repo whose wiki has the driver registered by init
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    index = root / 'core' / '_index.md'
+    index.parent.mkdir()
+    base_comment = (
+        '  # section slug\n' if theirs_comment.startswith('  ') else '# section slug\n'
+    )
+    base = (
+        f'---\nname: core\n{base_comment}desc: Original section.\n'
+        'created: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---\n\n'
+        '# core\n\n***\n\nBody prose.\n'
+    )
+    _write(index, base)
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # theirs edits the comment and the desc; ours regenerates the stamp
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    theirs = base.replace(base_comment, theirs_comment)
+    theirs = theirs.replace('desc: Original section.', 'desc: Edited by theirs.')
+    _write(index, theirs)
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    _write(
+        index,
+        base.replace('updated: 2026-01-01T00:00:00Z', 'updated: 2026-01-03T12:00:00Z'),
+    )
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
+
+    # the merge is clean and theirs' comment edit lands beside ours' stamp
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    merged = index.read_text(encoding='utf-8')
+    assert present in merged
+    assert absent not in merged.split('---\n')[1]
+    assert 'updated: 2026-01-03T12:00:00Z' in merged
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_merge_driver_replaces_a_block_body_whole(tmp_path: pathlib.Path) -> None:
+    """An indented comment inside a block-scalar name is value, replaced with the rest of the body."""
+    root = tmp_path / 'wiki'
+    # a real repo whose wiki has the driver registered by init
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    index = root / 'core' / '_index.md'
+    index.parent.mkdir()
+    base = (
+        '---\nname: core\ndesc: Original section.\n'
+        'created: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---\n\n'
+        '# core\n\n***\n\nBody prose.\n'
+    )
+    _write(index, base)
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # theirs writes the name as a block whose body holds a hash line
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    theirs = base.replace('name: core\n', 'name: |\n  core\n  # note\n')
+    _write(index, theirs.replace('desc: Original section.', 'desc: Edited by theirs.'))
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    _write(
+        index,
+        base.replace('updated: 2026-01-01T00:00:00Z', 'updated: 2026-01-03T12:00:00Z'),
+    )
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
+
+    # the merge is clean; ours' one-line name replaces theirs' whole block
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    frontmatter = index.read_text(encoding='utf-8').split('---\n')[1]
+    assert frontmatter.startswith('name: core\ndesc: Edited by theirs.\n')
+    assert '# note' not in frontmatter
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')

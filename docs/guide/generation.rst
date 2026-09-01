@@ -54,7 +54,12 @@ rewrites only the files that differ. It owns:
    an unset ``title:`` or ``category:`` line (blank or plain ``null``), drops
    stray blank lines, and enforces the canonical field order. Authored values
    — ``title:``, ``desc:``, ``category:``, ``tags:``, ``sources:``, and any
-   custom keys — are preserved.
+   custom keys — are preserved, and so are the comments on a field the
+   repair fills or removes (``desc: # note`` becomes ``desc: ... # note``).
+   Values are read the way a strict YAML reader reads them (a value continued
+   on indented lines folds, a quoted value decodes, ``null # comment`` unsets
+   like ``null``); a block a strict reader rejects still reads through the
+   line grammar, as authored.
 
 **Headings.**
    The H1 of every page and index is rewritten to the authored ``title:`` when
@@ -186,6 +191,16 @@ would destroy authored content or race a concurrent editor:
 
 - **A page whose frontmatter never closes** (opening ``---`` with no closing
   ``---``) is left untouched — update cannot tell frontmatter from body.
+- **A frontmatter block that is not a mapping** (valid YAML, but a bare
+  sentence or a list between the fences) is left untouched — it has no fields
+  to repair, and appending fields under the text would leave a block no
+  reader accepts.
+- **A mapping whose keys are not column-0** ``key:`` **lines** (a flow mapping
+  such as ``{name: x}``, a mapping indented as a whole, an explicit ``? key``)
+  is left untouched the same way — the repair edits column-0 key lines, and
+  has none to edit — as is a block whose repair would leave it rejected by a
+  strict reader; ``wiki lint`` reports both as malformed frontmatter, and
+  their fields still read through the parser.
 - **An emptied or truncated index** (an ``_index.md`` with no closed
   frontmatter) is kept as-is rather than rebuilt; rebuilding would discard
   whatever authored content survives. Restore it from git, or delete it so
@@ -335,6 +350,34 @@ its meaning:
 ``Malformed frontmatter (no closing ---)``
    A page's frontmatter block never closes; update leaves the file untouched.
    Close the block by hand.
+
+``Malformed frontmatter (keys are not column-0 key: value lines)`` / ``Malformed frontmatter (its repair would break the YAML)``
+   A mapping the byte-level repair cannot edit — a flow mapping, a mapping
+   indented as a whole, an explicit ``? key``, an alias used as a key, a
+   merge key, two keys on one line — or a block whose repair (the
+   ``updated:`` re-stamp included) would leave a strict reader rejecting it
+   or would land its fields inside a quoted value, such as an anchored
+   ``name:`` with an alias of it below or a ``name:`` line inside a quote
+   left open above it and closed below; update leaves the file untouched and
+   the parser still reads the fields it can. Rewrite the block as plain
+   ``key: value`` lines. (A block that is valid YAML but not ``key: value``
+   pairs — a bare sentence, a list — draws update's ``Malformed frontmatter
+   (not a key: value mapping)`` notice and lint's ``Invalid YAML
+   frontmatter`` issue below.)
+
+``Invalid YAML frontmatter (line N): <reason>; <advice>``
+   A strict YAML reader rejects the block — an unquoted ``': '`` inside a
+   one-line value, a value ending in ``:``, a duplicate key, a control
+   character, a key that is not a scalar, or a body that is not ``key: value``
+   pairs — so Obsidian and any YAML library lose every field, while the wiki
+   still reads the block through its line grammar (or, for a body that is not
+   a mapping, leaves it untouched). The advice names the cause: a parse error
+   (``a strict reader drops the whole block, so quote or rewrite the value``),
+   a duplicate key (``a strict reader rejects the block or keeps the last
+   copy, the wiki reads the first``), a key that is not a scalar (``the wiki
+   reads the block by its line grammar alone``), or a body that is not a
+   mapping (``no strict reader finds key: value pairs in it``). Quote the
+   value, drop the duplicate, or rewrite the block.
 
 ``Empty or truncated index (no frontmatter); restore it from git or delete it to rebuild``
    An emptied or truncated ``_index.md``; update keeps it as-is. Restore or
@@ -511,8 +554,11 @@ topics/_index.md``). The condensed lines and what they mean:
      - Entries violating the naming policy were left unlinked.
    * - ``Skipped N concurrently-edited files (re-run `wiki update`)``
      - Files changed while update was planning; re-run to converge.
-   * - ``N pages with malformed frontmatter (no closing ---)``
-     - Left untouched; close the block by hand.
+   * - ``N files with malformed frontmatter``
+     - Left untouched; the per-file notice names the reason — close an
+       unclosed block by hand, rewrite a body that is not ``key: value``
+       pairs or a flow or indented mapping as column-0 ``key: value`` lines,
+       or remove the alias the repair would break.
    * - ``N empty or truncated indexes (restore from git or delete to rebuild)``
      - Left untouched; restore or delete.
 

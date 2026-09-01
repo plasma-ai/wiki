@@ -163,14 +163,14 @@ Maintain indexes as files are added and removed:
 
 `wiki lint` exits 1 on issues and 0 on a clean wiki (soft notes go to stderr and
 never affect the exit code — a stale wikilink in prose is a note, while a broken
-link in a generated index block, or a prose link naming a folder rather than its
-`_index` page, is an issue). Scripts should read `wiki lint --json` — one JSON
-document on stdout listing every issue and note with a `severity` and `kind` —
-rather than parse the prose; the exit code is unchanged. A page that must
-display otherwise-flagged content — sample conflict markers, stale link examples
-— wraps those lines in a `<!-- start: no-lint -->` ... `<!-- end: no-lint -->`
-region, which suppresses the positional rules, notes included, for just that
-span.
+link in a generated index block, a prose link naming a folder rather than its
+`_index` page, or frontmatter a strict YAML reader rejects, is an issue).
+Scripts should read `wiki lint --json` — one JSON document on stdout listing
+every issue and note with a `severity` and `kind` — rather than parse the prose;
+the exit code is unchanged. A page that must display otherwise-flagged content —
+sample conflict markers, stale link examples — wraps those lines in a
+`<!-- start: no-lint -->` ... `<!-- end: no-lint -->` region, which suppresses
+the positional rules, notes included, for just that span.
 
 Browse structure, search across content, and read entries:
 

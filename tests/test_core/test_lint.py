@@ -15,6 +15,7 @@ import shutil
 
 import pytest
 
+from wiki.core import format
 from wiki.core.wiki import Issue, Wiki
 from wiki.util import markdown
 
@@ -54,6 +55,14 @@ __all__ = [
     'test_lint_flags_unparseable_stamp',
     'test_lint_future_stamp_is_clean',
     'test_lint_stamp_parse_follows_configured_format',
+    'test_lint_flags_frontmatter_a_strict_yaml_reader_rejects',
+    'test_lint_flags_a_stamp_that_is_a_sequence',
+    'test_lint_flags_a_block_whose_repair_would_break_it',
+    'test_lint_flags_an_unaddressable_block_as_malformed',
+    'test_lint_reports_deep_nesting_instead_of_crashing',
+    'test_lint_reports_an_escape_naming_no_character',
+    'test_lint_invalid_yaml_yields_to_merge_states',
+    'test_lint_names_a_comment_truncated_desc',
     'test_lint_hyphen_dangle',
     'test_lint_wrapped_list_marker',
     'test_lint_blank_led_list_is_clean',
@@ -278,6 +287,11 @@ def test_lint_issues_are_typed(tmp_path: pathlib.Path) -> None:
         'See [[core]] for more.\n\n<!-- start: no-lint -->\n',
         encoding='utf-8',
     )
+    # frontmatter a strict YAML reader rejects
+    (tmp_path / 'data' / 'unquoted.md').write_text(
+        '---\nname: unquoted\ndesc: A lane for X: HR, WR.\n---\n\n# unquoted\n\nBody.\n',
+        encoding='utf-8',
+    )
     # an emptied index (and, with a page to link, its missing delimiter)
     trunc = tmp_path / 'trunc'
     trunc.mkdir()
@@ -327,6 +341,7 @@ def test_lint_issues_are_typed(tmp_path: pathlib.Path) -> None:
         'invalid_folder_name',
         'invalid_page_name',
         'invalid_wiki_name',
+        'invalid_yaml',
         'malformed_frontmatter',
         'missing_delimiter',
         'missing_index',
@@ -921,6 +936,367 @@ def test_lint_stamp_parse_follows_configured_format(
         encoding='utf-8',
     )
     assert any('Unparseable created' in issue for issue in wiki.lint())
+
+
+@pytest.mark.parametrize(
+    argnames=('field', 'line', 'reason', 'advice'),
+    argvalues=[
+        (
+            'desc: Independent lane for L1: the harness.',
+            3,
+            'mapping values',
+            'quote or rewrite the value',
+        ),
+        (
+            'title: Theorem for X: HR, WR',
+            3,
+            'mapping values',
+            'quote or rewrite the value',
+        ),
+        ('desc: Ends with a colon:', 3, 'mapping values', 'quote or rewrite the value'),
+        ('desc: One.\ndesc: Two.', 4, 'duplicate key', 'the wiki reads the first'),
+        (
+            'desc: Position and\x0c routes.',
+            3,
+            'characters are not allowed',
+            'quote or rewrite the value',
+        ),
+        (
+            'desc: caf\xe9 caf\xe9 caf\xe9.\ncategory: bad\x0c',
+            4,
+            'characters are not allowed',
+            'quote or rewrite the value',
+        ),
+        ('? [a, b]\n: x', 3, 'not a scalar', 'line grammar alone'),
+        ('desc: "a\x85b"\ndesc: Two.', 4, 'duplicate key', 'the wiki reads the first'),
+        (
+            'desc: "unterminated\ntags: []',
+            3,
+            'end of stream',
+            'quote or rewrite the value',
+        ),
+        (
+            'stray\ndesc: A.',
+            3,
+            "could not find expected ':'",
+            'quote or rewrite the value',
+        ),
+    ],
+    ids=[
+        'colon-space-desc',
+        'colon-space-title',
+        'trailing-colon',
+        'duplicate-key',
+        'control-char',
+        'control-char-after-non-ascii',
+        'complex-key',
+        'nel-before-the-error',
+        'unterminated-quote',
+        'stray-line',
+    ],
+)
+@pytest.mark.usefixtures('_vary_loader')
+def test_lint_flags_frontmatter_a_strict_yaml_reader_rejects(
+    tmp_path: pathlib.Path,
+    field: str,
+    line: int,
+    reason: str,
+    advice: str,
+) -> None:
+    """A block the wiki reads leniently but a strict YAML reader refuses is an issue.
+
+    The wiki reads an unquoted ``: `` value as the authored text through
+    the line grammar, but a strict reader (Obsidian's) drops the whole
+    block; lint names the file and line as a hard issue typed for
+    ``--json`` with the remedy for its cause, under the C loader and the
+    pure-Python loader alike, and update leaves the authored bytes alone
+    (the fix is the author's). The line is the offending one whatever
+    precedes it: a forbidden character after accented text (the C loader
+    counts stream positions in bytes), an error after a NEL the parser
+    counts as a line break, an unterminated quote or a stray line the
+    parser only notices further on.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    desc = '' if field.startswith('desc:') else 'desc: A page.\n'
+    page.write_text(
+        f'---\nname: core/design\n{field}\n{desc}tags: []\nsources: []\n'
+        'created: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---\n'
+        '\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # the finding names the line and the remedy; the block is otherwise read leniently
+    issues = [issue for issue in wiki.lint() if issue.kind == 'invalid_yaml']
+    assert [issue.fields['path'] for issue in issues] == ['core/design.md']
+    assert issues[0].fields['line'] == line
+    assert reason in issues[0].fields['reason']
+    assert f'core/design.md: Invalid YAML frontmatter (line {line})' in issues[0]
+    assert advice in issues[0]
+    # update never rewrites an authored value: the field lines stay as typed
+    wiki.update()
+    assert field in page.read_text(encoding='utf-8').split('---\n')[1]
+    assert any(issue.kind == 'invalid_yaml' for issue in Wiki(tmp_path).lint())
+
+
+@pytest.mark.parametrize(
+    argnames=('stamp', 'value'),
+    argvalues=[
+        ('created:\n- 2025-01-01', '- 2025-01-01'),
+        ('created: [2025-01-01]', '[2025-01-01]'),
+        ('created: {a: b}', '{a: b}'),
+        ('created: []', '[]'),
+    ],
+    ids=['block-sequence', 'flow-sequence', 'flow-mapping', 'empty-sequence'],
+)
+def test_lint_flags_a_stamp_that_is_a_sequence(
+    tmp_path: pathlib.Path,
+    stamp: str,
+    value: str,
+) -> None:
+    """A ``created:`` over a sequence or mapping is an unparseable stamp, not an absent one.
+
+    The reader resolves no collection, so the key would otherwise read as
+    missing and neither update (which fills only a valueless key) nor
+    lint would say a word about a stamp no format parses -- whether the
+    collection sits under the key or on its line.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        f'---\nname: core/design\ndesc: A page.\n{stamp}\n---\n\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+    wiki.update()
+
+    # the collection is named as the unparseable stamp it is
+    issues = [issue for issue in wiki.lint() if issue.kind == 'unparseable_stamp']
+    assert [issue.fields['field'] for issue in issues] == ['created']
+    assert issues[0].fields['value'] == value
+
+
+def test_lint_flags_a_block_whose_repair_would_break_it(tmp_path: pathlib.Path) -> None:
+    """A block update refuses to repair is a malformed-frontmatter issue, not a silent stall.
+
+    Refreshing an anchored ``name:`` would strand the alias of it; update
+    keeps the page as written with a notice on every run, and lint names
+    the same refusal so the stale name is never a surprise.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    authored = (
+        '---\nname: &n wrong\ndesc: A page.\ntitle: *n\n---\n\n# design\n\nBody.\n'
+    )
+    page.write_text(authored, encoding='utf-8')
+
+    # update keeps the page and lint names the refusal
+    wiki.update()
+    assert page.read_text(encoding='utf-8') == authored
+    issues = [
+        issue
+        for issue in Wiki(tmp_path).lint()
+        if issue.kind == 'malformed_frontmatter'
+    ]
+    assert [str(issue) for issue in issues] == [
+        'core/design.md: Malformed frontmatter (its repair would break the YAML)'
+    ]
+
+
+def test_lint_flags_an_unaddressable_block_as_malformed(tmp_path: pathlib.Path) -> None:
+    """A mapping with no column-0 key lines is malformed frontmatter to lint, page or index.
+
+    A collection-valued stamp inside such a mapping is the same finding,
+    never a crash of the whole run.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    (tmp_path / 'core' / 'design.md').write_text(
+        '---\n{name: x, desc: Flow.}\n---\n\n# design\n\nBody.\n', encoding='utf-8'
+    )
+    (tmp_path / 'core' / '_index.md').write_text(
+        '---\n  created: []\n  name: core\n  desc: Indented.\n---\n\n# core\n\n***\n\nProse.\n',
+        encoding='utf-8',
+    )
+
+    # both files carry the malformed-frontmatter issue with the reason
+    issues = [issue for issue in wiki.lint() if issue.kind == 'malformed_frontmatter']
+    assert sorted(issue.fields['path'] for issue in issues) == [
+        'core/_index.md',
+        'core/design.md',
+    ]
+    assert all('keys are not column-0 key: value lines' in issue for issue in issues)
+
+
+@pytest.mark.usefixtures('_vary_loader')
+def test_lint_reports_deep_nesting_instead_of_crashing(tmp_path: pathlib.Path) -> None:
+    """Nesting past the composer's bound is an issue, never an abort or a crash.
+
+    The pure-Python loader recurses once per nesting level and raises
+    ``RecursionError`` -- not a YAML error -- a few hundred levels down,
+    and the C loader recurses unchecked into the C stack; the bound
+    refuses the block before either, so lint reports it the same way
+    under both loaders and the sweep goes on.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    nested = '[' * 2000 + ']' * 2000
+    page.write_text(
+        f'---\nname: core/design\ndesc: A page.\nextra: {nested}\n---\n\n'
+        '# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # the sweep completes with the block named as invalid, and update converges
+    issues = [issue for issue in wiki.lint() if issue.kind == 'invalid_yaml']
+    assert [issue.fields['path'] for issue in issues] == ['core/design.md']
+    reason = f'collections nested deeper than {format._MAX_NESTING} levels'
+    assert issues[0].fields['reason'] == reason
+    assert issues[0].fields['line'] == 4
+    wiki.update()
+    assert Wiki(tmp_path).update() == []
+
+
+@pytest.mark.usefixtures('_vary_loader')
+@pytest.mark.parametrize(
+    argnames='escape',
+    argvalues=['\\U00110000', '\\uD800'],
+    ids=['past-unicode', 'surrogate'],
+)
+def test_lint_reports_an_escape_naming_no_character(
+    tmp_path: pathlib.Path, escape: str
+) -> None:
+    """A double-quoted escape naming no character is an issue, never a crash, under either loader.
+
+    The C loader rejects it as an invalid escape; the pure loader decodes
+    it into text no writer can emit (or raises from ``chr``), which the
+    reader turns into the same finding, so ``update`` completes and the
+    value reads verbatim through the line grammar.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        f'---\nname: core/design\ndesc: "a{escape}b."\n---\n\n# design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    # the sweep completes, the block is named, and the parent row reads the escape as text
+    wiki.update()
+    issues = [issue for issue in Wiki(tmp_path).lint() if issue.kind == 'invalid_yaml']
+    assert [issue.fields['path'] for issue in issues] == ['core/design.md']
+    index = (tmp_path / 'core' / '_index.md').read_text(encoding='utf-8')
+    assert f'[[core/design|design]]: a{escape}b.' in index
+    assert Wiki(tmp_path).update() == []
+
+
+def test_lint_invalid_yaml_yields_to_merge_states(tmp_path: pathlib.Path) -> None:
+    """Merge debris keeps its own finding: markers win, the hint stays valid YAML.
+
+    Conflict markers inside a block make it unparseable, but the marker
+    check runs first and suppresses the per-file checks, so the file
+    reports only ``conflict_markers``; the driver's resolution hint is
+    valid YAML for every parser, so it reports only ``merge_hint``.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    index = tmp_path / 'core' / '_index.md'
+    lines = page.read_text(encoding='utf-8').split('\n')
+    lines[2:3] = [
+        '<<<<<<< ours',
+        lines[2],
+        '=======',
+        'desc: Theirs.',
+        '>>>>>>> theirs',
+    ]
+    page.write_text('\n'.join(lines), encoding='utf-8')
+    hint = (
+        '<!-- index *** separator missing on one side: likely formatter'
+        ' damage; restore the *** line (wiki update repairs it), redo the'
+        ' merge, and delete this line when resolving -->'
+    )
+    lines = index.read_text(encoding='utf-8').split('\n')
+    lines.insert(2, hint)
+    index.write_text('\n'.join(lines), encoding='utf-8')
+
+    # each file carries exactly its merge-state finding
+    kinds: dict[str, set[str]] = {}
+    for issue in wiki.lint():
+        kinds.setdefault(issue.fields['path'], set()).add(issue.kind)
+    assert kinds['core/design.md'] == {'conflict_markers'}
+    assert kinds['core/_index.md'] == {'merge_hint'}
+
+
+def test_lint_names_a_comment_truncated_desc(tmp_path: pathlib.Path) -> None:
+    """A desc cut short by a ``' #'`` comment fails the period check with the cause named.
+
+    A YAML reader stops a plain value at ``' #'``, so the parent row and
+    the period check see only the text before it; the message says so
+    instead of leaving the author to guess, while a comment after a
+    complete sentence draws nothing.
+    """
+    pages = ['cut', 'bare', 'commented', 'header', 'fallback', 'quoted', 'under']
+    wiki = _make_wiki(tmp_path, folders={'core': pages})
+    (tmp_path / 'core' / 'quoted.md').write_text(
+        "---\nname: core/quoted\ndesc: 'Notes on room #12'\n---\n\n# quoted\n\nBody.\n",
+        encoding='utf-8',
+    )
+    (tmp_path / 'core' / 'under.md').write_text(
+        '---\nname: core/under\ndesc: Notes\n  # a comment line under the value\n---\n\n'
+        '# under\n\nBody.\n',
+        encoding='utf-8',
+    )
+    (tmp_path / 'core' / 'cut.md').write_text(
+        '---\nname: core/cut\ndesc: Notes on room #12 and the key.\n---\n\n'
+        '# cut\n\nBody.\n',
+        encoding='utf-8',
+    )
+    (tmp_path / 'core' / 'bare.md').write_text(
+        '---\nname: core/bare\ndesc:\n  Notes on room #12 and the key.\n---\n\n'
+        '# bare\n\nBody.\n',
+        encoding='utf-8',
+    )
+    (tmp_path / 'core' / 'commented.md').write_text(
+        '---\nname: core/commented\ndesc: Short summary.  # TODO expand\n---\n\n'
+        '# commented\n\nBody.\n',
+        encoding='utf-8',
+    )
+    (tmp_path / 'core' / 'header.md').write_text(
+        '---\nname: core/header\ndesc: | # note\n  No period here\n---\n\n'
+        '# header\n\nBody.\n',
+        encoding='utf-8',
+    )
+    (tmp_path / 'core' / 'fallback.md').write_text(
+        '---\nname: core/fallback\ndesc: Notes on room #12 and the key.\nzz: A: b\n---\n\n'
+        '# fallback\n\nBody.\n',
+        encoding='utf-8',
+    )
+    wiki.update()
+
+    # a truncated desc is named with its cause, on the key line or a
+    # continuation line; the intentional comment is silent; a block header's
+    # comment truncates nothing; a block the parser rejects reads through the
+    # line grammar, where the hint would explain nothing
+    issues = {
+        issue.fields['path']: issue
+        for issue in wiki.lint()
+        if issue.kind == 'missing_period'
+    }
+    hint = "(the text after ' #' is a YAML comment"
+    assert sorted(issues) == [
+        'core/bare.md',
+        'core/cut.md',
+        'core/fallback.md',
+        'core/header.md',
+        'core/quoted.md',
+        'core/under.md',
+    ]
+    assert hint in issues['core/cut.md']
+    assert hint in issues['core/bare.md']
+    # a quoted value, a comment line under the value, a block header's
+    # comment, and a block the parser rejects lost nothing to a comment
+    for page in ('header', 'fallback', 'quoted', 'under'):
+        assert issues[f'core/{page}.md'] == f'core/{page}.md: Missing period in desc'
+    index = (tmp_path / 'core' / '_index.md').read_text(encoding='utf-8')
+    assert '[[core/cut|cut]]: Notes on room\n' in index
+    assert '[[core/commented|commented]]: Short summary.\n' in index
 
 
 # ------ wrap mangles
