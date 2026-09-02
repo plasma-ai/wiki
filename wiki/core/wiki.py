@@ -3043,7 +3043,8 @@ class Wiki:
             probe = pathlib.Path(joined)
             if not probe.is_relative_to(self._root):
                 continue
-            if probe.is_symlink():
+            # os.path reads an unstat-able target as missing (see the scan)
+            if os.path.islink(joined):
                 return True
         return False
 
@@ -3066,7 +3067,8 @@ class Wiki:
             probe = pathlib.Path(joined)
             if not probe.is_relative_to(self._root):
                 continue
-            if not probe.exists():
+            # os.path reads an unstat-able target as missing (see the scan)
+            if not os.path.exists(joined):
                 continue
             if pattern := self._excluded_by(probe):
                 return pattern
@@ -3090,7 +3092,8 @@ class Wiki:
             probe = pathlib.Path(joined)
             if not probe.is_relative_to(self._root):
                 continue
-            if not probe.exists():
+            # os.path reads an unstat-able target as missing (see the scan)
+            if not os.path.exists(joined):
                 continue
             if self._is_gitignored(probe):
                 return True
@@ -4909,16 +4912,17 @@ class Wiki:
         resolved = pathlib.Path(joined)
         if not resolved.is_relative_to(self._root):
             return None
-        # only suggest a target that actually exists (as a page or folder)
-        if resolved.with_name(resolved.name + '.md').exists():
+        # only suggest a target that actually exists (as a page or folder);
+        # os.path stats read an unstat-able path as missing, as the scan does
+        if os.path.exists(resolved.with_name(resolved.name + '.md')):
             return resolved.relative_to(self._root).as_posix()
         # a folder the walk indexes canonicalizes to its index page -- the
         # bare folder form is the directory-link hard issue -- while an
         # unindexed folder keeps the bare form, the shape lint leaves live
-        if (resolved / WIKI_INDEX).is_file() and self._is_indexed_dir(resolved):
+        if os.path.isfile(resolved / WIKI_INDEX) and self._is_indexed_dir(resolved):
             index_target = resolved / WIKI_INDEX
             return index_target.relative_to(self._root).with_suffix('').as_posix()
-        if resolved.is_dir():
+        if os.path.isdir(resolved):
             return resolved.relative_to(self._root).as_posix()
         return None
 
@@ -4987,14 +4991,18 @@ class Wiki:
             # root ('..' segments) is stale even when a file exists above it
             joined = pathlib.Path(os.path.normpath(self._root / page_target))
             if joined.is_relative_to(self._root):
-                if (self._root / (page_target + '.md')).exists():
+                # probe through os.path: a link target is authored text, so a
+                # path the filesystem cannot stat (a name past its length
+                # limit, an unreadable directory) is a missing target, never
+                # a crash -- pathlib re-raises those errors before 3.14
+                if os.path.exists(self._root / (page_target + '.md')):
                     continue
                 # a directory link names the folder, not the folder's index
                 # page a follow would need -- a hard issue naming the fix,
                 # scoped to folders the walk reaches: an unindexed subtree
                 # has no maintained index to steer prose at
                 index_path = joined / WIKI_INDEX
-                if index_path.is_file() and self._is_indexed_dir(joined):
+                if os.path.isfile(index_path) and self._is_indexed_dir(joined):
                     if target in reported:
                         continue
                     reported.add(target)
@@ -5012,7 +5020,7 @@ class Wiki:
                         )
                     )
                     continue
-                if (self._root / page_target).exists():
+                if os.path.exists(self._root / page_target):
                     continue
             if target in reported:
                 continue

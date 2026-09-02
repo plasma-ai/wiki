@@ -9,6 +9,7 @@ hard-issue vs soft-note split.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -95,6 +96,7 @@ __all__ = [
     'test_lint_directory_link_to_unindexed_folder_is_live',
     'test_lint_flags_folder_shadowing_page',
     'test_lint_accepts_anchor_links',
+    'test_lint_link_probes_never_raise',
 ]
 
 
@@ -2312,3 +2314,69 @@ def test_lint_accepts_anchor_links(tmp_path: pathlib.Path) -> None:
     ]
     assert len(stale) == 1
     assert 'missing' in stale[0]
+
+
+@pytest.mark.skipif(
+    os.geteuid() == 0, reason='permission denial needs an unprivileged user'
+)
+@pytest.mark.parametrize(
+    argnames=('surface', 'target'),
+    argvalues=[
+        # a prose target past the filesystem's name length limit
+        ('prose', 'a' * 300),
+        # a prose target under a directory the user cannot search
+        ('prose', '.locked/page'),
+        # a generated row's target past the name length limit
+        ('row', 'a' * 300),
+    ],
+    ids=['prose-long', 'prose-unreadable', 'row-long'],
+)
+def test_lint_link_probes_never_raise(
+    tmp_path: pathlib.Path,
+    surface: str,
+    target: str,
+) -> None:
+    """A link target the filesystem cannot stat reads as missing.
+
+    Link text is authored prose, so a name past the filesystem's length
+    limit or a path under an unreadable directory reaches the probes;
+    each reads as a missing target -- a stale note for prose, a broken
+    link for a generated row -- rather than surfacing the ``OSError``
+    that ``pathlib`` re-raises on interpreters before 3.14.
+    """
+    wiki = _make_wiki(tmp_path, folders={'notes': ['meeting']})
+    locked = tmp_path / '.locked'
+    locked.mkdir()
+    if surface == 'prose':
+        meeting = tmp_path / 'notes' / 'meeting.md'
+        meeting.write_text(
+            meeting.read_text(encoding='utf-8').replace(
+                'Content for meeting.', f'See [[{target}]] now.'
+            ),
+            encoding='utf-8',
+        )
+    else:
+        # inject the row into the root index's generated block
+        root_index = tmp_path / '_index.md'
+        text = root_index.read_text(encoding='utf-8')
+        text = text.replace(
+            '[[notes/_index|notes/]]',
+            f'[[{target}|long]]: ...\n[[notes/_index|notes/]]',
+            1,
+        )
+        root_index.write_text(text, encoding='utf-8')
+    os.chmod(locked, 0o000)
+    try:
+        notices = _capture_notices(wiki)
+        issues = wiki.lint()
+    finally:
+        os.chmod(locked, 0o700)
+    if surface == 'prose':
+        assert issues == []
+        stale = [
+            event.description for event in notices if 'Stale link' in event.description
+        ]
+        assert stale == [f'notes/meeting.md: Stale link [[{target}]]']
+    else:
+        broken = [issue for issue in issues if 'Broken link' in issue]
+        assert broken == [f'_index.md: Broken link [[{target}|long]]']
