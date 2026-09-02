@@ -23,6 +23,7 @@ import wiki.util
 from wiki.constants import (
     OFFLINE_MODE,
     WIKI_CACHE,
+    WIKI_CONFIG_DIR,
     WIKI_DIR,
     WIKI_INDEX,
     WIKI_SETTINGS,
@@ -116,6 +117,9 @@ class Wiki:
         #: instance out -- typed notes a machine consumer (``lint --json``)
         #: folds into its report beside the engine's own
         self.resolver_notices: list[Event] = []
+        # the wikis links.external folders admit, constructed once per
+        # instance as targets under them come up in the link scan
+        self._link_wikis: dict[pathlib.Path, Wiki] = {}
 
     @functools.cached_property
     def _root_name(self: Wiki) -> str:
@@ -1346,26 +1350,34 @@ class Wiki:
           pattern, and one the enclosing repo's gitignore fences is
           named as gitignored), directory links in user content (a
           wikilink target naming a folder rather than the folder's
-          ``_index`` page, flagged with the ``/_index`` form as the
-          fix), and -- under ``titles.required`` -- a missing or
-          unfilled ``title:``.
+          ``_index`` page -- in this wiki, or in another wiki a
+          ``links.external`` folder admits, judged by that wiki's own
+          settings -- flagged with the ``/_index`` form as the fix),
+          relative links inside the wiki (a ``./`` or ``../`` target,
+          read from the page's folder, that lands inside the wiki;
+          flagged with the prefix-free form as the fix), and -- under
+          ``titles.required`` -- a missing or unfilled ``title:``.
 
         Every line begins with the relevant path; an out-of-date file's
         diff follows its ``Requires update`` header, indented.
 
         A ``<!-- start: no-lint -->`` ... ``<!-- end: no-lint -->`` region
         suppresses the positional rules (conflict markers, escaped
-        wikilinks, wrap mangles, stale and directory links) for the lines
-        it wraps; file-level checks ignore regions, and a nested or
+        wikilinks, wrap mangles, stale, outside, directory, and relative
+        links) for the lines it wraps; file-level checks ignore regions,
+        and a nested or
         dangling region marker is itself a hard issue.
 
         Placeholder and oversized descriptions, empty content sections,
         stale links in user content (index bodies and pages -- the
-        generated link block's broken-link check is the hard surface),
-        a ``links.external`` entry naming no folder on this machine
-        (noted once per run; links into it go unchecked), and CRLF line
-        endings (which the next ``update`` normalizes) are soft notes
-        (stderr) and do not count as issues.
+        generated link block's broken-link check is the hard surface; a
+        target outside the root resolves only under a folder
+        ``links.external`` allowlists), a link to a real file outside
+        every allowlisted folder (noted with the entry to add), a
+        ``links.external`` entry naming no folder on this machine (noted
+        once per run; links into it go unchecked), and CRLF line endings
+        (which the next ``update`` normalizes) are soft notes (stderr)
+        and do not count as issues.
 
         Args:
             name: Restrict scope to named subtree (relative
@@ -2605,6 +2617,26 @@ class Wiki:
             event = LinkStaleEvent(message, **kwargs)
         return self.on_notice(event, logging_level=logging_level)
 
+    def on_link_outside(
+        self: Wiki,
+        message: Optional[str] = None,
+        *,
+        logging_level: int = logging.INFO,
+        event: Optional[LinkOutsideEvent] = None,
+        **kwargs: Any,
+    ) -> Event:
+        """Handle an outside-link notice event.
+
+        Constructs a ``LinkOutsideEvent`` from ``message`` and the
+        payload kwargs (the live-site path) unless a pre-built ``event``
+        is passed through, then delegates to ``on_notice``. Override in
+        subclasses to intercept this notice kind alone; override
+        ``on_notice`` to intercept every notice.
+        """
+        if event is None:
+            event = LinkOutsideEvent(message, **kwargs)
+        return self.on_notice(event, logging_level=logging_level)
+
     def on_link_folder_missing(
         self: Wiki,
         message: Optional[str] = None,
@@ -3151,6 +3183,100 @@ class Wiki:
             if self._is_excluded_dir(current):
                 return False
         return True
+
+    def _external_folder(self: Wiki, path: pathlib.Path) -> Optional[pathlib.Path]:
+        """Return the ``links.external`` folder holding ``path``, or ``None``.
+
+        Containment is lexical, like every link probe: a link means what
+        its text says, and only a stat follows. The most specific entry
+        wins, so an ancestor beside an absent sibling never answers for
+        the sibling's targets.
+        """
+        holders = []
+        for _folder, joined in self._links_policy:
+            if path.is_relative_to(joined):
+                holders.append(joined)
+        if not holders:
+            return None
+        return max(holders, key=lambda folder: len(folder.parts))
+
+    def _is_link_wiki_root(self: Wiki, path: pathlib.Path) -> bool:
+        """Return ``True`` if ``path`` holds another wiki's settings marker.
+
+        The home directory and the config home are exempt, as the CLI's
+        root resolution exempts them: the trust store lives at
+        ``~/.wiki/settings.json`` (or under ``WIKI_CONFIG_DIR``), so a
+        home that read as a root would answer for every folder beneath
+        it.
+        """
+        if path.resolve() == pathlib.Path.home().resolve():
+            return False
+        override = os.environ.get(WIKI_CONFIG_DIR)
+        if override:
+            config_home = pathlib.Path(override).expanduser()
+        else:
+            config_home = pathlib.Path.home() / WIKI_DIR
+        if (path / WIKI_DIR).resolve() == config_home.resolve():
+            return False
+        return os.path.isfile(path / WIKI_SETTINGS)
+
+    def _link_wiki(
+        self: Wiki,
+        path: pathlib.Path,
+        folder: pathlib.Path,
+    ) -> Optional[tuple[pathlib.Path, Wiki]]:
+        """Return the wiki enclosing external ``path`` under ``folder``, or ``None``.
+
+        The root is the nearest ancestor holding the settings marker, as
+        the CLI resolves any root; nested wikis are refused everywhere, so
+        the first marker up the chain is the root, and the walk stops at
+        the allowlisted ``folder`` -- an entry inside a wiki admits its
+        files as plain files. The instance is the plain class (a hook
+        loads only through the CLI's trust check), constructed once per
+        instance, and its settings are read as the host's are: a
+        malformed block fails the run naming the wiki. Returns the
+        marker's folder beside the instance, whose own root is resolved.
+        """
+        for ancestor in (path, *path.parents):
+            if self._is_link_wiki_root(ancestor):
+                if ancestor not in self._link_wikis:
+                    guest = Wiki(ancestor)
+                    try:
+                        guest._exclude_policy  # noqa: B018
+                    except ValueError as e:
+                        relative = os.path.relpath(ancestor, self._root)
+                        raise ValueError(
+                            f'links.external wiki {relative!r}: {e}'
+                        ) from e
+                    self._link_wikis[ancestor] = guest
+                return ancestor, self._link_wikis[ancestor]
+            if ancestor == folder:
+                return None
+        return None
+
+    def _external_spelling(
+        self: Wiki,
+        reading: pathlib.Path,
+        page: pathlib.Path,
+    ) -> Optional[str]:
+        """Return the page-relative spelling of the allowlisted file ``reading`` names.
+
+        ``reading`` is a target read as if from the wiki root, or an
+        absolute target; when it lands under an allowlisted folder present
+        on this machine and names a real file, page, or folder there, the
+        fix is the same path spelled from ``page``'s folder, the form the
+        scan reads. ``None`` otherwise: a target that reaches nothing has
+        no fix to suggest.
+        """
+        if reading.is_relative_to(self._root):
+            return None
+        folder = self._external_folder(reading)
+        if (folder is None) or not os.path.isdir(folder):
+            return None
+        page_form = reading.parent / (reading.name + '.md')
+        if not (os.path.exists(page_form) or os.path.exists(reading)):
+            return None
+        return pathlib.Path(os.path.relpath(reading, page.parent)).as_posix()
 
     def _is_symlink_skipped(self: Wiki, target: str) -> bool:
         """Return ``True`` if link ``target`` names a symlinked file on disk.
@@ -5019,6 +5145,24 @@ class Wiki:
                 )
         return result
 
+    def _root_relative_form(self: Wiki, resolved: pathlib.Path) -> Optional[str]:
+        """Return the root-relative target an in-root path is linked by, or ``None``.
+
+        A page links by stem, a folder the walk indexes by its ``_index``
+        page (the bare folder form is the directory-link hard issue), and
+        any other folder or file by its bare path; ``None`` when nothing
+        exists there (an unresolvable target has no fix to suggest). The
+        probes go through ``os.path``, as the link scan's do.
+        """
+        if os.path.exists(resolved.with_name(resolved.name + '.md')):
+            return resolved.relative_to(self._root).as_posix()
+        if os.path.isfile(resolved / WIKI_INDEX) and self._is_indexed_dir(resolved):
+            index_target = resolved / WIKI_INDEX
+            return index_target.relative_to(self._root).with_suffix('').as_posix()
+        if os.path.exists(resolved):
+            return resolved.relative_to(self._root).as_posix()
+        return None
+
     def _canonical_link_target(
         self: Wiki,
         path: pathlib.Path,
@@ -5026,31 +5170,17 @@ class Wiki:
     ) -> Optional[str]:
         """Return the root-relative form of a folder-relative wikilink target.
 
-        Resolves ``target`` (e.g. ``../overview``) from ``path``'s folder and
-        expresses it relative to the wiki root, the form wikilinks use. Returns
-        the canonical target when it resolves inside the root -- a page, the
-        ``_index`` page of an indexed folder that has one, or any other
-        folder's bare form -- else ``None`` (an unresolvable target has no fix
-        to suggest).
+        Resolves ``target`` (e.g. ``overview``) from ``path``'s folder and
+        expresses it relative to the wiki root, the form prefix-free
+        wikilinks use. Returns the canonical target when it resolves
+        inside the root (see :meth:`_root_relative_form`) -- else ``None``.
         """
         # resolve the folder-relative target without touching the filesystem
         joined = os.path.normpath(path.parent / target)
         resolved = pathlib.Path(joined)
         if not resolved.is_relative_to(self._root):
             return None
-        # only suggest a target that actually exists (as a page or folder);
-        # os.path stats read an unstat-able path as missing, as the scan does
-        if os.path.exists(resolved.with_name(resolved.name + '.md')):
-            return resolved.relative_to(self._root).as_posix()
-        # a folder the walk indexes canonicalizes to its index page -- the
-        # bare folder form is the directory-link hard issue -- while an
-        # unindexed folder keeps the bare form, the shape lint leaves live
-        if os.path.isfile(resolved / WIKI_INDEX) and self._is_indexed_dir(resolved):
-            index_target = resolved / WIKI_INDEX
-            return index_target.relative_to(self._root).with_suffix('').as_posix()
-        if os.path.isdir(resolved):
-            return resolved.relative_to(self._root).as_posix()
-        return None
+        return self._root_relative_form(resolved)
 
     def _lint_stale_links(
         self: Wiki,
@@ -5059,22 +5189,39 @@ class Wiki:
     ) -> list[Issue]:
         """Check wikilinks in content; return the hard issues.
 
-        A directory link -- a target naming a folder rather than the
-        folder's index page -- renders but resolves to nothing when
-        followed, so it is a hard issue naming the ``/_index`` form as
-        the fix; only a folder the walk reaches qualifies, since a
-        dot-prefixed, symlinked, or ``exclude.patterns`` segment keeps
-        its whole subtree out of the index. A stale link in user content
-        is a soft note (``on_link_stale``), not an issue: prose
-        references pages that come and go, and the generated index link
-        block's broken-link check is the hard surface. Either way a
-        target reports once per file, and a link's display text rides
-        into the suggested fix so the replacement keeps its label.
-        Wikilinks in a code sample -- fenced, inline, or four-space
-        indented -- and in an HTML comment are not links to follow, so
-        neither rule sees them. Lines inside a well-formed ``no-lint``
-        region are exempt too; the region is parsed from the scanned
-        content itself, so the region must wrap the link lines.
+        Two spellings, one rule each: a prefix-free target is read from
+        the wiki root and must name something inside it; a target with a
+        ``.`` or ``..`` segment is read from the page's folder, as
+        Obsidian and markdown read it, and must leave the wiki -- one
+        that lands inside is a hard issue naming the prefix-free form
+        (and the file the text reaches when read from the root, if an
+        allowlisted one exists there). A directory link -- a target
+        naming a folder rather than the folder's index page -- renders
+        but resolves to nothing when followed, so it is a hard issue
+        naming the ``/_index`` form as the fix; only a folder a walk
+        reaches qualifies -- this wiki's, or that of another wiki a
+        ``links.external`` folder admits, judged by its own settings --
+        since a dot-prefixed, symlinked, or ``exclude.patterns`` segment
+        keeps its whole subtree out of the index. Outside the wiki a
+        target is live under an allowlisted folder present on this
+        machine when the file, its ``.md`` form, or the folder exists; a
+        target under an entry naming no folder here is left to the
+        run-level note; a real file under no allowlisted folder is a soft
+        note naming the entry to add (``on_link_outside``). A stale link
+        in user content is a soft note (``on_link_stale``), not an issue:
+        prose references pages that come and go, and the generated index
+        link block's broken-link check is the hard surface; the note
+        names the fix when a reading resolves -- the page-relative
+        spelling of an allowlisted file a prefixed or absolute target
+        missed, or the root-relative form a prefix-free target's
+        folder-relative reading names. Either way a target reports once
+        per file, and a link's display text rides into the suggested fix
+        so the replacement keeps its label. Wikilinks in a code sample --
+        fenced, inline, or four-space indented -- and in an HTML comment
+        are not links to follow, so no rule sees them. Lines inside a
+        well-formed ``no-lint`` region are exempt too; the region is
+        parsed from the scanned content itself, so the region must wrap
+        the link lines.
         """
         # initialize issues and the targets already reported for this file:
         # the scan is content-local, so a repeat of a target carries no line
@@ -5113,10 +5260,49 @@ class Wiki:
             anchor = target[len(page_target) :]
             if not page_target:
                 continue
-            # targets are root-relative by grammar, so a join that escapes the
-            # root ('..' segments) is stale even when a file exists above it
-            joined = pathlib.Path(os.path.normpath(self._root / page_target))
+            # a './' or '../' target is read from the page's folder, as
+            # Obsidian and markdown read it, and must leave the wiki; a
+            # prefix-free target is read from the root and must stay inside
+            segments = page_target.split('/')
+            prefixed = ('.' in segments) or ('..' in segments)
+            base = path.parent if prefixed else self._root
+            joined = pathlib.Path(os.path.normpath(base / page_target))
             if joined.is_relative_to(self._root):
+                # a prefixed target landing inside the wiki is a hard issue:
+                # the in-wiki form is prefix-free, the one spelling every
+                # reader resolves from the root, so name it -- and the file
+                # outside the wiki the text reaches when read from the root,
+                # if an allowlisted one exists
+                if prefixed:
+                    if target in reported:
+                        continue
+                    reported.add(target)
+                    canonical = self._root_relative_form(joined)
+                    reading = pathlib.Path(os.path.normpath(self._root / page_target))
+                    external = self._external_spelling(reading, path)
+                    fixes = []
+                    if canonical is not None:
+                        fixes.append(f'[[{canonical}{anchor}{alias}]]')
+                    if external is not None:
+                        fixes.append(
+                            f'[[{external}{anchor}{alias}]] for the file outside'
+                            ' the wiki'
+                        )
+                    fix = f' (use {", or ".join(fixes)})' if fixes else ''
+                    fields = {'path': str(relpath), 'target': target}
+                    if canonical is not None:
+                        fields['canonical'] = canonical + anchor
+                    if external is not None:
+                        fields['external'] = external + anchor
+                    result.append(
+                        Issue(
+                            f'{relpath}: Link [[{target}{alias}]] points inside'
+                            f" the wiki through './' or '../'{fix}",
+                            kind='relative_link',
+                            **fields,
+                        )
+                    )
+                    continue
                 # probe through os.path: a link target is authored text, so a
                 # path the filesystem cannot stat (a name past its length
                 # limit, an unreadable directory) is a missing target, never
@@ -5148,13 +5334,79 @@ class Wiki:
                     continue
                 if os.path.exists(self._root / page_target):
                     continue
+            elif not os.path.isabs(page_target):
+                folder = self._external_folder(joined)
+                if folder is None:
+                    # a real file under no allowlisted folder: name the entry
+                    # that would admit it rather than call the link stale
+                    page_form = joined.parent / (joined.name + '.md')
+                    if os.path.exists(page_form) or os.path.exists(joined):
+                        if target in reported:
+                            continue
+                        reported.add(target)
+                        holder = joined if os.path.isdir(joined) else joined.parent
+                        entry = pathlib.Path(os.path.relpath(holder, self._root))
+                        self.on_link_outside(
+                            path=str(relpath),
+                            target=target + alias,
+                            folder=entry.as_posix(),
+                        )
+                        continue
+                elif not os.path.isdir(folder):
+                    # an entry naming no folder on this machine leaves nothing
+                    # to check: the run-level note names it once
+                    continue
+                else:
+                    # a page by stem is live wherever it lies
+                    if os.path.exists(joined.parent / (joined.name + '.md')):
+                        continue
+                    # inside another wiki its own rules apply, exclusions
+                    # included: a folder that wiki indexes is the directory
+                    # link, judged by the instance built from its settings
+                    guest = self._link_wiki(joined, folder)
+                    if guest is not None:
+                        guest_root, guest_wiki = guest
+                        index_path = joined / WIKI_INDEX
+                        inner = guest_wiki._root / joined.relative_to(guest_root)
+                        if os.path.isfile(index_path) and guest_wiki._is_indexed_dir(
+                            inner
+                        ):
+                            if target in reported:
+                                continue
+                            reported.add(target)
+                            index_target = pathlib.Path(
+                                os.path.relpath(index_path, path.parent)
+                            )
+                            index_target = index_target.with_suffix('').as_posix()
+                            result.append(
+                                Issue(
+                                    f'{relpath}: Link [[{target}{alias}]] targets a'
+                                    ' folder, not a page'
+                                    f' (use [[{index_target}{anchor}{alias}]])',
+                                    kind='directory_link',
+                                    path=str(relpath),
+                                    target=target,
+                                    canonical=index_target + anchor,
+                                )
+                            )
+                            continue
+                    # the literal file or folder is there
+                    if os.path.exists(joined):
+                        continue
             if target in reported:
                 continue
             reported.add(target)
-            # a folder-relative link (e.g. [[../overview]]) is stale because
-            # wiki targets are root-relative; when it resolves to a real page
-            # from this file's folder, name the canonical form as the fix
-            canonical = self._canonical_link_target(path, page_target)
+            # name the fix when a reading resolves: a prefixed or absolute
+            # target read from the wiki root that lands on an allowlisted file
+            # gets its page-relative spelling; a prefix-free miss keeps the
+            # root-relative form of its folder-relative reading
+            if os.path.isabs(page_target):
+                canonical = self._external_spelling(joined, path)
+            elif prefixed:
+                reading = pathlib.Path(os.path.normpath(self._root / page_target))
+                canonical = self._external_spelling(reading, path)
+            else:
+                canonical = self._canonical_link_target(path, page_target)
             if (canonical is not None) and (canonical != page_target):
                 self.on_link_stale(
                     path=str(relpath),
@@ -5514,6 +5766,22 @@ class LinkStaleEvent(Event):
         return result
 
 
+class LinkOutsideEvent(Event):
+    """Emitted when lint notes a wikilink leaving the wiki for an unlisted file."""
+
+    path: str
+    target: str
+    folder: str
+
+    @property
+    def description(self: LinkOutsideEvent) -> str:
+        """Return the outside-link note line."""
+        return (
+            f'{self.path}: Link [[{self.target}]] points outside the wiki (add'
+            f' {self.folder!r} to links.external in {WIKI_SETTINGS} to allow it)'
+        )
+
+
 class LinkFolderMissingEvent(Event):
     """Emitted when lint finds a ``links.external`` entry naming no folder."""
 
@@ -5555,6 +5823,7 @@ _NOTICE_HOOKS = {
     ContentEmptyEvent: 'on_content_empty',
     CrlfNoticeEvent: 'on_crlf_notice',
     LinkStaleEvent: 'on_link_stale',
+    LinkOutsideEvent: 'on_link_outside',
     LinkFolderMissingEvent: 'on_link_folder_missing',
 }
 
