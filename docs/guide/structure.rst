@@ -120,6 +120,10 @@ Any ``[[topics/example]]`` wikilinks in prose now
 name a folder rather than a page, which ``wiki lint`` reports as an issue
 naming the ``[[topics/example/_index]]`` form to use instead (a plain rename,
 where the old name vanishes, draws a stale-link note — once per target).
+A prose link written with ``./`` or ``../`` to a page inside the wiki —
+``[[./example/basics]]`` from ``topics/other.md`` — is an issue too, naming
+the prefix-free ``[[topics/example/basics]]`` form: a prefixed target is read
+from the page's folder and must leave the wiki (see :doc:`/configuration`).
 Wikilinks in prose are authored by hand, so find them (``wiki match``) and
 update them yourself.
 

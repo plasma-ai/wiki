@@ -261,8 +261,10 @@ The name resolves relative to the wiki root: a directory reads its
 (appended, not substituted — ``app.config`` resolves to ``app.config.md``). A
 miss fails with ``Wiki entry not found: '<name>'``, suggesting the full key
 when exactly one page's stem matches; a path escaping the root fails with
-``Path is outside wiki root: '<name>'``. Resolution is directory-first: a
-folder shadows a same-named page.
+``Path is outside wiki root: '<name>'`` — even under a ``links.external``
+folder; the allowlist is a lint rule, not a read grant (see
+:doc:`/configuration`). Resolution is directory-first: a folder shadows a
+same-named page.
 
 The slice options are pairwise mutually exclusive and share the format
 ``n:m``, ``n:``, or ``:m`` (0-indexed, half-open). A slice applies to the
@@ -617,8 +619,8 @@ stderr note is not a blocking issue). ``--json`` replaces the prose report
 with one JSON document on stdout carrying every finding under an explicit
 ``severity`` (``issue``/``note``) and a machine ``kind`` with its per-kind
 payload fields (``path`` on every issue and on most notes — the
-``resolver_notice``, ``merge_driver_unconfigured``, and
-``git_fence_unavailable`` notes carry none — plus e.g. ``target``/``label``
+``resolver_notice``, ``merge_driver_unconfigured``, ``git_fence_unavailable``,
+and ``link_folder_missing`` notes carry none — plus e.g. ``target``/``label``
 on a broken link, ``line`` on a wrap mangle, or ``line``/``reason`` on
 invalid YAML frontmatter), the rendered prose under ``text``, and a
 ``summary`` with both counts; the exit-code contract is unchanged.
@@ -636,29 +638,39 @@ nested wiki roots, formatter-damage signatures (escaped wikilinks, a missing
 delimiter), hand-wrap mangles, authored descriptions missing their trailing
 period, unparseable ``created:``/``updated:`` stamps, broken links in the
 generated index block, prose wikilinks naming a folder rather than its
-``_index`` page, dangling or nested region markers, and — when the
+``_index`` page (in this wiki, or in another wiki a ``links.external``
+folder admits, judged by that wiki's own settings), prose wikilinks written
+with ``./`` or ``../`` that land inside the wiki (a prefixed target is read
+from the page's folder and must leave the wiki; the issue names the
+prefix-free form), dangling or nested region markers, and — when the
 ``titles.required`` setting is on — missing titles.
 
 **Notes** (soft, stderr) flag placeholder (``...``) descriptions, descriptions
 over 500 characters, empty index content sections, CRLF line endings, stale
-``[[wikilinks]]`` in authored prose (suggesting the canonical target when one
-resolves), an indexed path this machine's git ignores (a personal
-``core.excludesFile`` rule — the row ships where the file cannot, so every other
-clone reds on a broken link), a gitignore fence the probe cannot read inside an
-enclosing repository (``git check-ignore`` failed — git off ``PATH`` or a
-broken install — so indexing proceeds unfenced and adopts what the repository
-ignores), and a ``.gitattributes`` mapping ``merge=wiki`` with no
-``merge.wiki.driver`` configured — the fresh-clone state where index merges
-silently fall back to a plain text merge until ``wiki config`` registers the
-driver. Resolver diagnostics (an upward resolution, a missing settings marker
-or root index, an outer index above the declared root) join the notes too —
-counted in the closing summary and typed as ``resolver_notice`` rows in
-``--json`` — beside their stderr prose.
+``[[wikilinks]]`` in authored prose (inside the wiki, or under a
+``links.external`` folder present on this machine; the note suggests the
+prefix-free target, or the page-relative spelling of an allowlisted file,
+when one resolves), a ``./`` or ``../`` link reaching a real file outside
+every ``links.external`` folder (naming the entry to add), a
+``links.external`` entry naming no folder on this machine (noted once per
+run; links into it go unchecked), an indexed path this machine's git ignores
+(a personal ``core.excludesFile`` rule — the row ships where the file cannot,
+so every other clone reds on a broken link), a gitignore fence the probe
+cannot read inside an enclosing repository (``git check-ignore`` failed — git
+off ``PATH`` or a broken install — so indexing proceeds unfenced and adopts
+what the repository ignores), and a ``.gitattributes`` mapping ``merge=wiki``
+with no ``merge.wiki.driver`` configured — the fresh-clone state where index
+merges silently fall back to a plain text merge until ``wiki config``
+registers the driver. Resolver diagnostics (an upward resolution, a missing
+settings marker or root index, an outer index above the declared root) join
+the notes too — counted in the closing summary and typed as
+``resolver_notice`` rows in ``--json`` — beside their stderr prose.
 
 A ``<!-- start: no-lint -->`` ... ``<!-- end: no-lint -->`` region suppresses
 the position-based rules (conflict markers, escaped wikilinks, wrap mangles,
-stale-link notes, directory-link issues) for the lines it wraps; a malformed
-pair is itself an issue and suppresses nothing.
+stale-link and outside-link notes, directory-link and relative-link issues)
+for the lines it wraps; a malformed pair is itself an issue and suppresses
+nothing.
 
 .. list-table::
    :header-rows: 1

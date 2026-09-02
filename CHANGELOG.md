@@ -38,6 +38,50 @@ may include breaking changes, each listed under a Breaking heading.
   on that first update, as one opening the block's body is.
 - PyYAML (`pyyaml>=6,<7`) is a runtime dependency; environments synced before
   this release need a `uv sync` (or a reinstall).
+- `wiki lint` reports a `./` or `../` prose wikilink that lands inside the wiki
+  as a new hard issue, `relative_link` (with `path`, `target`, `canonical`, and
+  `external` payload fields — the last two only when a fix resolves). A prefixed
+  target is read from the page's folder, as Obsidian and markdown read it, and
+  must point outside the wiki: the in-wiki form is prefix-free, so the issue
+  names it (`(use [[overview]])`) and, when the same text read from the wiki
+  root reaches a real file under a `links.external` folder, that file's
+  page-relative spelling too
+  (`(use [[../../src/main.py]] for the file outside the wiki)`). The
+  folder-relative slip `[[../overview]]` from a nested page, which was a soft
+  `Stale link` note carrying the same `(use [[overview]])` suggestion, is now
+  this issue. A wiki with no such link lints exactly as before.
+
+### Added
+
+- `links.external` external link folders: a list in `.wiki/settings.json` of
+  folder paths relative to the wiki root, each climbing out of it with leading
+  `..` (`{"links": {"external": ["../src", "../math"]}}`), under which prose
+  wikilinks may leave the wiki. Two link bases, one rule each: a prefix-free
+  target is read from the wiki root and must name something inside it; a `./` or
+  `../` target is read from the page's folder, as Obsidian and markdown read it,
+  and must leave the wiki. Under a listed folder present on this machine
+  `wiki lint` holds a link live when the file, its `.md` page, or the folder
+  exists and notes a missing target stale; a target inside another wiki (a
+  folder holding `.wiki/settings.json`) is judged by that wiki's own settings —
+  a page by stem is live, a folder it indexes is the `directory_link` issue
+  naming its `_index` page, a folder its `exclude.patterns` keeps out is live —
+  read as a JSON parse that runs none of that wiki's code (a malformed settings
+  file there fails lint naming that wiki). A real file outside every listed
+  folder is noted with the entry to add (`LinkOutsideEvent`, hook
+  `on_link_outside`, JSON kind `link_outside` with `path`, `target`, and
+  `folder`), and an entry naming no folder on this machine draws one note per
+  run while the links into it go unchecked (`LinkFolderMissingEvent`, hook
+  `on_link_folder_missing`, JSON kind `link_folder_missing` with `folder` and no
+  `path`). The allowlist is a lint rule alone: `wiki read`, `map`, `match`,
+  `search`, `update`, and `new` stay confined to the root, and generated index
+  rows never carry an external target, so `wiki map` never shows an external
+  folder. Obsidian reads `./` and `../` from the note's folder too, so nothing
+  lint accepts renders as a different file there, but it cannot see outside the
+  vault, so an external link shows unresolved — do not click it: Obsidian
+  creates the missing target at that path. `wiki init` does not seed the block
+  but validates one passed through `--settings`; `wiki lint` reads it on every
+  run and `wiki update` never does; earlier versions ignore it and note external
+  links as stale.
 
 ### Changed
 
@@ -54,6 +98,17 @@ may include breaking changes, each listed under a Breaking heading.
   one space).
 - The `wiki update` narration counts files with malformed frontmatter without
   the `(no closing ---)` suffix; each per-file notice names its reason.
+- A prose wikilink that leaves the wiki and resolves to a real file or folder
+  outside every `links.external` folder is noted as
+  `Link [[../docs/guide]] points outside the wiki (add '../docs' to links.external in .wiki/settings.json to allow it)`
+  instead of `Stale link [[../docs/guide]]` — still a note, never an issue; a
+  target with nothing at its path keeps the stale note.
+- The `(use [[...]])` suggestion also names a raw file's spelling inside the
+  wiki — `(use [[Makefile]])` on the relative-link issue for a `[[../Makefile]]`
+  slip to a root-level `Makefile`, `(use [[notes/Makefile]])` on the stale note
+  for a `[[Makefile]]` in `notes/` that resolves only from the page's folder —
+  and the page-relative spelling of an allowlisted file a prefixed or absolute
+  link missed (`Stale link [[/repo/src/main.py]] (use [[../../src/main.py]])`).
 
 ### Fixed
 
@@ -267,6 +322,11 @@ may include breaking changes, each listed under a Breaking heading.
   its block scalar with an explicit indentation indicator (`desc: |2`), so a
   strict reader takes the leading whitespace as content instead of mis-detecting
   the block's indentation and rejecting it.
+- `wiki lint` no longer exits 2 on Python 3.11 to 3.13 when a prose wikilink or
+  an index row names a path the filesystem cannot stat (a name over 255 bytes,
+  an unreadable directory): every link probe goes through `os.path`, so the
+  target reads as missing — a stale note for prose, a broken-link issue for a
+  generated row — as it does on 3.14.
 
 ## [1.3.1] - 2026-08-25
 
