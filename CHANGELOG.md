@@ -65,23 +65,24 @@ may include breaking changes, each listed under a Breaking heading.
   folder holding `.wiki/settings.json`) is judged by that wiki's own settings —
   a page by stem is live, a folder it indexes is the `directory_link` issue
   naming its `_index` page, a folder its `exclude.patterns` keeps out is live —
-  read as a JSON parse that runs none of that wiki's code (a malformed settings
-  file there fails lint naming that wiki). A real file outside every listed
-  folder is noted with the entry to add (`LinkOutsideEvent`, hook
-  `on_link_outside`, JSON kind `link_outside` with `path`, `target`, and
-  `folder`), and an entry naming no folder on this machine draws one note per
-  run while the links into it go unchecked (`LinkFolderMissingEvent`, hook
-  `on_link_folder_missing`, JSON kind `link_folder_missing` with `folder` and no
-  `path`). The allowlist is a lint rule alone: `wiki read`, `map`, `match`,
-  `search`, `update`, and `new` stay confined to the root, and generated index
-  rows never carry an external target, so `wiki map` never shows an external
-  folder. Obsidian reads `./` and `../` from the note's folder too, so nothing
-  lint accepts renders as a different file there, but it cannot see outside the
-  vault, so an external link shows unresolved — do not click it: Obsidian
-  creates the missing target at that path. `wiki init` does not seed the block
-  but validates one passed through `--settings`; `wiki lint` reads it on every
-  run and `wiki update` never does; earlier versions ignore it and note external
-  links as stale.
+  read as a JSON parse that runs none of that wiki's code (a malformed or
+  unreadable settings file there fails lint naming that wiki once a link needs
+  its rules; the home directory and the config home never count as a wiki). A
+  real file outside every listed folder is noted with the entry to add
+  (`LinkOutsideEvent`, hook `on_link_outside`, JSON kind `link_outside` with
+  `path`, `target`, and `folder`), and an entry naming no folder on this machine
+  draws one note per run while the links into it go unchecked
+  (`LinkFolderMissingEvent`, hook `on_link_folder_missing`, JSON kind
+  `link_folder_missing` with `folder` and no `path`). The allowlist is a lint
+  rule alone: `wiki read`, `map`, `match`, `search`, `update`, and `new` stay
+  confined to the root, and generated index rows never carry an external target,
+  so `wiki map` never shows an external folder. Obsidian reads `./` and `../`
+  from the note's folder too, so nothing lint accepts renders as a different
+  file there, but it cannot see outside the vault, so an external link shows
+  unresolved — do not click it: Obsidian creates the missing target at that
+  path. `wiki init` does not seed the block but validates one passed through
+  `--settings`; `wiki lint` reads it on every run and `wiki update` never does;
+  earlier versions ignore it and note external links as stale.
 
 ### Changed
 

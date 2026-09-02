@@ -27,6 +27,7 @@ from ._helpers import (
     _git_repo,
     _make_wiki,
     _needs_git,
+    _needs_unprivileged,
     _set_exclude_patterns,
     page_index,
 )
@@ -84,6 +85,7 @@ __all__ = [
     'test_quoted_placeholder_desc_is_soft',
     'test_long_desc_is_note_only',
     'test_lint_relative_prefix_inside_wiki_is_issue',
+    'test_lint_relative_root_link_names_the_index_page',
     'test_lint_directory_link_is_issue_naming_index_form',
     'test_lint_link_rules_spare_samples_not_prose',
     'test_lint_directory_link_keeps_display_text',
@@ -1920,12 +1922,9 @@ def test_lint_relative_prefix_inside_wiki_is_issue(
     name = 'meeting.md' if kind == 'page' else '_index.md'
     marker = 'Content for meeting.' if kind == 'page' else 'Overview of notes.'
     page = tmp_path / 'notes' / name
-    page.write_text(
-        page.read_text(encoding='utf-8').replace(
-            marker, f'See [[{link}{anchor}|Here]] for context.'
-        ),
-        encoding='utf-8',
-    )
+    body = f'See [[{link}{anchor}|Here]] for context.'
+    text = page.read_text(encoding='utf-8').replace(marker, body)
+    page.write_text(text, encoding='utf-8')
     Wiki(tmp_path).update()
 
     # the issue names the prefix-free spelling; the link never also notes
@@ -1939,6 +1938,31 @@ def test_lint_relative_prefix_inside_wiki_is_issue(
     ]
     assert flagged[0].kind == 'relative_link'
     assert not any('Stale link' in event.description for event in notices)
+
+
+def test_lint_relative_root_link_names_the_index_page(tmp_path: pathlib.Path) -> None:
+    """A prefixed link to the wiki root itself is steered to its index page.
+
+    ``[[.]]`` from a root page and ``[[..]]`` from a nested one land on
+    the root, whose fix is ``_index`` -- never the stem of a file beside
+    the wiki that shares the root folder's name.
+    """
+    root = tmp_path / 'wiki'
+    _make_wiki(root, folders={'notes': ['meeting']})
+    (tmp_path / 'wiki.md').write_text('x\n', encoding='utf-8')
+    for page, link in (('_index.md', '.'), ('notes/meeting.md', '..')):
+        path = root / page
+        marker = 'Root overview.' if page == '_index.md' else 'Content for meeting.'
+        text = path.read_text(encoding='utf-8').replace(marker, f'See [[{link}]] now.')
+        path.write_text(text, encoding='utf-8')
+
+    issues = Wiki(root).lint()
+    assert sorted(issues) == [
+        "_index.md: Link [[.]] points inside the wiki through './' or '../'"
+        ' (use [[_index]])',
+        "notes/meeting.md: Link [[..]] points inside the wiki through './' or '../'"
+        ' (use [[_index]])',
+    ]
 
 
 @page_index
@@ -2299,9 +2323,7 @@ def test_lint_accepts_anchor_links(tmp_path: pathlib.Path) -> None:
     assert 'missing' in stale[0]
 
 
-@pytest.mark.skipif(
-    os.geteuid() == 0, reason='permission denial needs an unprivileged user'
-)
+@_needs_unprivileged
 @pytest.mark.parametrize(
     argnames=('surface', 'target'),
     argvalues=[
@@ -2332,12 +2354,9 @@ def test_lint_link_probes_never_raise(
     locked.mkdir()
     if surface == 'prose':
         meeting = tmp_path / 'notes' / 'meeting.md'
-        meeting.write_text(
-            meeting.read_text(encoding='utf-8').replace(
-                'Content for meeting.', f'See [[{target}]] now.'
-            ),
-            encoding='utf-8',
-        )
+        body = f'See [[{target}]] now.'
+        text = meeting.read_text(encoding='utf-8').replace('Content for meeting.', body)
+        meeting.write_text(text, encoding='utf-8')
     else:
         # inject the row into the root index's generated block
         root_index = tmp_path / '_index.md'

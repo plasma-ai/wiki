@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -16,6 +17,7 @@ from wiki.core.wiki import Wiki
 __all__ = [
     'page_index',
     '_needs_git',
+    '_needs_unprivileged',
     '_git',
     '_git_repo',
     '_capture_notices',
@@ -30,6 +32,11 @@ page_index = pytest.mark.parametrize('kind', ['page', 'index'])
 
 # gates the tests that drive a real git repository
 _needs_git = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
+
+# gates the tests that rely on a permission denial
+_needs_unprivileged = pytest.mark.skipif(
+    os.geteuid() == 0, reason='needs a non-root user'
+)
 
 
 def _git(cwd: pathlib.Path, *args: str) -> subprocess.CompletedProcess[str]:

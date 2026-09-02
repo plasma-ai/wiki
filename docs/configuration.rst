@@ -392,7 +392,8 @@ external links (in-wiki links, being root-relative, survive the move).
      (no wikilink target can carry one); an empty segment (``//``); a ``.``
      segment; a ``..`` segment anywhere but the start; a path naming the
      whole filesystem; a path inside the wiki root (an in-wiki link needs no
-     allowlist); and a path that aliases the wiki root through a symlink.
+     allowlist); and a path that resolves inside the wiki root through a
+     symlink alias.
    - An entry may name a folder absent from this machine — a sibling
      checkout missing from a partial clone. ``wiki lint`` notes it once per
      run (``links.external entry '../src' names no folder on this machine;
@@ -401,11 +402,14 @@ external links (in-wiki links, being root-relative, survive the move).
      file rather than a folder draws the same note: list the folder that
      holds the file.
 
-A target under a listed folder may lie inside another wiki — a folder
-holding ``.wiki/settings.json`` on the path from the entry down to the
-target, the entry itself included (an entry that lies inside another wiki
-admits that wiki's files as plain files). Such a target is judged by that
-wiki's own page rules, read from its settings: a page links by stem
+A target under a listed folder may lie inside another wiki — the nearest
+folder holding ``.wiki/settings.json`` on the path from the filesystem root
+down to the target, above the entry or below it, so an entry inside another
+wiki still hands its files to that wiki's rules. Your home directory and
+the config home (``~/.wiki``, or ``WIKI_CONFIG_DIR``) are never taken for a
+wiki: the trust store lives there, and a home that counted would enclose
+every wiki beneath it. Such a target is judged by that wiki's own page
+rules, read from its settings: a page links by stem
 (``[[../math/lemmas]]``); a folder that wiki indexes — one its
 ``exclude.patterns`` and its repository's gitignore leave in its walk,
 holding an ``_index.md`` — is the same hard directory-link issue as at home
@@ -414,13 +418,15 @@ holding an ``_index.md`` — is the same hard directory-link issue as at home
 The read is a JSON parse of that wiki's settings plus, on the first folder
 link into it per run, its indexed-folder walk and one ``git check-ignore``;
 none of that wiki's code runs — a ``.wiki/wiki.py`` hook loads only through
-the CLI's trust check on the wiki being linted. A malformed settings file
-there fails this lint with exit 2, naming it (``links.external wiki
-'../math': ...``). And because that wiki's own ``wiki update`` mints an
-``_index.md`` in every folder it indexes, a bare folder link here turns into
-the issue the moment it does — exactly as inside one wiki. A target under a
-plain folder, with no wiki marker on the path down to it, is judged by
-existence alone; a stray ``_index.md`` there has no effect.
+the CLI's trust check on the wiki being linted. A malformed or unreadable
+settings file there fails this lint with exit 2, naming it
+(``links.external wiki '../math': ...``), as soon as a link needs that
+wiki's rules — any target but a page by stem. And because that wiki's own
+``wiki update`` mints an ``_index.md`` in every folder it indexes, a bare
+folder link here turns into the issue the moment it does — exactly as inside
+one wiki. A target under a plain folder, with no wiki marker on the path
+down to it, is judged by existence alone; a stray ``_index.md`` there has no
+effect.
 
 Obsidian reads a prefix-free link from the vault root and a ``./`` or ``../``
 link from the note's folder — the same two bases ``wiki lint`` uses — so
