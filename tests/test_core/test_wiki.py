@@ -204,6 +204,7 @@ def test_init_seeds_custom_settings(tmp_path: pathlib.Path) -> None:
         {'titles': {'required': 'yes'}},
         {'map': {'desc_limit': 'wide'}},
         {'exclude': {'patterns': ['!vendor']}},
+        {'links': {'external': ['src']}},
     ],
     ids=[
         'bad-naming',
@@ -211,6 +212,7 @@ def test_init_seeds_custom_settings(tmp_path: pathlib.Path) -> None:
         'bad-titles',
         'bad-map',
         'bad-exclude',
+        'bad-links',
     ],
 )
 def test_init_rejects_bad_settings_before_writing(

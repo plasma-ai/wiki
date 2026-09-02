@@ -432,6 +432,91 @@ class Wiki:
         return result
 
     @functools.cached_property
+    def _links_policy(self: Wiki) -> list[tuple[str, pathlib.Path]]:
+        """Return the ``links.external`` folders from ``settings.json``.
+
+        Validates the per-wiki ``links`` block (``external`` -- a list
+        of folder paths relative to the wiki root, each climbing out of
+        it with leading ``..`` segments) so a bad value fails loudly
+        with a file+key message rather than leaking a raw exception
+        from inside the link scan (settings.json is user input). Each
+        entry pairs the path as written with its folder joined onto the
+        root lexically -- never resolved, the containment every link
+        probe uses -- so a link means what its text says and a note can
+        name its cause; entries naming one folder collapse to the first
+        spelling.
+        """
+        # overlay the settings.json links block onto the default
+        override = self._settings.get('links', {})
+        if not isinstance(override, dict):
+            raise ValueError(
+                f'The links block must be a JSON object in {WIKI_SETTINGS}.'
+            )
+        external = override.get('external', [])
+        if not isinstance(external, list):
+            raise ValueError(
+                f'links.external must be a list of folder paths, got'
+                f' {external!r} in {WIKI_SETTINGS}.'
+            )
+        # contain each folder lexically, keeping its text as written so a
+        # note names its cause; the grammar mirrors exclude.patterns (one
+        # trailing '/' stripped, '/' the separator, no '.' segments) except
+        # that leading '..' segments are the point -- a folder inside the
+        # root needs no allowlist -- and no entry may name the whole
+        # filesystem or reach the root through an alias
+        result = []
+        for folder in external:
+            if not isinstance(folder, str):
+                raise ValueError(
+                    f'links.external entry must be a string, got'
+                    f' {folder!r} in {WIKI_SETTINGS}.'
+                )
+            stripped = folder[:-1] if folder.endswith('/') else folder
+            segments = stripped.split('/')
+            climb = 0
+            while (climb < len(segments)) and (segments[climb] == '..'):
+                climb += 1
+            joined = pathlib.Path(os.path.normpath(self._root / stripped))
+            if not stripped.strip():
+                reason = 'empty or whitespace-only path'
+            elif stripped.startswith(('/', '~')):
+                reason = (
+                    "absolute and '~' paths are not allowed"
+                    ' (use a path relative to the wiki root)'
+                )
+            elif '\\' in folder:
+                reason = "use '/' as the separator (no '\\')"
+            elif any(char in folder for char in '#|]\0'):
+                reason = (
+                    "contains '#', '|', ']', or a NUL character, which no"
+                    ' wikilink target can carry'
+                )
+            elif '' in segments:
+                reason = "empty segment ('//')"
+            elif '.' in segments:
+                reason = "'.' segments are not allowed"
+            elif '..' in segments[climb:]:
+                reason = "'..' segments are allowed only at the start"
+            elif joined.parent == joined:
+                reason = 'names the whole filesystem'
+            elif joined.is_relative_to(self._root):
+                reason = 'inside the wiki root (in-wiki links need no allowlist)'
+            elif pathlib.Path(os.path.realpath(joined)).is_relative_to(self._root):
+                reason = 'aliases the wiki root'
+            else:
+                reason = None
+            if reason is not None:
+                raise ValueError(
+                    f'Invalid links.external folder {folder!r}: {reason}'
+                    f' in {WIKI_SETTINGS}.'
+                )
+            # one folder, one entry: a repeated spelling adds nothing
+            if any(joined == seen for _folder, seen in result):
+                continue
+            result.append((folder, joined))
+        return result
+
+    @functools.cached_property
     def _gitignore_fence(self: Wiki) -> frozenset[str]:
         """Return the root-relative POSIX paths the repo's gitignore fences.
 
@@ -596,6 +681,20 @@ class Wiki:
             return
         self.on_merge_driver_unconfigured()
 
+    def _warn_missing_link_folders(self: Wiki) -> None:
+        """Note each ``links.external`` entry that names no folder on disk.
+
+        A sibling checkout the settings name may be absent on a clone,
+        or an entry may name a file: the links into it are neither live
+        nor stale, so lint names the entry once (soft) and the link scan
+        passes over targets under it rather than noting every one.
+        Reading the policy here also validates the block on every run,
+        links or none.
+        """
+        for folder, joined in self._links_policy:
+            if not os.path.isdir(joined):
+                self.on_link_folder_missing(folder=folder)
+
     def _name_violation(self: Wiki, name: str) -> Optional[str]:
         """Return the naming rule ``name`` breaks, or ``None`` if it is valid.
 
@@ -699,12 +798,13 @@ class Wiki:
         violation = self._name_violation(name)
         if violation is not None:
             raise ValueError(f'Invalid wiki name {name!r}: {violation}')
-        # the titles, map, and exclude policies are read lazily (first inside
-        # the plan, the map render, and the walk), so touch them here to
-        # reject a bad seed early
+        # the titles, map, exclude, and links policies are read lazily (first
+        # inside the plan, the map render, the walk, and lint's folder check),
+        # so touch them here to reject a bad seed early
         self._titles_required  # noqa: B018
         self._map_policy  # noqa: B018
         self._exclude_policy  # noqa: B018
+        self._links_policy  # noqa: B018
         # alias current timestamp
         now = self._utc_now()
         # initialize wiki root
@@ -1262,8 +1362,10 @@ class Wiki:
         Placeholder and oversized descriptions, empty content sections,
         stale links in user content (index bodies and pages -- the
         generated link block's broken-link check is the hard surface),
-        and CRLF line endings (which the next ``update`` normalizes)
-        are soft notes (stderr) and do not count as issues.
+        a ``links.external`` entry naming no folder on this machine
+        (noted once per run; links into it go unchecked), and CRLF line
+        endings (which the next ``update`` normalizes) are soft notes
+        (stderr) and do not count as issues.
 
         Args:
             name: Restrict scope to named subtree (relative
@@ -1291,6 +1393,10 @@ class Wiki:
         # clone's first merge pays for it
         self._warn_unconfigured_merge_driver()
         self._warn_untrackable_rows(folder)
+        # a links.external entry naming no folder on this machine is one note
+        # per run, not one per link; reading the policy here also fails a
+        # malformed block before the walk, links or none
+        self._warn_missing_link_folders()
         # compute what update would write (the source of truth for drift)
         now = self._utc_now()
         overlay, _, _ = self._plan(folder, now=now)
@@ -2497,6 +2603,26 @@ class Wiki:
         """
         if event is None:
             event = LinkStaleEvent(message, **kwargs)
+        return self.on_notice(event, logging_level=logging_level)
+
+    def on_link_folder_missing(
+        self: Wiki,
+        message: Optional[str] = None,
+        *,
+        logging_level: int = logging.WARNING,
+        event: Optional[LinkFolderMissingEvent] = None,
+        **kwargs: Any,
+    ) -> Event:
+        """Handle a missing-link-folder notice event.
+
+        Constructs a ``LinkFolderMissingEvent`` from ``message`` and the
+        payload kwargs (the entry as written) unless a pre-built
+        ``event`` is passed through, then delegates to ``on_notice``.
+        Override in subclasses to intercept this notice kind alone;
+        override ``on_notice`` to intercept every notice.
+        """
+        if event is None:
+            event = LinkFolderMissingEvent(message, **kwargs)
         return self.on_notice(event, logging_level=logging_level)
 
     def on_notice(
@@ -5388,6 +5514,20 @@ class LinkStaleEvent(Event):
         return result
 
 
+class LinkFolderMissingEvent(Event):
+    """Emitted when lint finds a ``links.external`` entry naming no folder."""
+
+    folder: str
+
+    @property
+    def description(self: LinkFolderMissingEvent) -> str:
+        """Return the missing-link-folder note line."""
+        return (
+            f'links.external entry {self.folder!r} names no folder on this'
+            ' machine; links into it are not checked'
+        )
+
+
 # plan-phase dispatch: event class -> per-kind hook name (kept in lockstep
 # with the events above; the CLI's _UPDATE_CATEGORIES keys on the same classes)
 _NOTICE_HOOKS = {
@@ -5415,6 +5555,7 @@ _NOTICE_HOOKS = {
     ContentEmptyEvent: 'on_content_empty',
     CrlfNoticeEvent: 'on_crlf_notice',
     LinkStaleEvent: 'on_link_stale',
+    LinkFolderMissingEvent: 'on_link_folder_missing',
 }
 
 

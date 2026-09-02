@@ -23,6 +23,7 @@ __all__ = [
     '_make_wiki',
     '_make_category_folder',
     '_set_exclude_patterns',
+    '_set_links_external',
 ]
 
 page_index = pytest.mark.parametrize('kind', ['page', 'index'])
@@ -136,4 +137,16 @@ def _set_exclude_patterns(path: pathlib.Path, patterns: list[str]) -> None:
     settings = path / '.wiki' / 'settings.json'
     data = json.loads(settings.read_text(encoding='utf-8'))
     data['exclude'] = {'patterns': patterns}
+    settings.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
+
+
+def _set_links_external(path: pathlib.Path, folders: list[str]) -> None:
+    """Write ``links.external`` into an existing wiki's ``settings.json``.
+
+    Policies are cached per instance, so construct a fresh ``Wiki``
+    after calling this.
+    """
+    settings = path / '.wiki' / 'settings.json'
+    data = json.loads(settings.read_text(encoding='utf-8'))
+    data['links'] = {'external': folders}
     settings.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
