@@ -866,14 +866,19 @@ def _is_wiki_root(path: pathlib.Path) -> bool:
     ``WIKI_CONFIG_DIR`` points it -- and the home exemption stands on its
     own, since an override leaves the default store in place.
     """
-    # compare resolved on both sides: candidates arrive resolved, so an
-    # unresolved home or config home under a symlink would never match
-    # and the trust store would declare its parent a wiki root
-    if path.resolve() == pathlib.Path.home().resolve():
+    # compare through realpath on both sides: candidates arrive resolved, so
+    # an unresolved home or config home under a symlink would never match
+    # and the trust store would declare its parent a wiki root, and
+    # Path.resolve() raises on a symlink loop before 3.13 where realpath
+    # returns the path; the marker probe goes through os.path for the same
+    # reason, reading an unsearchable folder as no marker rather than raising
+    home = pathlib.Path(os.path.realpath(pathlib.Path.home()))
+    if pathlib.Path(os.path.realpath(path)) == home:
         return False
-    if (path / WIKI_DIR).resolve() == _config_home().resolve():
+    config_home = pathlib.Path(os.path.realpath(_config_home()))
+    if pathlib.Path(os.path.realpath(path / WIKI_DIR)) == config_home:
         return False
-    return (path / WIKI_SETTINGS).is_file()
+    return os.path.isfile(path / WIKI_SETTINGS)
 
 
 class ResolverNoticeEvent(Event):

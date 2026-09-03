@@ -5371,10 +5371,14 @@ class Wiki:
         # directives are comments and would not survive it
         stripped = wiki.util.markdown.mask_comments(stripped)
         stripped = wiki.util.markdown.mask_indented_code(stripped)
+        # the masked scan preserves line structure, so a running newline count
+        # up to each match maps its offset to its source line without
+        # rescanning the page from the top for every link
+        lineno = 1
+        counted = 0
         for match in re.finditer(r'\[\[([^\]|]+)(?:\|([^\]]*))?', stripped):
-            # the masked scan preserves line structure, so the match
-            # offset maps straight to its source line
-            lineno = stripped.count('\n', 0, match.start()) + 1
+            lineno += stripped.count('\n', counted, match.start())
+            counted = match.start()
             if lineno in suppressed:
                 continue
             # strip trailing backslash (escaped pipe in markdown tables)

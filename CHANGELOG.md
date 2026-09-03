@@ -132,6 +132,14 @@ may include breaking changes, each listed under a Breaking heading.
 - A `.wiki/settings.json` nested past the JSON parser's recursion limit fails as
   `Malformed JSON in .wiki/settings.json: ...`, naming the file (and, for an
   allowlisted wiki, that wiki), instead of a bare recursion error.
+- A `HOME` or `WIKI_CONFIG_DIR` that is a symlink loop no longer fails every
+  command with `Symlink loop from ...` on Python 3.11 and 3.12: root resolution
+  compares real paths, as the engine's guest-wiki lookup does, and probes the
+  root marker through `os.path`, so an unsearchable folder on the way up reads
+  as no marker instead of raising.
+- `wiki lint` no longer slows quadratically with the number of wikilinks on one
+  page: the scan counts line numbers once across the page instead of from its
+  top for every link.
 - A stamp written as a bare `created:`/`updated:` key over an indented line is a
   value: `wiki update` no longer stamps the run's clock onto the key line and
   strands the authored stamp below it, and the `updated:` re-stamp replaces the

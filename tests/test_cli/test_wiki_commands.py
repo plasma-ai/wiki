@@ -117,6 +117,7 @@ __all__ = [
     'test_trust_refuses_non_wiki_path',
     'test_trust_store_does_not_mark_home_as_wiki_root',
     'test_trust_store_exemption_survives_symlinked_home',
+    'test_root_resolution_survives_a_symlink_loop_home',
 ]
 
 pytestmark = pytest.mark.skipif(
@@ -3315,6 +3316,24 @@ def test_trust_store_exemption_survives_symlinked_home(
     result = _wiki(root, 'update', home=home)
     assert result.returncode == 0, result.stdout + result.stderr
     assert not (physical / '_index.md').exists()
+
+
+def test_root_resolution_survives_a_symlink_loop_home(tmp_path: pathlib.Path) -> None:
+    """A ``$HOME`` that is a symlink loop leaves root resolution intact.
+
+    The home and config-home exemptions compare real paths, which read a
+    looped path as itself where ``Path.resolve()`` raises before Python
+    3.13, so a broken home directory never fails a command resolving its
+    root.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', 'Loop', '--path', str(root)).returncode == 0
+    loop = tmp_path / 'loop'
+    loop.symlink_to('loop')
+    # resolving from cwd walks the ancestor chain under the looped $HOME
+    result = _wiki(root, 'lint', home=loop)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'Symlink loop' not in result.stderr
 
 
 # ------ helpers
