@@ -6,7 +6,7 @@
     "cookiecutter": {
       "branch": "main",
       "python": ">=3.11,<3.15",
-      "default_python": "3.13",
+      "default_python": "3.14",
       "project": {
         "name": "wiki",
         "package": "plasma-wiki",
