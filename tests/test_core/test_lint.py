@@ -88,7 +88,7 @@ __all__ = [
     'test_lint_relative_prefix_inside_wiki_is_issue',
     'test_lint_relative_root_link_names_the_index_page',
     'test_lint_relative_root_link_steers_to_index_before_update',
-    'test_lint_link_text_ignores_padding_and_a_stray_bracket',
+    'test_lint_link_text_ignores_padding_but_not_a_stray_bracket',
     'test_lint_stale_prefix_free_link_names_a_raw_file',
     'test_lint_directory_link_is_issue_naming_index_form',
     'test_lint_link_rules_spare_samples_not_prose',
@@ -2022,22 +2022,23 @@ def test_lint_relative_root_link_steers_to_index_before_update(
     argvalues=[
         ('[[ overview ]]', []),
         ('[[overview\t]]', []),
-        ('[[[overview]]', []),
+        ('[[[overview]]', ['notes/meeting.md: Stale link [[[overview]]']),
         ('[[overview\n]]', ['notes/meeting.md: Stale link [[overview\n]]']),
         ('[[ ]]', []),
     ],
     ids=['spaces', 'tab', 'stray-bracket', 'line-break', 'blank'],
 )
-def test_lint_link_text_ignores_padding_and_a_stray_bracket(
+def test_lint_link_text_ignores_padding_but_not_a_stray_bracket(
     tmp_path: pathlib.Path,
     text: str,
     stale: list[str],
 ) -> None:
-    """Spaces, tabs, and a stray bracket around a target are not part of it.
+    """Spaces and tabs around a target are not part of it; a bracket is junk.
 
-    ``[[ overview ]]`` and ``[[[overview]]`` link the root page; a link
-    broken across a line break is still the text as written, and stale;
-    a target of only spaces is no link at all, as ``[[]]`` never was.
+    ``[[ overview ]]`` links the root page, while ``[[[overview]]`` carries
+    a ``[`` no name can, so it is stale as written; a link broken across a
+    line break is still the text as written, and stale; a target of only
+    spaces is no link at all, as ``[[]]`` never was.
     """
     _make_wiki(tmp_path, folders={'notes': ['meeting']})
     (tmp_path / 'overview.md').write_text(
@@ -2050,7 +2051,7 @@ def test_lint_link_text_ignores_padding_and_a_stray_bracket(
     page.write_text(body, encoding='utf-8')
     wiki = Wiki(tmp_path)
 
-    # the padded spellings are live; the broken one notes stale
+    # the padded spellings are live; the bracketed and broken ones note stale
     notices = _capture_notices(wiki)
     assert wiki.lint() == []
     notes = [

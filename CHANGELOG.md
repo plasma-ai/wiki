@@ -113,14 +113,13 @@ may include breaking changes, each listed under a Breaking heading.
   target with nothing at its path keeps the stale note, as does one whose entry
   the policy would refuse (reached through a symlink alias of the wiki, at the
   filesystem root, or through a folder name carrying a backslash).
-- A prose wikilink's target is read without surrounding spaces and tabs, and a
-  `[` never opens or sits inside a target: `[[ page ]]` links `page` (so
-  `[[ notes ]]` is judged as the folder `notes` — the directory-link issue where
-  the padded text was a stale note), and a stray third bracket (`[[[page]]`)
-  reads as `[` before `[[page]]`, so neither typo draws a stale note for the
-  junk-carrying text; likewise `[[page[x]]` links `page`, the text after the `[`
-  being junk, and a target of only spaces and tabs (`[[ ]]`) is no link at all,
-  as `[[]]` never was.
+- A prose wikilink's target is read without surrounding spaces and tabs:
+  `[[ page ]]` links `page` (so `[[ notes ]]` is judged as the folder `notes` —
+  the directory-link issue where the padded text was a stale note), and a target
+  of only spaces and tabs (`[[ ]]`) is no link at all, as `[[]]` never was. A
+  target carrying `[` (`[[[page]]`, `[[page[x]]`) is junk no name can carry: it
+  stays the stale note it always was, quoted as written, and is never read from
+  the page's folder.
 - The `(use [[...]])` suggestion also names a raw file's spelling inside the
   wiki — `(use [[Makefile]])` on the relative-link issue for a `[[../Makefile]]`
   slip to a root-level `Makefile`, `(use [[notes/Makefile]])` on the stale note

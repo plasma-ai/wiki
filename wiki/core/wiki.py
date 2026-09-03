@@ -5371,7 +5371,7 @@ class Wiki:
         # directives are comments and would not survive it
         stripped = wiki.util.markdown.mask_comments(stripped)
         stripped = wiki.util.markdown.mask_indented_code(stripped)
-        for match in re.finditer(r'\[\[([^\]\[|]+)(?:\|([^\]]*))?', stripped):
+        for match in re.finditer(r'\[\[([^\]|]+)(?:\|([^\]]*))?', stripped):
             # the masked scan preserves line structure, so the match
             # offset maps straight to its source line
             lineno = stripped.count('\n', 0, match.start()) + 1
@@ -5390,6 +5390,15 @@ class Wiki:
             page_target, hash_sign, heading = target.strip(' \t').partition('#')
             anchor = hash_sign + heading
             if not page_target:
+                continue
+            # a target carrying '[' is junk no name can carry (a stray bracket,
+            # or one swallowed from the text): never live, never read from the
+            # page's folder, so the stale note quotes it as written
+            if '[' in page_target:
+                if target in reported:
+                    continue
+                reported.add(target)
+                self.on_link_stale(path=str(relpath), target=target + alias)
                 continue
             # a './' or '../' target is read from the page's folder, as
             # Obsidian and markdown read it, and must leave the wiki; a

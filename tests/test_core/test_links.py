@@ -258,8 +258,10 @@ def test_links_policy_accepts_missing_and_ancestor_folders(
             '../../docs/guide/',
             'stale-fix:../../docs/guide',
         ),
-        # a stray bracket or surrounding spaces and tabs are not part of the target
-        (['../src'], {'src/main.py'}, 'nested', '[../../src/main.py', 'live'),
+        # a stray bracket is junk no name carries: stale as written, never read
+        # from the page's folder
+        (['../src'], {'src/main.py'}, 'nested', '[../../src/main.py', 'stale'),
+        # surrounding spaces and tabs are not part of the target
         (['../src'], {'src/main.py'}, 'nested', ' ../../src/main.py', 'live'),
         (['../src'], {'src/main.py'}, 'nested', '../../src/main.py ', 'live'),
         (['../src'], {'src/main.py'}, 'nested', '\t../../src/main.py\t', 'live'),
@@ -363,9 +365,10 @@ def test_lint_judges_external_targets_by_the_allowlist(
     index page a wiki would link it by; an absolute target leaving the wiki
     is never live, but is steered to its page-relative spelling when it
     lands under an entry; a ``..`` chain clamped at the filesystem root is
-    stale, since no entry could admit it; a stray bracket or surrounding
-    whitespace is not part of the target, and a path of thousands of
-    segments is judged like any other. Nothing here is a hard issue.
+    stale, since no entry could admit it; surrounding whitespace is not part
+    of the target, a stray bracket makes the text junk (stale as written),
+    and a path of thousands of segments is judged like any other. Nothing
+    here is a hard issue.
     """
     root = tmp_path / 'wiki'
     _make_wiki(root, folders={'notes': ['meeting']})
