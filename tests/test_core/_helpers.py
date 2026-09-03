@@ -16,6 +16,7 @@ from wiki.core.wiki import Wiki
 
 __all__ = [
     'page_index',
+    'bare_anchored',
     '_needs_git',
     '_needs_unprivileged',
     '_git',
@@ -25,17 +26,22 @@ __all__ = [
     '_make_wiki',
     '_make_category_folder',
     '_set_exclude_patterns',
-    '_set_links_external',
 ]
 
 page_index = pytest.mark.parametrize('kind', ['page', 'index'])
+bare_anchored = pytest.mark.parametrize(
+    argnames='anchor',
+    argvalues=['', '#context'],
+    ids=['bare', 'anchored'],
+)
 
 # gates the tests that drive a real git repository
 _needs_git = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
 
 # gates the tests that rely on a permission denial
 _needs_unprivileged = pytest.mark.skipif(
-    os.geteuid() == 0, reason='needs a non-root user'
+    os.geteuid() == 0,
+    reason='needs a non-root user',
 )
 
 
@@ -144,16 +150,4 @@ def _set_exclude_patterns(path: pathlib.Path, patterns: list[str]) -> None:
     settings = path / '.wiki' / 'settings.json'
     data = json.loads(settings.read_text(encoding='utf-8'))
     data['exclude'] = {'patterns': patterns}
-    settings.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
-
-
-def _set_links_external(path: pathlib.Path, folders: list[str]) -> None:
-    """Write ``links.external`` into an existing wiki's ``settings.json``.
-
-    Policies are cached per instance, so construct a fresh ``Wiki``
-    after calling this.
-    """
-    settings = path / '.wiki' / 'settings.json'
-    data = json.loads(settings.read_text(encoding='utf-8'))
-    data['links'] = {'external': folders}
     settings.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')

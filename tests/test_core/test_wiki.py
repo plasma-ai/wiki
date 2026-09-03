@@ -274,6 +274,7 @@ def test_init_refuses_conflict_markers(tmp_path: pathlib.Path) -> None:
     argnames=('content', 'match'),
     argvalues=[
         ('{bad json', r'Malformed JSON'),
+        ('{"a": ' + '[' * 1_000_000 + ']' * 1_000_000 + '}', r'Malformed JSON'),
         ('[]', r'must be a JSON object'),
         ('{"naming": "strict"}', r'naming block must be a JSON object'),
         ('{"naming": {"validate": "identifier"}}', r'validate must be a list'),
@@ -292,6 +293,7 @@ def test_init_refuses_conflict_markers(tmp_path: pathlib.Path) -> None:
     ],
     ids=[
         'malformed-json',
+        'nested-past-recursion-limit',
         'non-object-top-level',
         'non-object-naming',
         'non-list-validate',

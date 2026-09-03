@@ -151,8 +151,9 @@ Day-to-day use
   prefix-free target (``[[topics/example]]``) from the vault root — the wiki
   root — and a ``./`` or ``../`` target from the note's own folder, so
   nothing lint accepts renders as a different note in Obsidian. A prefixed
-  target must leave the wiki, reaching a file under a ``links.external``
-  folder (see :doc:`/configuration`); that target lies outside the vault, so
+  target must leave the wiki, reaching a file, folder, or another wiki's
+  page under a ``links.external`` folder (see :doc:`/configuration`); that
+  target lies outside the vault, so
   Obsidian shows the link unresolved — do not click it: Obsidian creates the
   missing target at that path, as folders outside the vault, through a known
   bug.

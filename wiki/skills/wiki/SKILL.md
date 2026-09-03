@@ -158,21 +158,24 @@ rather than authoring or auditing page by page yourself:
   Link a file or the `_index` page, never a bare folder — stricter link checkers
   reject a bare folder link too. A prefixed link that lands inside the wiki
   fails lint (`points inside the wiki through './' or '../'`), naming the
-  prefix-free spelling, or the page-relative spelling of the outside file the
-  same text reaches when read from the wiki root
-  (`(use [[../../src/main.py]] for the file outside the wiki)`); a link to a
+  prefix-free spelling (of the page-relative reading when something exists
+  there, else of the same text read from the wiki root; the root itself is
+  `_index`), or the page-relative spelling of the outside file the same text
+  reaches when read from the wiki root
+  (`(use [[../../src/main.py]] for the path outside the wiki)`); a link to a
   real file outside every allowlisted folder draws the note
-  `points outside the wiki (add '../docs' to links.external in .wiki/settings.json to allow it)`.
-  Link when the reader should open the file; a passing mention, or anything
-  outside every allowlisted folder, goes in backticks. The allowlist is a lint
-  rule alone: `wiki read` never serves an external target (use
-  `wiki read --path <its root>` for another wiki, `cat` for a file), generated
-  index rows never carry one, and `wiki map` never shows an external folder.
-  Obsidian cannot see outside the vault, so an external link shows unresolved
-  there — do not click it: Obsidian creates the missing target at that path, as
-  folders outside the vault. `wiki match '\[\[\.\.?/' --lines` lists every link
-  opening with `./` or `../` (code samples included; the `wiki lint` findings
-  are the authoritative list).
+  `points outside the wiki (add '../docs' to links.external in .wiki/settings.json to allow it)`
+  (for a folder holding an `_index.md`, adding
+  `, and link [[../docs/_index]] if a wiki indexes the folder`). Link when the
+  reader should open the file; a passing mention, or anything outside every
+  allowlisted folder, goes in backticks. The allowlist is a lint rule alone:
+  `wiki read` never serves an external target (use `wiki read --path <its root>`
+  for another wiki, `cat` for a file), generated index rows never carry one, and
+  `wiki map` never shows an external folder. Obsidian cannot see outside the
+  vault, so an external link shows unresolved there — do not click it: Obsidian
+  creates the missing target at that path, as folders outside the vault.
+  `wiki match '\[\[\.\.?/' --lines` lists every link opening with `./` or `../`
+  (code samples included; the `wiki lint` findings are the authoritative list).
 - **Lint's output contract.** `wiki lint` prints issues to stdout and soft notes
   to stderr; exit 1 means exactly "issues found" (0 clean, 2 a command error) —
   notes never gate. A script must branch on the exit code or read
@@ -184,8 +187,9 @@ rather than authoring or auditing page by page yourself:
   target no longer exists — inside the wiki or under a `links.external` folder —
   draws a stderr note from `wiki lint` without failing the run; when the same
   text read from the wiki root names a real allowlisted file (a link written
-  root-relative or absolute), the note suggests its page-relative spelling. A
-  prose link to a real file outside every allowlisted folder is the
+  root-relative or absolute), the note suggests its page-relative spelling, and
+  a target missing only by a trailing slash the same path without it. A prose
+  link to a real file outside every allowlisted folder is the
   `points outside the wiki` note naming the entry to add; a `links.external`
   entry naming no folder on this machine draws one note per run
   (`links.external entry '../src' names no folder on this machine; links into it are not checked`)

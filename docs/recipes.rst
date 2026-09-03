@@ -256,9 +256,11 @@ In ``notes/meeting.md``, one folder down:
    See [[../../src/main.py]] and [[../../math/lemmas|the lemmas]].
 
 A prefix-free target is still read from the wiki root and names something
-inside it. List every prefixed link with ``wiki match``; it over-reports,
-matching code samples where lint sees no link, so the notes and issues from
-``wiki lint`` are the authoritative list:
+inside it. List every link opening with ``./`` or ``../`` with ``wiki match``;
+it over-reports (code samples where lint sees no link) and under-reports
+(``[[..]]``, ``[[.]]``, an interior ``..`` segment, and a target padded with
+spaces), so the notes and issues from ``wiki lint`` are the authoritative
+list:
 
 .. code-block:: console
 

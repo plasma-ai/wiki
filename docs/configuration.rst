@@ -333,16 +333,21 @@ indexing depend on the machine.
 
 Lets prose wikilinks reach files outside the wiki. A wikilink is read from
 one of two places: a prefix-free target (``[[core/design]]``) is read from
-the wiki root and must name something inside it, while a target that starts
-with ``./`` or ``../`` is read from the folder of the page that carries it —
-as Obsidian and markdown read it — and must leave the wiki. From a root-level
+the wiki root and must name something inside it, while a target carrying a
+``.`` or ``..`` segment anywhere (most often at its start, as ``./`` or
+``../``) is read from the folder of the page that carries it — as Obsidian
+and markdown read it — and must leave the wiki. From a root-level
 page a sibling wiki's page is ``[[../math/lemmas]]``; from ``nodes/verify.md``
 the same file is ``[[../../math/lemmas]]``. ``wiki lint`` accepts such a link
 when its target lands under a folder this block lists and the file, its
 ``.md`` form, or the folder exists there; judges a target inside another wiki
 by that wiki's own page rules (below); notes a missing target as a ``Stale
 link``; and, when a link reaches a real file outside every listed folder,
-notes the entry to add. The block is a lint rule and nothing more:
+notes the entry to add (and, for a folder holding an ``_index.md``, the index
+page a wiki would link it by; a target whose entry the policy would refuse —
+through a symlink alias of the wiki, at the filesystem root, or through a
+folder name carrying a backslash — is noted stale instead). The block is a
+lint rule and nothing more:
 ``wiki read``, ``wiki map``, ``wiki match``, ``wiki search``, ``wiki update``,
 and ``wiki new`` stay confined to the wiki root (a name under a listed folder
 still fails with ``Path is outside wiki root``), generated index rows never
@@ -416,12 +421,19 @@ holding an ``_index.md`` — is the same hard directory-link issue as at home
 (``Link [[../math/g2]] targets a folder, not a page (use
 [[../math/g2/_index]])``); a folder it excludes is live in the bare form.
 The read is a JSON parse of that wiki's settings plus, on the first folder
-link into it per run, its indexed-folder walk and one ``git check-ignore``;
-none of that wiki's code runs — a ``.wiki/wiki.py`` hook loads only through
-the CLI's trust check on the wiki being linted. A malformed or unreadable
-settings file there fails this lint with exit 2, naming it
-(``links.external wiki '../math': ...``), as soon as a link needs that
-wiki's rules — any target but a page by stem. And because that wiki's own
+link into it per run, its indexed-folder walk and one ``git check-ignore``
+(a note that walk raises, such as its gitignore fence being unavailable, is
+that wiki's, worded as during its own update); none of that wiki's code runs
+— a ``.wiki/wiki.py`` hook loads only through the CLI's trust check on the
+wiki being linted. A settings file there that is not valid JSON, not a JSON
+object, whose ``exclude`` block is invalid, or that cannot be read — the
+marker folder itself included — fails this lint with exit 2, naming it
+(``links.external wiki '../math': ...``), as soon as a link's verdict needs
+that wiki's rules — any target but a page by stem; a link judged without
+them (one landing inside this wiki, or an absolute target) keeps its verdict,
+and its suggestion names only a spelling that needs none of that wiki's rules
+— a page there by stem, never a folder or raw file there. And because that
+wiki's own
 ``wiki update`` mints an ``_index.md`` in every folder it indexes, a bare
 folder link here turns into the issue the moment it does — exactly as inside
 one wiki. A target under a plain folder, with no wiki marker on the path

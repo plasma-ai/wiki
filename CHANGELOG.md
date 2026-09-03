@@ -46,10 +46,14 @@ may include breaking changes, each listed under a Breaking heading.
   names it (`(use [[overview]])`) and, when the same text read from the wiki
   root reaches a real file under a `links.external` folder, that file's
   page-relative spelling too
-  (`(use [[../../src/main.py]] for the file outside the wiki)`). The
+  (`(use [[../../src/main.py]] for the path outside the wiki)`). The
   folder-relative slip `[[../overview]]` from a nested page, which was a soft
   `Stale link` note carrying the same `(use [[overview]])` suggestion, is now
-  this issue. A wiki with no such link lints exactly as before.
+  this issue; so is a `./` target, or a `.` or `..` segment after a plain one,
+  that resolved to a real page from the wiki root (`[[./overview]]`,
+  `[[core/../overview]]`, `[[../wiki/overview]]` through the wiki's own folder
+  name), which linted clean before. A wiki with no such link draws no new issue
+  and exits as before.
 
 ### Added
 
@@ -65,13 +69,16 @@ may include breaking changes, each listed under a Breaking heading.
   folder holding `.wiki/settings.json`) is judged by that wiki's own settings —
   a page by stem is live, a folder it indexes is the `directory_link` issue
   naming its `_index` page, a folder its `exclude.patterns` keeps out is live —
-  read as a JSON parse that runs none of that wiki's code (a malformed or
-  unreadable settings file there fails lint naming that wiki once a link needs
-  its rules; the home directory and the config home never count as a wiki). A
-  real file outside every listed folder is noted with the entry to add
-  (`LinkOutsideEvent`, hook `on_link_outside`, JSON kind `link_outside` with
-  `path`, `target`, and `folder`), and an entry naming no folder on this machine
-  draws one note per run while the links into it go unchecked
+  read as a JSON parse that runs none of that wiki's code (a settings file there
+  that is not valid JSON or not a JSON object, whose `exclude` block is invalid,
+  or that cannot be read — its `.wiki` folder included — fails lint naming that
+  wiki once a link needs its rules, any target but a page by stem; the home
+  directory and the config home never count as a wiki). A real file outside
+  every listed folder is noted with the entry to add, and a folder holding an
+  `_index.md` with the index page a wiki would link it by (`LinkOutsideEvent`,
+  hook `on_link_outside`, JSON kind `link_outside` with `path`, `target`,
+  `folder`, and an optional `canonical`), and an entry naming no folder on this
+  machine draws one note per run while the links into it go unchecked
   (`LinkFolderMissingEvent`, hook `on_link_folder_missing`, JSON kind
   `link_folder_missing` with `folder` and no `path`). The allowlist is a lint
   rule alone: `wiki read`, `map`, `match`, `search`, `update`, and `new` stay
@@ -103,7 +110,17 @@ may include breaking changes, each listed under a Breaking heading.
   outside every `links.external` folder is noted as
   `Link [[../docs/guide]] points outside the wiki (add '../docs' to links.external in .wiki/settings.json to allow it)`
   instead of `Stale link [[../docs/guide]]` — still a note, never an issue; a
-  target with nothing at its path keeps the stale note.
+  target with nothing at its path keeps the stale note, as does one whose entry
+  the policy would refuse (reached through a symlink alias of the wiki, at the
+  filesystem root, or through a folder name carrying a backslash).
+- A prose wikilink's target is read without surrounding spaces and tabs, and a
+  `[` never opens or sits inside a target: `[[ page ]]` links `page` (so
+  `[[ notes ]]` is judged as the folder `notes` — the directory-link issue where
+  the padded text was a stale note), and a stray third bracket (`[[[page]]`)
+  reads as `[` before `[[page]]`, so neither typo draws a stale note for the
+  junk-carrying text; likewise `[[page[x]]` links `page`, the text after the `[`
+  being junk, and a target of only spaces and tabs (`[[ ]]`) is no link at all,
+  as `[[]]` never was.
 - The `(use [[...]])` suggestion also names a raw file's spelling inside the
   wiki — `(use [[Makefile]])` on the relative-link issue for a `[[../Makefile]]`
   slip to a root-level `Makefile`, `(use [[notes/Makefile]])` on the stale note
@@ -113,6 +130,9 @@ may include breaking changes, each listed under a Breaking heading.
 
 ### Fixed
 
+- A `.wiki/settings.json` nested past the JSON parser's recursion limit fails as
+  `Malformed JSON in .wiki/settings.json: ...`, naming the file (and, for an
+  allowlisted wiki, that wiki), instead of a bare recursion error.
 - A stamp written as a bare `created:`/`updated:` key over an indented line is a
   value: `wiki update` no longer stamps the run's clock onto the key line and
   strands the authored stamp below it, and the `updated:` re-stamp replaces the

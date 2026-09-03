@@ -440,12 +440,16 @@ its meaning:
    Obsidian and markdown read it — and must leave the wiki; the in-wiki form
    is prefix-free and read from the wiki root, so the message names it: a
    page by stem, an indexed folder's ``_index`` page, or the bare path of a
-   raw file or unindexed folder. When the same text read from the wiki root
-   would reach a real file under a ``links.external`` folder, the message
-   also offers that file's page-relative spelling — ``(use
-   [[folder_b/file_b]], or [[../../folder_b/file_b]] for the file outside
+   raw file or unindexed folder. When nothing exists at the page-relative
+   reading, the same text read from the wiki root is tried —
+   ``[[./overview]]`` from ``notes/`` names ``(use [[overview]])`` — and the
+   wiki root itself always names ``_index``. When the same text read from
+   the wiki root would reach a real file under a ``links.external`` folder,
+   the message also offers that file's page-relative spelling — ``(use
+   [[folder_b/file_b]], or [[../../folder_b/file_b]] for the path outside
    the wiki)`` — or offers it alone when nothing inside the wiki matches;
-   with nothing to name, the ``(use ...)`` tail is omitted. An anchor and
+   with nothing to name either way, the ``(use ...)`` tail is omitted. An
+   anchor and
    alias ride along, and a target reports once per file. The
    folder-relative slip ``[[../overview]]`` from a nested page is this
    issue, with ``(use [[overview]])`` as its fix.
@@ -484,12 +488,15 @@ notes is clean — lint exits 0.
      - A ``[[wikilink]]`` in authored prose points at nothing — inside the
        wiki for a prefix-free target, or under a ``links.external`` folder
        present on this machine for a ``./`` or ``../`` target (see
-       :doc:`/configuration`); an absolute target is never live. The note
+       :doc:`/configuration`); an absolute target that leaves the wiki is
+       never live. The note
        names the fix when one reading resolves: for a prefix-free target
        whose folder-relative reading lands on something real inside the
        wiki, its root-relative form — ``(use [[canonical]])``: a page by
        stem, an indexed folder's ``_index`` page, or the bare path of a raw
-       file or unindexed folder; for a prefixed or absolute target whose
+       file or unindexed folder; for a prefixed target that misses only by
+       a trailing slash, the same path without it — ``(use
+       [[../../docs/guide]])``; for a prefixed or absolute target whose
        text read from the wiki root reaches a real file under a
        ``links.external`` folder, that file's page-relative spelling —
        ``(use [[../../src/main.py]])``.
@@ -498,11 +505,18 @@ notes is clean — lint exits 0.
        per file, however often the prose repeats it.
    * - ``<path>: Link [[target]] points outside the wiki (add '<folder>' to links.external in .wiki/settings.json to allow it)``
      - A ``./`` or ``../`` prose link that leaves the wiki and reaches a real
-       file or folder under no ``links.external`` folder. The named entry is
+       file or folder under no ``links.external`` folder. A target whose
+       entry the policy would refuse — reached through a symlink alias of
+       the wiki itself, at the filesystem root (the root itself, or a file
+       directly under it), or through a folder name carrying a backslash —
+       is a ``Stale link`` instead. The named entry is
        the target's folder — or the target itself, when it is a folder —
        relative to the wiki root; add it to allow the link, or put the
-       reference in backticks. Typed ``link_outside`` in ``--json``, with
-       ``path``, ``target``, and ``folder`` fields.
+       reference in backticks. A folder holding an ``_index.md`` may be
+       another wiki's, so the note adds ``, and link [[<folder>/_index]] if
+       a wiki indexes the folder``. Typed ``link_outside`` in ``--json``,
+       with ``path``, ``target``, ``folder``, and (for such a folder)
+       ``canonical`` fields.
    * - ``<path>: indexed, but this machine's git ignores it (<source>:<line> '<pattern>'); its generated row ships where the file cannot, so every other clone reds on a broken link``
      - The gitignore fence reads only the repository's own rules (pinned, so
        indexing is identical on every clone), but the named ignore rule —

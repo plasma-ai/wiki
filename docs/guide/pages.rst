@@ -232,10 +232,10 @@ Each row has the shape ``[[target|label]]: description``:
 - **Targets** in generated rows are always relative to the wiki root, joined
   with ``/``, with the ``.md`` suffix stripped — ``topics/example``, never a
   platform path. A prose wikilink reads the same way when its target is
-  prefix-free; a prose target starting with ``./`` or ``../`` is read from
-  the page's folder, as Obsidian and markdown read it, and must leave the
-  wiki — it reaches only a file under a ``links.external`` folder (see
-  :doc:`/configuration`).
+  prefix-free; a prose target carrying a ``./`` or ``../`` segment is read
+  from the page's folder, as Obsidian and markdown read it, and must leave
+  the wiki — it reaches only a file, folder, or another wiki's page under a
+  ``links.external`` folder (see :doc:`/configuration`).
 - The **parent row**, labeled ``..``, comes first, targets the parent
   folder's ``_index``, and carries no description. The root index has no
   parent row.
