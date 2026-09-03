@@ -7,6 +7,7 @@ from .test_config import *
 from .test_event import *
 from .test_exclude import *
 from .test_format import *
+from .test_links import *
 from .test_lint import *
 from .test_map import *
 from .test_match import *

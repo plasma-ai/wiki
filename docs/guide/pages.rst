@@ -229,8 +229,13 @@ Link rows
 
 Each row has the shape ``[[target|label]]: description``:
 
-- **Targets** are always relative to the wiki root, joined with ``/``, with
-  the ``.md`` suffix stripped — ``topics/example``, never a platform path.
+- **Targets** in generated rows are always relative to the wiki root, joined
+  with ``/``, with the ``.md`` suffix stripped — ``topics/example``, never a
+  platform path. A prose wikilink reads the same way when its target is
+  prefix-free; a prose target carrying a ``./`` or ``../`` segment is read
+  from the page's folder, as Obsidian and markdown read it, and must leave
+  the wiki — it reaches only a file, folder, or another wiki's page under a
+  ``links.external`` folder (see :doc:`/configuration`).
 - The **parent row**, labeled ``..``, comes first, targets the parent
   folder's ``_index``, and carries no description. The root index has no
   parent row.
@@ -298,13 +303,14 @@ Any page or index may wrap lines in an HTML-comment region:
 
 Each marker sits alone on its line. The ``no-lint`` directive suppresses
 ``wiki lint``'s positional rules — conflict markers and leftover merge repair
-hints, escaped wikilinks, wrap mangles, stale-link notes, directory-link
-issues — for the wrapped lines, so a page can display sample conflict markers
-or stale-link examples without failing lint. A nested or dangling marker is
-itself a hard lint issue, and a malformed pair suppresses nothing. Markers
-inside fenced or inline code are masked — a marker shown in a code block is a
-sample, not a directive. Well-formed regions with other directive names are
-inert; ``no-lint`` is the only directive with shipped semantics.
+hints, escaped wikilinks, wrap mangles, stale-link and outside-link notes,
+directory-link and relative-link issues — for the wrapped lines, so a page
+can display sample conflict markers or stale-link examples without failing
+lint. A nested or dangling marker is itself a hard lint issue, and a
+malformed pair suppresses nothing. Markers inside fenced or inline code are
+masked — a marker shown in a code block is a sample, not a directive.
+Well-formed regions with other directive names are inert; ``no-lint`` is the
+only directive with shipped semantics.
 
 Ownership summary
 -----------------

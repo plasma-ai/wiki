@@ -147,6 +147,16 @@ Day-to-day use
 - ``wiki update`` never linkifies prose: author ``[[wikilink]]``
   cross-references in page bodies by hand (Obsidian's link suggestions help
   here).
+- Obsidian and ``wiki lint`` read wikilinks from the same places: a
+  prefix-free target (``[[topics/example]]``) from the vault root — the wiki
+  root — and a ``./`` or ``../`` target from the note's own folder, so
+  nothing lint accepts renders as a different note in Obsidian. A prefixed
+  target must leave the wiki, reaching a file, folder, or another wiki's
+  page under a ``links.external`` folder (see :doc:`/configuration`); that
+  target lies outside the vault, so
+  Obsidian shows the link unresolved — do not click it: Obsidian creates the
+  missing target at that path, as folders outside the vault, through a known
+  bug.
 - Keep markdown-formatting plugins away from the wiki: a formatter that
   rewrites ``***`` into ``---`` or backslash-escapes ``[[`` brackets corrupts
   the generated region. ``wiki lint`` names these damage signatures when they

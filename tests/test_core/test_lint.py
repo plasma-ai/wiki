@@ -9,9 +9,11 @@ hard-issue vs soft-note split.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
 import shutil
+from typing import Optional
 
 import pytest
 
@@ -25,7 +27,9 @@ from ._helpers import (
     _git_repo,
     _make_wiki,
     _needs_git,
+    _needs_unprivileged,
     _set_exclude_patterns,
+    bare_anchored,
     page_index,
 )
 
@@ -81,9 +85,11 @@ __all__ = [
     'test_lint_survives_index_deleted_mid_check',
     'test_quoted_placeholder_desc_is_soft',
     'test_long_desc_is_note_only',
-    'test_lint_stale_body_link_names_canonical',
-    'test_lint_stale_directory_link_suggests_index_form',
-    'test_lint_stale_link_to_unindexed_folder_suggests_bare_form',
+    'test_lint_relative_prefix_inside_wiki_is_issue',
+    'test_lint_relative_root_link_names_the_index_page',
+    'test_lint_relative_root_link_steers_to_index_before_update',
+    'test_lint_link_text_ignores_padding_but_not_a_stray_bracket',
+    'test_lint_stale_prefix_free_link_names_a_raw_file',
     'test_lint_directory_link_is_issue_naming_index_form',
     'test_lint_link_rules_spare_samples_not_prose',
     'test_lint_directory_link_keeps_display_text',
@@ -95,6 +101,7 @@ __all__ = [
     'test_lint_directory_link_to_unindexed_folder_is_live',
     'test_lint_flags_folder_shadowing_page',
     'test_lint_accepts_anchor_links',
+    'test_lint_link_probes_never_raise',
 ]
 
 
@@ -278,13 +285,13 @@ def test_lint_issues_are_typed(tmp_path: pathlib.Path) -> None:
         '---\nname: malformed\ndesc: A page.\n\n# malformed\n\nBody.\n',
         encoding='utf-8',
     )
-    # a period-less desc, an unparseable stamp, both wrap mangles, a
-    # directory link, and a dangling region marker on one messy page
+    # a period-less desc, an unparseable stamp, both wrap mangles, a directory
+    # link, a relative link, and a dangling region marker on one messy page
     (tmp_path / 'data' / 'messy.md').write_text(
         '---\nname: messy\ndesc: No trailing period\n'
         'created: not-a-stamp\n---\n\n# messy\n\n'
         'a twenty-\nclass system, that\n+ wraps into a marker.\n\n'
-        'See [[core]] for more.\n\n<!-- start: no-lint -->\n',
+        'See [[core]] and [[./keep]] for more.\n\n<!-- start: no-lint -->\n',
         encoding='utf-8',
     )
     # frontmatter a strict YAML reader rejects
@@ -349,6 +356,7 @@ def test_lint_issues_are_typed(tmp_path: pathlib.Path) -> None:
         'missing_title',
         'nested_wiki_root',
         'region_marker',
+        'relative_link',
         'requires_update',
         'shadowed_page',
         'symlink_link_target',
@@ -1847,85 +1855,73 @@ def test_long_desc_is_note_only(tmp_path: pathlib.Path) -> None:
 # ------ body links and structure
 
 
-@pytest.mark.parametrize('anchor', ['', '#context'], ids=['bare', 'anchored'])
-def test_lint_stale_body_link_names_canonical(
+@page_index
+@bare_anchored
+@pytest.mark.parametrize(
+    argnames=('link', 'fix'),
+    argvalues=[
+        # the root page, written as if relative to the page's folder
+        ('../overview', 'overview'),
+        # a root page missed through './', named from the root
+        ('./overview', 'overview'),
+        # a sibling page through './'
+        ('./sibling', 'notes/sibling'),
+        # an indexed folder: the fix is its index page
+        ('../core', 'core/_index'),
+        # an excluded folder keeps its bare form
+        ('../vendor', 'vendor'),
+        # a raw file at the root
+        ('../Makefile', 'Makefile'),
+        # the root itself
+        ('..', '_index'),
+        # an interior '..' segment reads the same way
+        ('sibling/../sibling', 'notes/sibling'),
+        # a folder the walk reaches whose index is not minted yet
+        ('../drafts', 'drafts/_index'),
+        # nothing exists there: the issue stands without a fix
+        ('./gone', None),
+    ],
+    ids=[
+        'page',
+        'dot-root-page',
+        'dot-sibling',
+        'indexed-folder',
+        'excluded-folder',
+        'raw-file',
+        'root',
+        'interior',
+        'unminted-folder',
+        'missing',
+    ],
+)
+def test_lint_relative_prefix_inside_wiki_is_issue(
     tmp_path: pathlib.Path,
+    kind: str,
     anchor: str,
+    link: str,
+    fix: Optional[str],
 ) -> None:
-    """A folder-relative body link is noted with its root-relative fix.
+    """A ``./`` or ``../`` link that lands inside the wiki is a hard issue.
 
-    An anchor suffix rides along on the suggestion: dropping it would make
-    a user applying the fix verbatim silently lose the anchor.
+    A prefixed target is read from the page's folder, as Obsidian and
+    markdown read it, and means "outside the wiki"; one that resolves
+    inside is written wrong, so lint fails it and names the prefix-free
+    form -- a page by stem, an indexed folder's ``_index`` page, an
+    excluded folder's bare form, a raw file's path, or the page the text
+    names when read from the root -- with the anchor and alias riding
+    along, and no fix when nothing exists either way. The link
+    reports once however often the prose repeats it, and is never also
+    noted as stale.
     """
-    _make_wiki(tmp_path, folders={'notes': ['meeting']})
-    wiki = Wiki(tmp_path)
-    # a page that exists at root, and a folder-relative link to it from a subpage
+    _make_wiki(
+        tmp_path,
+        folders={'notes': ['meeting', 'sibling'], 'core': ['design']},
+    )
     (tmp_path / 'overview.md').write_text(
         '---\nname: overview\ndesc: An overview.\n---\n\n# overview\n\nText.\n',
         encoding='utf-8',
     )
-    meeting = tmp_path / 'notes' / 'meeting.md'
-    meeting.write_text(
-        meeting.read_text(encoding='utf-8').replace(
-            'Content for meeting.',
-            f'See [[../overview{anchor}]] for context.',
-        ),
-        encoding='utf-8',
-    )
-    wiki.update()
-    # the stale link is noted with the canonical [[overview]] as the fix
-    notices = _capture_notices(wiki)
-    wiki.lint()
-    stale = [
-        event.description
-        for event in notices
-        if f'Stale link [[../overview{anchor}]]' in event.description
-    ]
-    assert stale
-    assert all(f'(use [[overview{anchor}]])' in note for note in stale)
-
-
-def test_lint_stale_directory_link_suggests_index_form(
-    tmp_path: pathlib.Path,
-) -> None:
-    """A folder-relative link to a folder suggests its ``_index`` page.
-
-    Suggesting the bare folder would steer the author straight into the
-    directory-link hard issue; the canonical fix is the index page.
-    """
-    wiki = _make_wiki(tmp_path, folders={'core': ['design'], 'notes': ['meeting']})
-    meeting = tmp_path / 'notes' / 'meeting.md'
-    meeting.write_text(
-        meeting.read_text(encoding='utf-8').replace(
-            'Content for meeting.',
-            'See [[../core]] for context.',
-        ),
-        encoding='utf-8',
-    )
-    wiki.update()
-    # the stale note names the folder's index page as the fix
-    notices = _capture_notices(wiki)
-    assert wiki.lint() == []
-    stale = [
-        event.description
-        for event in notices
-        if 'Stale link [[../core]]' in event.description
-    ]
-    assert stale
-    assert all('(use [[core/_index]])' in note for note in stale)
-
-
-def test_lint_stale_link_to_unindexed_folder_suggests_bare_form(
-    tmp_path: pathlib.Path,
-) -> None:
-    """A folder-relative link to an unindexed folder suggests the bare form.
-
-    A pattern-excluded folder is never walked, so an index it carries on
-    disk is not maintained -- steering prose at it would contradict the
-    index block's own report that the path is not indexed. The bare
-    folder form is the shape lint leaves live for an unindexed target.
-    """
-    _make_wiki(tmp_path, folders={'notes': ['meeting']})
+    (tmp_path / 'Makefile').write_text('all:\n', encoding='utf-8')
     # a folder carrying an index on disk that the walk will not enter
     vendor = tmp_path / 'vendor'
     vendor.mkdir()
@@ -1933,27 +1929,163 @@ def test_lint_stale_link_to_unindexed_folder_suggests_bare_form(
         '---\nname: vendored\ndesc: A vendored index.\n---\n\n# vendored\n\n***\n',
         encoding='utf-8',
     )
-    # reference the excluded folder with a folder-relative link
-    meeting = tmp_path / 'notes' / 'meeting.md'
-    meeting.write_text(
-        meeting.read_text(encoding='utf-8').replace(
-            'Content for meeting.',
-            'See [[../vendor]] for context.',
-        ),
+    _set_exclude_patterns(tmp_path, ['vendor'])
+    name = 'meeting.md' if kind == 'page' else '_index.md'
+    marker = 'Content for meeting.' if kind == 'page' else 'Overview of notes.'
+    page = tmp_path / 'notes' / name
+    body = f'See [[{link}{anchor}|Here]] and [[{link}{anchor}|Here]] again.'
+    text = page.read_text(encoding='utf-8').replace(marker, body)
+    page.write_text(text, encoding='utf-8')
+    Wiki(tmp_path).update()
+    # a folder created after the update, its index not minted yet
+    (tmp_path / 'drafts').mkdir()
+
+    # the issue names the prefix-free spelling; the link never also notes
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+    flagged = [issue for issue in wiki.lint() if 'points inside the wiki' in issue]
+    tail = '' if fix is None else f' (use [[{fix}{anchor}|Here]])'
+    assert flagged == [
+        f'notes/{name}: Link [[{link}{anchor}|Here]] points inside the wiki'
+        f" through './' or '../'{tail}"
+    ]
+    assert flagged[0].kind == 'relative_link'
+    assert not any('Stale link' in event.description for event in notices)
+
+
+def test_lint_relative_root_link_names_the_index_page(tmp_path: pathlib.Path) -> None:
+    """A prefixed link to the wiki root itself is steered to its index page.
+
+    ``[[.]]`` from a root page and ``[[..]]`` from a nested one land on
+    the root, whose fix is ``_index`` -- never the stem of a file beside
+    the wiki that shares the root folder's name; a link re-entering the
+    wiki through that folder name (``[[../wiki/overview]]``) is steered to
+    the prefix-free page.
+    """
+    root = tmp_path / 'wiki'
+    _make_wiki(root, folders={'notes': ['meeting']})
+    (tmp_path / 'wiki.md').write_text('x\n', encoding='utf-8')
+    (root / 'overview.md').write_text(
+        '---\nname: overview\ndesc: An overview.\n---\n\n# overview\n\nText.\n',
         encoding='utf-8',
     )
-    _set_exclude_patterns(tmp_path, ['vendor'])
+    Wiki(root).update()
+    links = {
+        '_index.md': 'See [[.]] and [[../wiki/overview]] now.',
+        'notes/meeting.md': 'See [[..]] now.',
+    }
+    for page, body in links.items():
+        path = root / page
+        marker = 'Root overview.' if page == '_index.md' else 'Content for meeting.'
+        text = path.read_text(encoding='utf-8').replace(marker, body)
+        path.write_text(text, encoding='utf-8')
+
+    # the root links are steered to the index page; the re-entry to the page it names
+    issues = Wiki(root).lint()
+    expected = [
+        "_index.md: Link [[.]] points inside the wiki through './' or '../'"
+        ' (use [[_index]])',
+        "_index.md: Link [[../wiki/overview]] points inside the wiki through './' or"
+        " '../' (use [[overview]])",
+        "notes/meeting.md: Link [[..]] points inside the wiki through './' or '../'"
+        ' (use [[_index]])',
+    ]
+    assert sorted(issues) == sorted(expected)
+
+
+def test_lint_relative_root_link_steers_to_index_before_update(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The root's fix is its index page even while that page is missing.
+
+    A root whose ``_index.md`` has not been minted yet still links by it;
+    the bare ``.`` form would be the relative-link issue itself.
+    """
+    root = tmp_path / 'wiki'
+    _make_wiki(root, folders={'notes': ['meeting']})
+    (root / '_index.md').unlink()
+    page = root / 'notes' / 'meeting.md'
+    text = page.read_text(encoding='utf-8').replace(
+        'Content for meeting.', 'See [[..]].'
+    )
+    page.write_text(text, encoding='utf-8')
+
+    issues = [issue for issue in Wiki(root).lint() if 'points inside the wiki' in issue]
+    assert issues == [
+        "notes/meeting.md: Link [[..]] points inside the wiki through './' or '../'"
+        ' (use [[_index]])'
+    ]
+
+
+@pytest.mark.parametrize(
+    argnames=('text', 'stale'),
+    argvalues=[
+        ('[[ overview ]]', []),
+        ('[[overview\t]]', []),
+        ('[[[overview]]', ['notes/meeting.md: Stale link [[[overview]]']),
+        ('[[overview\n]]', ['notes/meeting.md: Stale link [[overview\n]]']),
+        ('[[ ]]', []),
+    ],
+    ids=['spaces', 'tab', 'stray-bracket', 'line-break', 'blank'],
+)
+def test_lint_link_text_ignores_padding_but_not_a_stray_bracket(
+    tmp_path: pathlib.Path,
+    text: str,
+    stale: list[str],
+) -> None:
+    """Spaces and tabs around a target are not part of it; a bracket is junk.
+
+    ``[[ overview ]]`` links the root page, while ``[[[overview]]`` carries
+    a ``[`` no name can, so it is stale as written; a link broken across a
+    line break is still the text as written, and stale; a target of only
+    spaces is no link at all, as ``[[]]`` never was.
+    """
+    _make_wiki(tmp_path, folders={'notes': ['meeting']})
+    (tmp_path / 'overview.md').write_text(
+        '---\nname: overview\ndesc: An overview.\n---\n\n# overview\n\nText.\n',
+        encoding='utf-8',
+    )
+    Wiki(tmp_path).update()
+    page = tmp_path / 'notes' / 'meeting.md'
+    body = page.read_text(encoding='utf-8').replace('Content for meeting.', text)
+    page.write_text(body, encoding='utf-8')
     wiki = Wiki(tmp_path)
-    # the stale note names the bare folder, not its unmaintained index
+
+    # the padded spellings are live; the bracketed and broken ones note stale
     notices = _capture_notices(wiki)
     assert wiki.lint() == []
-    stale = [
-        event.description
-        for event in notices
-        if 'Stale link [[../vendor]]' in event.description
+    notes = [
+        event.description for event in notices if 'Stale link' in event.description
     ]
-    assert stale
-    assert all('(use [[vendor]])' in note for note in stale)
+    assert notes == stale
+
+
+def test_lint_stale_prefix_free_link_names_a_raw_file(tmp_path: pathlib.Path) -> None:
+    """A prefix-free miss that names a raw file beside the page is steered to it.
+
+    ``[[data.csv]]`` from ``notes/meeting.md`` reads from the wiki root,
+    where nothing exists; read from the page's folder it lands on a real
+    file, so the stale note names that file's root-relative spelling, as
+    it does for a page.
+    """
+    _make_wiki(tmp_path, folders={'notes': ['meeting']})
+    (tmp_path / 'notes' / 'data.csv').write_text('a,b\n', encoding='utf-8')
+    Wiki(tmp_path).update()
+    page = tmp_path / 'notes' / 'meeting.md'
+    body = 'See [[data.csv]] now.'
+    text = page.read_text(encoding='utf-8').replace('Content for meeting.', body)
+    page.write_text(text, encoding='utf-8')
+    wiki = Wiki(tmp_path)
+
+    # the note names the raw file's root-relative spelling
+    notices = _capture_notices(wiki)
+    assert wiki.lint() == []
+    notes = [
+        event.description for event in notices if 'Stale link' in event.description
+    ]
+    assert notes == [
+        'notes/meeting.md: Stale link [[data.csv]] (use [[notes/data.csv]])'
+    ]
 
 
 @page_index
@@ -2312,3 +2444,65 @@ def test_lint_accepts_anchor_links(tmp_path: pathlib.Path) -> None:
     ]
     assert len(stale) == 1
     assert 'missing' in stale[0]
+
+
+@_needs_unprivileged
+@pytest.mark.parametrize(
+    argnames=('surface', 'target'),
+    argvalues=[
+        # a prose target past the filesystem's name length limit
+        ('prose', 'a' * 300),
+        # a prose target under a directory the user cannot search
+        ('prose', '.locked/page'),
+        # a generated row's target past the name length limit
+        ('row', 'a' * 300),
+    ],
+    ids=['prose-long', 'prose-unreadable', 'row-long'],
+)
+def test_lint_link_probes_never_raise(
+    tmp_path: pathlib.Path,
+    surface: str,
+    target: str,
+) -> None:
+    """A link target the filesystem cannot stat reads as missing.
+
+    Link text is authored prose, so a name past the filesystem's length
+    limit or a path under an unreadable directory reaches the probes;
+    each reads as a missing target -- a stale note for prose, a broken
+    link for a generated row -- rather than surfacing the ``OSError``
+    that ``pathlib`` re-raises on interpreters before 3.14.
+    """
+    wiki = _make_wiki(tmp_path, folders={'notes': ['meeting']})
+    locked = tmp_path / '.locked'
+    locked.mkdir()
+    if surface == 'prose':
+        meeting = tmp_path / 'notes' / 'meeting.md'
+        body = f'See [[{target}]] now.'
+        text = meeting.read_text(encoding='utf-8').replace('Content for meeting.', body)
+        meeting.write_text(text, encoding='utf-8')
+    else:
+        # inject the row into the root index's generated block
+        root_index = tmp_path / '_index.md'
+        text = root_index.read_text(encoding='utf-8')
+        text = text.replace(
+            '[[notes/_index|notes/]]',
+            f'[[{target}|long]]: ...\n[[notes/_index|notes/]]',
+            1,
+        )
+        root_index.write_text(text, encoding='utf-8')
+    os.chmod(locked, 0o000)
+    try:
+        notices = _capture_notices(wiki)
+        issues = wiki.lint()
+    finally:
+        os.chmod(locked, 0o700)
+    # a prose target draws a stale note; a generated row is a broken link
+    if surface == 'prose':
+        assert issues == []
+        stale = [
+            event.description for event in notices if 'Stale link' in event.description
+        ]
+        assert stale == [f'notes/meeting.md: Stale link [[{target}]]']
+    else:
+        broken = [issue for issue in issues if 'Broken link' in issue]
+        assert broken == [f'_index.md: Broken link [[{target}|long]]']

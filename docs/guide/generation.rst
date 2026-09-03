@@ -249,8 +249,10 @@ reports two kinds of problem — without writing anything:
   *cannot* fix. Any issue makes lint **exit 1** — and nothing else does: a
   command error exits 2, so 1 always means exactly "issues found".
 - **Notes** (stderr): soft advisories — unauthored descriptions, stale prose
-  links, pending CRLF normalization, an unconfigured merge driver in a fresh
-  clone. Notes **never affect the exit code**.
+  links, a prose link to a real file outside every ``links.external``
+  folder, a ``links.external`` entry naming no folder on this machine,
+  pending CRLF normalization, an unconfigured merge driver in a fresh clone.
+  Notes **never affect the exit code**.
 
 .. code-block:: console
 
@@ -426,7 +428,31 @@ its meaning:
    (an anchor suffix rides along, and a target reports once per file).
    Only a folder the walk reaches is flagged — a dot-prefixed, symlinked,
    or ``exclude.patterns`` segment keeps its whole subtree out of the
-   index, leaving nothing to name.
+   index, leaving nothing to name. The same issue covers a folder that
+   another wiki indexes, reached through a ``links.external`` folder and
+   judged by that wiki's own settings — ``Link [[../math/g2]] targets a
+   folder, not a page (use [[../math/g2/_index]])`` (see
+   :doc:`/configuration`).
+
+``Link [[target]] points inside the wiki through './' or '../' (use [[canonical]])``
+   A prose wikilink written with a ``./`` or ``../`` segment that lands
+   inside the wiki. Such a target is read from the page's folder — as
+   Obsidian and markdown read it — and must leave the wiki; the in-wiki form
+   is prefix-free and read from the wiki root, so the message names it: a
+   page by stem, an indexed folder's ``_index`` page, or the bare path of a
+   raw file or unindexed folder. When nothing exists at the page-relative
+   reading, the same text read from the wiki root is tried —
+   ``[[./overview]]`` from ``notes/`` names ``(use [[overview]])`` — and the
+   wiki root itself always names ``_index``. When the same text read from
+   the wiki root would reach a real file under a ``links.external`` folder,
+   the message also offers that file's page-relative spelling — ``(use
+   [[folder_b/file_b]], or [[../../folder_b/file_b]] for the path outside
+   the wiki)`` — or offers it alone when nothing inside the wiki matches;
+   with nothing to name either way, the ``(use ...)`` tail is omitted. An
+   anchor and
+   alias ride along, and a target reports once per file. The
+   folder-relative slip ``[[../overview]]`` from a nested page is this
+   issue, with ``(use [[overview]])`` as its fix.
 
 ``Nested '<!-- start: no-lint -->' (line N)`` / ``Dangling '<!-- start: no-lint -->' (line N)`` / ``Dangling '<!-- end: no-lint -->' (line N)``
    A malformed region directive (below): a second start inside an open
@@ -459,12 +485,38 @@ notes is clean — lint exits 0.
    * - ``<path>: CRLF line endings; update will normalize``
      - The next writing update rewrites the file to LF.
    * - ``<path>: Stale link [[target]]``
-     - A ``[[wikilink]]`` in authored prose points at nothing. When a
-       folder-relative target (e.g. ``../overview``) resolves to a real
-       page, the note suggests the root-relative form: ``(use
-       [[canonical]])``. Prose links are soft because pages come and go —
-       the generated link block's broken-link check is the hard surface.
-       A target notes once per file, however often the prose repeats it.
+     - A ``[[wikilink]]`` in authored prose points at nothing — inside the
+       wiki for a prefix-free target, or under a ``links.external`` folder
+       present on this machine for a ``./`` or ``../`` target (see
+       :doc:`/configuration`); an absolute target that leaves the wiki is
+       never live. The note
+       names the fix when one reading resolves: for a prefix-free target
+       whose folder-relative reading lands on something real inside the
+       wiki, its root-relative form — ``(use [[canonical]])``: a page by
+       stem, an indexed folder's ``_index`` page, or the bare path of a raw
+       file or unindexed folder; for a prefixed target that misses only by
+       a trailing slash, the same path without it — ``(use
+       [[../../docs/guide]])``; for a prefixed or absolute target whose
+       text read from the wiki root reaches a real file under a
+       ``links.external`` folder, that file's page-relative spelling —
+       ``(use [[../../src/main.py]])``.
+       Prose links are soft because pages come and go — the generated link
+       block's broken-link check is the hard surface. A target notes once
+       per file, however often the prose repeats it.
+   * - ``<path>: Link [[target]] points outside the wiki (add '<folder>' to links.external in .wiki/settings.json to allow it)``
+     - A ``./`` or ``../`` prose link that leaves the wiki and reaches a real
+       file or folder under no ``links.external`` folder. A target whose
+       entry the policy would refuse — reached through a symlink alias of
+       the wiki itself, at the filesystem root (the root itself, or a file
+       directly under it), or through a folder name carrying a backslash —
+       is a ``Stale link`` instead. The named entry is
+       the target's folder — or the target itself, when it is a folder —
+       relative to the wiki root; add it to allow the link, or put the
+       reference in backticks. A folder holding an ``_index.md`` may be
+       another wiki's, so the note adds ``, and link [[<folder>/_index]] if
+       a wiki indexes the folder``. Typed ``link_outside`` in ``--json``,
+       with ``path``, ``target``, ``folder``, and (for such a folder)
+       ``canonical`` fields.
    * - ``<path>: indexed, but this machine's git ignores it (<source>:<line> '<pattern>'); its generated row ships where the file cannot, so every other clone reds on a broken link``
      - The gitignore fence reads only the repository's own rules (pinned, so
        indexing is identical on every clone), but the named ignore rule —
@@ -478,6 +530,14 @@ notes is clean — lint exits 0.
        per-clone ``merge.wiki.driver`` config, so git text-merges
        ``_index.md`` files until ``wiki config`` registers the driver (see
        :doc:`/guide/merge-driver`).
+   * - ``links.external entry '<folder>' names no folder on this machine; links into it are not checked``
+     - A ``links.external`` entry names a folder absent from this clone (a
+       sibling checkout missing from a partial clone) or names a file
+       rather than a folder. Lint notes it once per run, links or none, and
+       skips every link into it — neither live nor stale — so a stale link
+       under it stays invisible on this machine. An environment condition:
+       nothing in the wiki needs to change. Typed ``link_folder_missing`` in
+       ``--json``, with a ``folder`` field and no ``path``.
    * - ``Gitignore fence unavailable: `git check-ignore` failed inside the enclosing repository (is git installed?); indexing proceeds unfenced, so paths the repository ignores are adopted``
      - A ``.git`` directory encloses the wiki root but ``git check-ignore``
        could not run (git missing or broken), so the walk proceeds without
@@ -507,11 +567,12 @@ wrapped lines:
    <!-- end: no-lint -->
 
 Each marker stands alone on its line. The region suppresses the positional
-rules — conflict markers, escaped wikilinks, wrap mangles, stale-link notes,
-directory-link issues — for the wrapped lines only; file-level checks are
-unaffected. Content inside fenced or inline code is already masked, so those
-code samples need no region. The link rules — stale-link notes and
-directory-link issues — also skip a wikilink inside an HTML comment or an
+rules — conflict markers, escaped wikilinks, wrap mangles, stale-link and
+outside-link notes, directory-link and relative-link issues — for the
+wrapped lines only; file-level checks are unaffected. Content inside fenced
+or inline code is already masked, so those code samples need no region. The
+link rules — the stale-link and outside-link notes, the directory-link and
+relative-link issues — also skip a wikilink inside an HTML comment or an
 indented code block, so a link sample in either needs no wrapping; the
 escaped-wikilink and wrap-mangle checks do not mask those, so an
 escaped-bracket sample or a deliberately wrapped line in a comment or
