@@ -106,8 +106,8 @@ may include breaking changes, each listed under a Breaking heading.
   one space).
 - The `wiki update` narration counts files with malformed frontmatter without
   the `(no closing ---)` suffix; each per-file notice names its reason.
-- A prose wikilink that leaves the wiki and resolves to a real file or folder
-  outside every `links.external` folder is noted as
+- A `./` or `../` prose wikilink that leaves the wiki and resolves to a real
+  file or folder outside every `links.external` folder is noted as
   `Link [[../docs/guide]] points outside the wiki (add '../docs' to links.external in .wiki/settings.json to allow it)`
   instead of `Stale link [[../docs/guide]]` — still a note, never an issue; a
   target with nothing at its path keeps the stale note, as does one whose entry

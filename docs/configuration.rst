@@ -393,12 +393,12 @@ external links (in-wiki links, being root-relative, survive the move).
      ``../``.
    - Rejected when the policy loads, with a message naming the entry, the
      reason, and the file: an empty or whitespace-only path; an absolute or
-     ``~`` path; a ``\`` separator; a ``#``, ``|``, ``]``, or NUL character
-     (no wikilink target can carry one); an empty segment (``//``); a ``.``
-     segment; a ``..`` segment anywhere but the start; a path naming the
-     whole filesystem; a path inside the wiki root (an in-wiki link needs no
-     allowlist); and a path that resolves inside the wiki root through a
-     symlink alias.
+     ``~`` path; a ``\`` separator; a ``#``, ``|``, ``[``, ``]``, or NUL
+     character (no wikilink target can carry one); an empty segment
+     (``//``); a ``.`` segment; a ``..`` segment anywhere but the start; a
+     path naming the whole filesystem; a path inside the wiki root (an
+     in-wiki link needs no allowlist); and a path that resolves inside the
+     wiki root through a symlink alias.
    - An entry may name a folder absent from this machine — a sibling
      checkout missing from a partial clone. ``wiki lint`` notes it once per
      run (``links.external entry '../src' names no folder on this machine;

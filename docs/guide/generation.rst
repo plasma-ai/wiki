@@ -514,9 +514,11 @@ notes is clean — lint exits 0.
        relative to the wiki root; add it to allow the link, or put the
        reference in backticks. A folder holding an ``_index.md`` may be
        another wiki's, so the note adds ``, and link [[<folder>/_index]] if
-       a wiki indexes the folder``. Typed ``link_outside`` in ``--json``,
-       with ``path``, ``target``, ``folder``, and (for such a folder)
-       ``canonical`` fields.
+       a wiki indexes the folder``, where the folder is spelled from the
+       page's folder like the link itself, not from the wiki root, so a
+       nested page takes one more ``..`` than the entry does. Typed
+       ``link_outside`` in ``--json``, with ``path``, ``target``,
+       ``folder``, and (for such a folder) ``canonical`` fields.
    * - ``<path>: indexed, but this machine's git ignores it (<source>:<line> '<pattern>'); its generated row ships where the file cannot, so every other clone reds on a broken link``
      - The gitignore fence reads only the repository's own rules (pinned, so
        indexing is identical on every clone), but the named ignore rule —

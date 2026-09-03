@@ -83,6 +83,7 @@ __all__ = [
         # characters no wikilink target can carry
         ({'external': ['../c#']}, r'no wikilink target can carry'),
         ({'external': ['../a|b']}, r'no wikilink target can carry'),
+        ({'external': ['../a[b']}, r'no wikilink target can carry'),
         ({'external': ['../a]b']}, r'no wikilink target can carry'),
         ({'external': ['../a\x00b']}, r'no wikilink target can carry'),
         # empty, '.', and interior '..' segments
@@ -109,6 +110,7 @@ __all__ = [
         'backslash',
         'anchor-char',
         'pipe-char',
+        'open-bracket-char',
         'bracket-char',
         'nul',
         'empty-segment',
@@ -397,6 +399,7 @@ def test_lint_judges_external_targets_by_the_allowlist(
     ]
     if verdict == 'live':
         assert notes == []
+        assert folder_notes == []
     elif verdict.startswith('skip:'):
         entry = verdict.partition(':')[2]
         assert notes == []
@@ -409,6 +412,7 @@ def test_lint_judges_external_targets_by_the_allowlist(
     elif verdict.startswith('stale-fix:'):
         fix = verdict.partition(':')[2]
         assert notes == [f'{relpath}: Stale link [[{link}]] (use [[{fix}]])']
+        assert folder_notes == []
     else:
         folder, _sep, index = verdict.partition(':')[2].partition(':')
         hint = ''

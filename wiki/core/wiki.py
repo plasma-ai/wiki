@@ -488,9 +488,9 @@ class Wiki:
                 )
             elif '\\' in folder:
                 reason = "use '/' as the separator (no '\\')"
-            elif any(char in folder for char in '#|]\0'):
+            elif any(char in folder for char in '#|[]\0'):
                 reason = (
-                    "contains '#', '|', ']', or a NUL character, which no"
+                    "contains '#', '|', '[', ']', or a NUL character, which no"
                     ' wikilink target can carry'
                 )
             elif '' in segments:
@@ -5336,8 +5336,9 @@ class Wiki:
         """Check wikilinks in content; return the hard issues.
 
         Two spellings, one rule each: a prefix-free target is read from
-        the wiki root and must name something inside it; a ``./`` or
-        ``../`` target is read from the page's folder, as Obsidian and
+        the wiki root and must name something inside it; a target
+        carrying a ``.`` or ``..`` segment (most often leading, as ``./``
+        or ``../``) is read from the page's folder, as Obsidian and
         markdown read it, and must leave the wiki -- one that lands inside
         is a hard issue naming the prefix-free form. A directory link (a
         target naming an indexed folder rather than its ``_index`` page)
@@ -5404,10 +5405,11 @@ class Wiki:
                 reported.add(target)
                 self.on_link_stale(path=str(relpath), target=target + alias)
                 continue
-            # a './' or '../' target is read from the page's folder, as
-            # Obsidian and markdown read it, and must leave the wiki; a
-            # prefix-free target is read from the root and must stay inside;
-            # an absolute target is read as written
+            # a target carrying a '.' or '..' segment (most often
+            # leading, as './' or '../') is read from the page's folder,
+            # as Obsidian and markdown read it, and must leave the wiki;
+            # a prefix-free target is read from the root and must stay
+            # inside; an absolute target is read as written
             absolute = os.path.isabs(page_target)
             segments = page_target.split('/')
             prefixed = (not absolute) and (('.' in segments) or ('..' in segments))

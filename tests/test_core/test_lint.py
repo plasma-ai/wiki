@@ -101,7 +101,8 @@ __all__ = [
     'test_lint_directory_link_to_unindexed_folder_is_live',
     'test_lint_flags_folder_shadowing_page',
     'test_lint_accepts_anchor_links',
-    'test_lint_link_probes_never_raise',
+    'test_lint_link_probes_never_raise_on_an_overlong_name',
+    'test_lint_link_probes_never_raise_under_an_unreadable_folder',
 ]
 
 
@@ -2089,7 +2090,7 @@ def test_lint_stale_prefix_free_link_names_a_raw_file(tmp_path: pathlib.Path) ->
 
 
 @page_index
-@pytest.mark.parametrize('anchor', ['', '#context'], ids=['bare', 'anchored'])
+@bare_anchored
 def test_lint_directory_link_is_issue_naming_index_form(
     tmp_path: pathlib.Path,
     anchor: str,
@@ -2446,35 +2447,21 @@ def test_lint_accepts_anchor_links(tmp_path: pathlib.Path) -> None:
     assert 'missing' in stale[0]
 
 
-@_needs_unprivileged
-@pytest.mark.parametrize(
-    argnames=('surface', 'target'),
-    argvalues=[
-        # a prose target past the filesystem's name length limit
-        ('prose', 'a' * 300),
-        # a prose target under a directory the user cannot search
-        ('prose', '.locked/page'),
-        # a generated row's target past the name length limit
-        ('row', 'a' * 300),
-    ],
-    ids=['prose-long', 'prose-unreadable', 'row-long'],
-)
-def test_lint_link_probes_never_raise(
+@pytest.mark.parametrize('surface', ['prose', 'row'])
+def test_lint_link_probes_never_raise_on_an_overlong_name(
     tmp_path: pathlib.Path,
     surface: str,
-    target: str,
 ) -> None:
-    """A link target the filesystem cannot stat reads as missing.
+    """A link target past the filesystem's name length limit reads as missing.
 
-    Link text is authored prose, so a name past the filesystem's length
-    limit or a path under an unreadable directory reaches the probes;
-    each reads as a missing target -- a stale note for prose, a broken
-    link for a generated row -- rather than surfacing the ``OSError``
-    that ``pathlib`` re-raises on interpreters before 3.14.
+    Link text is authored prose, so a name the filesystem cannot stat
+    reaches the probes; it reads as a missing target -- a stale note for
+    prose, a broken link for a generated row -- rather than surfacing the
+    ``OSError`` that ``pathlib`` re-raises on interpreters before 3.14.
     """
     wiki = _make_wiki(tmp_path, folders={'notes': ['meeting']})
-    locked = tmp_path / '.locked'
-    locked.mkdir()
+    # a name past the filesystem's length limit
+    target = 'a' * 300
     if surface == 'prose':
         meeting = tmp_path / 'notes' / 'meeting.md'
         body = f'See [[{target}]] now.'
@@ -2490,12 +2477,8 @@ def test_lint_link_probes_never_raise(
             1,
         )
         root_index.write_text(text, encoding='utf-8')
-    os.chmod(locked, 0o000)
-    try:
-        notices = _capture_notices(wiki)
-        issues = wiki.lint()
-    finally:
-        os.chmod(locked, 0o700)
+    notices = _capture_notices(wiki)
+    issues = wiki.lint()
     # a prose target draws a stale note; a generated row is a broken link
     if surface == 'prose':
         assert issues == []
@@ -2506,3 +2489,33 @@ def test_lint_link_probes_never_raise(
     else:
         broken = [issue for issue in issues if 'Broken link' in issue]
         assert broken == [f'_index.md: Broken link [[{target}|long]]']
+
+
+@_needs_unprivileged
+def test_lint_link_probes_never_raise_under_an_unreadable_folder(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A prose target under a folder the user cannot search reads as missing.
+
+    The permission denial reaches the in-root probe like any other failed
+    stat, so the target draws the stale note rather than surfacing the
+    ``OSError`` that ``pathlib`` re-raises on interpreters before 3.14.
+    """
+    wiki = _make_wiki(tmp_path, folders={'notes': ['meeting']})
+    locked = tmp_path / '.locked'
+    locked.mkdir()
+    meeting = tmp_path / 'notes' / 'meeting.md'
+    body = 'See [[.locked/page]] now.'
+    text = meeting.read_text(encoding='utf-8').replace('Content for meeting.', body)
+    meeting.write_text(text, encoding='utf-8')
+    os.chmod(locked, 0o000)
+    try:
+        notices = _capture_notices(wiki)
+        issues = wiki.lint()
+    finally:
+        os.chmod(locked, 0o700)
+    assert issues == []
+    stale = [
+        event.description for event in notices if 'Stale link' in event.description
+    ]
+    assert stale == ['notes/meeting.md: Stale link [[.locked/page]]']
