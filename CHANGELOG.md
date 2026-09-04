@@ -510,6 +510,53 @@ may include breaking changes, each listed under a Breaking heading.
   tree to the probe's cwd). The wiring pins to the repository enclosing the
   wiki.
 
+### Fixed
+
+- A case-mismatched subtree scope (`wiki search ... CORE` for the on-disk
+  `core`) on a case-insensitive filesystem canonicalizes to the on-disk
+  spelling, so `wiki search` and `wiki match` agree — search's path prefix
+  filter matched nothing under the spelled casing while match still found the
+  pages — and reported paths carry the true casing.
+- `wiki trust` bounds its wait for the trust-store lock instead of blocking on
+  it forever: one stopped holder (or a stalled network-filesystem write) wedged
+  every fleet-wide spawn-time trust call with no diagnostic at all. The wait
+  polls a non-blocking acquisition and, once the budget is spent, refuses naming
+  the lock path.
+- Undecodable bytes in the trust store read as corruption instead of escaping as
+  a `UnicodeDecodeError`: one bad byte — a partial write, a truncated restore,
+  an encoding mishap — turned every `wiki update`/`lint`/`map` on a hooked wiki
+  into a hard failure whose message named no file. Reads fail safe (nothing is
+  trusted) and the rewrite refuses naming the store, as both already did for
+  unparseable JSON.
+- An unreadable trust store is refused in plain language
+  (`Cannot read the trust store: <path> (check its permissions).`) rather than
+  leaking a bare `EACCES` — the one store state the guarded open never
+  converted, and the one a restrictive umask or a chmod typo reaches by
+  accident.
+- A config home symlinked at a non-directory — a dotfiles target not yet
+  materialized, a link into an unmounted volume — reaches the
+  `Refusing symlinked config home` refusal instead of a bare `File exists` about
+  a path that, to the user, does not exist: the named refusal sat downstream of
+  a `mkdir(parents=True, exist_ok=True)` that raised first.
+- `wiki lint` reports a leftover merge repair hint in an `_index.md` as an
+  issue. The driver plants its hint above the first conflict marker, which
+  normally lands inside the frontmatter (the `updated:` stamps differ first),
+  where the hint parses as an authored key — so a resolution that dropped the
+  markers but forgot the hint kept it in every later rewrite with both
+  instruments blind to it.
+- The description-propagation docs state the `...` placeholder exemption: a
+  child carrying the placeholder propagates nothing, so its parent row keeps the
+  description it has — no overwrite, no warning, nothing pending — rather than
+  the unconditional overwrite the guide described.
+- Lint's wrapped-list-marker rule no longer false-flags a legal bullet that
+  follows a multi-line item whose continuation line is only a code span (for
+  example a bare backticked path): such a line masks to blank but the list is
+  still open, so list state now closes only at a raw blank line.
+- `import wiki.cli.utils` works in a fresh interpreter: the top-level package no
+  longer star-exports the Typer app runner over the `wiki.cli` subpackage
+  attribute. The `wiki.cli(...)` callable was an accidental top-level alias —
+  the CLI is the `wiki` console script (an entry point), not library API.
+
 ### Security
 
 - The trust store is refused inside a wiki, on the read path and the write path
@@ -583,53 +630,6 @@ may include breaking changes, each listed under a Breaking heading.
   and now writes cleanly: an empty file holds no trusted roots, so the "a
   rewrite would drop every trusted root" refusal was vacuous and served only to
   wedge every trust call on the machine until a human removed the file.
-
-### Fixed
-
-- A case-mismatched subtree scope (`wiki search ... CORE` for the on-disk
-  `core`) on a case-insensitive filesystem canonicalizes to the on-disk
-  spelling, so `wiki search` and `wiki match` agree — search's path prefix
-  filter matched nothing under the spelled casing while match still found the
-  pages — and reported paths carry the true casing.
-- `wiki trust` bounds its wait for the trust-store lock instead of blocking on
-  it forever: one stopped holder (or a stalled network-filesystem write) wedged
-  every fleet-wide spawn-time trust call with no diagnostic at all. The wait
-  polls a non-blocking acquisition and, once the budget is spent, refuses naming
-  the lock path.
-- Undecodable bytes in the trust store read as corruption instead of escaping as
-  a `UnicodeDecodeError`: one bad byte — a partial write, a truncated restore,
-  an encoding mishap — turned every `wiki update`/`lint`/`map` on a hooked wiki
-  into a hard failure whose message named no file. Reads fail safe (nothing is
-  trusted) and the rewrite refuses naming the store, as both already did for
-  unparseable JSON.
-- An unreadable trust store is refused in plain language
-  (`Cannot read the trust store: <path> (check its permissions).`) rather than
-  leaking a bare `EACCES` — the one store state the guarded open never
-  converted, and the one a restrictive umask or a chmod typo reaches by
-  accident.
-- A config home symlinked at a non-directory — a dotfiles target not yet
-  materialized, a link into an unmounted volume — reaches the
-  `Refusing symlinked config home` refusal instead of a bare `File exists` about
-  a path that, to the user, does not exist: the named refusal sat downstream of
-  a `mkdir(parents=True, exist_ok=True)` that raised first.
-- `wiki lint` reports a leftover merge repair hint in an `_index.md` as an
-  issue. The driver plants its hint above the first conflict marker, which
-  normally lands inside the frontmatter (the `updated:` stamps differ first),
-  where the hint parses as an authored key — so a resolution that dropped the
-  markers but forgot the hint kept it in every later rewrite with both
-  instruments blind to it.
-- The description-propagation docs state the `...` placeholder exemption: a
-  child carrying the placeholder propagates nothing, so its parent row keeps the
-  description it has — no overwrite, no warning, nothing pending — rather than
-  the unconditional overwrite the guide described.
-- Lint's wrapped-list-marker rule no longer false-flags a legal bullet that
-  follows a multi-line item whose continuation line is only a code span (for
-  example a bare backticked path): such a line masks to blank but the list is
-  still open, so list state now closes only at a raw blank line.
-- `import wiki.cli.utils` works in a fresh interpreter: the top-level package no
-  longer star-exports the Typer app runner over the `wiki.cli` subpackage
-  attribute. The `wiki.cli(...)` callable was an accidental top-level alias —
-  the CLI is the `wiki` console script (an entry point), not library API.
 
 ## [1.2.0] - 2026-07-28
 
