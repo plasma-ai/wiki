@@ -68,12 +68,13 @@ Errors and exit codes
 Commands exit 0 on success. An error prints ``Error: <message>`` to stderr and
 exits 2, as does invalid option usage — mutually exclusive flags, a bad
 slice/``--depth``/``--desc-limit`` value, or malformed ``--settings`` JSON,
-which prints a usage message; a closed downstream pipe exits 0 silently. Exit 1
-is left to each command's own nonzero outcome, documented in its section:
-``search`` and ``match`` follow the grep convention (0 match, 1 no match,
-2 error), ``update --check`` exits 1 when changes are pending, and ``lint``
-exits 1 when issues are found — so a script gating on one can never read a
-failed run as the other.
+which prints a usage message; a closed downstream pipe exits 0 silently, and an
+interrupted command (Ctrl-C) prints ``Interrupted.`` to stderr and exits 130.
+Exit 1 is left to each command's own nonzero outcome, documented in its
+section: ``search`` and ``match`` follow the grep convention (0 match, 1 no
+match, 2 error), ``update --check`` exits 1 when changes are pending, and
+``lint`` exits 1 when issues are found — so a script gating on one can never
+read a failed run as the other.
 
 ``wiki install``
 ----------------
