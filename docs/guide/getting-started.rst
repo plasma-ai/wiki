@@ -164,9 +164,9 @@ indexes:
 .. code-block:: console
 
    $ wiki update
+   Adopted 1 bare page (frontmatter added)
    Created 1 new index (fill in its desc)
    Added 2 new links
-   Adopted 1 bare page (frontmatter added)
    Updated 3 files.
 
 The count lines are narration on stderr; the ``Updated N files.`` summary is

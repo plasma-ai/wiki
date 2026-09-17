@@ -166,8 +166,8 @@ bare page beside ``world.md`` and running ``wiki update`` replays exactly how
    $ cd /tmp/hello
    $ printf '# Another\n\nA second page.\n' > another.md
    $ wiki update
-   Added 1 new link
    Adopted 1 bare page (frontmatter added)
+   Added 1 new link
    Updated 2 files.
 
 The update adopts the bare page (frontmatter added, ``title: Another`` seeded
