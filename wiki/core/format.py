@@ -37,11 +37,14 @@ _FRONTMATTER_TAIL = (
     'updated',
 )
 
-# per-process memo of composed frontmatter blocks: an update reads each block
-# a few times and a lint a few more, and a run over a few thousand pages fits
-# one cache at about a kilobyte per block; a block past the byte bound is
-# composed on every read rather than pinned for the run
-_SCALAR_CACHE_SIZE = 4_096
+# per-process memos keyed by text -- composed frontmatter blocks at about a
+# kilobyte and a half apiece, and plain-safety verdicts on the values the
+# writers quote (a file's name, the run's stamp); a run composes two blocks
+# per file, as written and as the write re-stamps it, and reads them all
+# again once the last page is planned, so a bound under twice the file count
+# evicts between passes and this bound holds eight thousand files; a block
+# past the byte bound is composed on every read rather than pinned for the run
+_SCALAR_CACHE_SIZE = 16_384
 _SCALAR_CACHE_BYTES = 65_536
 
 # the deepest collection nesting handed to the composer, which recurses per
@@ -2350,6 +2353,7 @@ def _is_unset_field(frontmatter: str, key: str) -> bool:
     return _is_valueless(indicator, body, nulls=('', 'null'))
 
 
+@functools.lru_cache(maxsize=_SCALAR_CACHE_SIZE)
 def _is_plain_safe(value: str) -> bool:
     """Return whether a strict YAML reader reads ``value`` back verbatim when plain.
 
@@ -2358,7 +2362,10 @@ def _is_plain_safe(value: str) -> bool:
     comment), one opening with an indicator character or with ``'- '``,
     ``'? '``, or ``': '`` reads as structure, a node property, or a quoted
     scalar, and leading or trailing whitespace (a tab anywhere) is dropped
-    or rejected -- so none of them may be written plain.
+    or rejected -- so none of them may be written plain. The verdict is a
+    function of the value and the installed PyYAML build alone, so it is
+    memoized per process: a run quotes its one stamp at every write and
+    every re-stamped read.
     """
     if not value:
         return True
