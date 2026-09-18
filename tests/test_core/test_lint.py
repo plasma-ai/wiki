@@ -63,6 +63,7 @@ __all__ = [
     'test_lint_flags_a_stamp_that_is_a_sequence',
     'test_lint_flags_a_block_whose_repair_would_break_it',
     'test_lint_flags_an_unaddressable_block_as_malformed',
+    'test_lint_names_the_refusal_update_names_once',
     'test_lint_reports_deep_nesting_instead_of_crashing',
     'test_lint_reports_an_escape_naming_no_character',
     'test_lint_invalid_yaml_yields_to_merge_states',
@@ -1135,6 +1136,77 @@ def test_lint_flags_an_unaddressable_block_as_malformed(tmp_path: pathlib.Path) 
     assert all('keys are not column-0 key: value lines' in issue for issue in issues)
 
 
+@page_index
+@pytest.mark.parametrize(
+    argnames=('block', 'reason', 'lint_kind'),
+    argvalues=[
+        (
+            '{name: x, desc: Flow.}',
+            'keys are not column-0 key: value lines',
+            'malformed_frontmatter',
+        ),
+        (
+            'name: &n wrong\ndesc: A page.\ntitle: *n',
+            'its repair would break the YAML',
+            'malformed_frontmatter',
+        ),
+        ('- a\n- b', 'not a key: value mapping', 'invalid_yaml'),
+        (
+            '"quoted\nupdated: 2020-01-01T00:00:00Z\n"',
+            'not a key: value mapping',
+            'invalid_yaml',
+        ),
+    ],
+    ids=['unaddressable', 'unrepairable', 'list', 'quoted-key-lines'],
+)
+def test_lint_names_the_refusal_update_names_once(
+    tmp_path: pathlib.Path,
+    kind: str,
+    block: str,
+    reason: str,
+    lint_kind: str,
+) -> None:
+    """Lint carries update's refusal once per file with the same reason; a non-mapping body is the strict reader's issue alone.
+
+    Update keeps a block it can neither address nor repair as written and
+    says why in a notice on every run; lint carries that verdict as one
+    ``malformed_frontmatter`` issue, page or index, so the two never
+    disagree on a block. A body that is not ``key: value`` pairs has no
+    fields to repair, so it is the strict reader's ``invalid_yaml``
+    finding and draws no repair verdict, quoted lines shaped like keys
+    included.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    name = 'design.md' if kind == 'page' else '_index.md'
+    body = '\n# design\n\nBody.\n' if kind == 'page' else '\n# core\n\n***\n\nProse.\n'
+    path = tmp_path / 'core' / name
+    authored = f'---\n{block}\n---\n{body}'
+    path.write_text(authored, encoding='utf-8')
+
+    # update keeps the file as written and names the refusal once
+    notices = _capture_notices(wiki)
+    wiki.update()
+    named = [
+        event.description
+        for event in notices
+        if 'Malformed frontmatter' in event.description
+    ]
+    assert named == [f'Malformed frontmatter ({reason}) in core/{name}']
+    assert path.read_text(encoding='utf-8') == authored
+    # lint reports the file exactly once, as the kind the refusal calls for
+    issues = [
+        issue
+        for issue in Wiki(tmp_path).lint()
+        if issue.fields['path'] == f'core/{name}'
+    ]
+    assert [issue.kind for issue in issues] == [lint_kind]
+    if lint_kind == 'malformed_frontmatter':
+        assert str(issues[0]) == f'core/{name}: Malformed frontmatter ({reason})'
+    # the next update finds nothing to do
+    assert Wiki(tmp_path).update() == []
+    assert path.read_text(encoding='utf-8') == authored
+
+
 @pytest.mark.usefixtures('_vary_loader')
 def test_lint_reports_deep_nesting_instead_of_crashing(tmp_path: pathlib.Path) -> None:
     """Nesting past the composer's bound is an issue, never an abort or a crash.
@@ -1754,28 +1826,15 @@ def test_lint_survives_folder_deleted_mid_walk(
     assert all('doomed' in issue for issue in issues)
 
 
-@pytest.mark.parametrize(
-    argnames=('vanish_read', 'expected_kinds'),
-    argvalues=[
-        # the plan's baseline read is first; lint's own index read is second
-        (2, {'missing_index'}),
-        # the marker probe re-reads after lint's read: the check ran clean
-        (3, set()),
-    ],
-    ids=['index-check-read', 'marker-probe-read'],
-)
 def test_lint_survives_index_deleted_mid_check(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
-    vanish_read: int,
-    expected_kinds: set[str],
 ) -> None:
-    """An index vanishing between probe and re-read never crashes lint.
+    """An index vanishing between the plan and lint's read never crashes lint.
 
-    Lint re-reads each index after probing it -- once for the index
-    check and once for the missing-delimiter probe -- so a delete
-    landing before either re-read (a concurrent delete) must classify
-    the index as missing (or leave the probe silent) rather than raise.
+    The plan's baseline read of each index is first and lint's own read
+    second, so a delete landing between them (a concurrent delete) must
+    classify the index as missing rather than raise.
     """
     wiki = _make_wiki(tmp_path, folders={'notes': ['alpha']})
     index = tmp_path / 'notes' / '_index.md'
@@ -1783,17 +1842,18 @@ def test_lint_survives_index_deleted_mid_check(
     reads: list[pathlib.Path] = []
 
     def racy(self: Wiki, path: pathlib.Path) -> str:
-        """Delete the index just as the numbered re-read begins."""
+        """Delete the index just as lint's own read begins."""
+        # the plan's baseline read is first; lint's own index read is second
         if path == index:
             reads.append(path)
-            if len(reads) == vanish_read:
+            if len(reads) == 2:
                 index.unlink()
         return real(self, path)
 
     # the mid-check deletion is handled, not crashed on
     monkeypatch.setattr(Wiki, '_read_text', racy)
     issues = wiki.lint()
-    assert {issue.kind for issue in issues} == expected_kinds
+    assert {issue.kind for issue in issues} == {'missing_index'}
 
 
 def test_quoted_placeholder_desc_is_soft(

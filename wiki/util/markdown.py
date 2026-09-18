@@ -7,6 +7,18 @@ from typing import Optional
 
 __all__ = []
 
+# the fence and span grammar mask_code and find_heading share, compiled once
+# for the per-line loops, the rules stated at their use
+_FENCE_OPEN = re.compile(r'^ {0,3}(`{3,}(?=[^`]*$)|~{3,})')
+_FENCE_CLOSE = re.compile(r'^ {0,3}(`+|~+)[ \t]*$')
+_CODE_SPAN = re.compile(
+    r'(?<!`)(`+)(?!`)(?:[^`\n]|\n(?![ \t]*\n)|(?!\1(?!`))`+(?!`))+?\1(?!`)'
+)
+# a list marker line, as mask_indented_code reads list context
+_LIST_MARKER_LINE = re.compile(r' {0,3}(?:[-*+]|\d{1,9}[.)])(?:\s|$)')
+# the H1 line find_heading locates
+_HEADING = re.compile(r'^ {0,3}# (.+)$')
+
 
 def mask_code(text: str, /) -> str:
     """Blank fenced code blocks and inline code spans in text.
@@ -23,6 +35,10 @@ def mask_code(text: str, /) -> str:
     >>> mask_code('an `inline span` masked')
     'an  masked'
     """
+    # no backtick and no tilde run means no span and no fence: the text is
+    # its own mask
+    if ('`' not in text) and ('~~~' not in text):
+        return text
     # blank fenced code blocks (line count preserved); the fence walk is
     # mirrored in find_heading, which must skip fences without the
     # inline-span masking below
@@ -33,12 +49,12 @@ def mask_code(text: str, /) -> str:
             lines.append('')
             # CommonMark closes on a same-char run at least as long as
             # the opening fence, indented at most three spaces
-            close = re.match(r'^ {0,3}(`+|~+)[ \t]*$', line)
+            close = _FENCE_CLOSE.match(line)
             if close and close.group(1).startswith(fence):
                 fence = None
             continue
         # a backtick fence's info string may not contain a backtick
-        match = re.match(r'^ {0,3}(`{3,}(?=[^`]*$)|~{3,})', line)
+        match = _FENCE_OPEN.match(line)
         if match:
             fence = match.group(1)
             lines.append('')
@@ -47,8 +63,7 @@ def mask_code(text: str, /) -> str:
     # blank inline code spans (equal-length backtick runs, newline-tolerant;
     # a span's interior newlines survive so line numbers stay aligned, and
     # interior backtick runs of a different length are span content)
-    return re.sub(
-        pattern=r'(?<!`)(`+)(?!`)(?:[^`\n]|\n(?![ \t]*\n)|(?!\1(?!`))`+(?!`))+?\1(?!`)',
+    return _CODE_SPAN.sub(
         repl=lambda match: '\n' * match.group(0).count('\n'),
         string='\n'.join(lines),
     )
@@ -88,6 +103,10 @@ def mask_indented_code(text: str, /) -> str:
     >>> mask_indented_code('- item\n\n    still the list [[x]]\n')
     '- item\n\n    still the list [[x]]\n'
     """
+    # a block line is indented four columns: a text with no four-space run
+    # and no tab has none to mask
+    if ('    ' not in text) and ('\t' not in text):
+        return text
     lines = []
     in_list = False
     in_code = False
@@ -103,7 +122,7 @@ def mask_indented_code(text: str, /) -> str:
         # an unindented line closes any block and re-reads list context
         if indent < 4:
             in_code = False
-            in_list = bool(re.match(r' {0,3}(?:[-*+]|\d{1,9}[.)])(?:\s|$)', expanded))
+            in_list = bool(_LIST_MARKER_LINE.match(expanded))
         elif after_blank and not in_list:
             in_code = True
         lines.append('' if in_code else line)
@@ -128,15 +147,15 @@ def find_heading(text: str, /) -> Optional[tuple[int, str]]:
     fence = None
     for index, line in enumerate(text.split('\n')):
         if fence is not None:
-            close = re.match(r'^ {0,3}(`+|~+)[ \t]*$', line)
+            close = _FENCE_CLOSE.match(line)
             if close and close.group(1).startswith(fence):
                 fence = None
             continue
-        match = re.match(r'^ {0,3}(`{3,}(?=[^`]*$)|~{3,})', line)
+        match = _FENCE_OPEN.match(line)
         if match:
             fence = match.group(1)
             continue
-        match = re.match(r'^ {0,3}# (.+)$', line)
+        match = _HEADING.match(line)
         if match:
             return index, match.group(1)
     return None

@@ -1914,8 +1914,15 @@ def test_update_fills_blank_frontmatter_values(
         '- a\n- b',
         'name:core/design',
         '[a,\ndesc: no period]',
+        '"quoted\nupdated: 2020-01-01T00:00:00Z\n"',
     ],
-    ids=['prose', 'list', 'missing-space', 'flow-list-with-key-text'],
+    ids=[
+        'prose',
+        'list',
+        'missing-space',
+        'flow-list-with-key-text',
+        'quoted-key-lines',
+    ],
 )
 def test_update_leaves_a_non_mapping_block_untouched(
     tmp_path: pathlib.Path,
@@ -1923,12 +1930,15 @@ def test_update_leaves_a_non_mapping_block_untouched(
 ) -> None:
     """A block that is valid YAML but not ``key: value`` pairs is kept as written and named.
 
-    A bare sentence, a list, or a ``name:core/design`` typo composes to a
-    scalar or sequence root with no fields to read or repair; appending
+    A bare sentence, a list, a ``name:core/design`` typo, or a quoted
+    sentence wrapped over a line shaped like an ``updated:`` stamp composes
+    to a scalar or sequence root with no fields to read or repair; appending
     ``name:``, ``desc:``, and stamps under the text would leave a block no
-    reader accepts. Update keeps the page and the index byte-identical
-    and names each with its reason, lint reports the block on its first
-    line, and the next update finds nothing to do.
+    reader accepts, and writing them inside the quotes would leave a scalar
+    still, with no fields to read. Update keeps the page and the index
+    byte-identical and names each with its reason, lint reports the block on
+    its first line as the strict reader's finding alone, and the next update
+    finds nothing to do.
     """
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
     page = tmp_path / 'core' / 'design.md'
@@ -1960,7 +1970,7 @@ def test_update_leaves_a_non_mapping_block_untouched(
     kinds = {
         issue.kind
         for issue in Wiki(tmp_path).lint()
-        if 'design' in issue.fields['path']
+        if issue.fields['path'] in ('core/design.md', 'core/_index.md')
     }
     assert kinds == {'invalid_yaml'}
     assert Wiki(tmp_path).match('period', field='desc') == []
