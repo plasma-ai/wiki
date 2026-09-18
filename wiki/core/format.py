@@ -467,6 +467,12 @@ def strip_blank_lines(frontmatter: str) -> str:
     verbatim, so an over-indented whitespace-only body line keeps its
     content spaces.
     """
+    lines = frontmatter.split('\n')
+    # a block with no blank line has nothing to drop: the walk below holds a
+    # line back only when it is blank, so every line re-emits in place and
+    # the result is the input byte for byte
+    if all(line.strip() for line in lines):
+        return frontmatter
     result = []
     pending = []  # blank lines held verbatim until the next line reveals them
     in_block = False
@@ -476,7 +482,7 @@ def strip_blank_lines(frontmatter: str) -> str:
     quote_char = None  # the quote opening a scalar not yet closed
     flow_depth = 0  # the brackets of a flow collection not yet closed
     flow_quote = None  # the quote a line of the open flow collection left open
-    for line in frontmatter.split('\n'):
+    for line in lines:
         # every line of an open quoted scalar or flow collection is content,
         # blank or not, up to the line that closes it -- or, for a bracket
         # never closed, up to the key line the line grammar reads next
@@ -1605,6 +1611,10 @@ def _nested_too_deep(body: str) -> Optional[int]:
     scalar's body and the continuation lines of a plain or quoted value
     are text, whatever they hold.
     """
+    # a level opens only on a bracket or on a `- `/`? ` indicator, so a body
+    # holding no more of those characters than the bound cannot nest past it
+    if sum(body.count(char) for char in '[{-?') <= _MAX_NESTING:
+        return None
     depth = 0
     quote = None
     body_indent = None  # the header indentation of an open block scalar
