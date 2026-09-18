@@ -48,6 +48,9 @@ _DESC_NOTE_CHARS = 500
 # plants above the first conflict marker (_assets/git/merge_index.sh)
 _MERGE_HINT_TAIL = 'delete this line when resolving -->'
 
+# the marker line _conflict_marker_lines scans for, shape documented there
+_CONFLICT_MARKER = re.compile(r'^(<{7,}|>{7,})( |$)')
+
 # the malformed-frontmatter reasons the planners keep a page as written for:
 # a body that is valid YAML but not a key: value mapping (a bare sentence, a
 # list), a mapping whose keys open off column 0 (a flow or indented mapping),
@@ -6008,8 +6011,12 @@ def _conflict_marker_lines(text: str) -> list[int]:
     ``no-lint`` region instead.
     """
     result = []
+    # a marker line opens with a run of seven: a text without one has no line
+    # to scan
+    if ('<<<<<<<' not in text) and ('>>>>>>>' not in text):
+        return result
     for lineno, line in enumerate(text.split('\n'), 1):
-        if re.match(r'^(<{7,}|>{7,})( |$)', line):
+        if _CONFLICT_MARKER.match(line):
             result.append(lineno)
     return result
 
@@ -6026,6 +6033,9 @@ def _merge_hint_lines(text: str) -> list[int]:
     the hint keeps it forever.
     """
     result = []
+    # a hint line carries the tail: a text without it has no line to scan
+    if _MERGE_HINT_TAIL not in text:
+        return result
     for lineno, line in enumerate(text.split('\n'), 1):
         if _MERGE_HINT_TAIL in line:
             result.append(lineno)

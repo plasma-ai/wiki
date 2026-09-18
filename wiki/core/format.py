@@ -22,6 +22,19 @@ _REGION_DIRECTIVE = re.compile(
     r'((?:\s+[a-z0-9]+(?:-[a-z0-9]+)*)*)\s+-->'
 )
 
+# the line signatures of lint's content scans, compiled once for the per-line
+# loops: a formatter-escaped wikilink; a hyphen dangle, the word start that
+# continues it and the suspended-hyphen idiom that exempts it; a list marker
+# and a bullet; a thematic break; and a bare block-scalar header
+_ESCAPED_WIKILINK = re.compile(r'(?<!\[)\\\[\\?\[')
+_HYPHEN_DANGLE = re.compile(r'\w-$')
+_WORD_START = re.compile(r'\w')
+_SUSPENDED_HYPHEN = re.compile(r'(?:and|n?or) ')
+_LIST_MARKER = re.compile(r'(?:[-+*]|\d+[.)]) ')
+_BULLET = re.compile(r'[-+*] ')
+_THEMATIC_BREAK = re.compile(r'\*{3,}|-{3,}|_{3,}')
+_SCALAR_HEADER = re.compile(r'\w+:\s*[|>][-+0-9]*')
+
 # canonical frontmatter field order: the known head keys, then any
 # unrecognized authored keys, then the tool-owned timestamp tail
 _FRONTMATTER_HEAD = (
@@ -350,7 +363,7 @@ def reclaim_link_run(body: list[str]) -> tuple[list[Link], list[str]]:
             continue
         # a thematic break after the run is the mangled delimiter: drop it
         if current_link is not None:
-            if re.fullmatch(r'\*{3,}|-{3,}|_{3,}', stripped):
+            if _THEMATIC_BREAK.fullmatch(stripped):
                 consumed = i + 1
                 break
         # a line directly under a link continues its description
@@ -1343,6 +1356,9 @@ def parse_regions(masked: str) -> tuple[dict[str, list[tuple[int, int]]], list[s
     errors = []
     open_starts: dict[str, Optional[int]] = {}
     poisoned: set[str] = set()
+    # a directive is an HTML comment: a text without one holds no marker
+    if '<!--' not in masked:
+        return regions, errors
     for lineno, line in enumerate(masked.split('\n'), 1):
         match = _REGION_DIRECTIVE.fullmatch(line.strip())
         if not match:
@@ -1398,8 +1414,12 @@ def escaped_wikilink_lines(masked: str) -> list[int]:
     trips it.
     """
     result = []
+    # the signature carries a backslash before a bracket: a text without the
+    # pair has no line to scan
+    if '\\[' not in masked:
+        return result
     for lineno, line in enumerate(masked.split('\n'), 1):
-        if re.search(r'(?<!\[)\\\[\\?\[', line):
+        if _ESCAPED_WIKILINK.search(line):
             result.append(lineno)
     return result
 
@@ -1418,12 +1438,14 @@ def hyphen_dangle_lines(masked: str) -> list[int]:
     result = []
     lines = masked.split('\n')
     for lineno, line in enumerate(lines[:-1], 1):
-        # a dangle breaks a word at its hyphen: word char, hyphen, EOL
-        if not re.search(r'\w-$', line.rstrip()):
+        # a dangle breaks a word at its hyphen: word char, hyphen, EOL -- the
+        # trailing hyphen alone clears almost every line before the pattern runs
+        stripped = line.rstrip()
+        if not stripped.endswith('-') or not _HYPHEN_DANGLE.search(stripped):
             continue
         # the next line must continue the text, minus the idiom
         following = lines[lineno].lstrip()
-        if re.match(r'\w', following) and not re.match(r'(?:and|n?or) ', following):
+        if _WORD_START.match(following) and not _SUSPENDED_HYPHEN.match(following):
             result.append(lineno)
     return result
 
@@ -1463,18 +1485,17 @@ def wrapped_marker_lines(masked: str, text: str) -> list[int]:
         stripped = line.lstrip()
         indent = len(line) - len(stripped)
         # a marker must open the raw line as well as the masked one
-        masked_marker = bool(re.match(r'(?:[-+*]|\d+[.)]) ', stripped))
-        raw_marker = bool(re.match(r'(?:[-+*]|\d+[.)]) ', raw[lineno - 1].lstrip()))
-        marker = masked_marker and raw_marker
-        bullet = bool(re.match(r'[-+*] ', stripped))
+        marker = bool(_LIST_MARKER.match(stripped)) and bool(
+            _LIST_MARKER.match(raw[lineno - 1].lstrip())
+        )
         in_open_list = any(item <= indent for item in open_items)
-        if marker and bullet and (lineno > 1) and not in_open_list:
+        if marker and _BULLET.match(stripped) and (lineno > 1) and not in_open_list:
             # only a paragraph line above makes the marker line a mangle
             previous = lines[lineno - 2].strip()
-            list_item = bool(re.match(r'(?:[-+*]|\d+[.)]) ', previous))
+            list_item = bool(_LIST_MARKER.match(previous))
             block_start = previous.startswith(('#', '>', '|', '<!--'))
-            thematic_break = bool(re.fullmatch(r'\*{3,}|-{3,}|_{3,}', previous))
-            scalar_header = bool(re.fullmatch(r'\w+:\s*[|>][-+0-9]*', previous))
+            thematic_break = bool(_THEMATIC_BREAK.fullmatch(previous))
+            scalar_header = bool(_SCALAR_HEADER.fullmatch(previous))
             structural = list_item or block_start or thematic_break or scalar_header
             if previous and not structural:
                 result.append(lineno)
