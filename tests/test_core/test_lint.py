@@ -63,6 +63,7 @@ __all__ = [
     'test_lint_flags_a_stamp_that_is_a_sequence',
     'test_lint_flags_a_block_whose_repair_would_break_it',
     'test_lint_flags_an_unaddressable_block_as_malformed',
+    'test_lint_names_the_refusal_update_names_once',
     'test_lint_reports_deep_nesting_instead_of_crashing',
     'test_lint_reports_an_escape_naming_no_character',
     'test_lint_invalid_yaml_yields_to_merge_states',
@@ -1133,6 +1134,77 @@ def test_lint_flags_an_unaddressable_block_as_malformed(tmp_path: pathlib.Path) 
         'core/design.md',
     ]
     assert all('keys are not column-0 key: value lines' in issue for issue in issues)
+
+
+@page_index
+@pytest.mark.parametrize(
+    argnames=('block', 'reason', 'lint_kind'),
+    argvalues=[
+        (
+            '{name: x, desc: Flow.}',
+            'keys are not column-0 key: value lines',
+            'malformed_frontmatter',
+        ),
+        (
+            'name: &n wrong\ndesc: A page.\ntitle: *n',
+            'its repair would break the YAML',
+            'malformed_frontmatter',
+        ),
+        ('- a\n- b', 'not a key: value mapping', 'invalid_yaml'),
+        (
+            '"quoted\nupdated: 2020-01-01T00:00:00Z\n"',
+            'not a key: value mapping',
+            'invalid_yaml',
+        ),
+    ],
+    ids=['unaddressable', 'unrepairable', 'list', 'quoted-key-lines'],
+)
+def test_lint_names_the_refusal_update_names_once(
+    tmp_path: pathlib.Path,
+    kind: str,
+    block: str,
+    reason: str,
+    lint_kind: str,
+) -> None:
+    """Lint carries update's refusal once per file with the same reason; a non-mapping body is the strict reader's issue alone.
+
+    Update keeps a block it can neither address nor repair as written and
+    says why in a notice on every run; lint carries that verdict as one
+    ``malformed_frontmatter`` issue, page or index, so the two never
+    disagree on a block. A body that is not ``key: value`` pairs has no
+    fields to repair, so it is the strict reader's ``invalid_yaml``
+    finding and draws no repair verdict, quoted lines shaped like keys
+    included.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    name = 'design.md' if kind == 'page' else '_index.md'
+    body = '\n# design\n\nBody.\n' if kind == 'page' else '\n# core\n\n***\n\nProse.\n'
+    path = tmp_path / 'core' / name
+    authored = f'---\n{block}\n---\n{body}'
+    path.write_text(authored, encoding='utf-8')
+
+    # update keeps the file as written and names the refusal once
+    notices = _capture_notices(wiki)
+    wiki.update()
+    named = [
+        event.description
+        for event in notices
+        if 'Malformed frontmatter' in event.description
+    ]
+    assert named == [f'Malformed frontmatter ({reason}) in core/{name}']
+    assert path.read_text(encoding='utf-8') == authored
+    # lint reports the file exactly once, as the kind the refusal calls for
+    issues = [
+        issue
+        for issue in Wiki(tmp_path).lint()
+        if issue.fields['path'] == f'core/{name}'
+    ]
+    assert [issue.kind for issue in issues] == [lint_kind]
+    if lint_kind == 'malformed_frontmatter':
+        assert str(issues[0]) == f'core/{name}: Malformed frontmatter ({reason})'
+    # the next update finds nothing to do
+    assert Wiki(tmp_path).update() == []
+    assert path.read_text(encoding='utf-8') == authored
 
 
 @pytest.mark.usefixtures('_vary_loader')
