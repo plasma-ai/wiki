@@ -1826,28 +1826,15 @@ def test_lint_survives_folder_deleted_mid_walk(
     assert all('doomed' in issue for issue in issues)
 
 
-@pytest.mark.parametrize(
-    argnames=('vanish_read', 'expected_kinds'),
-    argvalues=[
-        # the plan's baseline read is first; lint's own index read is second
-        (2, {'missing_index'}),
-        # the marker probe re-reads after lint's read: the check ran clean
-        (3, set()),
-    ],
-    ids=['index-check-read', 'marker-probe-read'],
-)
 def test_lint_survives_index_deleted_mid_check(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
-    vanish_read: int,
-    expected_kinds: set[str],
 ) -> None:
-    """An index vanishing between probe and re-read never crashes lint.
+    """An index vanishing between the plan and lint's read never crashes lint.
 
-    Lint re-reads each index after probing it -- once for the index
-    check and once for the missing-delimiter probe -- so a delete
-    landing before either re-read (a concurrent delete) must classify
-    the index as missing (or leave the probe silent) rather than raise.
+    The plan's baseline read of each index is first and lint's own read
+    second, so a delete landing between them (a concurrent delete) must
+    classify the index as missing rather than raise.
     """
     wiki = _make_wiki(tmp_path, folders={'notes': ['alpha']})
     index = tmp_path / 'notes' / '_index.md'
@@ -1855,17 +1842,18 @@ def test_lint_survives_index_deleted_mid_check(
     reads: list[pathlib.Path] = []
 
     def racy(self: Wiki, path: pathlib.Path) -> str:
-        """Delete the index just as the numbered re-read begins."""
+        """Delete the index just as lint's own read begins."""
+        # the plan's baseline read is first; lint's own index read is second
         if path == index:
             reads.append(path)
-            if len(reads) == vanish_read:
+            if len(reads) == 2:
                 index.unlink()
         return real(self, path)
 
     # the mid-check deletion is handled, not crashed on
     monkeypatch.setattr(Wiki, '_read_text', racy)
     issues = wiki.lint()
-    assert {issue.kind for issue in issues} == expected_kinds
+    assert {issue.kind for issue in issues} == {'missing_index'}
 
 
 def test_quoted_placeholder_desc_is_soft(

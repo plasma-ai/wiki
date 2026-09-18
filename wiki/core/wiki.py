@@ -51,6 +51,10 @@ _MERGE_HINT_TAIL = 'delete this line when resolving -->'
 # the marker line _conflict_marker_lines scans for, shape documented there
 _CONFLICT_MARKER = re.compile(r'^(<{7,}|>{7,})( |$)')
 
+# a folder's indexed entries, sorted: the child folders the walk descends
+# into and the files it indexes, each judged once against the exclusions
+_Listing = tuple[list[pathlib.Path], list[pathlib.Path]]
+
 # the malformed-frontmatter reasons the planners keep a page as written for:
 # a body that is valid YAML but not a key: value mapping (a bare sentence, a
 # list), a mapping whose keys open off column 0 (a flow or indented mapping),
@@ -1485,6 +1489,7 @@ class Wiki:
                         path=str(folder_relpath),
                     )
                 )
+                pages = self._find_pages(folder)
             else:
                 index_relpath = index_path.relative_to(self._root)
                 # mask code once per file; the region parse and the
@@ -1494,6 +1499,16 @@ class Wiki:
                 # the pending normalization rather than failing the file
                 if self._has_crlf(index_path):
                     self.on_crlf_notice(path=str(index_relpath))
+                # list the folder once the index is in hand: the delimiter
+                # probe, the broken-link check, and the page walk below read
+                # one listing, each entry judged once; a folder vanishing
+                # between the walk and this listing (a concurrent delete) has
+                # no children left to check
+                try:
+                    listing = self._list_folder(folder)
+                except FileNotFoundError:
+                    listing = ([], [])
+                _, pages = listing
                 # region directives: no-lint suppresses the positional rules
                 # below, and a malformed pairing is itself a hard issue
                 suppressed, region_issues = self._lint_regions(index_path, masked)
@@ -1528,7 +1543,7 @@ class Wiki:
                     # a missing *** delimiter collapses the link block into user
                     # content; the diff already flags the rewrite -- name the marker
                     # (and, for a thematic break in its place, the likely formatter)
-                    if self._index_missing_marker(folder):
+                    if self._index_missing_marker(folder, text=text, listing=listing):
                         if self._index_mangled_marker(folder):
                             result.append(
                                 Issue(
@@ -1606,7 +1621,10 @@ class Wiki:
                     # -- matched by normalized identity, as _merge_links matches
                     expected_targets = {
                         unicodedata.normalize('NFC', target)
-                        for target, _ in self._build_expected_links(folder)
+                        for target, _ in self._build_expected_links(
+                            folder,
+                            listing=listing,
+                        )
                     }
                     for target, label, link_desc in links:
                         if label == '..':
@@ -1711,7 +1729,7 @@ class Wiki:
                     if not user_content.strip():
                         self.on_content_empty(path=str(index_relpath))
             # check pages (always, even when the index is missing)
-            for page in self._find_pages(folder):
+            for page in pages:
                 page_relpath = page.relative_to(self._root)
                 # report an invalid name for every file, including
                 # non-markdown -- validate what the wikilink would carry
@@ -2737,7 +2755,13 @@ class Wiki:
                 '\n  (3) run `wiki update`'
             )
 
-    def _index_missing_marker(self: Wiki, folder: pathlib.Path) -> bool:
+    def _index_missing_marker(
+        self: Wiki,
+        folder: pathlib.Path,
+        *,
+        text: Optional[str] = None,
+        listing: Optional[_Listing] = None,
+    ) -> bool:
         """Return ``True`` if ``folder``'s index lost its ``***`` delimiter.
 
         The delimiter separates generated links from user content; without it
@@ -2745,31 +2769,33 @@ class Wiki:
         block (see :func:`format.reclaim_link_run`). Reports the gap only when
         the index exists and the folder has on-disk children that should be
         linked, so a genuinely empty wiki is not mistaken for a broken one.
+        Lint hands in the index text it read and the folder's listing; the
+        standalone probe (map) reads both itself.
         """
-        # the index must exist to be missing its marker
+        # the index must exist to be missing its marker: text in hand is the
+        # proof, the standalone probe checks the file
         index_path = folder / WIKI_INDEX
-        if not index_path.is_file():
+        if (text is None) and not index_path.is_file():
             return False
         # only a folder with on-disk children (pages or child folders) would
-        # lose links to the gap; the parent '..' link is not a child, so check
-        # the filesystem directly rather than _build_expected_links; a folder
-        # vanishing under the probe (a concurrent delete) has no gap to report
-        has_pages = bool(self._find_pages(folder))
-        try:
-            has_dirs = any(
-                child.is_dir() and not self._is_excluded_dir(child)
-                for child in folder.iterdir()
-            )
-        except FileNotFoundError:
-            return False
-        if not (has_pages or has_dirs):
+        # lose links to the gap; the parent '..' link is not a child, so read
+        # the listing rather than _build_expected_links; a folder vanishing
+        # under the probe (a concurrent delete) has no gap to report
+        if listing is None:
+            try:
+                listing = self._list_folder(folder)
+            except FileNotFoundError:
+                return False
+        children, pages = listing
+        if not (pages or children):
             return False
         # the marker is a line equal to the delimiter; an index vanishing
         # after the probe (a concurrent delete) has no marker to miss
-        try:
-            text = self._read_text(index_path)
-        except FileNotFoundError:
-            return False
+        if text is None:
+            try:
+                text = self._read_text(index_path)
+            except FileNotFoundError:
+                return False
         lines = [line.rstrip() for line in text.split('\n')]
         return self.index_delimiter not in lines
 
@@ -3522,6 +3548,27 @@ class Wiki:
                 result.append(path)
         return result
 
+    def _list_folder(self: Wiki, folder: pathlib.Path) -> _Listing:
+        """Return ``folder``'s non-excluded child folders and files, sorted.
+
+        One listing per folder per pass: the readers of a folder's
+        entries (:meth:`_build_expected_links`, :meth:`_invalid_links`,
+        :meth:`_read_child_labels`, lint's per-folder checks) judge each
+        entry against the exclusions once between them. A folder
+        vanishing before the listing (a concurrent delete) raises
+        ``FileNotFoundError`` for the caller to answer as its own
+        listing would.
+        """
+        children = []
+        pages = []
+        for path in sorted(folder.iterdir()):
+            if path.is_dir():
+                if not self._is_excluded_dir(path):
+                    children.append(path)
+            elif path.is_file() and not self._is_excluded_file(path):
+                pages.append(path)
+        return children, pages
+
     def _search_files(
         self: Wiki,
         folder: pathlib.Path,
@@ -3797,13 +3844,17 @@ class Wiki:
     def _build_expected_links(
         self: Wiki,
         folder: pathlib.Path,
+        *,
+        listing: Optional[_Listing] = None,
     ) -> list[tuple[str, str]]:
         """Build expected ``(target, base_label)`` pairs from filesystem.
 
         Labels are base names only (no category prefix).
         Folders get a trailing ``/``. Targets join with ``/``
         (``as_posix``), the wikilink grammar's separator, never the
-        platform's.
+        platform's. A caller whose pass listed the folder already hands
+        its ``listing`` in (see :meth:`_list_folder`); the default lists
+        it here.
         """
         # initialize links
         result = []
@@ -3813,22 +3864,22 @@ class Wiki:
             target = parent / WIKI_INDEX
             target = target.relative_to(self._root).with_suffix('').as_posix()
             result.append((target, '..'))
-        # child directory links; a folder vanishing between the walk and this
-        # listing (a concurrent delete) has no children left to link
-        try:
-            entries = list(folder.iterdir())
-        except FileNotFoundError:
-            entries = []
-        children = []
-        for path in entries:
-            if path.is_dir() and not self._is_excluded_dir(path):
-                children.append(path)
-        for child in sorted(children):
+        # child directory links and page links from the folder's listing (the
+        # caller's, when its pass listed the folder already); a folder
+        # vanishing between the walk and this listing (a concurrent delete)
+        # has no children left to link
+        if listing is None:
+            try:
+                listing = self._list_folder(folder)
+            except FileNotFoundError:
+                listing = ([], [])
+        children, pages = listing
+        for child in children:
             target = child / WIKI_INDEX
             target = target.relative_to(self._root).with_suffix('').as_posix()
             result.append((target, f'{child.name}/'))
         # page links, stem or full name per _links_by_stem
-        for page in self._find_pages(folder):
+        for page in pages:
             if self._links_by_stem(page):
                 target = page.relative_to(self._root).with_suffix('').as_posix()
                 result.append((target, page.stem))
@@ -3846,6 +3897,8 @@ class Wiki:
     def _invalid_links(
         self: Wiki,
         folder: pathlib.Path,
+        *,
+        listing: _Listing,
     ) -> list[tuple[str, str, str]]:
         """Return ``(target, relpath, reason)`` for entries with invalid names.
 
@@ -3854,28 +3907,23 @@ class Wiki:
         link rather than emit a malformed wikilink. ``target`` matches the
         wikilink target :meth:`_build_expected_links` would have produced;
         ``relpath`` names the offending path and ``reason`` the broken rule
-        for the warning.
+        for the warning. ``listing`` is the folder's entries per
+        :meth:`_list_folder`.
         """
         # initialize results
         result = []
-        # child directory entries (validated on the folder name); a folder
-        # vanishing between the walk and this listing (a concurrent delete)
-        # has no entries left to validate
-        try:
-            entries = sorted(folder.iterdir())
-        except FileNotFoundError:
-            entries = []
-        for path in entries:
-            if path.is_dir() and not self._is_excluded_dir(path):
-                violation = self._name_violation(path.name)
-                if violation is not None:
-                    target = path / WIKI_INDEX
-                    target = target.relative_to(self._root).with_suffix('').as_posix()
-                    relpath = str(path.relative_to(self._root))
-                    result.append((target, relpath, violation))
+        # child directory entries (validated on the folder name)
+        children, pages = listing
+        for path in children:
+            violation = self._name_violation(path.name)
+            if violation is not None:
+                target = path / WIKI_INDEX
+                target = target.relative_to(self._root).with_suffix('').as_posix()
+                relpath = str(path.relative_to(self._root))
+                result.append((target, relpath, violation))
         # page entries -- validate what the wikilink would carry
         # (stem or full name per _links_by_stem)
-        for page in self._find_pages(folder):
+        for page in pages:
             if self._links_by_stem(page):
                 violation = self._name_violation(page.stem)
             else:
@@ -4018,6 +4066,8 @@ class Wiki:
         folder: pathlib.Path,
         overlay: Optional[dict[pathlib.Path, str]] = None,
         now: Optional[str] = None,
+        *,
+        listing: _Listing,
     ) -> dict[str, str]:
         """Read categorized labels from child frontmatter.
 
@@ -4032,24 +4082,17 @@ class Wiki:
             folder: Parent folder to scan.
             overlay: Staged ``{path: content}`` from earlier passes.
             now: The run's timestamp, to read each block re-stamped.
+            listing: The folder's listing, per :meth:`_list_folder`.
 
         Returns:
             Dict mapping wikilink targets to categorized labels.
 
         """
-        # collect child directories; a folder vanishing between the walk and
-        # this listing (a concurrent delete) has no children left to read
-        try:
-            entries = list(folder.iterdir())
-        except FileNotFoundError:
-            entries = []
-        children = []
-        for path in entries:
-            if path.is_dir() and not self._is_excluded_dir(path):
-                children.append(path)
+        # collect child directories and pages from the folder's listing
+        children, pages = listing
         # read folder categories from child indexes
         result = {}
-        for child in sorted(children):
+        for child in children:
             child_index = child / WIKI_INDEX
             text = self._current_text(child_index, overlay)
             if text is not None:
@@ -4065,7 +4108,7 @@ class Wiki:
                 label = f'[{category}] {child.name}/'
                 result[target] = unicodedata.normalize('NFC', label)
         # read page categories from markdown page frontmatter
-        for page in self._find_pages(folder):
+        for page in pages:
             if page.suffix != '.md':
                 continue
             text = self._current_text(page, overlay)
@@ -4379,8 +4422,16 @@ class Wiki:
             frontmatter = format.strip_blank_lines(
                 format.order_frontmatter(frontmatter)
             )
+        # list the folder once: the expected links, the naming check, and the
+        # child labels below read the same entries, each judged once; a
+        # folder vanishing between the walk and this listing (a concurrent
+        # delete) has no children left to link
+        try:
+            listing = self._list_folder(folder)
+        except FileNotFoundError:
+            listing = ([], [])
         # build expected links from filesystem
-        expected = self._build_expected_links(folder)
+        expected = self._build_expected_links(folder, listing=listing)
         # drop links for filesystem entries whose stem/name fails the naming
         # policy (a denied char like '|' yields a malformed [[a|b|a|b]] link that
         # grows the index every run); skip them and warn once, like match skips
@@ -4390,13 +4441,13 @@ class Wiki:
         # announce an auto-created index so its placeholder desc gets filled
         if text is None:
             notices.append(IndexCreateEvent(path=str(relpath)))
-        invalid = self._invalid_links(folder)
+        invalid = self._invalid_links(folder, listing=listing)
         for _target, skipped, reason in invalid:
             notices.append(NameSkipEvent(path=skipped, reason=reason))
         invalid_targets = {target for target, _, _ in invalid}
         expected = [(t, label) for t, label in expected if t not in invalid_targets]
         # enrich new entries from child frontmatter
-        labels = self._read_child_labels(folder, overlay, now)
+        labels = self._read_child_labels(folder, overlay, now, listing=listing)
         # merge and sort
         links, broken, new = self._merge_links(
             existing=existing,
