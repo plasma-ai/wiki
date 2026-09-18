@@ -26,6 +26,17 @@ may include breaking changes, each listed under a Breaking heading.
   notice, rather than also as
   `Malformed frontmatter (its repair would break the YAML)` for a repair update
   never attempts.
+- `wiki lint` and `wiki update` on a wiki of several thousand pages repeat far
+  less of their own work: each folder is listed and judged against the
+  exclusions once per pass, the tree is walked once per run, an exclusion
+  verdict spells its candidates from the root prefix, a content scan returns
+  before splitting a text that cannot hold the shape it looks for, and the
+  frontmatter reader takes a fast path through a block with no blank line and a
+  body that cannot nest past its bound. On a 5,000-page wiki `wiki lint` runs in
+  about 0.55x of the pre-reader run time and `wiki update --check` in about
+  0.63x, a converged `wiki update` takes about half the time, and a 300-page
+  wiki gains about a quarter. Issues, notices, exit codes, and written files are
+  unchanged.
 
 ## [1.4.0] - 2026-09-17
 
