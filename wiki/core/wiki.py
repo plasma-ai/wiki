@@ -552,12 +552,13 @@ class Wiki:
         candidates = ['.']
         for dirpath, dirnames, filenames in os.walk(self._root):
             dirnames[:] = [d for d in dirnames if not d.startswith('.')]
-            folder = pathlib.Path(dirpath)
+            prefix = self._relpath(pathlib.Path(dirpath))
+            if prefix:
+                prefix += '/'
             for name in (*dirnames, *filenames):
                 if name.startswith('.'):
                     continue
-                relative = (folder / name).relative_to(self._root)
-                candidates.append(relative.as_posix())
+                candidates.append(prefix + name)
         matched = self._check_ignore(candidates)
         if matched is None:
             return frozenset()
@@ -647,9 +648,9 @@ class Wiki:
         candidates = []
         for indexed, pages in walk:
             index_path = indexed / WIKI_INDEX
-            candidates.append(index_path.relative_to(self._root).as_posix())
+            candidates.append(self._relpath(index_path))
             for page in pages:
-                candidates.append(page.relative_to(self._root).as_posix())
+                candidates.append(self._relpath(page))
         if not candidates:
             return
         # index-aware and unpinned: the question is whether THIS machine's
@@ -3111,6 +3112,18 @@ class Wiki:
         relpath = path.relative_to(self._root)
         return relpath.with_suffix('').as_posix()
 
+    def _relpath(self: Wiki, path: pathlib.Path) -> str:
+        """Return ``path``'s root-relative POSIX form; empty for the root itself.
+
+        Callers hand it paths spelled from ``self._root``: walked entries
+        and lexical joins both start there, so the form is the text past
+        the root's prefix. Every exclusion verdict pays this once per
+        entry, where ``relative_to`` would rebuild and compare each
+        ancestor.
+        """
+        prefix = self._root.as_posix().rstrip('/')
+        return path.as_posix()[len(prefix) + 1 :]
+
     def _target_page(self: Wiki, target: str) -> Optional[pathlib.Path]:
         """Return the markdown page a link ``target`` names, or ``None``.
 
@@ -3159,10 +3172,11 @@ class Wiki:
             return None
         # test the path and every strict in-root ancestor, so a pattern
         # naming a directory covers everything inside it
-        relative = path.relative_to(self._root)
-        candidates = [
-            part.as_posix() for part in (relative, *relative.parents) if part.parts
-        ]
+        candidates = []
+        relative = self._relpath(path)
+        while relative:
+            candidates.append(relative)
+            relative = relative.rpartition('/')[0]
         for pattern, compiled in self._exclude_policy:
             for candidate in candidates:
                 if compiled.match(candidate):
@@ -3179,11 +3193,12 @@ class Wiki:
         """
         if not self._gitignore_fence:
             return False
-        relative = path.relative_to(self._root)
-        candidates = (
-            part.as_posix() for part in (relative, *relative.parents) if part.parts
-        )
-        return any(candidate in self._gitignore_fence for candidate in candidates)
+        relative = self._relpath(path)
+        while relative:
+            if relative in self._gitignore_fence:
+                return True
+            relative = relative.rpartition('/')[0]
+        return False
 
     def _is_excluded_file(self: Wiki, path: pathlib.Path) -> bool:
         """Return ``True`` if file should be excluded from index links.
