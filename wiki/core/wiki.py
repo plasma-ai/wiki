@@ -1406,9 +1406,16 @@ class Wiki:
         # per run, not one per link; reading the policy here also fails a
         # malformed block before the walk, links or none
         self._warn_missing_link_folders()
-        # compute what update would write (the source of truth for drift)
+        # compute what update would write (the source of truth for drift); the
+        # blocks the planners keep as written come back as notices, keyed here
+        # by path like the overlay, so lint names the refusals update applies
         now = self._utc_now()
-        overlay, _, _ = self._plan(folder, now=now)
+        overlay, _, notices = self._plan(folder, now=now)
+        malformed = {
+            self._root / event.path: event.reason
+            for event in notices
+            if isinstance(event, FrontmatterMalformedEvent)
+        }
         # walk all directories
         result = []
         folders = self._find_dirs(folder)
@@ -1570,10 +1577,7 @@ class Wiki:
                             )
                         )
                     else:
-                        name = self._path_to_name(folder)
-                        result.extend(
-                            self._lint_unrepairable(index_path, frontmatter, name)
-                        )
+                        result.extend(self._lint_unrepairable(index_path, malformed))
                     result.extend(self._lint_desc(index_path, frontmatter))
                     result.extend(self._lint_title(index_path, frontmatter))
                     result.extend(self._lint_timestamps(index_path, frontmatter))
@@ -1786,8 +1790,7 @@ class Wiki:
                         )
                     )
                 elif frontmatter:
-                    name = self._path_to_name(page)
-                    result.extend(self._lint_unrepairable(page, frontmatter, name))
+                    result.extend(self._lint_unrepairable(page, malformed))
                 elif not frontmatter:
                     result.append(
                         Issue(
@@ -5107,8 +5110,7 @@ class Wiki:
     def _lint_unrepairable(
         self: Wiki,
         path: pathlib.Path,
-        frontmatter: str,
-        name: str,
+        malformed: dict[pathlib.Path, str],
     ) -> list[Issue]:
         """Check the block is one the planners repair rather than keep as written.
 
@@ -5117,28 +5119,19 @@ class Wiki:
         it, are left untouched by update with a notice on every run (see
         ``_plan_page``); lint surfaces the same refusal as a hard issue,
         with the same reason, so the page does not stay stale in silence.
+        The verdict is the plan's own, read off its notices in
+        ``malformed`` (path to reason), so lint and update judge one pass
+        over each block; a body that is not a mapping is the strict
+        reader's finding (``_lint_frontmatter_yaml``), not this one.
         """
         # initialize issues
         result = []
+        # the planners' refusal for this block, if any
+        reason = malformed.get(path)
+        if reason not in (_UNADDRESSABLE, _UNREPAIRABLE):
+            return result
         # alias relative path
         relpath = path.relative_to(self._root)
-        # the same refusals the planners apply, judged on the same block
-        if format.is_unaddressable_frontmatter(frontmatter):
-            reason = _UNADDRESSABLE
-        else:
-            now = self._utc_now()
-            repaired = format.repair_frontmatter(
-                frontmatter,
-                name=name,
-                now=now,
-                title=True,
-                category=True,
-                order=True,
-            )
-            restamped = format.restamp_updated(repaired, now)
-            if not format.repair_breaks_frontmatter(frontmatter, restamped):
-                return result
-            reason = _UNREPAIRABLE
         result.append(
             Issue(
                 f'{relpath}: Malformed frontmatter ({reason})',

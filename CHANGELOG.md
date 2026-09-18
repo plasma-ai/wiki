@@ -7,6 +7,26 @@ may include breaking changes, each listed under a Breaking heading.
 
 ## [Unreleased]
 
+### Fixed
+
+- `wiki lint` and `wiki update` on a wiki of several thousand pages spend far
+  less time in the strict frontmatter reader: the run's `created:`/`updated:`
+  stamp is judged for quoting once rather than parsed as YAML at every write,
+  `wiki lint` takes its malformed-frontmatter verdicts from the plan it already
+  diffs against rather than repairing every block a second time, and the
+  composed-block memo holds a whole run's blocks. On a 5,000-page wiki the
+  reader's cost falls from about 1.5x of the pre-reader run time to about 1.05x
+  for `wiki lint` and 1.15x for `wiki update --check`; a 300-page wiki pays
+  nothing measurable. Issues, notices, and written files are unchanged, bar the
+  one lint row the next entry describes.
+- `wiki lint` reports a frontmatter body that is valid YAML but not `key: value`
+  pairs — a quoted scalar spanning lines with a column-0 `updated:`-shaped line
+  inside, on a page or an index — as its `Invalid YAML frontmatter` issue alone,
+  matching `wiki update`'s `Malformed frontmatter (not a key: value mapping)`
+  notice, rather than also as
+  `Malformed frontmatter (its repair would break the YAML)` for a repair update
+  never attempts.
+
 ## [1.4.0] - 2026-09-17
 
 ### Breaking
