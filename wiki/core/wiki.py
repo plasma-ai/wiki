@@ -5103,11 +5103,13 @@ class Wiki:
         suppressed = set()
         for start, end in regions.get('no-lint', []):
             suppressed.update(range(start, end + 1))
-        relpath = path.relative_to(self._root)
-        result = [
-            Issue(f'{relpath}: {error}', kind='region_marker', path=str(relpath))
-            for error in errors
-        ]
+        result = []
+        if errors:
+            relpath = path.relative_to(self._root)
+            result = [
+                Issue(f'{relpath}: {error}', kind='region_marker', path=str(relpath))
+                for error in errors
+            ]
         return suppressed, result
 
     def _lint_desc(
@@ -5118,14 +5120,18 @@ class Wiki:
         """Check desc is present, concise, and ends in a period."""
         # initialize issues
         result = []
+        desc = format.read_frontmatter_desc(frontmatter)
+        # an absent or empty desc is the repair path's business, so every
+        # check below reads a value
+        if not desc:
+            return result
         # alias relative path
         relpath = path.relative_to(self._root)
-        desc = format.read_frontmatter_desc(frontmatter)
         # a placeholder desc is a soft, "not yet authored" state (init seeds it),
         # so note it without failing lint; a real desc must end in a period
         if desc == '...':
             self.on_desc_missing(path=str(relpath))
-        elif desc and not desc.strip().endswith('.'):
+        elif not desc.strip().endswith('.'):
             # a plain value with ' #' in its lines lost its tail to a YAML
             # comment, the likely cause of the missing period
             hint = ''
@@ -5143,10 +5149,9 @@ class Wiki:
             )
         # desc length is author judgment, not structure, so an oversized desc
         # draws a soft note rather than an issue
-        if desc:
-            folded = format.join_lines(desc)
-            if len(folded) > _DESC_NOTE_CHARS:
-                self.on_desc_long(path=str(relpath), length=len(folded))
+        folded = format.join_lines(desc)
+        if len(folded) > _DESC_NOTE_CHARS:
+            self.on_desc_long(path=str(relpath), length=len(folded))
         return result
 
     def _lint_title(
@@ -5165,12 +5170,12 @@ class Wiki:
         """
         # initialize issues
         result = []
-        # alias relative path
-        relpath = path.relative_to(self._root)
         # only an authored value satisfies the requirement: the field is
         # absent (update seeds it), blank, or the null placeholder
         if self._titles_required and frontmatter:
             if not format.read_frontmatter_title(frontmatter):
+                # alias relative path
+                relpath = path.relative_to(self._root)
                 result.append(
                     Issue(
                         f'{relpath}: Missing title (author a value)',
@@ -5197,8 +5202,6 @@ class Wiki:
         """
         # initialize issues
         result = []
-        # alias relative path
-        relpath = path.relative_to(self._root)
         # parse each present stamp against the configured strftime format
         policy = self._timestamp_policy
         for field in ('created', 'updated'):
@@ -5218,6 +5221,8 @@ class Wiki:
             try:
                 dt.datetime.strptime(value, policy['format'])
             except ValueError:
+                # alias relative path
+                relpath = path.relative_to(self._root)
                 timestamp_format = policy['format']
                 result.append(
                     Issue(
@@ -5289,14 +5294,17 @@ class Wiki:
         """
         # initialize issues
         result = []
-        # alias relative path
-        relpath = path.relative_to(self._root)
         # an empty or unclosed block has nothing to parse (reported elsewhere)
         if not frontmatter:
             return result
         # the reader's own parse supplies the findings, so lint and update
         # judge one composition of the block
-        for line, reason, cause in format.frontmatter_issues(frontmatter):
+        issues = format.frontmatter_issues(frontmatter)
+        if not issues:
+            return result
+        # alias relative path
+        relpath = path.relative_to(self._root)
+        for line, reason, cause in issues:
             advice = _YAML_ADVICE[cause]
             result.append(
                 Issue(
