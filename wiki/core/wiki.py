@@ -55,6 +55,10 @@ _CONFLICT_MARKER = re.compile(r'^(<{7,}|>{7,})( |$)')
 # into and the files it indexes, each judged once against the exclusions
 _Listing = tuple[list[pathlib.Path], list[pathlib.Path]]
 
+# a walk of the tree: every non-excluded folder in depth-first order, each
+# with the non-excluded files it holds, from one listing per folder
+_Walk = list[tuple[pathlib.Path, list[pathlib.Path]]]
+
 # the malformed-frontmatter reasons the planners keep a page as written for:
 # a body that is valid YAML but not a key: value mapping (a bare sentence, a
 # list), a mapping whose keys open off column 0 (a flow or indented mapping),
@@ -618,7 +622,12 @@ class Wiki:
             return False
         return bool(matched)
 
-    def _warn_untrackable_rows(self: Wiki, folder: pathlib.Path) -> None:
+    def _in_repository(self: Wiki) -> bool:
+        """Return ``True`` if a git repository encloses the wiki root."""
+        enclosing = (self._root, *self._root.parents)
+        return any((ancestor / '.git').exists() for ancestor in enclosing)
+
+    def _warn_untrackable_rows(self: Wiki, walk: _Walk) -> None:
         """Note indexed paths the caller's full ignore stack excludes.
 
         The fence reads the repository's own rules alone, so indexing is
@@ -629,19 +638,17 @@ class Wiki:
         other clone then reds on a broken link the author's lint never
         shows. The note names the excluding source so the divergence is
         visible where it is created; the fence itself stays pinned, so
-        what gets indexed never varies by machine.
+        what gets indexed never varies by machine. The caller gates on
+        the enclosing repository (no repository, no divergence to warn
+        about) and hands in the scope's walk.
         """
-        # no repository, no divergence to warn about
-        enclosing = (self._root, *self._root.parents)
-        if not any((ancestor / '.git').exists() for ancestor in enclosing):
-            return
         # the paths this wiki writes or links: each folder's index, plus
         # every page indexed under it
         candidates = []
-        for indexed in self._find_dirs(folder):
+        for indexed, pages in walk:
             index_path = indexed / WIKI_INDEX
             candidates.append(index_path.relative_to(self._root).as_posix())
-            for page in self._find_pages(indexed):
+            for page in pages:
                 candidates.append(page.relative_to(self._root).as_posix())
         if not candidates:
             return
@@ -1106,13 +1113,20 @@ class Wiki:
         self._refuse_enclosing_wiki(folder)
         # TODO: remove back-compat in future version
         self._refuse_legacy_layout()
+        # one walk of the scope: the untrackable-row note, the nested-root
+        # scan, and the plan read the same folders and pages; nothing between
+        # the walk and the plan touches the walked tree (_ensure_settings
+        # writes under .wiki/, a dot path the walk never lists)
+        walk = self._walk(folder)
         # the sweep is where a row for an untrackable path gets minted, so
-        # the divergence is named as it happens, not only at the next lint
-        self._warn_untrackable_rows(folder)
+        # the divergence is named as it happens, not only at the next lint;
+        # no repository, no divergence to warn about
+        if self._in_repository():
+            self._warn_untrackable_rows(walk)
         # refuse to sweep across a nested declared wiki: absorbing it would
         # rewrite its name: paths against the wrong root, and a dry run
         # would preview that same absorption, so both refuse alike
-        for nested in self._find_dirs(folder):
+        for nested, _ in walk:
             if (nested != self._root) and (nested / WIKI_SETTINGS).is_file():
                 raise _encloses_wiki_error(nested)
         # a dry run reports without mutating, so the marker guarantee
@@ -1123,7 +1137,7 @@ class Wiki:
                 self._dispatch_notice(event)
         # compute corrected content for the scope (single timestamp)
         now = self._utc_now()
-        overlay, baseline, notices = self._plan(folder, now=now)
+        overlay, baseline, notices = self._plan(folder, now=now, walk=walk)
         # refuse to write over merge conflict markers: the write and the
         # dry run refuse alike, naming every marked file
         self._refuse_conflicted(baseline)
@@ -1143,9 +1157,13 @@ class Wiki:
             ]
         result = self._apply_plan(overlay, baseline, now)
         # refresh the counts cache, announcing a recreated .wiki/cache/ rather
-        # than restoring a deleted directory silently
+        # than restoring a deleted directory silently; the counts cover the
+        # whole wiki, which only an unscoped run's walk has listed
         recreated = not (self._root / WIKI_CACHE).exists()
-        self._load_counts()
+        counts_walk = None
+        if folder == self._root:
+            counts_walk = walk
+        self._load_counts(walk=counts_walk)
         if recreated:
             self.on_cache_restore(path=WIKI_CACHE)
         return result
@@ -1306,10 +1324,11 @@ class Wiki:
             scope = parent.relative_to(self._root).as_posix()
         # TODO: remove back-compat in future version
         self._refuse_legacy_layout()
-        for nested in self._find_dirs(parent):
+        walk = self._walk(parent)
+        for nested, _ in walk:
             if (nested != self._root) and (nested / WIKI_SETTINGS).is_file():
                 raise _encloses_wiki_error(nested)
-        _, baseline, _ = self._plan(parent, now=now)
+        _, baseline, _ = self._plan(parent, now=now, walk=walk)
         self._refuse_conflicted(baseline)
         # write the index, links left to the sweep below
         folder.mkdir(exist_ok=True)
@@ -1408,7 +1427,13 @@ class Wiki:
         # text-merges indexes silently: note the gap (soft) before the
         # clone's first merge pays for it
         self._warn_unconfigured_merge_driver()
-        self._warn_untrackable_rows(folder)
+        # inside a repository the untrackable-row note walks the scope and the
+        # plan reads that walk; outside one there is no note, and the plan
+        # walks for itself once the links policy below is read
+        walk = None
+        if self._in_repository():
+            walk = self._walk(folder)
+            self._warn_untrackable_rows(walk)
         # a links.external entry naming no folder on this machine is one note
         # per run, not one per link; reading the policy here also fails a
         # malformed block before the walk, links or none
@@ -1417,7 +1442,7 @@ class Wiki:
         # blocks the planners keep as written come back as notices, keyed here
         # by path like the overlay, so lint names the refusals update applies
         now = self._utc_now()
-        overlay, _, notices = self._plan(folder, now=now)
+        overlay, _, notices = self._plan(folder, now=now, walk=walk)
         malformed = {
             self._root / event.path: event.reason
             for event in notices
@@ -3569,6 +3594,24 @@ class Wiki:
                 pages.append(path)
         return children, pages
 
+    def _walk(self: Wiki, folder: pathlib.Path) -> _Walk:
+        """Return every non-excluded folder under ``folder``, depth-first, with files.
+
+        One listing per folder serves every pass a caller threads the
+        walk through; each call site states what keeps the listing
+        current. A folder vanishing between the walk and its listing
+        (a concurrent delete) walks as absent, its subtree with it; the
+        next run converges.
+        """
+        try:
+            children, pages = self._list_folder(folder)
+        except FileNotFoundError:
+            return []
+        result = [(folder, pages)]
+        for child in children:
+            result.extend(self._walk(child))
+        return result
+
     def _search_files(
         self: Wiki,
         folder: pathlib.Path,
@@ -3663,7 +3706,7 @@ class Wiki:
         except FileNotFoundError:
             return None
 
-    def _load_counts(self: Wiki) -> dict[str, int]:
+    def _load_counts(self: Wiki, *, walk: Optional[_Walk] = None) -> dict[str, int]:
         """Return body word counts for every markdown file, via the cache.
 
         Reads ``.wiki/cache/word_counts.json`` under the wiki root, recomputes
@@ -3673,6 +3716,10 @@ class Wiki:
         recomputed, and a failed cache write is swallowed -- the cache can
         never break a command, the worst case is a full recompute.
         ``update`` calls this after writing, so the cache tracks the tree.
+
+        Args:
+            walk: The root's walk, when the caller took it already and
+                wrote nothing the walk would miss; taken here otherwise.
 
         Returns:
             Dict mapping root-relative paths to body word counts.
@@ -3686,12 +3733,17 @@ class Wiki:
             cached = {}
         if not isinstance(cached, dict):
             cached = {}
-        # walk the wiki, reusing fresh entries and recomputing stale ones
+        # walk the wiki, reusing fresh entries and recomputing stale ones; a
+        # caller's pre-write walk lists the same folders and pages (update
+        # rewrites pages and creates indexes, never a page or a folder) and
+        # every path is probed and stat'ed afresh below
+        if walk is None:
+            walk = self._walk(self._root)
         result = {}
         entries = {}
         dirty = False
-        for folder in self._find_dirs(self._root):
-            paths = [folder / WIKI_INDEX, *self._find_pages(folder)]
+        for folder, pages in walk:
+            paths = [folder / WIKI_INDEX, *pages]
             for path in paths:
                 if (path.suffix != '.md') or not path.is_file():
                     continue
@@ -4136,6 +4188,7 @@ class Wiki:
         folder: pathlib.Path,
         *,
         now: str,
+        walk: Optional[_Walk] = None,
     ) -> tuple[
         dict[pathlib.Path, str],
         dict[pathlib.Path, Optional[str]],
@@ -4155,6 +4208,8 @@ class Wiki:
             now: Single timestamp threaded through every pass (seeds
                 missing fields; :meth:`_apply_plan` reuses it to
                 re-stamp ``updated:``).
+            walk: The scope's walk, when the caller took it already;
+                taken here otherwise.
 
         Returns:
             Tuple of ``(overlay, baseline, notices)`` where ``baseline``
@@ -4166,16 +4221,18 @@ class Wiki:
             across all indexes and pages.
 
         """
-        # alias directories
-        folders = self._find_dirs(folder)
+        # take the scope's walk unless the caller handed one in: one listing
+        # per folder serves the page pass and, reversed, the index pass
+        if walk is None:
+            walk = self._walk(folder)
         overlay: dict[pathlib.Path, str] = {}
         baseline: dict[pathlib.Path, Optional[str]] = {}
         notices = []
         # plan pages first: a page reads no other file, and an index reads
         # its pages' repaired frontmatter from the overlay, so a row never
         # lags a repair by one run
-        for folder in folders:
-            for page in self._find_pages(folder):
+        for _folder, pages in walk:
+            for page in pages:
                 if page.suffix == '.md':
                     # a page vanishing between the walk and the read (a
                     # concurrent delete) plans as absent from the walk; the
@@ -4190,7 +4247,7 @@ class Wiki:
                     notices.extend(page_notices)
         # plan indexes (bottom-up so child categories
         # exist before parents read them)
-        for folder in reversed(folders):
+        for folder, _ in reversed(walk):
             # snapshot the on-disk text before planning from it, so the
             # writer can detect (and skip) a concurrent edit to the file;
             # the plan reads the same snapshot, so plan input and the
