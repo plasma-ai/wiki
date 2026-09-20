@@ -54,6 +54,7 @@ __all__ = [
     'test_lint_other_wiki_broken_settings_spare_unrelated_links',
     'test_links_other_wiki_runs_no_hook',
     'test_links_other_wiki_notices_ride_the_host_funnel',
+    'test_links_other_wiki_keeps_the_host_run_memo',
     'test_links_home_marker_is_not_a_wiki',
     'test_links_home_symlink_loop_never_raises',
     'test_lint_missing_external_folder_notes_once',
@@ -935,6 +936,34 @@ def test_links_other_wiki_notices_ride_the_host_funnel(
     ]
     fence_count = len(fence)
     assert fence_count == 1
+
+
+def test_links_other_wiki_keeps_the_host_run_memo(
+    tmp_path: pathlib.Path,
+    compositions: list[str],
+) -> None:
+    """Judging another wiki mid-run leaves the host run's memo in place.
+
+    Lint builds the other wiki's instance while checking the root index,
+    then reads the frontmatter of every folder below; those reads hit
+    the compositions the plan made, so building and using a second
+    instance inside a run neither opens a run of its own nor ends the
+    host's. A memo tied to construction would drop the host's entries
+    there and compose them again.
+    """
+    root = tmp_path / 'wiki'
+    _make_wiki(root, folders={'notes': ['meeting']})
+    _make_sibling_wiki(tmp_path / 'math')
+    _link_from(root, 'root', '../math/g2')
+    _set_links_external(root, ['../math'])
+    compositions.clear()
+
+    # the other wiki is judged, and every block still composes once
+    issues = Wiki(root).lint()
+    assert any('targets a folder' in issue for issue in issues)
+    compose_count = len(compositions)
+    distinct_count = len(set(compositions))
+    assert distinct_count == compose_count
 
 
 @pytest.mark.parametrize(

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import bisect
+import contextvars
 import functools
+import os
 import re
 import textwrap
-from typing import Optional
+from collections.abc import Callable
+from typing import Optional, ParamSpec, TypeVar
 
 import wiki.util
 from wiki.typing import Link
@@ -52,12 +55,15 @@ _FRONTMATTER_TAIL = (
     'updated',
 )
 
-# a composed block past this size is composed on every read rather than
-# pinned in the memo for the process: an authored block's text runs a few
-# hundred bytes, about six hundred with a paragraph-long desc, so a bound a
-# hundred times above them pins every authored block and recomposes only a
-# pathological one
+# a composed block past this size is composed on every read rather than pinned
+# in the memo for the run: an authored block's text runs a few hundred bytes,
+# about six hundred with a paragraph-long desc, so a bound a hundred times
+# above them pins every authored block and recomposes only a pathological one
 _SCALAR_CACHE_BYTES = 65_536
+
+# the memo of the run in progress (see run_scoped), None outside one -- or the
+# closed memo of a run that ended, in a context copied while it was open
+_RUN_MEMO = contextvars.ContextVar('_RUN_MEMO', default=None)
 
 # the deepest collection nesting handed to the composer, which recurses per
 # level: the pure loader raises RecursionError a few hundred levels down, and
@@ -81,6 +87,11 @@ _Issue = tuple[int, str, str]
 # the top-level keys of a block in document order, each with the 0-based line
 # of its key line within the block (a non-scalar key spells as '')
 _Keys = tuple[tuple[str, int], ...]
+
+# the signature run_scoped hands through unchanged, so a
+# bracketed method stays visible to a type checker as itself
+_P = ParamSpec('_P')
+_R = TypeVar('_R')
 
 # characters no YAML stream may carry plain or single-quoted -- the C0 and C1
 # controls (a tab excepted), the DEL, the line separators LS and PS, and the
@@ -141,6 +152,55 @@ FIELD_EXTENT = r'(?:[ \t]+.*\n|[ \t]*\n|-(?:[ \t].*)?\n|#.*\n)*'
 # the extent below a key line carrying a value: a column-0 item after a value
 # is text to YAML, outside the field
 _VALUED_EXTENT = r'(?:[ \t]+.*\n|[ \t]*\n|#.*\n)*'
+
+
+def run_scoped(f: Callable[_P, _R], /) -> Callable[_P, _R]:
+    """Bracket ``f`` as one run, whose format calls share a memo freed at its end.
+
+    An update or lint reads every block as written and as re-stamped,
+    then all of them again once the last page is planned, and quotes its
+    one stamp at every re-stamp, so the composed blocks and plain-safety
+    verdicts are memoized for the run (:class:`_Memo`) and dropped when
+    ``f`` returns or raises. A call inside a run joins it -- an
+    operation another operation runs, a guest wiki's reads -- rather
+    than opening its own, so the memo lives exactly as long as the
+    outermost bracketed call.
+
+    The memo belongs to the context that opens the run. A thread or task
+    that inherits that context joins the run while it is open -- an
+    operation in flight there when the opener returns finishes
+    unmemoized -- and opens its own once it has closed
+    (:func:`_live_memo`); one with a fresh context opens its own. A
+    process forked from inside the run closes the memo it inherits as it
+    starts (:func:`_close_inherited_memo`) and opens its own. ``f`` is a
+    synchronous call that returns, since a generator or coroutine body
+    runs after the bracket closes.
+
+    Every public ``Wiki`` operation is bracketed, and a subclass
+    operation that reads frontmatter itself carries the same decorator,
+    whether or not it calls the base method, so its reads and the base
+    call share one run; a format function called outside a run computes
+    unmemoized.
+    """
+
+    @functools.wraps(f)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        if _live_memo() is not None:
+            return f(*args, **kwargs)
+        memo = _Memo()
+        try:
+            # set inside the try, so an interrupt landing on it still closes
+            _RUN_MEMO.set(memo)
+            return f(*args, **kwargs)
+        finally:
+            # the bare store closes the memo before any call an
+            # asynchronous exception could land in, and None restores
+            # what the open path found: a variable that reads as no run
+            memo.open = False
+            _RUN_MEMO.set(None)
+            memo.close()
+
+    return wrapper
 
 
 def extract_frontmatter(lines: list[str]) -> tuple[str, int]:
@@ -1305,7 +1365,9 @@ def quote(value: str) -> str:
         escaped = value.replace('\\', '\\\\').replace('"', '\\"')
         escaped = _ESCAPED_CHARS.sub(repl=_escape, string=escaped)
         return f'"{escaped}"'
-    if not _is_plain_safe(value):
+    memo = _live_memo()
+    plain_safe = _is_plain_safe if memo is None else memo.plain_safe
+    if not plain_safe(value):
         escaped = value.replace("'", "''")
         return f"'{escaped}'"
     return value
@@ -1507,7 +1569,72 @@ def wrapped_marker_lines(masked: str, text: str) -> list[int]:
     return result
 
 
+# ------ helper classes
+
+
+class _Memo:
+    """The memo of one run: its composed blocks and plain-safety verdicts.
+
+    Both are functions of their text and the installed PyYAML build
+    alone, so a run computes each once however often it reads a block or
+    quotes a value: about two kilobytes per composed block with the
+    block's text (more for a block with long values), two blocks per
+    file, and one verdict per distinct value -- a file's name, an adopted
+    page's H1, an authored desc, the run's stamp. :meth:`close` is the
+    authoritative list of what a run memoizes: a wrapper it leaves bound
+    outlives the run in every context copied while the run was open. A
+    further function joins as one more ``functools.cache`` in the
+    constructor, its plain function in :meth:`close`, and one consult at
+    its single entry seam (:func:`_compose_fields`, :func:`quote`). The
+    memo closes when its run ends and drops what it holds, so a context
+    that still maps :data:`_RUN_MEMO` to it reads no run
+    (:func:`_live_memo`).
+    """
+
+    def __init__(self: _Memo) -> None:
+        """Initialize an open memo, empty for each memoized function."""
+        self.compose = functools.cache(_compose_block)
+        self.plain_safe = functools.cache(_is_plain_safe)
+        self.open = True
+
+    def close(self: _Memo) -> None:
+        """Close the memo as its run ends and drop what it holds."""
+        # rebind rather than clear: a consult that fetched a cache before the
+        # close computes into a wrapper nothing holds once it returns
+        self.open = False
+        self.compose = _compose_block
+        self.plain_safe = _is_plain_safe
+
+
 # ------ helper functions
+
+
+def _live_memo() -> Optional[_Memo]:
+    """Return the memo of the run in progress, or ``None`` outside one.
+
+    A context copied while a run was open -- the context a task or
+    callback scheduled from inside an operation inherits, a thread
+    started under context inheritance -- still maps :data:`_RUN_MEMO` to
+    that run's memo after the run ends; the closed memo reads as no run,
+    so an operation in that context opens its own.
+    """
+    memo = _RUN_MEMO.get()
+    if (memo is None) or not memo.open:
+        return None
+    return memo
+
+
+def _close_inherited_memo() -> None:
+    """Close the memo a forked child inherits, so its first operation opens its own run.
+
+    A fork from inside a run -- a process pool a notice hook or a
+    subclass operation starts -- copies the forking thread's context
+    into the child, where the bracket that would close the memo never
+    returns; closed here, it reads as no run (:func:`_live_memo`).
+    """
+    memo = _RUN_MEMO.get()
+    if memo is not None:
+        memo.close()
 
 
 def _uncommented(text: str, quote: Optional[str] = None) -> str:
@@ -1879,21 +2006,21 @@ def _key_of(line: str) -> Optional[str]:
 def _compose_fields(
     frontmatter: str,
 ) -> tuple[str, _Fields, tuple[_Issue, ...], _Keys, bool]:
-    """Compose a frontmatter block, through the memo for a block of ordinary size.
+    """Compose a frontmatter block, through the run's memo for a block of ordinary size.
 
-    See :func:`_compose_cached` for the result; a block past
+    See :func:`_compose_block` for the result; a block past
     :data:`_SCALAR_CACHE_BYTES` composes on every read rather than pin
-    its text in the memo for the process.
+    its text in the memo for the run, and outside a run every block
+    composes on every read.
     """
     if len(frontmatter) > _SCALAR_CACHE_BYTES:
-        return _compose_cached.__wrapped__(frontmatter)
-    return _compose_cached(frontmatter)
+        return _compose_block(frontmatter)
+    memo = _live_memo()
+    compose = _compose_block if memo is None else memo.compose
+    return compose(frontmatter)
 
 
-# a process-long memo of composed blocks, about two kilobytes apiece with the
-# block's text (more for a block with long values) and two per file for a run
-@functools.cache
-def _compose_cached(
+def _compose_block(
     frontmatter: str,
 ) -> tuple[str, _Fields, tuple[_Issue, ...], _Keys, bool]:
     """Compose a frontmatter block into its top-level scalar fields.
@@ -1919,14 +2046,8 @@ def _compose_cached(
     typed-looking title stays a string.
 
     The composition is a function of the block's text and the installed
-    PyYAML build alone, so it is memoized per process: a run reads every
-    block as written and as re-stamped, then all of them again once the
-    last page is planned, and a CLI run frees the memo at exit.
-
-    Todo:
-        Scope the memo to a run: a CLI run frees it at exit, but a
-        long-lived host that embeds the engine keeps it for the process.
-
+    PyYAML build alone, so a run memoizes it (:class:`_Memo`) behind
+    :func:`_compose_fields`, the entry every reader takes.
     """
     import yaml
 
@@ -2393,9 +2514,6 @@ def _is_unset_field(frontmatter: str, key: str) -> bool:
     return _is_valueless(indicator, body, nulls=('', 'null'))
 
 
-# a process-long memo of plain-safety verdicts on the values the writers quote:
-# a file's name, an adopted page's H1, an authored desc, the run's stamp
-@functools.cache
 def _is_plain_safe(value: str) -> bool:
     """Return whether a strict YAML reader reads ``value`` back verbatim when plain.
 
@@ -2405,14 +2523,9 @@ def _is_plain_safe(value: str) -> bool:
     ``'? '``, or ``': '`` reads as structure, a node property, or a quoted
     scalar, and leading or trailing whitespace (a tab anywhere) is dropped
     or rejected -- so none of them may be written plain. The verdict is a
-    function of the value and the installed PyYAML build alone, so it is
-    memoized per process: a run quotes its one stamp at every write and
-    every re-stamped read.
-
-    Todo:
-        Scope the memo to a run: a CLI run frees it at exit, but a
-        long-lived host that embeds the engine keeps it for the process.
-
+    function of the value and the installed PyYAML build alone, so a run
+    memoizes it (:class:`_Memo`) behind :func:`quote`, the one writer
+    that takes it.
     """
     if not value:
         return True
@@ -2462,3 +2575,8 @@ def _unescape(match: re.Match[str]) -> str:
             return match.group(0)
         return chr(code_point)
     return _ESCAPES.get(char, f'\\{char}')
+
+
+# a forked child keeps the forking thread's context, memo and all,
+# and the bracket that would close it never returns there
+os.register_at_fork(after_in_child=_close_inherited_memo)
