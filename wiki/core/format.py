@@ -63,10 +63,7 @@ _SCALAR_CACHE_BYTES = 65_536
 
 # the memo of the run in progress (see run_scoped), None outside one -- or the
 # closed memo of a run that ended, in a context copied while it was open
-_RUN_MEMO: contextvars.ContextVar[Optional[_Memo]] = contextvars.ContextVar(
-    '_RUN_MEMO',
-    default=None,
-)
+_RUN_MEMO = contextvars.ContextVar('_RUN_MEMO', default=None)
 
 # the deepest collection nesting handed to the composer, which recurses per
 # level: the pure loader raises RecursionError a few hundred levels down, and
