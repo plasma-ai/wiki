@@ -110,6 +110,14 @@ class Wiki:
     the root display name are cached per instance, so hosted embedders
     construct a fresh ``Wiki`` per operation rather than holding one
     across mutations of the wiki.
+
+    Each operation a host calls from outside a run is one run of the
+    format functions (:func:`~wiki.core.format.run_scoped`): the
+    frontmatter blocks it composes and the values it judges for quoting
+    are memoized for the run and freed when it returns or raises, so a
+    host that runs many operations on one instance, or in one process,
+    holds one run's working set at a time and no memo between
+    operations.
     """
 
     path_sep: str = '/'
@@ -769,6 +777,7 @@ class Wiki:
         """
         return self._name_violation(name) is None
 
+    @format.run_scoped
     def init(
         self: Wiki,
         name: Optional[str] = None,
@@ -857,6 +866,7 @@ class Wiki:
         # materialize the self-ignoring counts cache
         self._load_counts()
 
+    @format.run_scoped
     def update_config(self: Wiki) -> list[str]:
         """Install ``.wiki/obsidian/`` into ``.obsidian/``.
 
@@ -1019,6 +1029,7 @@ class Wiki:
                     f' nested wikis are not supported.'
                 )
 
+    @format.run_scoped
     def update(
         self: Wiki,
         name: Optional[str] = None,
@@ -1175,6 +1186,7 @@ class Wiki:
             self.on_cache_restore(path=WIKI_CACHE)
         return result
 
+    @format.run_scoped
     def new(
         self: Wiki,
         name: str,
@@ -1352,6 +1364,7 @@ class Wiki:
         self.update(name=scope)
         return str(index_path.relative_to(self._root))
 
+    @format.run_scoped
     def lint(
         self: Wiki,
         name: Optional[str] = None,
@@ -1876,6 +1889,7 @@ class Wiki:
                 result.extend(self._lint_stale_links(page, content))
         return result
 
+    @format.run_scoped
     def read(
         self: Wiki,
         name: str,
@@ -1913,6 +1927,7 @@ class Wiki:
             content = self._slice(content, path, start, stop, on)
         return content
 
+    @format.run_scoped
     def search(
         self: Wiki,
         query: str,
@@ -1972,6 +1987,7 @@ class Wiki:
             on_unreadable=lambda relpath: self.on_read_skip(path=relpath),
         )
 
+    @format.run_scoped
     def match(
         self: Wiki,
         pattern: str,
@@ -2081,6 +2097,7 @@ class Wiki:
                         result.append((relpath, lineno, line))
         return result
 
+    @format.run_scoped
     def map(
         self: Wiki,
         name: Optional[str] = None,

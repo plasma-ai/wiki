@@ -7,6 +7,26 @@ may include breaking changes, each listed under a Breaking heading.
 
 ## [Unreleased]
 
+### Changed
+
+- The strict reader's quoting verdicts and composed frontmatter blocks are held
+  for one operation rather than for the life of the process: each `Wiki`
+  operation (`update`, `lint`, and the rest) memoizes them while it runs and
+  frees them when it returns or raises, so a library consumer that runs `update`
+  or `lint` many times in one process — on one `Wiki` or a fresh one per call —
+  holds one run's working set while an operation runs (the memo itself, about 23
+  MB on a 5,000-page wiki of short blocks) and no memo between operations,
+  instead of adding 2 to 5 KB per page with every run. A `wiki` command is
+  unchanged in time, memory, issues, notices, and written files; a second
+  operation in the same process composes the blocks it shares with the first
+  once more, about a tenth of a second on a 5,000-page wiki, or about three
+  quarters of a second on a wheel without libyaml. A `wiki.core.format` function
+  called outside an operation computes without a memo, a process forked from
+  inside an operation (a process pool a hook starts) opens its own runs, and a
+  subclass operation that reads frontmatter itself carries
+  `wiki.core.format.run_scoped` to memoize, whether or not it calls the base
+  method.
+
 ## [1.5.0] - 2026-09-19
 
 ### Changed

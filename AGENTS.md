@@ -41,13 +41,14 @@ integration.
 `core/` decomposes into `wiki.py` (the `Wiki` engine class), `format.py`
 (functions over the on-disk page format; frontmatter values come from PyYAML's
 composed node graph, with the line grammar as the fallback for a block a strict
-reader rejects, and every write stays byte-level), `event.py` (the payload-only
-`Event` base), `_obsidian.py` (the internal Obsidian integration), and
-`_search.py` (the internal SQLite FTS5 index). Engine diagnostics are typed
-notice events: each kind has an `on_<kind>` hook delegating to the `on_notice`
-funnel, which logs `event.description` through the stdlib `Wiki.logger`; hosts
-intercept by overriding hooks (the CLI swaps `on_notice` per instance to capture
-and condense narration).
+reader rejects, and every write stays byte-level; the composed blocks and
+quoting verdicts are memoized for one public `Wiki` operation, bracketed by
+`format.run_scoped`), `event.py` (the payload-only `Event` base), `_obsidian.py`
+(the internal Obsidian integration), and `_search.py` (the internal SQLite FTS5
+index). Engine diagnostics are typed notice events: each kind has an `on_<kind>`
+hook delegating to the `on_notice` funnel, which logs `event.description`
+through the stdlib `Wiki.logger`; hosts intercept by overriding hooks (the CLI
+swaps `on_notice` per instance to capture and condense narration).
 
 ## Build & Development
 
@@ -402,6 +403,18 @@ falls back to the event's own `logging_level`), and the `Event` base in
 `core/event.py` declares a `logging_level` class default that the grep counts
 without being a hook. The two offset, so the raw totals happen to match — audit
 per-kind hooks against per-kind signature defaults, not the raw grep totals.
+
+### Run Bracket
+
+Every operation the `Wiki` class docstring names carries `@format.run_scoped`
+(`core/format.py`): the bracket memoizes composed frontmatter blocks and quoting
+verdicts for one operation. A nested operation — `new` runs `update` — joins the
+enclosing run rather than opening its own, so the memo is freed when the
+outermost operation returns or raises. A subclass operation that reads
+frontmatter itself carries the decorator too, whether or not it calls the base
+method: a call inside a run joins it. The decorator count
+(`grep -c '@format.run_scoped' wiki/core/wiki.py`) equals the count of
+operations the class docstring names.
 
 ### Shell Scripts
 
