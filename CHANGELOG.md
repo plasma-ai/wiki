@@ -10,15 +10,22 @@ may include breaking changes, each listed under a Breaking heading.
 ### Fixed
 
 - `wiki lint` and `wiki update` on a wiki of several thousand pages spend far
-  less time in the strict frontmatter reader: the run's `created:`/`updated:`
-  stamp is judged for quoting once rather than parsed as YAML at every write,
+  less time in the strict reader: the run's `created:`/`updated:` stamp is
+  judged for quoting once rather than parsed as YAML at every write, and
   `wiki lint` takes its malformed-frontmatter verdicts from the plan it already
-  diffs against rather than repairing every block a second time, and the
-  composed-block memo holds a whole run's blocks. On a 5,000-page wiki the
-  reader's cost falls from about 1.5x of the pre-reader run time to about 1.05x
-  for `wiki lint` and 1.15x for `wiki update --check`; a 300-page wiki pays
-  nothing measurable. Issues, notices, and written files are unchanged, bar the
-  one lint row the next entry describes.
+  diffs against rather than repairing every block a second time. The quoting
+  verdicts and the composed blocks are held for the life of the process, however
+  many pages the wiki holds — a `wiki` command frees them at exit, while a
+  library consumer that runs `update` or `lint` many times in one process keeps
+  them — so a command's peak memory rises by about 13 MB on a 5,000-page wiki of
+  short blocks, 26 MB on one whose blocks carry a paragraph-long `desc`, and
+  about 100 MB on a 24,000-page wiki of short blocks; a later run in the same
+  process adds 2 to 5 KB per page. On a 5,000-page wiki this alone brings
+  `wiki lint` to about 1.08x the time before the strict reader and
+  `wiki update --check` to 1.15x, down from about 1.4x and 1.5x; a 300-page wiki
+  pays nothing measurable. On a tree no other writer edits during the run,
+  issues, notices, and written files are unchanged, except for the one lint row
+  the next entry describes.
 - `wiki lint` reports a frontmatter body that is valid YAML but not `key: value`
   pairs — a quoted scalar spanning lines with a column-0 `updated:`-shaped line
   inside, on a page or an index — as its `Invalid YAML frontmatter` issue alone,

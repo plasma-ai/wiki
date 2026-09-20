@@ -50,14 +50,11 @@ _FRONTMATTER_TAIL = (
     'updated',
 )
 
-# per-process memos keyed by text -- composed frontmatter blocks at about a
-# kilobyte and a half apiece, and plain-safety verdicts on the values the
-# writers quote (a file's name, the run's stamp); a run composes two blocks
-# per file, as written and as the write re-stamps it, and reads them all
-# again once the last page is planned, so a bound under twice the file count
-# evicts between passes and this bound holds eight thousand files; a block
-# past the byte bound is composed on every read rather than pinned for the run
-_SCALAR_CACHE_SIZE = 16_384
+# a composed block past this size is composed on every read rather than
+# pinned in the memo for the process: an authored block's text runs a few
+# hundred bytes, about six hundred with a paragraph-long desc, so a bound a
+# hundred times above them pins every authored block and recomposes only a
+# pathological one
 _SCALAR_CACHE_BYTES = 65_536
 
 # the deepest collection nesting handed to the composer, which recurses per
@@ -1886,14 +1883,16 @@ def _compose_fields(
 
     See :func:`_compose_cached` for the result; a block past
     :data:`_SCALAR_CACHE_BYTES` composes on every read rather than pin
-    its text in the memo for the run.
+    its text in the memo for the process.
     """
     if len(frontmatter) > _SCALAR_CACHE_BYTES:
         return _compose_cached.__wrapped__(frontmatter)
     return _compose_cached(frontmatter)
 
 
-@functools.lru_cache(maxsize=_SCALAR_CACHE_SIZE)
+# a process-long memo of composed blocks, about two kilobytes apiece with the
+# block's text (more for a block with long values) and two per file for a run
+@functools.cache
 def _compose_cached(
     frontmatter: str,
 ) -> tuple[str, _Fields, tuple[_Issue, ...], _Keys, bool]:
@@ -1918,6 +1917,16 @@ def _compose_cached(
     the wiki's grammar and document markers to YAML. The node graph is
     composed, never constructed, so a stamp stays its source text and a
     typed-looking title stays a string.
+
+    The composition is a function of the block's text and the installed
+    PyYAML build alone, so it is memoized per process: a run reads every
+    block as written and as re-stamped, then all of them again once the
+    last page is planned, and a CLI run frees the memo at exit.
+
+    Todo:
+        Scope the memo to a run: a CLI run frees it at exit, but a
+        long-lived host that embeds the engine keeps it for the process.
+
     """
     import yaml
 
@@ -2384,7 +2393,9 @@ def _is_unset_field(frontmatter: str, key: str) -> bool:
     return _is_valueless(indicator, body, nulls=('', 'null'))
 
 
-@functools.lru_cache(maxsize=_SCALAR_CACHE_SIZE)
+# a process-long memo of plain-safety verdicts on the values the writers quote:
+# a file's name, an adopted page's H1, an authored desc, the run's stamp
+@functools.cache
 def _is_plain_safe(value: str) -> bool:
     """Return whether a strict YAML reader reads ``value`` back verbatim when plain.
 
@@ -2397,6 +2408,11 @@ def _is_plain_safe(value: str) -> bool:
     function of the value and the installed PyYAML build alone, so it is
     memoized per process: a run quotes its one stamp at every write and
     every re-stamped read.
+
+    Todo:
+        Scope the memo to a run: a CLI run frees it at exit, but a
+        long-lived host that embeds the engine keeps it for the process.
+
     """
     if not value:
         return True
