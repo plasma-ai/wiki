@@ -7,6 +7,60 @@ may include breaking changes, each listed under a Breaking heading.
 
 ## [Unreleased]
 
+### Changed
+
+- The strict reader's quoting verdicts and composed frontmatter blocks are held
+  for the life of the process, however many pages the wiki holds: a `wiki`
+  command frees them at exit, while a library consumer that runs `update` or
+  `lint` many times in one process keeps them. A command's peak memory rises by
+  about 13 MB on a 5,000-page wiki of short blocks, 26 MB on one whose blocks
+  carry a paragraph-long `desc`, and about 100 MB on a 24,000-page wiki of short
+  blocks; a later run in the same process adds 2 to 5 KB per page.
+
+### Fixed
+
+- `wiki lint` and `wiki update` on a wiki of several thousand pages spend far
+  less time in the strict reader: the run's `created:`/`updated:` stamp is
+  judged for quoting once rather than parsed as YAML at every write, `wiki lint`
+  takes its malformed-frontmatter verdicts from the plan it already diffs
+  against rather than repairing every block a second time, and the composed
+  blocks are kept across the run's passes rather than evicted between them (the
+  Changed entry above states what a long-lived process then holds). On a
+  5,000-page wiki this alone brings `wiki lint` to about 1.08x the time before
+  the strict reader and `wiki update --check` to 1.15x, down from about 1.4x and
+  1.5x; a 300-page wiki pays nothing measurable. On a tree no other writer edits
+  during the run, issues, notices, and written files are unchanged, except for
+  the one lint row the next entry describes.
+- `wiki lint` reports a frontmatter body that is valid YAML but not `key: value`
+  pairs — a quoted scalar spanning lines with a column-0 `updated:`-shaped line
+  inside, as the whole body or inside a collection, on a page or an index — as
+  its `Invalid YAML frontmatter` issue alone, matching `wiki update`'s
+  `Malformed frontmatter (not a key: value mapping)` notice, rather than also as
+  `Malformed frontmatter (its repair would break the YAML)` for a repair update
+  never attempts.
+- `wiki lint` and `wiki update` on a wiki of several thousand pages repeat far
+  less of their own work: a run walks its scope once for its plan and the checks
+  before it, a walk `wiki lint` inside a repository holds until it finishes at
+  about 2.5 KB per indexed folder and per non-markdown file (5 MB on a
+  5,000-page wiki of about 2,000 folders, 17 MB on one of about 4,000 folders
+  and 3,100 non-markdown files); an index is planned from one listing of its
+  folder; a content scan skips a text that cannot hold the shape it looks for;
+  and the frontmatter reader takes a fast path through a block with no blank
+  line and a body that cannot nest past its bound. On a 5,000-page wiki
+  `wiki lint` runs in about 0.55x the time before the strict reader and
+  `wiki update --check` in about 0.63x, a converged `wiki update` in about 0.6x,
+  and a 300-page wiki gains about a quarter. On a tree no other writer edits
+  during the run, issues, notices, exit codes, and written files are unchanged,
+  with two exceptions: `wiki map`, a scoped `wiki update`, and a `wiki new`
+  below the top level complete on a tree holding an empty folder the process may
+  list but not enter (outside the scope the update or `new` sweeps), instead of
+  aborting with an error naming the folder's `_index.md` on an interpreter whose
+  `pathlib` raises for it; and on a tree holding a page the process cannot read
+  and, later in walk order, a folder it cannot list, the same commands' error
+  names the page rather than the folder, with the same exit code. A page or
+  folder another writer creates after the run's one walk gains its parent index
+  row this run and its own frontmatter or `_index.md` on the next.
+
 ## [1.4.0] - 2026-09-17
 
 ### Breaking

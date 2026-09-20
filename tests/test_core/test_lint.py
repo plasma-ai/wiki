@@ -61,12 +61,12 @@ __all__ = [
     'test_lint_stamp_parse_follows_configured_format',
     'test_lint_flags_frontmatter_a_strict_yaml_reader_rejects',
     'test_lint_flags_a_stamp_that_is_a_sequence',
-    'test_lint_flags_a_block_whose_repair_would_break_it',
-    'test_lint_flags_an_unaddressable_block_as_malformed',
+    'test_lint_reports_one_issue_for_what_update_refuses',
     'test_lint_reports_deep_nesting_instead_of_crashing',
     'test_lint_reports_an_escape_naming_no_character',
     'test_lint_invalid_yaml_yields_to_merge_states',
     'test_lint_names_a_comment_truncated_desc',
+    'test_valueless_desc_draws_only_its_repair_diff',
     'test_lint_hyphen_dangle',
     'test_lint_wrapped_list_marker',
     'test_lint_blank_led_list_is_clean',
@@ -82,6 +82,7 @@ __all__ = [
     'test_lint_survives_page_deleted_mid_walk',
     'test_lint_survives_page_deleted_before_crlf_probe',
     'test_lint_survives_folder_deleted_mid_walk',
+    'test_lint_survives_folder_deleted_before_listing',
     'test_lint_survives_index_deleted_mid_check',
     'test_quoted_placeholder_desc_is_soft',
     'test_long_desc_is_note_only',
@@ -697,7 +698,10 @@ def test_lint_missing_index(tmp_path: pathlib.Path) -> None:
         '---\nname: note\ndesc: A note.\n---\n\n# note\n\nSome text here.\n',
         encoding='utf-8',
     )
-    assert any('orphan/: Missing index' in issue for issue in wiki.lint())
+    # the orphan page is linted under its missing index
+    issues = wiki.lint()
+    assert any('orphan/: Missing index' in issue for issue in issues)
+    assert any('orphan/note.md: Requires update' in issue for issue in issues)
     wiki.update()
     assert (orphan / '_index.md').exists()
     assert wiki.lint() == []
@@ -1084,55 +1088,106 @@ def test_lint_flags_a_stamp_that_is_a_sequence(
     assert issues[0].fields['value'] == value
 
 
-def test_lint_flags_a_block_whose_repair_would_break_it(tmp_path: pathlib.Path) -> None:
-    """A block update refuses to repair is a malformed-frontmatter issue, not a silent stall.
+@page_index
+@pytest.mark.parametrize(
+    argnames=('block', 'reason', 'lint_kind'),
+    argvalues=[
+        (
+            '{name: x, desc: Flow.}',
+            'keys are not column-0 key: value lines',
+            'malformed_frontmatter',
+        ),
+        # a collection under a stamp key the line grammar cannot place
+        # draws the unaddressable verdict, never the stamp check's or a crash
+        (
+            '  created: []\n  name: core\n  desc: Indented.',
+            'keys are not column-0 key: value lines',
+            'malformed_frontmatter',
+        ),
+        # refreshing the anchored name: would strand its alias
+        (
+            'name: &n wrong\ndesc: A page.\ntitle: *n',
+            'its repair would break the YAML',
+            'malformed_frontmatter',
+        ),
+        ('- a\n- b', 'not a key: value mapping', 'invalid_yaml'),
+        (
+            '"quoted\nupdated: 2020-01-01T00:00:00Z\n"',
+            'not a key: value mapping',
+            'invalid_yaml',
+        ),
+        (
+            '["a\nupdated: 2020-01-01T00:00:00Z\n"]',
+            'not a key: value mapping',
+            'invalid_yaml',
+        ),
+        (
+            '- "a\nupdated: 2020-01-01T00:00:00Z\n"',
+            'not a key: value mapping',
+            'invalid_yaml',
+        ),
+        (
+            '- k: "a\nupdated: 2020-01-01T00:00:00Z\n"',
+            'not a key: value mapping',
+            'invalid_yaml',
+        ),
+    ],
+    ids=[
+        'unaddressable',
+        'indented-collection-stamp',
+        'unrepairable',
+        'list',
+        'quoted-key-lines',
+        'flow-wrapped',
+        'block-wrapped',
+        'nested-wrapped',
+    ],
+)
+def test_lint_reports_one_issue_for_what_update_refuses(
+    tmp_path: pathlib.Path,
+    kind: str,
+    block: str,
+    reason: str,
+    lint_kind: str,
+) -> None:
+    """Lint reports a block update refuses as one issue of the refusal's kind.
 
-    Refreshing an anchored ``name:`` would strand the alias of it; update
-    keeps the page as written with a notice on every run, and lint names
-    the same refusal so the stale name is never a surprise.
+    Update keeps a block it can neither address nor repair as written and
+    says why in a notice on every run; lint carries that verdict as one
+    ``malformed_frontmatter`` issue, page or index, so the two never
+    disagree on a block. A body that is not ``key: value`` pairs has no
+    fields to repair, so it is the strict reader's ``invalid_yaml``
+    finding and draws no repair verdict, quoted lines shaped like keys
+    included, whether the scalar is the whole body or sits anywhere inside
+    a collection.
     """
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
-    page = tmp_path / 'core' / 'design.md'
-    authored = (
-        '---\nname: &n wrong\ndesc: A page.\ntitle: *n\n---\n\n# design\n\nBody.\n'
-    )
-    page.write_text(authored, encoding='utf-8')
+    name = 'design.md' if kind == 'page' else '_index.md'
+    body = '\n# design\n\nBody.\n' if kind == 'page' else '\n# core\n\n***\n\nProse.\n'
+    path = tmp_path / 'core' / name
+    authored = f'---\n{block}\n---\n{body}'
+    path.write_text(authored, encoding='utf-8')
 
-    # update keeps the page and lint names the refusal
+    # update keeps the file as written and names the refusal once
+    notices = _capture_notices(wiki)
     wiki.update()
-    assert page.read_text(encoding='utf-8') == authored
-    issues = [
-        issue
-        for issue in Wiki(tmp_path).lint()
-        if issue.kind == 'malformed_frontmatter'
+    named = [
+        event.description
+        for event in notices
+        if 'Malformed frontmatter' in event.description
     ]
-    assert [str(issue) for issue in issues] == [
-        'core/design.md: Malformed frontmatter (its repair would break the YAML)'
+    assert named == [f'Malformed frontmatter ({reason}) in core/{name}']
+    assert path.read_text(encoding='utf-8') == authored
+    # lint reports the refusal once, on this file alone, as the kind it calls for
+    issues = Wiki(tmp_path).lint()
+    assert [(issue.fields['path'], issue.kind) for issue in issues] == [
+        (f'core/{name}', lint_kind)
     ]
-
-
-def test_lint_flags_an_unaddressable_block_as_malformed(tmp_path: pathlib.Path) -> None:
-    """A mapping with no column-0 key lines is malformed frontmatter to lint, page or index.
-
-    A collection-valued stamp inside such a mapping is the same finding,
-    never a crash of the whole run.
-    """
-    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
-    (tmp_path / 'core' / 'design.md').write_text(
-        '---\n{name: x, desc: Flow.}\n---\n\n# design\n\nBody.\n', encoding='utf-8'
-    )
-    (tmp_path / 'core' / '_index.md').write_text(
-        '---\n  created: []\n  name: core\n  desc: Indented.\n---\n\n# core\n\n***\n\nProse.\n',
-        encoding='utf-8',
-    )
-
-    # both files carry the malformed-frontmatter issue with the reason
-    issues = [issue for issue in wiki.lint() if issue.kind == 'malformed_frontmatter']
-    assert sorted(issue.fields['path'] for issue in issues) == [
-        'core/_index.md',
-        'core/design.md',
-    ]
-    assert all('keys are not column-0 key: value lines' in issue for issue in issues)
+    if lint_kind == 'malformed_frontmatter':
+        assert str(issues[0]) == f'core/{name}: Malformed frontmatter ({reason})'
+    # the next update finds nothing to do
+    assert Wiki(tmp_path).update() == []
+    assert path.read_text(encoding='utf-8') == authored
 
 
 @pytest.mark.usefixtures('_vary_loader')
@@ -1308,6 +1363,39 @@ def test_lint_names_a_comment_truncated_desc(tmp_path: pathlib.Path) -> None:
     assert '[[core/commented|commented]]: Short summary.\n' in index
 
 
+@pytest.mark.parametrize(
+    argnames='desc_line',
+    argvalues=['desc:', "desc: ''", 'desc: |'],
+    ids=['bare', 'quoted-empty', 'empty-block'],
+)
+def test_valueless_desc_draws_only_its_repair_diff(
+    tmp_path: pathlib.Path,
+    desc_line: str,
+) -> None:
+    """A present-but-valueless desc is an update diff, never a period issue.
+
+    A bare ``desc:``, a quoted-empty ``desc: ''``, and an empty ``desc: |``
+    all read as no description; update restores the ``desc: ...``
+    placeholder, so the missing text is the repair's business and the
+    period check has no value to judge.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        page.read_text(encoding='utf-8').replace('desc: The design page.', desc_line),
+        encoding='utf-8',
+    )
+
+    # the page carries only its repair diff, and the restored
+    # placeholder is a soft note, not an issue
+    kinds = {
+        issue.kind for issue in wiki.lint() if issue.fields['path'] == 'core/design.md'
+    }
+    assert kinds == {'requires_update'}
+    wiki.update()
+    assert wiki.lint() == []
+
+
 # ------ wrap mangles
 
 
@@ -1315,10 +1403,11 @@ def test_lint_names_a_comment_truncated_desc(tmp_path: pathlib.Path) -> None:
     argnames=('body', 'flagged'),
     argvalues=[
         ('supports twenty-\nclass workloads.', True),
+        ('supports twenty- \nclass workloads.', True),
         ('supports twenty-\nand thirty-class workloads.', False),
         ('supports neither twenty-\nnor thirty-class workloads.', False),
     ],
-    ids=['dangle', 'suspended-and', 'suspended-nor'],
+    ids=['dangle', 'dangle-trailing-space', 'suspended-and', 'suspended-nor'],
 )
 def test_lint_hyphen_dangle(
     tmp_path: pathlib.Path,
@@ -1329,7 +1418,8 @@ def test_lint_hyphen_dangle(
 
     Every folded read joins the pair with a space, mangling the word;
     only the suspended-hyphen idiom (a next line opening ``and ``/
-    ``or ``/``nor ``) legitimately ends a line on a hyphen.
+    ``or ``/``nor ``) legitimately ends a line on a hyphen, and trailing
+    spaces after the hyphen change nothing.
     """
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
     page = tmp_path / 'core' / 'design.md'
@@ -1393,15 +1483,17 @@ def test_lint_blank_led_list_is_clean(tmp_path: pathlib.Path) -> None:
     """The house list shapes are never flagged as wrap mangles.
 
     A list opening after a blank line, a bullet following its sibling's
-    wrapped continuation line, and a nested sublist opening after its
-    parent's continuation are all healthy -- only a marker continuing a
-    sentence or interrupting a paragraph is a mangle.
+    wrapped continuation line, a nested sublist opening after its
+    parent's continuation, and a numbered item opening directly under a
+    paragraph line are all healthy -- only a bullet continuing a sentence
+    or interrupting a paragraph is a mangle.
     """
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
     body = (
         'Intro paragraph.\n\n'
         '- item one\n- item two\n\n'
         '1. step\n   - detail\n\n'
+        'A paragraph line.\n1. a numbered step under it\n\n'
         '- an item that wraps\n  onto a continuation line\n- next item\n'
         '- another wrapping item\n  with its continuation\n  - nested detail\n'
     )
@@ -1509,8 +1601,15 @@ def test_lint_ignores_multiline_code_span(tmp_path: pathlib.Path) -> None:
             False,
         ),
         ('<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch', True),
+        ('ours\n=======\ntheirs\n>>>>>>> branch', True),
     ],
-    ids=['inline-span', 'fenced-conflict', 'no-lint-region', 'real-conflict'],
+    ids=[
+        'inline-span',
+        'fenced-conflict',
+        'no-lint-region',
+        'real-conflict',
+        'closing-marker-only',
+    ],
 )
 def test_lint_conflict_markers_scan_raw(
     tmp_path: pathlib.Path,
@@ -1754,28 +1853,51 @@ def test_lint_survives_folder_deleted_mid_walk(
     assert all('doomed' in issue for issue in issues)
 
 
-@pytest.mark.parametrize(
-    argnames=('vanish_read', 'expected_kinds'),
-    argvalues=[
-        # the plan's baseline read is first; lint's own index read is second
-        (2, {'missing_index'}),
-        # the marker probe re-reads after lint's read: the check ran clean
-        (3, set()),
-    ],
-    ids=['index-check-read', 'marker-probe-read'],
-)
+def test_lint_survives_folder_deleted_before_listing(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A folder deleted between its index read and its listing never crashes lint.
+
+    Lint reads a walked folder's index and then lists the folder once
+    for the delimiter probe, the broken-link check, and the page walk,
+    so a folder vanishing inside that window (a concurrent delete) must
+    lint from the text in hand with no children left to check: the same
+    run flags the vanished page's stale row, the next run the stale
+    parent row.
+    """
+    wiki = _make_wiki(tmp_path, folders={'doomed': ['gone'], 'notes': ['alpha']})
+    doomed = tmp_path / 'doomed'
+    index = doomed / '_index.md'
+    real = Wiki._has_crlf
+
+    def racy(self: Wiki, path: pathlib.Path) -> bool:
+        """Delete the doomed folder once its index read is already in hand."""
+        if (path == index) and doomed.exists():
+            shutil.rmtree(doomed)
+        return real(self, path)
+
+    # the pre-listing deletion is handled, not crashed on: the vanished
+    # folder's index lints from the text in hand, its page row now stale
+    monkeypatch.setattr(Wiki, '_has_crlf', racy)
+    issues = wiki.lint()
+    assert {issue.kind for issue in issues} == {'broken_link'}
+    assert all('doomed/gone' in issue for issue in issues)
+
+    # the next run flags the stale parent row the vanished folder left
+    issues = wiki.lint()
+    assert any(issue.kind == 'broken_link' for issue in issues)
+
+
 def test_lint_survives_index_deleted_mid_check(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
-    vanish_read: int,
-    expected_kinds: set[str],
 ) -> None:
-    """An index vanishing between probe and re-read never crashes lint.
+    """An index vanishing between the plan and lint's read never crashes lint.
 
-    Lint re-reads each index after probing it -- once for the index
-    check and once for the missing-delimiter probe -- so a delete
-    landing before either re-read (a concurrent delete) must classify
-    the index as missing (or leave the probe silent) rather than raise.
+    The plan's baseline read of each index is first and lint's own read
+    second, so a delete landing between them (a concurrent delete) must
+    classify the index as missing rather than raise.
     """
     wiki = _make_wiki(tmp_path, folders={'notes': ['alpha']})
     index = tmp_path / 'notes' / '_index.md'
@@ -1783,17 +1905,18 @@ def test_lint_survives_index_deleted_mid_check(
     reads: list[pathlib.Path] = []
 
     def racy(self: Wiki, path: pathlib.Path) -> str:
-        """Delete the index just as the numbered re-read begins."""
+        """Delete the index just as lint's own read begins."""
+        # the plan's baseline read is first; lint's own index read is second
         if path == index:
             reads.append(path)
-            if len(reads) == vanish_read:
+            if len(reads) == 2:
                 index.unlink()
         return real(self, path)
 
     # the mid-check deletion is handled, not crashed on
     monkeypatch.setattr(Wiki, '_read_text', racy)
     issues = wiki.lint()
-    assert {issue.kind for issue in issues} == expected_kinds
+    assert {issue.kind for issue in issues} == {'missing_index'}
 
 
 def test_quoted_placeholder_desc_is_soft(

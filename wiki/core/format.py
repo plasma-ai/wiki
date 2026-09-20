@@ -22,6 +22,21 @@ _REGION_DIRECTIVE = re.compile(
     r'((?:\s+[a-z0-9]+(?:-[a-z0-9]+)*)*)\s+-->'
 )
 
+# the line signatures of lint's content scans, compiled once for the per-line
+# loops, each rule stated at its scan: escaped_wikilink_lines's escape
+_ESCAPED_WIKILINK = re.compile(r'(?<!\[)\\\[\\?\[')
+# hyphen_dangle_lines's dangle, the word start that continues
+# it and the suspended-hyphen idiom that exempts it
+_HYPHEN_DANGLE = re.compile(r'\w-$')
+_WORD_START = re.compile(r'\w')
+_SUSPENDED_HYPHEN = re.compile(r'(?:and|n?or) ')
+# wrapped_marker_lines's marker, bullet, thematic break and block-scalar header
+# (reclaim_link_run reads the thematic break too)
+_LIST_MARKER = re.compile(r'(?:[-+*]|\d+[.)]) ')
+_BULLET = re.compile(r'[-+*] ')
+_THEMATIC_BREAK = re.compile(r'\*{3,}|-{3,}|_{3,}')
+_SCALAR_HEADER = re.compile(r'\w+:\s*[|>][-+0-9]*')
+
 # canonical frontmatter field order: the known head keys, then any
 # unrecognized authored keys, then the tool-owned timestamp tail
 _FRONTMATTER_HEAD = (
@@ -37,11 +52,11 @@ _FRONTMATTER_TAIL = (
     'updated',
 )
 
-# per-process memo of composed frontmatter blocks: an update reads each block
-# a few times and a lint a few more, and a run over a few thousand pages fits
-# one cache at about a kilobyte per block; a block past the byte bound is
-# composed on every read rather than pinned for the run
-_SCALAR_CACHE_SIZE = 4_096
+# a composed block past this size is composed on every read rather than
+# pinned in the memo for the process: an authored block's text runs a few
+# hundred bytes, about six hundred with a paragraph-long desc, so a bound a
+# hundred times above them pins every authored block and recomposes only a
+# pathological one
 _SCALAR_CACHE_BYTES = 65_536
 
 # the deepest collection nesting handed to the composer, which recurses per
@@ -347,7 +362,7 @@ def reclaim_link_run(body: list[str]) -> tuple[list[Link], list[str]]:
             continue
         # a thematic break after the run is the mangled delimiter: drop it
         if current_link is not None:
-            if re.fullmatch(r'\*{3,}|-{3,}|_{3,}', stripped):
+            if _THEMATIC_BREAK.fullmatch(stripped):
                 consumed = i + 1
                 break
         # a line directly under a link continues its description
@@ -451,6 +466,11 @@ def strip_blank_lines(frontmatter: str) -> str:
     verbatim, so an over-indented whitespace-only body line keeps its
     content spaces.
     """
+    lines = frontmatter.split('\n')
+    # a block with no blank line has nothing to drop: the walk
+    # below re-emits every non-blank line in place, byte for byte
+    if all(line.strip() for line in lines):
+        return frontmatter
     result = []
     pending = []  # blank lines held verbatim until the next line reveals them
     in_block = False
@@ -460,7 +480,7 @@ def strip_blank_lines(frontmatter: str) -> str:
     quote_char = None  # the quote opening a scalar not yet closed
     flow_depth = 0  # the brackets of a flow collection not yet closed
     flow_quote = None  # the quote a line of the open flow collection left open
-    for line in frontmatter.split('\n'):
+    for line in lines:
         # every line of an open quoted scalar or flow collection is content,
         # blank or not, up to the line that closes it -- or, for a bracket
         # never closed, up to the key line the line grammar reads next
@@ -1340,6 +1360,9 @@ def parse_regions(masked: str) -> tuple[dict[str, list[tuple[int, int]]], list[s
     errors = []
     open_starts: dict[str, Optional[int]] = {}
     poisoned: set[str] = set()
+    # a directive is an HTML comment: a text without one holds no marker
+    if '<!--' not in masked:
+        return regions, errors
     for lineno, line in enumerate(masked.split('\n'), 1):
         match = _REGION_DIRECTIVE.fullmatch(line.strip())
         if not match:
@@ -1395,8 +1418,12 @@ def escaped_wikilink_lines(masked: str) -> list[int]:
     trips it.
     """
     result = []
+    # the signature carries a backslash before a bracket:
+    # a text without the pair has no line to scan
+    if '\\[' not in masked:
+        return result
     for lineno, line in enumerate(masked.split('\n'), 1):
-        if re.search(r'(?<!\[)\\\[\\?\[', line):
+        if _ESCAPED_WIKILINK.search(line):
             result.append(lineno)
     return result
 
@@ -1415,12 +1442,14 @@ def hyphen_dangle_lines(masked: str) -> list[int]:
     result = []
     lines = masked.split('\n')
     for lineno, line in enumerate(lines[:-1], 1):
-        # a dangle breaks a word at its hyphen: word char, hyphen, EOL
-        if not re.search(r'\w-$', line.rstrip()):
+        # a dangle breaks a word at its hyphen: word char, hyphen, EOL -- the
+        # endswith test rules out almost every line before the pattern runs
+        stripped = line.rstrip()
+        if not stripped.endswith('-') or not _HYPHEN_DANGLE.search(stripped):
             continue
         # the next line must continue the text, minus the idiom
         following = lines[lineno].lstrip()
-        if re.match(r'\w', following) and not re.match(r'(?:and|n?or) ', following):
+        if _WORD_START.match(following) and not _SUSPENDED_HYPHEN.match(following):
             result.append(lineno)
     return result
 
@@ -1460,18 +1489,16 @@ def wrapped_marker_lines(masked: str, text: str) -> list[int]:
         stripped = line.lstrip()
         indent = len(line) - len(stripped)
         # a marker must open the raw line as well as the masked one
-        masked_marker = bool(re.match(r'(?:[-+*]|\d+[.)]) ', stripped))
-        raw_marker = bool(re.match(r'(?:[-+*]|\d+[.)]) ', raw[lineno - 1].lstrip()))
-        marker = masked_marker and raw_marker
-        bullet = bool(re.match(r'[-+*] ', stripped))
+        masked_marker = bool(_LIST_MARKER.match(stripped))
+        marker = masked_marker and bool(_LIST_MARKER.match(raw[lineno - 1].lstrip()))
         in_open_list = any(item <= indent for item in open_items)
-        if marker and bullet and (lineno > 1) and not in_open_list:
+        if marker and _BULLET.match(stripped) and (lineno > 1) and not in_open_list:
             # only a paragraph line above makes the marker line a mangle
             previous = lines[lineno - 2].strip()
-            list_item = bool(re.match(r'(?:[-+*]|\d+[.)]) ', previous))
+            list_item = bool(_LIST_MARKER.match(previous))
             block_start = previous.startswith(('#', '>', '|', '<!--'))
-            thematic_break = bool(re.fullmatch(r'\*{3,}|-{3,}|_{3,}', previous))
-            scalar_header = bool(re.fullmatch(r'\w+:\s*[|>][-+0-9]*', previous))
+            thematic_break = bool(_THEMATIC_BREAK.fullmatch(previous))
+            scalar_header = bool(_SCALAR_HEADER.fullmatch(previous))
             structural = list_item or block_start or thematic_break or scalar_header
             if previous and not structural:
                 result.append(lineno)
@@ -1581,6 +1608,10 @@ def _nested_too_deep(body: str) -> Optional[int]:
     scalar's body and the continuation lines of a plain or quoted value
     are text, whatever they hold.
     """
+    # a level opens only on a bracket or on a `- `/`? ` indicator, so a body
+    # holding no more of those characters than the bound cannot nest past it
+    if sum(body.count(char) for char in '[{-?') <= _MAX_NESTING:
+        return None
     depth = 0
     quote = None
     body_indent = None  # the header indentation of an open block scalar
@@ -1852,14 +1883,16 @@ def _compose_fields(
 
     See :func:`_compose_cached` for the result; a block past
     :data:`_SCALAR_CACHE_BYTES` composes on every read rather than pin
-    its text in the memo for the run.
+    its text in the memo for the process.
     """
     if len(frontmatter) > _SCALAR_CACHE_BYTES:
         return _compose_cached.__wrapped__(frontmatter)
     return _compose_cached(frontmatter)
 
 
-@functools.lru_cache(maxsize=_SCALAR_CACHE_SIZE)
+# a process-long memo of composed blocks, about two kilobytes apiece with the
+# block's text (more for a block with long values) and two per file for a run
+@functools.cache
 def _compose_cached(
     frontmatter: str,
 ) -> tuple[str, _Fields, tuple[_Issue, ...], _Keys, bool]:
@@ -1884,6 +1917,16 @@ def _compose_cached(
     the wiki's grammar and document markers to YAML. The node graph is
     composed, never constructed, so a stamp stays its source text and a
     typed-looking title stays a string.
+
+    The composition is a function of the block's text and the installed
+    PyYAML build alone, so it is memoized per process: a run reads every
+    block as written and as re-stamped, then all of them again once the
+    last page is planned, and a CLI run frees the memo at exit.
+
+    Todo:
+        Scope the memo to a run: a CLI run frees it at exit, but a
+        long-lived host that embeds the engine keeps it for the process.
+
     """
     import yaml
 
@@ -2350,6 +2393,9 @@ def _is_unset_field(frontmatter: str, key: str) -> bool:
     return _is_valueless(indicator, body, nulls=('', 'null'))
 
 
+# a process-long memo of plain-safety verdicts on the values the writers quote:
+# a file's name, an adopted page's H1, an authored desc, the run's stamp
+@functools.cache
 def _is_plain_safe(value: str) -> bool:
     """Return whether a strict YAML reader reads ``value`` back verbatim when plain.
 
@@ -2358,7 +2404,15 @@ def _is_plain_safe(value: str) -> bool:
     comment), one opening with an indicator character or with ``'- '``,
     ``'? '``, or ``': '`` reads as structure, a node property, or a quoted
     scalar, and leading or trailing whitespace (a tab anywhere) is dropped
-    or rejected -- so none of them may be written plain.
+    or rejected -- so none of them may be written plain. The verdict is a
+    function of the value and the installed PyYAML build alone, so it is
+    memoized per process: a run quotes its one stamp at every write and
+    every re-stamped read.
+
+    Todo:
+        Scope the memo to a run: a CLI run frees it at exit, but a
+        long-lived host that embeds the engine keeps it for the process.
+
     """
     if not value:
         return True

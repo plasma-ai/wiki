@@ -315,29 +315,44 @@ def test_update_skips_excluded_subtree(tmp_path: pathlib.Path) -> None:
     assert 'vendor' not in root_index
 
 
-def test_update_names_excluded_link_target(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize(
+    argnames=('pattern', 'index', 'link'),
+    argvalues=[
+        # the pattern names the page itself
+        ('data/report.md', 'data/_index.md', '[[data/report|report]]'),
+        # the pattern names the folder, covering the row into its index
+        ('data', '_index.md', '[[data/_index|data/]]'),
+    ],
+    ids=['page', 'folder'],
+)
+def test_update_names_excluded_link_target(
+    tmp_path: pathlib.Path,
+    pattern: str,
+    index: str,
+    link: str,
+) -> None:
     """An index link whose target became excluded names the pattern.
 
     Excluded paths are dropped from the walk, so the link is no longer
     backed by an indexed entry -- but its target is still on disk, and
     a generic broken-link warning would send the user hunting for a
     deleted file. Update names the exclusion (and its pattern) as the
-    cause beside the prune notice naming the removal.
+    cause beside the prune notice naming the removal, whether the
+    pattern names the target itself or a folder above it.
     """
     _make_wiki(tmp_path, folders={'data': ['child', 'report']})
-    # index the page first, then exclude it
-    _set_exclude_patterns(tmp_path, ['data/report.md'])
+    # index the entries first, then exclude the target
+    _set_exclude_patterns(tmp_path, [pattern])
     wiki = Wiki(tmp_path)
     notices = _capture_notices(wiki)
 
     # the exclusion is named as the cause beside the removal
     wiki.update()
     err = '\n'.join(event.description for event in notices)
-    assert 'Link targets an excluded path:' in err
-    assert "exclude.patterns 'data/report.md'" in err
-    assert 'Pruned link:' in err
-    index = tmp_path / 'data' / '_index.md'
-    assert '[[data/report|report]]' not in index.read_text(encoding='utf-8')
+    assert f'Link targets an excluded path: {link}' in err
+    assert f"exclude.patterns '{pattern}'" in err
+    assert f'Pruned link: {link}' in err
+    assert link not in (tmp_path / index).read_text(encoding='utf-8')
 
 
 def test_update_symlink_precedence(tmp_path: pathlib.Path) -> None:

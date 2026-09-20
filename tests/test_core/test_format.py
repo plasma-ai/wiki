@@ -648,6 +648,7 @@ def test_unaddressable_blocks_are_refused_not_crashed(body: str) -> None:
         ("desc: 'one\n\ntwo'\n\ntags: []", "desc: 'one\n\ntwo'\ntags: []"),
         ('desc: |-\n  Alpha.\n    \ntags: []', 'desc: |-\n  Alpha.\n    \ntags: []'),
         ('desc: A.\n\ntags: []', 'desc: A.\ntags: []'),
+        ('desc: A.\n  \ntags: []', 'desc: A.\ntags: []'),
         ('desc: &a |+\n  text\n\ntags: []', 'desc: &a |+\n  text\n\ntags: []'),
         ('desc: !!str >+\n  text\n\ntags: []', 'desc: !!str >+\n  text\n\ntags: []'),
         ('extra: |2\n   \ntags: []', 'extra: |2\n   \ntags: []'),
@@ -666,6 +667,7 @@ def test_unaddressable_blocks_are_refused_not_crashed(body: str) -> None:
         'sq-column0-blank-then-stray',
         'ws-only-over-indented',
         'stray',
+        'ws-only-stray',
         'anchored-keep',
         'tagged-folded-keep',
         'explicit-indent-ws-body',
@@ -773,7 +775,9 @@ def test_compose_walks_an_alias_graph_once(body: str) -> None:
 
 
 # one level past the nesting bound, however the collections nest
-_DEEP = format._MAX_NESTING * 2
+_DEEP = format._MAX_NESTING + 1
+# a flow sequence nested exactly to the bound
+_AT_BOUND = '[' * format._MAX_NESTING + 'x' + ']' * format._MAX_NESTING
 
 
 @pytest.mark.parametrize(
@@ -782,7 +786,9 @@ _DEEP = format._MAX_NESTING * 2
         ('desc: ' + '[' * _DEEP + 'x' + ']' * _DEEP, 3),
         ('desc: ' + '{a: ' * _DEEP + 'x' + '}' * _DEEP, 3),
         ('tags:\n' + '- ' * _DEEP + 'x', 4),
-        ('tags: ' + '[' * format._MAX_NESTING + 'x' + ']' * format._MAX_NESTING, None),
+        ('tags:\n' + '? ' * _DEEP + 'x', 4),
+        ('tags: ' + _AT_BOUND, None),
+        ('tags: ' + _AT_BOUND + '\nmore: [x]', None),
         ("desc: rock 'n roll\ntags: " + '[' * _DEEP + 'x' + ']' * _DEEP, 4),
         ('desc: a ' + '[' * _DEEP, None),
         ('desc: |\n' + '\n'.join('  [ x' for _ in range(_DEEP)), None),
@@ -793,7 +799,9 @@ _DEEP = format._MAX_NESTING * 2
         'flow-sequence',
         'flow-mapping',
         'item-chain',
+        'explicit-key-chain',
         'at-the-bound',
+        'at-the-bound-with-another-collection',
         'apostrophe-before-deep',
         'brackets-in-plain-value',
         'brackets-in-block-body',
