@@ -23,13 +23,15 @@ _REGION_DIRECTIVE = re.compile(
 )
 
 # the line signatures of lint's content scans, compiled once for the per-line
-# loops: a formatter-escaped wikilink; a hyphen dangle, the word start that
-# continues it and the suspended-hyphen idiom that exempts it; a list marker
-# and a bullet; a thematic break; and a bare block-scalar header
+# loops, each rule stated at its scan: escaped_wikilink_lines's escape
 _ESCAPED_WIKILINK = re.compile(r'(?<!\[)\\\[\\?\[')
+# hyphen_dangle_lines's dangle, the word start that continues
+# it and the suspended-hyphen idiom that exempts it
 _HYPHEN_DANGLE = re.compile(r'\w-$')
 _WORD_START = re.compile(r'\w')
 _SUSPENDED_HYPHEN = re.compile(r'(?:and|n?or) ')
+# wrapped_marker_lines's marker, bullet, thematic break and block-scalar header
+# (reclaim_link_run reads the thematic break too)
 _LIST_MARKER = re.compile(r'(?:[-+*]|\d+[.)]) ')
 _BULLET = re.compile(r'[-+*] ')
 _THEMATIC_BREAK = re.compile(r'\*{3,}|-{3,}|_{3,}')
@@ -465,9 +467,8 @@ def strip_blank_lines(frontmatter: str) -> str:
     content spaces.
     """
     lines = frontmatter.split('\n')
-    # a block with no blank line has nothing to drop: the walk below holds a
-    # line back only when it is blank, so every line re-emits in place and
-    # the result is the input byte for byte
+    # a block with no blank line has nothing to drop: the walk
+    # below re-emits every non-blank line in place, byte for byte
     if all(line.strip() for line in lines):
         return frontmatter
     result = []
@@ -1417,8 +1418,8 @@ def escaped_wikilink_lines(masked: str) -> list[int]:
     trips it.
     """
     result = []
-    # the signature carries a backslash before a bracket: a text without the
-    # pair has no line to scan
+    # the signature carries a backslash before a bracket:
+    # a text without the pair has no line to scan
     if '\\[' not in masked:
         return result
     for lineno, line in enumerate(masked.split('\n'), 1):
@@ -1442,7 +1443,7 @@ def hyphen_dangle_lines(masked: str) -> list[int]:
     lines = masked.split('\n')
     for lineno, line in enumerate(lines[:-1], 1):
         # a dangle breaks a word at its hyphen: word char, hyphen, EOL -- the
-        # trailing hyphen alone clears almost every line before the pattern runs
+        # endswith test rules out almost every line before the pattern runs
         stripped = line.rstrip()
         if not stripped.endswith('-') or not _HYPHEN_DANGLE.search(stripped):
             continue
@@ -1488,9 +1489,8 @@ def wrapped_marker_lines(masked: str, text: str) -> list[int]:
         stripped = line.lstrip()
         indent = len(line) - len(stripped)
         # a marker must open the raw line as well as the masked one
-        marker = bool(_LIST_MARKER.match(stripped)) and bool(
-            _LIST_MARKER.match(raw[lineno - 1].lstrip())
-        )
+        masked_marker = bool(_LIST_MARKER.match(stripped))
+        marker = masked_marker and bool(_LIST_MARKER.match(raw[lineno - 1].lstrip()))
         in_open_list = any(item <= indent for item in open_items)
         if marker and _BULLET.match(stripped) and (lineno > 1) and not in_open_list:
             # only a paragraph line above makes the marker line a mangle

@@ -7,8 +7,8 @@ from typing import Optional
 
 __all__ = []
 
-# the fence and span grammar mask_code and find_heading share, compiled once
-# for the per-line loops, the rules stated at their use
+# the fence grammar mask_code and find_heading walk line by line, and
+# mask_code's span grammar, compiled once; each rule is stated at its use
 _FENCE_OPEN = re.compile(r'^ {0,3}(`{3,}(?=[^`]*$)|~{3,})')
 _FENCE_CLOSE = re.compile(r'^ {0,3}(`+|~+)[ \t]*$')
 _CODE_SPAN = re.compile(
@@ -35,8 +35,8 @@ def mask_code(text: str, /) -> str:
     >>> mask_code('an `inline span` masked')
     'an  masked'
     """
-    # no backtick and no tilde run means no span and no fence: the text is
-    # its own mask
+    # no backtick and no tilde run means no span
+    # and no fence: the text is its own mask
     if ('`' not in text) and ('~~~' not in text):
         return text
     # blank fenced code blocks (line count preserved); the fence walk is
@@ -103,8 +103,8 @@ def mask_indented_code(text: str, /) -> str:
     >>> mask_indented_code('- item\n\n    still the list [[x]]\n')
     '- item\n\n    still the list [[x]]\n'
     """
-    # a block line is indented four columns: a text with no four-space run
-    # and no tab has none to mask
+    # a block line is indented four columns: a text with no
+    # four-space run and no tab has none to mask
     if ('    ' not in text) and ('\t' not in text):
         return text
     lines = []

@@ -32,6 +32,7 @@ __all__ = [
     'test_map_survives_readonly_cache',
     'test_map_survives_page_deleted_mid_count',
     'test_map_survives_index_deleted_mid_render',
+    'test_map_survives_folder_deleted_mid_probe',
     'test_map_recounts_same_mtime_rewrite',
     'test_quoted_category_labels_and_filters',
     'test_map_output',
@@ -208,6 +209,42 @@ def test_map_survives_index_deleted_mid_render(
     output = wiki.map()
     assert re.search(r'design \(\d+\)', output)
     assert 'gone' not in output
+
+
+def test_map_survives_folder_deleted_mid_probe(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A folder deleted as map probes its delimiter never crashes map.
+
+    Before descending into a child folder, map checks its index for the
+    ``***`` delimiter, listing the folder for the children a gap would
+    cost; a folder vanishing just as that listing begins (a concurrent
+    delete) has no gap to report, and its row maps without children.
+    """
+    wiki = _make_wiki(tmp_path, folders={'doomed': ['gone'], 'notes': ['alpha']})
+    doomed = tmp_path / 'doomed'
+    real = Wiki._find_entries
+
+    def racy(
+        self: Wiki,
+        folder: pathlib.Path,
+    ) -> tuple[list[pathlib.Path], list[pathlib.Path]]:
+        """Delete the doomed folder just as its listing begins."""
+        if (folder == doomed) and doomed.exists():
+            shutil.rmtree(doomed)
+        return real(self, folder)
+
+    # the mid-probe deletion is handled, not crashed on; words are off so
+    # no counts walk lists the folder ahead of the probe
+    monkeypatch.setattr(Wiki, '_find_entries', racy)
+    notices = _capture_notices(wiki)
+    output = wiki.map(words=False)
+    err = '\n'.join(event.description for event in notices)
+    assert not doomed.exists()
+    assert 'doomed/: The doomed section.' in output
+    assert 'gone' not in output
+    assert 'delimiter' not in err
 
 
 def test_map_recounts_same_mtime_rewrite(tmp_path: pathlib.Path) -> None:

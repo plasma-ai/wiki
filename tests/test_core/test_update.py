@@ -127,6 +127,7 @@ __all__ = [
     'test_required_titles_converge_over_a_duplicated_name',
     'test_required_titles_adopts_no_h1_page',
     'test_update_materializes_missing_settings',
+    'test_update_mints_a_missing_root',
     'test_update_skips_symlinked_page',
     'test_update_names_symlinked_link_target',
     'test_update_skips_out_of_root_desc_propagation',
@@ -1760,7 +1761,11 @@ def test_update_converges_on_every_grammar_shape(tmp_path: pathlib.Path) -> None
 
 
 def test_update_scoped(tmp_path: pathlib.Path) -> None:
-    """Scoped update only modifies the specified subtree."""
+    """Scoped update only modifies the specified subtree.
+
+    The counts refresh after a scoped write still covers the whole
+    wiki, so the untouched sibling stays counted beside the new page.
+    """
     # build a populated wiki with two sibling folders
     folders = {
         'core': ['design'],
@@ -1786,6 +1791,19 @@ def test_update_scoped(tmp_path: pathlib.Path) -> None:
 
     # the out-of-scope sibling files are byte-identical
     assert [path.read_bytes() for path in api_files] == before
+
+    # the counts refresh covers the whole wiki, not only the scope
+    counts = json.loads(
+        (tmp_path / '.wiki' / 'cache' / 'word_counts.json').read_text(encoding='utf-8')
+    )
+    assert sorted(counts) == [
+        '_index.md',
+        'api/_index.md',
+        'api/endpoints.md',
+        'core/_index.md',
+        'core/design.md',
+        'core/new_page.md',
+    ]
 
 
 def test_reclaimed_index_keeps_link_shaped_continuation(
@@ -3371,6 +3389,32 @@ def test_update_materializes_missing_settings(tmp_path: pathlib.Path) -> None:
         wiki.update(check=True)
     with pytest.raises(ValueError, match=r'(?s)Legacy wiki layout.*wiki update'):
         wiki.lint()
+
+
+def test_update_mints_a_missing_root(tmp_path: pathlib.Path) -> None:
+    """``update`` on a root directory that does not exist yet mints the wiki.
+
+    The marker restore creates the root, so the run walks it after the
+    restore: the root ``_index.md`` and the counts cache land in the same
+    run, each announced once, and a re-run converges quietly.
+    """
+    root = tmp_path / 'fresh'
+    wiki = Wiki(root)
+    notices = _capture_notices(wiki)
+
+    # one run restores the marker, mints the root index, and writes the cache
+    assert wiki.update() == ['_index.md']
+    assert (root / '.wiki' / 'cache' / 'word_counts.json').is_file()
+    assert [event.description for event in notices] == [
+        'Restored missing .wiki/settings.json ({} -- all defaults)',
+        'New index: _index.md (fill in its desc)',
+        'Recreated .wiki/cache/ (derived counts cache)',
+    ]
+
+    # a re-run has nothing left to mint or announce
+    notices.clear()
+    assert wiki.update() == []
+    assert notices == []
 
 
 def test_update_skips_symlinked_page(tmp_path: pathlib.Path) -> None:

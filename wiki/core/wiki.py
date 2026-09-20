@@ -17,6 +17,7 @@ import tempfile
 import unicodedata
 import urllib.request
 import zoneinfo
+from collections.abc import Iterable, Iterator
 from typing import Any, Optional
 
 import wiki.util
@@ -55,9 +56,8 @@ _CONFLICT_MARKER = re.compile(r'^(<{7,}|>{7,})( |$)')
 # into and the files it indexes, each judged once against the exclusions
 _Listing = tuple[list[pathlib.Path], list[pathlib.Path]]
 
-# a walk of the tree: every non-excluded folder in depth-first order, each
-# with the non-excluded files it holds, from one listing per folder
-_Walk = list[tuple[pathlib.Path, list[pathlib.Path]]]
+# one step of a walk: a non-excluded folder with the non-excluded files it holds
+_WalkStep = tuple[pathlib.Path, list[pathlib.Path]]
 
 # the malformed-frontmatter reasons the planners keep a page as written for:
 # a body that is valid YAML but not a key: value mapping (a bare sentence, a
@@ -601,8 +601,7 @@ class Wiki:
             # a repository on disk the probe cannot read is a broken fence,
             # not an unfenced tree: indexing is about to adopt files that
             # repository keeps untracked, so say so rather than degrade mute
-            enclosing = (self._root, *self._root.parents)
-            if any((folder / '.git').exists() for folder in enclosing):
+            if self._in_repository():
                 self.on_git_fence_unavailable()
             return None
         return {os.fsdecode(entry) for entry in result.stdout.split(b'\0') if entry}
@@ -628,7 +627,7 @@ class Wiki:
         enclosing = (self._root, *self._root.parents)
         return any((ancestor / '.git').exists() for ancestor in enclosing)
 
-    def _warn_untrackable_rows(self: Wiki, walk: _Walk) -> None:
+    def _warn_untrackable_rows(self: Wiki, walk: Iterable[_WalkStep]) -> None:
         """Note indexed paths the caller's full ignore stack excludes.
 
         The fence reads the repository's own rules alone, so indexing is
@@ -1115,9 +1114,11 @@ class Wiki:
         # TODO: remove back-compat in future version
         self._refuse_legacy_layout()
         # one walk of the scope: the untrackable-row note, the nested-root
-        # scan, and the plan read the same folders and pages; nothing between
-        # the walk and the plan touches the walked tree (_ensure_settings
-        # writes under .wiki/, a dot path the walk never lists)
+        # scan, and the plan read the same folders and pages; nothing the run
+        # itself does between the walk and the plan touches the walked tree
+        # (_ensure_settings writes under .wiki/, a dot path the walk never
+        # lists, and creates only a missing root, re-walked below), and the
+        # plan re-judges each walked folder and page it reads
         walk = self._walk(folder)
         # the sweep is where a row for an untrackable path gets minted, so
         # the divergence is named as it happens, not only at the next lint;
@@ -1136,6 +1137,9 @@ class Wiki:
             # restore the declared-root marker before reading policy from it
             for event in self._ensure_settings():
                 self._dispatch_notice(event)
+            # a root the marker restore just created walked as absent: walk it now
+            if not walk:
+                walk = self._walk(folder)
         # compute corrected content for the scope (single timestamp)
         now = self._utc_now()
         overlay, baseline, notices = self._plan(folder, now=now, walk=walk)
@@ -1165,7 +1169,9 @@ class Wiki:
         if folder == self._root:
             counts_walk = walk
         self._load_counts(walk=counts_walk)
-        if recreated:
+        # a refresh that found the root replaced since the walk recreated
+        # nothing, so the notice keys on a root that still stands
+        if recreated and not os.path.islink(self._root) and os.path.isdir(self._root):
             self.on_cache_restore(path=WIKI_CACHE)
         return result
 
@@ -1191,8 +1197,10 @@ class Wiki:
         the parent's whole subtree -- the entire wiki for a top-level
         folder -- so pending maintenance in that scope (adoptions,
         prunes) lands in the same run; the sweep's own refusals are
-        pre-flighted before the write, so a refusal never strands a
-        half-written adoption.
+        pre-flighted before the write against the scope as walked, so
+        a refusal strands a half-written adoption only when a
+        concurrent writer lands its cause -- a conflict-marked page, a
+        nested declared wiki -- after that walk.
 
         Args:
             name: Folder to create and index (relative path below the
@@ -1325,12 +1333,17 @@ class Wiki:
             scope = parent.relative_to(self._root).as_posix()
         # TODO: remove back-compat in future version
         self._refuse_legacy_layout()
+        # one walk of the parent scope for the nested-root scan and the dry
+        # plan; nothing between them touches the walked tree
         walk = self._walk(parent)
         for nested, _ in walk:
             if (nested != self._root) and (nested / WIKI_SETTINGS).is_file():
                 raise _encloses_wiki_error(nested)
         _, baseline, _ = self._plan(parent, now=now, walk=walk)
         self._refuse_conflicted(baseline)
+        # free the pre-flight's walk and baseline before the sweep below walks and
+        # plans the scope again, so one copy of the scope sits in memory at a time
+        del walk, baseline
         # write the index, links left to the sweep below
         folder.mkdir(exist_ok=True)
         wiki.util.fs.write_atomic(index_path, text)
@@ -1429,15 +1442,16 @@ class Wiki:
         # clone's first merge pays for it
         self._warn_unconfigured_merge_driver()
         # inside a repository the untrackable-row note walks the scope and the
-        # plan reads that walk; outside one there is no note, and the plan
-        # walks for itself once the links policy below is read
+        # plan reads that walk (nothing between the walk and the plan touches
+        # the walked tree); outside one there is no note, and the plan walks
+        # for itself once the links policy below is read
         walk = None
         if self._in_repository():
             walk = self._walk(folder)
             self._warn_untrackable_rows(walk)
         # a links.external entry naming no folder on this machine is one note
         # per run, not one per link; reading the policy here also fails a
-        # malformed block before the walk, links or none
+        # malformed block before the plan, links or none
         self._warn_missing_link_folders()
         # compute what update would write (the source of truth for drift); the
         # blocks the planners keep as written come back as notices, keyed here
@@ -1525,13 +1539,13 @@ class Wiki:
                 # the pending normalization rather than failing the file
                 if self._has_crlf(index_path):
                     self.on_crlf_notice(path=str(index_relpath))
-                # list the folder once the index is in hand: the delimiter
-                # probe, the broken-link check, and the page walk below read
-                # one listing, each entry judged once; a folder vanishing
-                # between the walk and this listing (a concurrent delete) has
-                # no children left to check
+                # list the folder once the index is in hand: the
+                # delimiter probe, the broken-link check, and the page
+                # walk below read one listing, each entry judged once;
+                # a folder vanishing between the walk and this listing
+                # (a concurrent delete) has no children left to check
                 try:
-                    listing = self._list_folder(folder)
+                    listing = self._find_entries(folder)
                 except FileNotFoundError:
                     listing = ([], [])
                 _, pages = listing
@@ -2798,8 +2812,8 @@ class Wiki:
         Lint hands in the index text it read and the folder's listing; the
         standalone probe (map) reads both itself.
         """
-        # the index must exist to be missing its marker: text in hand is the
-        # proof, the standalone probe checks the file
+        # the index must exist to be missing its marker: text in
+        # hand is the proof, the standalone probe checks the file
         index_path = folder / WIKI_INDEX
         if (text is None) and not index_path.is_file():
             return False
@@ -2809,7 +2823,7 @@ class Wiki:
         # under the probe (a concurrent delete) has no gap to report
         if listing is None:
             try:
-                listing = self._list_folder(folder)
+                listing = self._find_entries(folder)
             except FileNotFoundError:
                 return False
         children, pages = listing
@@ -3115,11 +3129,9 @@ class Wiki:
     def _relpath(self: Wiki, path: pathlib.Path) -> str:
         """Return ``path``'s root-relative POSIX form; empty for the root itself.
 
-        Callers hand it paths spelled from ``self._root``: walked entries
-        and lexical joins both start there, so the form is the text past
-        the root's prefix. Every exclusion verdict pays this once per
-        entry, where ``relative_to`` would rebuild and compare each
-        ancestor.
+        Callers hand it paths spelled from ``self._root``: a walked entry,
+        or a lexical join ``is_relative_to`` has already contained, so the
+        form is the text past the root's prefix.
         """
         prefix = self._root.as_posix().rstrip('/')
         return path.as_posix()[len(prefix) + 1 :]
@@ -3588,7 +3600,7 @@ class Wiki:
                 result.append(path)
         return result
 
-    def _list_folder(self: Wiki, folder: pathlib.Path) -> _Listing:
+    def _find_entries(self: Wiki, folder: pathlib.Path) -> _Listing:
         """Return ``folder``'s non-excluded child folders and files, sorted.
 
         One listing per folder per pass: the readers of a folder's
@@ -3596,8 +3608,8 @@ class Wiki:
         :meth:`_read_child_labels`, lint's per-folder checks) judge each
         entry against the exclusions once between them. A folder
         vanishing before the listing (a concurrent delete) raises
-        ``FileNotFoundError`` for the caller to answer as its own
-        listing would.
+        ``FileNotFoundError``; each caller answers it as an empty
+        listing or an absent folder.
         """
         children = []
         pages = []
@@ -3609,23 +3621,38 @@ class Wiki:
                 pages.append(path)
         return children, pages
 
-    def _walk(self: Wiki, folder: pathlib.Path) -> _Walk:
-        """Return every non-excluded folder under ``folder``, depth-first, with files.
+    def _walk(self: Wiki, folder: pathlib.Path) -> list[_WalkStep]:
+        """Return every non-excluded folder under ``folder``, pre-order, with files.
 
         One listing per folder serves every pass a caller threads the
         walk through; each call site states what keeps the listing
         current. A folder vanishing between the walk and its listing
-        (a concurrent delete) walks as absent, its subtree with it; the
-        next run converges.
+        (a concurrent delete) walks as absent, its subtree with it, and
+        a page or folder created after the walk (a concurrent create)
+        stays absent from every pass it serves; the next run converges.
+        A single pass over the tree streams :meth:`_iter_walk` instead of
+        holding every folder's listing at once.
+        """
+        return list(self._iter_walk(folder))
+
+    def _iter_walk(self: Wiki, folder: pathlib.Path) -> Iterator[_WalkStep]:
+        """Yield every non-excluded folder under ``folder``, pre-order, with files.
+
+        The streaming form of :meth:`_walk`: the listings alive at once
+        are those from ``folder`` down to the folder it is on, each
+        ancestor's frame holding its listing until its children are
+        walked, so a pass that reads the tree once holds a depth's worth
+        of listings where :meth:`_walk`'s list holds every folder's for
+        a run of several passes.
         """
         try:
-            children, pages = self._list_folder(folder)
+            children, pages = self._find_entries(folder)
         except FileNotFoundError:
-            return []
-        result = [(folder, pages)]
+            return
+        yield (folder, pages)
         for child in children:
-            result.extend(self._walk(child))
-        return result
+            for step in self._iter_walk(child):
+                yield step
 
     def _search_files(
         self: Wiki,
@@ -3721,7 +3748,11 @@ class Wiki:
         except FileNotFoundError:
             return None
 
-    def _load_counts(self: Wiki, *, walk: Optional[_Walk] = None) -> dict[str, int]:
+    def _load_counts(
+        self: Wiki,
+        *,
+        walk: Optional[Iterable[_WalkStep]] = None,
+    ) -> dict[str, int]:
         """Return body word counts for every markdown file, via the cache.
 
         Reads ``.wiki/cache/word_counts.json`` under the wiki root, recomputes
@@ -3734,12 +3765,23 @@ class Wiki:
 
         Args:
             walk: The root's walk, when the caller took it already and
-                wrote nothing the walk would miss; taken here otherwise.
+                wrote nothing the walk would miss (a page another writer
+                creates after that walk is counted on the next pass);
+                streamed here otherwise, one folder's listing at a time,
+                so a fault is raised in walk order (an unreadable page
+                ahead of an unlistable folder below it).
 
         Returns:
             Dict mapping root-relative paths to body word counts.
 
         """
+        # a root replaced with a symlink since __init__ resolved it has nothing
+        # of its own to count; a file in its place rewrites nothing either (a
+        # handed-in walk drops it at the judge, a streamed one fails listing it)
+        # NOTE: the cache path resolves through the link, so a rewrite would
+        #   empty another tree's cache
+        if os.path.islink(self._root):
+            return {}
         # load the existing cache, tolerating absence or corruption
         cache_path = self._root / WIKI_CACHE / 'word_counts.json'
         try:
@@ -3749,18 +3791,34 @@ class Wiki:
         if not isinstance(cached, dict):
             cached = {}
         # walk the wiki, reusing fresh entries and recomputing stale ones; a
-        # caller's pre-write walk lists the same folders and pages (update
-        # rewrites pages and creates indexes, never a page or a folder) and
-        # every path is probed and stat'ed afresh below
+        # caller's pre-write walk lists the same folders and pages, since
+        # update creates no page or folder (only an index, which the loop
+        # probes per folder), and every path is re-judged below
         if walk is None:
-            walk = self._walk(self._root)
+            walk = self._iter_walk(self._root)
         result = {}
         entries = {}
         dirty = False
+        dropped: set[pathlib.Path] = set()
         for folder, pages in walk:
-            paths = [folder / WIKI_INDEX, *pages]
+            # re-judge a walked folder as _plan does, dropping one since swapped
+            # for a symlink or a file and its walked subtree with it; one made
+            # unreadable since the walk passes here, and its index, pages, and
+            # walked subfolders drop out at their os.path probes (judging kind,
+            # not readability, alike on every interpreter) like deleted files
+            plain = not os.path.islink(folder) and os.path.isdir(folder)
+            if (folder.parent in dropped) or not plain:
+                dropped.add(folder)
+                continue
+            # a walked page since swapped for a symlink would be
+            # counted through the link; the index is composed, not
+            # listed, and reads through a link as the plan reads it
+            paths = [
+                folder / WIKI_INDEX,
+                *(page for page in pages if not os.path.islink(page)),
+            ]
             for path in paths:
-                if (path.suffix != '.md') or not path.is_file():
+                if (path.suffix != '.md') or not os.path.isfile(path):
                     continue
                 # keys are composed to NFC, the form index-derived lookups use
                 relative = str(path.relative_to(self._root))
@@ -3920,7 +3978,7 @@ class Wiki:
         Folders get a trailing ``/``. Targets join with ``/``
         (``as_posix``), the wikilink grammar's separator, never the
         platform's. A caller whose pass listed the folder already hands
-        its ``listing`` in (see :meth:`_list_folder`); the default lists
+        its ``listing`` in (see :meth:`_find_entries`); the default lists
         it here.
         """
         # initialize links
@@ -3931,13 +3989,13 @@ class Wiki:
             target = parent / WIKI_INDEX
             target = target.relative_to(self._root).with_suffix('').as_posix()
             result.append((target, '..'))
-        # child directory links and page links from the folder's listing (the
-        # caller's, when its pass listed the folder already); a folder
-        # vanishing between the walk and this listing (a concurrent delete)
-        # has no children left to link
+        # child directory links and page links from the folder's
+        # listing (the caller's, when its pass listed the folder
+        # already); a folder vanishing between the walk and this
+        # listing (a concurrent delete) has no children left to link
         if listing is None:
             try:
-                listing = self._list_folder(folder)
+                listing = self._find_entries(folder)
             except FileNotFoundError:
                 listing = ([], [])
         children, pages = listing
@@ -3961,12 +4019,7 @@ class Wiki:
             (target, unicodedata.normalize('NFC', label)) for target, label in result
         ]
 
-    def _invalid_links(
-        self: Wiki,
-        folder: pathlib.Path,
-        *,
-        listing: _Listing,
-    ) -> list[tuple[str, str, str]]:
+    def _invalid_links(self: Wiki, listing: _Listing) -> list[tuple[str, str, str]]:
         """Return ``(target, relpath, reason)`` for entries with invalid names.
 
         A child folder or page whose name/stem fails :meth:`validate_name`
@@ -3975,7 +4028,7 @@ class Wiki:
         wikilink target :meth:`_build_expected_links` would have produced;
         ``relpath`` names the offending path and ``reason`` the broken rule
         for the warning. ``listing`` is the folder's entries per
-        :meth:`_list_folder`.
+        :meth:`_find_entries`.
         """
         # initialize results
         result = []
@@ -4130,11 +4183,10 @@ class Wiki:
 
     def _read_child_labels(
         self: Wiki,
-        folder: pathlib.Path,
+        listing: _Listing,
+        *,
         overlay: Optional[dict[pathlib.Path, str]] = None,
         now: Optional[str] = None,
-        *,
-        listing: _Listing,
     ) -> dict[str, str]:
         """Read categorized labels from child frontmatter.
 
@@ -4146,10 +4198,9 @@ class Wiki:
         block as the write leaves it (``now``, see :func:`_as_written`).
 
         Args:
-            folder: Parent folder to scan.
+            listing: The folder's listing, per :meth:`_find_entries`.
             overlay: Staged ``{path: content}`` from earlier passes.
             now: The run's timestamp, to read each block re-stamped.
-            listing: The folder's listing, per :meth:`_list_folder`.
 
         Returns:
             Dict mapping wikilink targets to categorized labels.
@@ -4203,7 +4254,7 @@ class Wiki:
         folder: pathlib.Path,
         *,
         now: str,
-        walk: Optional[_Walk] = None,
+        walk: Optional[Iterable[_WalkStep]] = None,
     ) -> tuple[
         dict[pathlib.Path, str],
         dict[pathlib.Path, Optional[str]],
@@ -4224,7 +4275,7 @@ class Wiki:
                 missing fields; :meth:`_apply_plan` reuses it to
                 re-stamp ``updated:``).
             walk: The scope's walk, when the caller took it already;
-                taken here otherwise.
+                streamed here otherwise.
 
         Returns:
             Tuple of ``(overlay, baseline, notices)`` where ``baseline``
@@ -4236,10 +4287,28 @@ class Wiki:
             across all indexes and pages.
 
         """
-        # take the scope's walk unless the caller handed one in: one listing
-        # per folder serves the page pass and, reversed, the index pass
+        # stream the scope's walk unless the caller handed one in: the judge
+        # below is the one pass over it, and its list serves the page pass
+        # and, reversed, orders the index pass, which lists each folder afresh
         if walk is None:
-            walk = self._walk(folder)
+            walk = self._iter_walk(folder)
+        # re-judge each walked folder before planning from it, its walked
+        # subtree with it (each descendant probes as a plain directory through
+        # a swap; the walk is pre-order, so a dropped parent is known by then);
+        # os.path judges kind, not readability, alike on every interpreter,
+        # so an unreadable folder passes the judge and fails at its index read
+        # NOTE: a folder a concurrent writer swapped for a symlink or a file
+        #   since the walk would be planned and written through the
+        #   replacement, into another indexed folder or outside the root
+        judged = []
+        dropped: set[pathlib.Path] = set()
+        for folder, pages in walk:
+            plain = not os.path.islink(folder) and os.path.isdir(folder)
+            if (folder.parent in dropped) or not plain:
+                dropped.add(folder)
+                continue
+            judged.append((folder, pages))
+        walk = judged
         overlay: dict[pathlib.Path, str] = {}
         baseline: dict[pathlib.Path, Optional[str]] = {}
         notices = []
@@ -4249,9 +4318,15 @@ class Wiki:
         for _folder, pages in walk:
             for page in pages:
                 if page.suffix == '.md':
-                    # a page vanishing between the walk and the read (a
-                    # concurrent delete) plans as absent from the walk; the
-                    # next run prunes its stale index row
+                    # re-judge a walked page before reading it; one deleted
+                    # since the walk plans as absent, and the index pass,
+                    # listing afresh, prunes its row this run
+                    # NOTE: a page a concurrent writer swapped for a symlink
+                    #   or a directory since the walk would be planned, and
+                    #   written, through the replacement -- an out-of-root
+                    #   target copied into a tracked page
+                    if os.path.islink(page) or not os.path.isfile(page):
+                        continue
                     try:
                         text = self._read_text(page)
                     except FileNotFoundError:
@@ -4494,12 +4569,13 @@ class Wiki:
             frontmatter = format.strip_blank_lines(
                 format.order_frontmatter(frontmatter)
             )
-        # list the folder once: the expected links, the naming check, and the
-        # child labels below read the same entries, each judged once; a
-        # folder vanishing between the walk and this listing (a concurrent
-        # delete) has no children left to link
+        # list the folder here rather than from the walk, so a page deleted
+        # since the walk (its page plan skipped it) draws no row; the expected
+        # links, the naming check, and the child labels below read this one
+        # listing, each entry judged once, and a folder vanishing since the
+        # walk (a concurrent delete) has no children left to link
         try:
-            listing = self._list_folder(folder)
+            listing = self._find_entries(folder)
         except FileNotFoundError:
             listing = ([], [])
         # build expected links from filesystem
@@ -4513,13 +4589,13 @@ class Wiki:
         # announce an auto-created index so its placeholder desc gets filled
         if text is None:
             notices.append(IndexCreateEvent(path=str(relpath)))
-        invalid = self._invalid_links(folder, listing=listing)
+        invalid = self._invalid_links(listing)
         for _target, skipped, reason in invalid:
             notices.append(NameSkipEvent(path=skipped, reason=reason))
         invalid_targets = {target for target, _, _ in invalid}
         expected = [(t, label) for t, label in expected if t not in invalid_targets]
         # enrich new entries from child frontmatter
-        labels = self._read_child_labels(folder, overlay, now, listing=listing)
+        labels = self._read_child_labels(listing, overlay=overlay, now=now)
         # merge and sort
         links, broken, new = self._merge_links(
             existing=existing,
@@ -5120,9 +5196,9 @@ class Wiki:
         """Check desc is present, concise, and ends in a period."""
         # initialize issues
         result = []
+        # an absent or empty desc is the repair path's
+        # business, so every check below reads a value
         desc = format.read_frontmatter_desc(frontmatter)
-        # an absent or empty desc is the repair path's business, so every
-        # check below reads a value
         if not desc:
             return result
         # alias relative path
@@ -5253,7 +5329,12 @@ class Wiki:
         The verdict is the plan's own, read off its notices in
         ``malformed`` (path to reason), so lint and update judge one pass
         over each block; a body that is not a mapping is the strict
-        reader's finding (``_lint_frontmatter_yaml``), not this one.
+        reader's finding (``_lint_frontmatter_yaml``), not this one. A
+        block rewritten between the plan's read and lint's (a concurrent
+        edit) carries the plan's verdict beside the diff row, which
+        already compares lint's text against the plan of the earlier
+        read; the next run judges the new text, as it judges a file the
+        plan never read (one created or renamed after its walk).
         """
         # initialize issues
         result = []
@@ -6142,8 +6223,8 @@ def _conflict_marker_lines(text: str) -> list[int]:
     ``no-lint`` region instead.
     """
     result = []
-    # a marker line opens with a run of seven: a text without one has no line
-    # to scan
+    # a marker line opens with a run of seven:
+    # a text without one has no line to scan
     if ('<<<<<<<' not in text) and ('>>>>>>>' not in text):
         return result
     for lineno, line in enumerate(text.split('\n'), 1):

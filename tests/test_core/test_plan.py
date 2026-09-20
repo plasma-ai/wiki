@@ -3,11 +3,14 @@
 The overlay/baseline split observed through the verb: ``updated:``
 re-stamped only on real writes, dry-run reporting, the
 concurrent-edit baseline skip, atomic writes under real reader
-threads, mid-plan deletion, and the CRLF byte probe.
+threads, the walked tree changing mid-plan (deletion, replacement,
+permission loss), and the CRLF byte probe.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import pathlib
 import re
 import shutil
@@ -18,7 +21,7 @@ import pytest
 
 from wiki.core.wiki import Wiki
 
-from ._helpers import _capture_notices, _make_wiki, page_index
+from ._helpers import _capture_notices, _make_wiki, _needs_unprivileged, page_index
 
 __all__ = [
     'test_noop_update_leaves_updated_alone',
@@ -31,6 +34,12 @@ __all__ = [
     'test_update_survives_page_deleted_mid_page_pass',
     'test_update_survives_page_deleted_mid_read',
     'test_update_survives_folder_deleted_mid_walk',
+    'test_update_survives_folder_deleted_mid_index_read',
+    'test_update_survives_folder_replaced_after_walk',
+    'test_update_survives_page_replaced_after_walk',
+    'test_update_survives_root_replaced_after_walk',
+    'test_update_fails_on_folder_unreadable_before_plan',
+    'test_update_counts_skip_folder_unreadable_before_refresh',
     'test_update_survives_folder_deleted_mid_write',
     'test_update_normalizes_crlf_file',
 ]
@@ -345,6 +354,340 @@ def test_update_survives_folder_deleted_mid_walk(
 
     # the tree has converged: nothing left pending
     assert wiki.update(check=True) == []
+
+
+def test_update_survives_folder_deleted_mid_index_read(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A folder deleted as the plan reads its index never crashes update.
+
+    The index pass snapshots a walked folder's index and then lists the
+    folder for its links, so a folder vanishing inside that window (a
+    concurrent delete) must plan with no children left to link -- the
+    fresh index it plans dropped at the write -- with the same run
+    pruning the stale parent row.
+    """
+    wiki = _make_wiki(tmp_path, folders={'doomed': ['gone'], 'notes': ['alpha']})
+    doomed = tmp_path / 'doomed'
+    index = doomed / '_index.md'
+    real = Wiki._current_text
+
+    def racy(
+        self: Wiki,
+        path: pathlib.Path,
+        overlay: Optional[dict[pathlib.Path, str]] = None,
+    ) -> Optional[str]:
+        """Delete the doomed folder just as the plan reads its index."""
+        if (path == index) and doomed.exists():
+            shutil.rmtree(doomed)
+        return real(self, path, overlay)
+
+    # the mid-read deletion is handled, not crashed on: the vanished
+    # folder is neither recreated nor reported written, and the same run
+    # prunes its row from the parent with the ordinary notice
+    monkeypatch.setattr(Wiki, '_current_text', racy)
+    notices = _capture_notices(wiki)
+    written = wiki.update()
+    err = '\n'.join(event.description for event in notices)
+    assert 'Pruned link' in err
+    assert 'doomed' in err
+    assert not doomed.exists()
+    assert all('doomed' not in path for path in written)
+
+    # the tree has converged: nothing left pending
+    assert wiki.update(check=True) == []
+
+
+@pytest.mark.parametrize('replacement', ['file', 'symlink'])
+@pytest.mark.parametrize(
+    argnames='folders',
+    argvalues=[
+        {'doomed': ['gone'], 'notes': ['alpha']},
+        {
+            'doomed': ['gone'],
+            'doomed/sub': ['deep'],
+            'notes': ['alpha'],
+            'notes/sub': ['beta'],
+        },
+    ],
+    ids=['flat', 'nested'],
+)
+def test_update_survives_folder_replaced_after_walk(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement: str,
+    folders: dict[str, list[str]],
+) -> None:
+    """A walked folder replaced before the plan reads it is never planned through.
+
+    Update walks the scope once ahead of its plan, so a folder a concurrent
+    writer swaps for a file or a symlink in that window is re-judged at
+    plan time: it plans as absent, its walked subtree with it, nothing is
+    written or counted through the replacement, and the same run prunes
+    the stale parent row.
+    """
+    wiki = _make_wiki(tmp_path, folders=folders)
+    doomed = tmp_path / 'doomed'
+    notes = tmp_path / 'notes'
+    before = {path: path.read_bytes() for path in notes.rglob('*.md')}
+    real = Wiki._utc_now
+
+    def racy(self: Wiki) -> str:
+        """Swap the doomed folder as the clock is read ahead of the plan."""
+        if doomed.is_dir() and not doomed.is_symlink():
+            shutil.rmtree(doomed)
+            if replacement == 'file':
+                doomed.write_text('raw\n', encoding='utf-8')
+            else:
+                doomed.symlink_to(notes)
+        return real(self)
+
+    # the swap is handled, not planned through: the parent row is pruned,
+    # the replacement's target is untouched, and the counts refresh skips
+    # the swapped folder rather than counting through the replacement
+    monkeypatch.setattr(Wiki, '_utc_now', racy)
+    notices = _capture_notices(wiki)
+    written = wiki.update()
+    err = '\n'.join(event.description for event in notices)
+    assert 'Pruned link' in err
+    assert all('doomed' not in path for path in written)
+    assert {path: path.read_bytes() for path in notes.rglob('*.md')} == before
+    counts = json.loads(
+        (tmp_path / '.wiki' / 'cache' / 'word_counts.json').read_text(encoding='utf-8')
+    )
+    surviving = {path.relative_to(tmp_path).as_posix() for path in before}
+    assert set(counts) == {'_index.md'} | surviving
+
+    # the tree has converged: nothing left pending
+    assert wiki.update(check=True) == []
+
+
+@pytest.mark.parametrize('replacement', ['symlink', 'directory'])
+def test_update_survives_page_replaced_after_walk(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement: str,
+) -> None:
+    """A walked page replaced before the plan reads it is never planned through.
+
+    Update walks the scope once ahead of its plan, so a page a concurrent
+    writer swaps for a symlink or a directory in that window is re-judged
+    before its read: it plans as absent, nothing is written or counted
+    through the replacement (a symlink's out-of-root target never lands
+    in a tracked page), and the same run prunes the stale parent row.
+    """
+    root = tmp_path / 'wiki'
+    root.mkdir()
+    wiki = _make_wiki(root, folders={'notes': ['alpha', 'beta']})
+    page = root / 'notes' / 'alpha.md'
+    secret = tmp_path / 'secret.md'
+    secret.write_text('# secret\n\nTOP SECRET\n', encoding='utf-8')
+    real = Wiki._utc_now
+
+    def racy(self: Wiki) -> str:
+        """Swap the page as the clock is read ahead of the plan."""
+        if page.is_file() and not page.is_symlink():
+            page.unlink()
+            if replacement == 'symlink':
+                page.symlink_to(secret)
+            else:
+                page.mkdir()
+                (page / 'late.md').write_text('# late\n\nLate.\n', encoding='utf-8')
+        return real(self)
+
+    # the swap is handled, not planned through: the parent row is pruned, no
+    # path under the page is written or counted, and the replacement stands
+    monkeypatch.setattr(Wiki, '_utc_now', racy)
+    notices = _capture_notices(wiki)
+    written = wiki.update()
+    err = '\n'.join(event.description for event in notices)
+    assert 'Pruned link: [[notes/alpha|alpha]]' in err
+    assert all('alpha' not in path for path in written)
+    counts = json.loads(
+        (root / '.wiki' / 'cache' / 'word_counts.json').read_text(encoding='utf-8')
+    )
+    assert sorted(counts) == ['_index.md', 'notes/_index.md', 'notes/beta.md']
+    if replacement == 'symlink':
+        assert page.is_symlink()
+        assert 'Link targets a symlink' in err
+        assert secret.read_text(encoding='utf-8') == '# secret\n\nTOP SECRET\n'
+    else:
+        assert (page / 'late.md').read_text(encoding='utf-8') == '# late\n\nLate.\n'
+
+    # the tree converges: a symlink leaves nothing pending, and the folder
+    # that replaced the page is planned by the next run
+    if replacement == 'directory':
+        assert 'notes/alpha.md/_index.md' in wiki.update()
+    assert wiki.update(check=True) == []
+
+
+@pytest.mark.parametrize(
+    argnames=('replacement', 'linked_cache'),
+    argvalues=[('file', False), ('symlink', False), ('symlink', True)],
+    ids=['file', 'symlink-bare', 'symlink-cached'],
+)
+def test_update_survives_root_replaced_after_walk(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement: str,
+    linked_cache: bool,
+) -> None:
+    """A root replaced before the plan reads it is never planned or counted through.
+
+    Update walks the root once ahead of its plan, so a root a concurrent
+    writer swaps for a file or a symlink to another wiki in that window
+    plans as absent: nothing is written or counted through the
+    replacement, so the other wiki's bare page stands, a counts cache it
+    is missing is neither written through the link nor announced as
+    recreated, and one it holds is not emptied through the link.
+    """
+    root = tmp_path / 'wiki'
+    root.mkdir()
+    wiki = _make_wiki(root, folders={'notes': ['alpha']})
+    other = tmp_path / 'other'
+    other.mkdir()
+    _make_wiki(other, folders={'notes': ['alpha']})
+    (other / 'notes' / 'alpha.md').write_text('# alpha\n\nraw\n', encoding='utf-8')
+    # the recreate notice would fire through the link on a missing cache;
+    # the counts refresh would empty a held one through the link
+    if not linked_cache:
+        shutil.rmtree(other / '.wiki' / 'cache')
+    before = {path: path.read_bytes() for path in other.rglob('*') if path.is_file()}
+    real = Wiki._utc_now
+
+    def racy(self: Wiki) -> str:
+        """Swap the root as the clock is read ahead of the plan."""
+        if root.is_dir() and not root.is_symlink():
+            shutil.rmtree(root)
+            if replacement == 'file':
+                root.write_text('raw\n', encoding='utf-8')
+            else:
+                root.symlink_to(other)
+        return real(self)
+
+    # the swap is handled, not planned through: nothing is
+    # written, the other wiki is untouched (no cache lands
+    # through the link), and no cache is announced as recreated
+    monkeypatch.setattr(Wiki, '_utc_now', racy)
+    notices = _capture_notices(wiki)
+    assert wiki.update() == []
+    err = '\n'.join(event.description for event in notices)
+    assert 'Recreated' not in err
+    after = {path: path.read_bytes() for path in other.rglob('*') if path.is_file()}
+    assert after == before
+    if replacement == 'file':
+        assert root.read_text(encoding='utf-8') == 'raw\n'
+
+    # the symlink root converges: a second run still plans nothing through the
+    # link and the other wiki stays untouched; a file root fails at its listing
+    if replacement == 'symlink':
+        assert wiki.update() == []
+        after = {path: path.read_bytes() for path in other.rglob('*') if path.is_file()}
+        assert after == before
+
+
+@_needs_unprivileged
+@pytest.mark.parametrize(
+    argnames='folders',
+    argvalues=[
+        {'core': ['design'], 'core/sub': ['deep'], 'other': ['alpha']},
+        {'core': ['design'], 'core/sub': ['deep'], 'core/sub/leaf': ['tip']},
+    ],
+    ids=['leaf', 'nested'],
+)
+def test_update_fails_on_folder_unreadable_before_plan(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    folders: dict[str, list[str]],
+) -> None:
+    """A walked folder made unreadable past the nested-root scan fails the run at its index read.
+
+    Update walks the scope once ahead of its plan, so a folder a concurrent
+    writer strips of every permission past the nested-root scan is
+    re-judged at plan time: its pages plan as absent, the index pass fails
+    the run naming the folder's index, and nothing is written -- the same
+    outcome on every interpreter, whichever way pathlib answers an
+    unreadable parent.
+    """
+    wiki = _make_wiki(tmp_path, folders=folders)
+    sub = tmp_path / 'core' / 'sub'
+    before = {path: path.read_bytes() for path in tmp_path.rglob('*.md')}
+    real = Wiki._utc_now
+
+    def racy(self: Wiki) -> str:
+        """Strip the folder's permissions as the clock is read ahead of the plan."""
+        os.chmod(sub, 0o000)
+        return real(self)
+
+    # the run fails on the folder's index, and nothing is written
+    monkeypatch.setattr(Wiki, '_utc_now', racy)
+    try:
+        with pytest.raises(PermissionError, match=r'core/sub/_index\.md'):
+            wiki.update()
+    finally:
+        os.chmod(sub, 0o700)
+    assert {path: path.read_bytes() for path in tmp_path.rglob('*.md')} == before
+
+    # the tree has converged: nothing left pending
+    monkeypatch.setattr(Wiki, '_utc_now', real)
+    assert wiki.update(check=True) == []
+
+
+@_needs_unprivileged
+@pytest.mark.parametrize(
+    argnames='folders',
+    argvalues=[
+        {'core': ['design'], 'core/sub': ['deep']},
+        {'core': ['design'], 'core/sub': ['deep'], 'core/sub/leaf': ['tip']},
+    ],
+    ids=['leaf', 'nested'],
+)
+def test_update_counts_skip_folder_unreadable_before_refresh(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    folders: dict[str, list[str]],
+) -> None:
+    """A walked folder made unreadable before the counts refresh drops out of the cache.
+
+    A writing update refreshes the counts cache from its own walk, so a
+    folder a concurrent writer strips of every permission after the writes
+    is re-judged there: the run succeeds, the folder's entries drop out of
+    the cache like deleted files, and the next run counts them again -- the
+    same outcome on every interpreter, whichever way pathlib answers an
+    unreadable parent.
+    """
+    wiki = _make_wiki(tmp_path, folders=folders)
+    sub = tmp_path / 'core' / 'sub'
+    cache = tmp_path / '.wiki' / 'cache' / 'word_counts.json'
+    converged = json.loads(cache.read_text(encoding='utf-8'))
+    real = Wiki._apply_plan
+
+    def racy(
+        self: Wiki,
+        overlay: dict[pathlib.Path, str],
+        baseline: dict[pathlib.Path, Optional[str]],
+        now: str,
+    ) -> list[str]:
+        """Strip the folder's permissions once the writes are applied."""
+        result = real(self, overlay, baseline, now)
+        os.chmod(sub, 0o000)
+        return result
+
+    # the run succeeds and the cache skips the folder
+    monkeypatch.setattr(Wiki, '_apply_plan', racy)
+    try:
+        assert wiki.update() == []
+        counts = json.loads(cache.read_text(encoding='utf-8'))
+    finally:
+        os.chmod(sub, 0o700)
+    assert set(counts) == {key for key in converged if not key.startswith('core/sub/')}
+
+    # the next run counts the folder again
+    monkeypatch.setattr(Wiki, '_apply_plan', real)
+    assert wiki.update() == []
+    counts = json.loads(cache.read_text(encoding='utf-8'))
+    assert counts == converged
 
 
 def test_update_survives_folder_deleted_mid_write(
