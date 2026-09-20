@@ -12,14 +12,24 @@ reader saw them, and every value the writer quotes reads back verbatim.
 
 from __future__ import annotations
 
+import contextvars
+import json
+import os
 import pathlib
 import re
+import select
+import signal
+import traceback
+import warnings
 from collections.abc import Callable
-from typing import Optional
+from typing import Any, Optional
 
 import pytest
+import yaml
 
 from wiki.core import format
+from wiki.core.event import Event
+from wiki.core.wiki import Wiki
 
 from ._helpers import _make_wiki
 from ._oracle import (
@@ -42,6 +52,11 @@ from ._oracle import (
 
 __all__ = [
     'test_plain_multiline_desc_propagates',
+    'test_format_functions_memoize_inside_a_run_only',
+    'test_operation_frees_its_memo_at_its_end',
+    'test_operation_composes_each_text_once',
+    'test_context_copied_mid_run_opens_its_own_run',
+    'test_process_forked_mid_run_opens_its_own_run',
     'test_reader_matches_strict_yaml',
     'test_reader_matches_strict_yaml_on_hostile_shapes',
     'test_repair_keeps_authored_values',
@@ -87,6 +102,31 @@ __all__ = [
     'test_field_ranges_match_yaml_extents_on_hostile_shapes',
 ]
 
+
+# ------ fixtures
+
+
+@pytest.fixture
+def verdicts(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Return a fresh list of every document the plain-safety verdict parses.
+
+    The verdict's PyYAML parse is the boundary the memo hides behind, as
+    the reader's compose is for ``compositions``: a value judged once per
+    run parses here once per run, as the ``k: value`` document the
+    verdict wraps it in. Drain the list between phases the same way.
+    """
+    real = yaml.safe_load
+    result: list[str] = []
+
+    def recording(stream: str) -> Any:
+        """Record the document the plain-safety verdict parses, then parse it."""
+        result.append(stream)
+        return real(stream)
+
+    monkeypatch.setattr(yaml, 'safe_load', recording)
+    return result
+
+
 # ------ engine cover
 
 
@@ -112,6 +152,337 @@ def test_plain_multiline_desc_propagates(tmp_path: pathlib.Path) -> None:
     core_index = (tmp_path / 'core' / '_index.md').read_text(encoding='utf-8')
     assert 'A plain multi-line scalar value.' in core_index
     assert wiki.update() == []
+
+
+# ------ run memo
+
+
+def test_format_functions_memoize_inside_a_run_only(compositions: list[str]) -> None:
+    """A format function memoizes its compositions inside a run and not outside one.
+
+    The memo is the run's: a host or test calling the functions directly
+    pays each composition and holds nothing afterwards, while a function
+    bracketed by ``format.run_scoped`` composes a block once however
+    often it reads it, and holds nothing once it returns. A block past
+    the byte bound composes on every read, inside a run too.
+    """
+    block = '---\nname: page\ndesc: A page.\n---\n'
+
+    # outside a run each read composes
+    format.frontmatter_issues(block)
+    format.read_frontmatter_desc(block)
+    outside = len(compositions)
+    assert outside == 2
+
+    @format.run_scoped
+    def read_twice(text: str) -> tuple[Optional[str], Optional[str]]:
+        """Return the desc read twice inside one run."""
+        first = format.read_frontmatter_desc(text)
+        return first, format.read_frontmatter_desc(text)
+
+    # inside a run the second read is the first's composition
+    compositions.clear()
+    assert read_twice(block) == ('A page.', 'A page.')
+    inside = len(compositions)
+    assert inside == 1
+
+    # the run over, the memo is gone with it
+    format.read_frontmatter_desc(block)
+    after = len(compositions)
+    assert after == 2
+
+    # a block past the byte bound composes on every read, run or no run
+    long_desc = 'x' * format._SCALAR_CACHE_BYTES
+    compositions.clear()
+    assert read_twice(f'---\ndesc: {long_desc}\n---\n') == (long_desc, long_desc)
+    over_bound = len(compositions)
+    assert over_bound == 2
+
+
+def test_operation_frees_its_memo_at_its_end(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    compositions: list[str],
+    verdicts: list[str],
+) -> None:
+    """An operation composes each block once and frees its memo when it ends.
+
+    A run reads every block as written and as re-stamped, then all of
+    them again once the last page is planned, and quotes its stamp at
+    every re-stamp; the memo folds those into one composition per block
+    and one verdict per value, and it goes with the run -- returned or
+    raised -- so a host holding one ``Wiki`` across operations holds one
+    run's working set. A memo kept past the run would compose nothing on
+    the second lint, a memo per public entry would compose the parent
+    scope twice inside ``new``, and an operation outside the bracket
+    would compose a block at every read.
+    """
+    folders = {'core': ['design', 'guide'], 'notes': ['meeting']}
+    root = tmp_path / 'wiki'
+    wiki = _make_wiki(root, folders=folders)
+
+    # an init composes the block it writes once however often it reads it back
+    compositions.clear()
+    Wiki(tmp_path / 'fresh').init(name='fresh')
+    compose_count = len(compositions)
+    distinct_count = len(set(compositions))
+    assert compose_count > 0
+    assert distinct_count == compose_count
+
+    # a stamp no fixture write carries, so the re-stamped block
+    # is its own text and every run below stamps alike
+    monkeypatch.setattr(Wiki, '_utc_now', lambda self: NOW)
+    compositions.clear()
+    verdicts.clear()
+
+    # one lint composes each text it reads once and judges the stamp once
+    assert wiki.lint() == []
+    first = sorted(compositions)
+    compose_count = len(first)
+    distinct_count = len(set(first))
+    assert distinct_count == compose_count
+    judged_count = len(verdicts)
+    assert judged_count == 1
+    assert NOW in verdicts[0]
+
+    # the next operation on the same instance composes and judges them all again
+    compositions.clear()
+    verdicts.clear()
+    assert wiki.lint() == []
+    second = sorted(compositions)
+    assert second == first
+    judged_count = len(verdicts)
+    assert judged_count == 1
+    assert NOW in verdicts[0]
+
+    # a refused operation frees its memo too: update plans the scope, refuses
+    # the conflict-marked page, and the same refusal composes it all again
+    conflict = '\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\n'
+    page = root / 'core' / 'design.md'
+    clean = page.read_text(encoding='utf-8')
+    page.write_text(clean + conflict, encoding='utf-8')
+    compositions.clear()
+    with pytest.raises(ValueError, match='Merge conflict markers'):
+        wiki.update()
+    refused = list(compositions)
+    assert refused
+    compositions.clear()
+    with pytest.raises(ValueError, match='Merge conflict markers'):
+        wiki.update()
+    assert compositions == refused
+    page.write_text(clean, encoding='utf-8')
+
+    # a nested operation joins the enclosing run: new pre-flights the parent
+    # scope's plan and runs the public update on it, and no text composes twice
+    compositions.clear()
+    wiki.new('notes/verify', desc='A real desc.', content='Real content.')
+    compose_count = len(compositions)
+    distinct_count = len(set(compositions))
+    assert distinct_count == compose_count
+    assert Wiki(root).update() == []
+
+
+@pytest.mark.parametrize(
+    argnames=('operation', 'kwargs'),
+    argvalues=[
+        ('update', {}),
+        ('lint', {}),
+        ('search', {'query': 'page'}),
+        ('match', {'pattern': 'page', 'field': 'desc'}),
+    ],
+    ids=['update', 'lint', 'search', 'match'],
+)
+def test_operation_composes_each_text_once(
+    tmp_path: pathlib.Path,
+    compositions: list[str],
+    operation: str,
+    kwargs: dict[str, str],
+) -> None:
+    """An operation composes a block once however often it reads it.
+
+    Every reading operation is bracketed as one run, so a block the
+    operation reads several times -- the planner and lint's checks, the
+    search index's four fields, a field match's line map -- composes
+    once; an operation outside the bracket would compose it at every
+    read.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design', 'guide']})
+    compositions.clear()
+    getattr(wiki, operation)(**kwargs)
+    compose_count = len(compositions)
+    distinct_count = len(set(compositions))
+    assert compose_count > 0
+    assert distinct_count == compose_count
+
+
+def test_context_copied_mid_run_opens_its_own_run(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    compositions: list[str],
+    verdicts: list[str],
+) -> None:
+    """A context copied while an operation runs opens its own run afterwards.
+
+    A task or thread started from inside an operation -- from a notice
+    hook, say -- inherits a copy of its context, memo and all. Once the
+    operation has ended, the copy holds a closed memo, so an operation
+    run there composes every block afresh rather than serving the
+    finished run's entries or growing them for the life of the copy,
+    and a format function called there outside a run computes
+    unmemoized, as it does in any context outside one.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    monkeypatch.setattr(Wiki, '_utc_now', lambda self: NOW)
+    copies: list[contextvars.Context] = []
+
+    def copying(event: Event, **kwargs: Any) -> Event:
+        """Copy the context the notice fires in, as a task scheduled there would."""
+        copies.append(contextvars.copy_context())
+        return event
+
+    wiki.on_notice = copying
+
+    # new fires its link-added notice from inside its run
+    wiki.new('core/verify', desc='A real desc.', content='Real content.')
+    assert copies
+    copy, *_ = copies
+
+    # the copy still holds the finished run's closed memo, which a format
+    # function called there outside a run neither reads from nor grows by one
+    block = '---\nname: page\ndesc: A page.\n---\n'
+    compositions.clear()
+    verdicts.clear()
+    copy.run(format.read_frontmatter_desc, block)
+    copy.run(format.read_frontmatter_desc, block)
+    copy.run(format.quote, NOW)
+    copy.run(format.quote, NOW)
+    compose_count = len(compositions)
+    judged_count = len(verdicts)
+    assert compose_count == 2
+    assert judged_count == 2
+
+    # a lint in the main context composes each text once; each lint in the
+    # copy composes the same texts again rather than serving the finished run
+    compositions.clear()
+    assert wiki.lint() == []
+    fresh = sorted(compositions)
+    compositions.clear()
+    assert copy.run(wiki.lint) == []
+    copied = sorted(compositions)
+    assert copied == fresh
+    compositions.clear()
+    assert copy.run(wiki.lint) == []
+    copied = sorted(compositions)
+    assert copied == fresh
+
+
+def test_process_forked_mid_run_opens_its_own_run(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    compositions: list[str],
+) -> None:
+    """A process forked while an operation runs opens its own runs.
+
+    A child forked from inside an operation -- a process pool a notice
+    hook starts -- inherits the forking thread's context, memo and all,
+    and the bracket that would close the memo never returns there, so
+    the child closes it as it starts: an operation run there composes
+    every block afresh rather than serving the parent's run or growing
+    its memo for the life of the child, while the parent's run keeps
+    its memo to its own end.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    monkeypatch.setattr(Wiki, '_utc_now', lambda self: NOW)
+    go_read, go_write = os.pipe()
+    report_read, report_write = os.pipe()
+    children: list[int] = []
+
+    def forking(event: Event, **kwargs: Any) -> Event:
+        """Fork once from the notice, as a hook starting a process pool would."""
+        if children:
+            return event
+        # ignore the multi-threaded fork warning the worker's live thread provokes
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                action='ignore',
+                message='This process .* is multi-threaded',
+                category=DeprecationWarning,
+            )
+            pid = os.fork()
+        if pid:
+            # the parent: record the child and let the notice through
+            children.append(pid)
+            return event
+        # the child: once the parent's operation has ended, two lints on the
+        # settled tree, each reporting what it composed; a child stuck on a
+        # lock the fork copied held dies at the alarm rather than hang the run
+        status = 1
+        try:
+            signal.alarm(30)
+            os.close(go_write)
+            os.close(report_read)
+            os.read(go_read, 1)
+            child = Wiki(tmp_path)
+            lints: list[list[str]] = []
+            for _ in range(2):
+                compositions.clear()
+                child.lint()
+                lints.append(sorted(compositions))
+            os.write(report_write, json.dumps(lints).encode())
+            status = 0
+        except Exception:
+            os.write(report_write, traceback.format_exc().encode())
+        finally:
+            os._exit(status)
+
+    wiki.on_notice = forking
+
+    # new fires its link-added notice from inside its run; the
+    # run over -- returned or raised -- the child may lint
+    compositions.clear()
+    report = b''
+    exit_code = None
+    try:
+        wiki.new('core/verify', desc='A real desc.', content='Real content.')
+    finally:
+        # release the child, then drain its report and reap it, on a red run too;
+        # a child that outlives the deadline is killed, so the reap cannot hang
+        os.close(go_write)
+        os.close(report_write)
+        while True:
+            ready, _, _ = select.select([report_read], [], [], 60)
+            if not ready:
+                pid, *_ = children
+                os.kill(pid, signal.SIGKILL)
+                break
+            chunk = os.read(report_read, 1 << 16)
+            if not chunk:
+                break
+            report += chunk
+        os.close(go_read)
+        os.close(report_read)
+        if children:
+            pid, *_ = children
+            _, status = os.waitpid(pid, 0)
+            exit_code = os.waitstatus_to_exitcode(status)
+    assert children
+    forked = list(compositions)
+    assert exit_code == 0, report.decode()
+
+    # the parent's run keeps its memo across the fork: new
+    # composes each text once however often it reads it
+    compose_count = len(forked)
+    distinct_count = len(set(forked))
+    assert distinct_count == compose_count
+
+    # a lint in the parent composes each text once; each lint in the child
+    # composes the same texts rather than serving the parent's run
+    compositions.clear()
+    assert wiki.lint() == []
+    fresh = sorted(compositions)
+    first, second = json.loads(report)
+    assert first == fresh
+    assert second == fresh
 
 
 # ------ differential oracle
