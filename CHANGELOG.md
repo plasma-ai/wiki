@@ -27,6 +27,20 @@ may include breaking changes, each listed under a Breaking heading.
   `wiki.core.format.run_scoped` to memoize, whether or not it calls the base
   method.
 
+### Fixed
+
+- `wiki search` returns pages of equal score in path order, so a `--limit` cut
+  picks the same pages on every run — tied pages otherwise come back in an order
+  that follows the process hash seed and can change between runs. `Wiki.search`
+  orders the same way.
+- `wiki search` rebuilds the index when a journal file beside it
+  (`search.db-wal` or `search.db-shm` under `.wiki/cache/`) cannot be written,
+  whatever SQLite build the Python carries. With Apple's system SQLite, which a
+  `pyenv`-built Python on macOS typically links, a stale read-only
+  `search.db-shm` otherwise fails every search immediately with
+  `database is locked` instead of rebuilding as it does under the SQLite that
+  `uv` and Homebrew Pythons carry. `Wiki.search` rebuilds the same way.
+
 ## [1.5.0] - 2026-09-19
 
 ### Changed

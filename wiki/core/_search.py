@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import pathlib
 import re
 import sqlite3
@@ -71,7 +72,8 @@ def search(
             refresh read fails. ``None`` means no narration.
 
     Returns:
-        ``(relative_path, snippet, score)`` tuples ordered by relevance.
+        ``(relative_path, snippet, score)`` tuples ordered by relevance, then
+        by path among equal scores.
 
     Raises:
         RuntimeError: If SQLite was built without FTS5.
@@ -103,7 +105,7 @@ def search(
         # corruption (SQLITE_CORRUPT, SQLITE_NOTADB) raises the bare
         # DatabaseError class, and a readonly fault (primary errorcode
         # SQLITE_READONLY, the low byte of the extended code) marks a
-        # read-only index or a stale read-only WAL companion; both are
+        # read-only index (_open discards stale companions); both are
         # derived state one discard-and-rebuild cures, and a second
         # failure propagates so a read-only cache directory stays a
         # single clean error, never a loop; every other subclass carries
@@ -174,7 +176,9 @@ def _rank(
             prefix_path = relpath.rstrip('/') + '/'
             sql += ' AND (folder = ? OR substr(folder, 1, ?) = ?)'
             parameters.extend((relpath, len(prefix_path), prefix_path))
-        sql += f' ORDER BY bm25(notes_fts, {_BM25_WEIGHTS}) LIMIT ?'
+        # order by rank, then path -- tied rows otherwise follow the refresh's
+        # hash-seeded insertion order, so a limit cut varies between runs
+        sql += f' ORDER BY bm25(notes_fts, {_BM25_WEIGHTS}), path LIMIT ?'
         parameters.append(limit)
         # execute the ranked query
         try:
@@ -197,6 +201,16 @@ def _open(root: pathlib.Path) -> sqlite3.Connection:
     gitignore = cache / '.gitignore'
     if not gitignore.exists():
         wiki.util.fs.write_atomic(gitignore, '*\n')
+    # a WAL companion this process cannot write is stale derived
+    # state; discard the family up front, since the fault it raises
+    # later varies by SQLite build -- SQLITE_READONLY from stock, an
+    # immediate SQLITE_BUSY from Apple's system library that
+    # search's gate rightly reads as contention
+    for suffix in ('-wal', '-shm'):
+        companion = cache / (_CACHE_NAME + suffix)
+        if companion.is_file() and not os.access(companion, os.W_OK):
+            _discard(cache)
+            break
     try:
         return _connect(cache / _CACHE_NAME)
     except sqlite3.DatabaseError:

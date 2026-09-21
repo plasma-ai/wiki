@@ -17,6 +17,7 @@ from ._helpers import _capture_notices, _make_wiki, _set_exclude_patterns
 __all__ = [
     'test_search_ranks_metadata_and_refreshes_incrementally',
     'test_search_ranks_desc_matches_above_body_prose',
+    'test_search_orders_equal_scores_by_path',
     'test_search_never_returns_index_pages',
     'test_search_skips_excluded_paths',
     'test_search_supports_scope_tags_prefixes_and_raw_queries',
@@ -100,6 +101,33 @@ def test_search_ranks_desc_matches_above_body_prose(tmp_path: pathlib.Path) -> N
         'core/desc-hit.md',
         'core/body-hit.md',
     ]
+
+
+def test_search_orders_equal_scores_by_path(tmp_path: pathlib.Path) -> None:
+    """Pages whose scores tie come back in path order on every run.
+
+    Tied rows otherwise follow the refresh's insertion order, which
+    follows the process hash seed, so a ``limit`` cut could pick
+    different pages from one run to the next.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': []})
+    stems = ['foxtrot', 'delta', 'alpha', 'echo', 'charlie', 'bravo']
+    for stem in stems:
+        (tmp_path / 'core' / f'{stem}.md').write_text(
+            f'# {stem}\n\nTiedtoken prose.\n',
+            encoding='utf-8',
+        )
+
+    # same-shaped pages tie exactly, so only the tiebreaker orders them
+    matches = wiki.search('tiedtoken')
+    scores = {score for _, _, score in matches}
+    assert len(scores) == 1
+    paths = [path for path, _, _ in matches]
+    assert paths == sorted(f'core/{stem}.md' for stem in stems)
+    # a limit cut takes the leading pages of that same order
+    cut = 2
+    limited = wiki.search('tiedtoken', limit=cut)
+    assert [path for path, _, _ in limited] == paths[:cut]
 
 
 def test_search_never_returns_index_pages(tmp_path: pathlib.Path) -> None:
@@ -408,19 +436,27 @@ def test_search_rebuilds_a_corrupt_index(
         data[page_size:] = bytes(byte ^ 0xFF for byte in data[page_size:])
         cache.write_bytes(data)
         # drop the WAL companions so recovery cannot mask the flipped pages
-        for suffix in ('-wal', '-shm'):
-            cache.with_name(cache.name + suffix).unlink(missing_ok=True)
+        _drop_companions(cache)
     assert wiki.search('corrupttoken')[0][0] == 'core/page.md'
 
 
-def test_search_heals_a_readonly_index_family(tmp_path: pathlib.Path) -> None:
-    """A read-only index and its stale WAL companions rebuild, never fatal.
+@pytest.mark.parametrize(
+    argnames='member',
+    argvalues=['index', 'companions'],
+    ids=['index', 'companions'],
+)
+def test_search_heals_a_readonly_index_family(
+    tmp_path: pathlib.Path,
+    member: str,
+) -> None:
+    """A read-only index or its stale WAL companions rebuild, never fatal.
 
-    A connection against a read-only ``search.db`` mints WAL companions
-    mirroring its mode, and they outlive a permission fix on the
-    database itself: every later query would fail writing the stale
-    read-only ``-shm``. The readonly family on the derived index
-    discards and rebuilds like corruption.
+    A read-only ``search.db`` fails the refresh's write lock, so the query
+    gate discards and rebuilds it like corruption. A connection against
+    that read-only index also mints WAL companions mirroring its mode,
+    and they outlive a permission fix on the database itself: every later
+    query would fail writing the stale read-only ``-shm``, so the open
+    discards the family up front.
     """
     wiki = _make_wiki(tmp_path, folders={'core': []})
     (tmp_path / 'core' / 'page.md').write_text(
@@ -430,17 +466,25 @@ def test_search_heals_a_readonly_index_family(tmp_path: pathlib.Path) -> None:
     assert wiki.search('regrowtoken')[0][0] == 'core/page.md'
 
     cache = tmp_path / '.wiki' / 'cache' / 'search.db'
-    # a connection against the read-only database mints WAL companions
-    # that mirror its mode, exactly as the engine's own open does
+    # drop the companions a persistent-WAL SQLite build (Apple's system
+    # library) keeps past the engine's close, so the read-only index
+    # stands alone, and a connection against it mints fresh companions
+    # that mirror the read-only mode, exactly as the engine's own open does
+    _drop_companions(cache)
     os.chmod(cache, 0o444)
-    connection = sqlite3.connect(cache)
-    connection.execute('PRAGMA journal_mode=WAL')
-    connection.close()
-    os.chmod(cache, 0o644)
-    shm = cache.with_name(cache.name + '-shm')
-    assert shm.stat().st_mode & 0o200 == 0
+    if member == 'companions':
+        connection = sqlite3.connect(cache)
+        connection.execute('PRAGMA journal_mode=WAL')
+        connection.close()
+        os.chmod(cache, 0o644)
+        shm = cache.with_name(cache.name + '-shm')
+        assert shm.stat().st_mode & 0o200 == 0
 
     assert wiki.search('regrowtoken')[0][0] == 'core/page.md'
+    # the rebuild leaves no read-only file in the family
+    for suffix in ('', '-wal', '-shm'):
+        path = cache.with_name(cache.name + suffix)
+        assert not path.exists() or path.stat().st_mode & 0o200
 
 
 def test_search_raises_once_for_a_readonly_cache_dir(tmp_path: pathlib.Path) -> None:
@@ -457,6 +501,10 @@ def test_search_raises_once_for_a_readonly_cache_dir(tmp_path: pathlib.Path) -> 
     assert wiki.search('walledtoken')[0][0] == 'core/page.md'
 
     cache = tmp_path / '.wiki' / 'cache'
+    # drop the companions a persistent-WAL SQLite build (Apple's system
+    # library) keeps past the engine's close, so the next open has to
+    # mint them inside the read-only directory
+    _drop_companions(cache / 'search.db')
     os.chmod(cache, 0o555)  # noqa: S103
     try:
         with pytest.raises((OSError, sqlite3.OperationalError)):
@@ -479,3 +527,12 @@ def test_search_rebuilds_an_outdated_schema_cache(tmp_path: pathlib.Path) -> Non
         connection.execute("UPDATE meta SET value = '1' WHERE key = 'schema_version'")
     connection.close()
     assert wiki.search('vintagetoken')[0][0] == 'core/page.md'
+
+
+# ------ helpers
+
+
+def _drop_companions(database: pathlib.Path) -> None:
+    """Unlink the WAL companions beside the index database."""
+    for suffix in ('-wal', '-shm'):
+        database.with_name(database.name + suffix).unlink(missing_ok=True)

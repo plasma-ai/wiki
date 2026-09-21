@@ -1959,7 +1959,8 @@ class Wiki:
             raw: Pass ``query`` through as FTS5 syntax.
 
         Returns:
-            ``(relative_path, snippet, score)`` tuples ordered by relevance.
+            ``(relative_path, snippet, score)`` tuples ordered by relevance,
+            then by path among equal scores.
 
         """
         # resolve folder
