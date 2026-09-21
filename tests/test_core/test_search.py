@@ -121,13 +121,15 @@ def test_search_orders_equal_scores_by_path(tmp_path: pathlib.Path) -> None:
     # same-shaped pages tie exactly, so only the tiebreaker orders them
     matches = wiki.search('tiedtoken')
     scores = {score for _, _, score in matches}
-    assert len(scores) == 1
+    score_count = len(scores)
+    assert score_count == 1
     paths = [path for path, _, _ in matches]
     assert paths == sorted(f'core/{stem}.md' for stem in stems)
     # a limit cut takes the leading pages of that same order
     cut = 2
     limited = wiki.search('tiedtoken', limit=cut)
-    assert [path for path, _, _ in limited] == paths[:cut]
+    limited_paths = [path for path, _, _ in limited]
+    assert limited_paths == paths[:cut]
 
 
 def test_search_never_returns_index_pages(tmp_path: pathlib.Path) -> None:
@@ -484,7 +486,8 @@ def test_search_heals_a_readonly_index_family(
     # the rebuild leaves no read-only file in the family
     for suffix in ('', '-wal', '-shm'):
         path = cache.with_name(cache.name + suffix)
-        assert not path.exists() or path.stat().st_mode & 0o200
+        writable = not path.exists() or bool(path.stat().st_mode & 0o200)
+        assert writable
 
 
 def test_search_raises_once_for_a_readonly_cache_dir(tmp_path: pathlib.Path) -> None:

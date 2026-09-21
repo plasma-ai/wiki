@@ -98,13 +98,10 @@ def typehints_formatter(annotation: Any, config: Config) -> Optional[str]:
     # absent one as NoneType), constraints, or a variance qualify it, which
     # only the default's constructor call shows
     if isinstance(annotation, (TypeVar, ParamSpec)):
-        qualified = (
-            annotation.__bound__ not in (None, type(None))
-            or bool(getattr(annotation, '__constraints__', ()))
-            or annotation.__covariant__
-            or annotation.__contravariant__
-        )
-        if not qualified:
+        bound = annotation.__bound__ not in (None, type(None))
+        constrained = bool(getattr(annotation, '__constraints__', ()))
+        variant = annotation.__covariant__ or annotation.__contravariant__
+        if not (bound or constrained or variant):
             return f'``{annotation.__name__}``'
     # spell a Callable over a bare ParamSpec unbracketed, where the default
     # lists the ParamSpec as one parameter type
