@@ -250,6 +250,7 @@ markers = [
 # https://coverage.readthedocs.io/en/latest/config.html#run
 source = ["wiki"]
 parallel = true
+patch = ["_exit"]
 disable_warnings = ["no-data-collected"]
 
 [tool.coverage.report]
