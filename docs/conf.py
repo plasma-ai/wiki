@@ -11,10 +11,18 @@
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
+from __future__ import annotations
+
 import datetime as dt
 import importlib
 import os
 import sys
+import typing
+from collections.abc import Callable
+from typing import Any, Optional, ParamSpec, TypeVar
+
+if typing.TYPE_CHECKING:
+    from sphinx.config import Config
 
 sys.path.insert(0, os.path.abspath('..'))
 year = dt.date.today().year
@@ -69,6 +77,44 @@ napoleon_attr_annotations = True
 
 # sphinx-autodoc-typehints settings
 always_document_param_types = True
+
+
+# NOTE: the formatter extends the template settings -- the default spells a
+#   type variable as its constructor call, so `Callable[_P, _R]` in the source
+#   renders as `Callable[[ParamSpec(_P)], TypeVar(_R)]`
+def typehints_formatter(annotation: Any, config: Config) -> Optional[str]:
+    """Spell type variables and a ``Callable`` over a ``ParamSpec`` as the source does.
+
+    Returns:
+        The RST spelling, or ``None`` for any other annotation, which defers
+        to the default formatter.
+
+    """
+    # the extension is a docs-group dependency, so pytest's doctest collection
+    # of this module never imports it
+    from sphinx_autodoc_typehints import format_annotation
+
+    # spell a type variable as its name, unless a bound (a ParamSpec stores an
+    # absent one as NoneType), constraints, or a variance qualify it, which
+    # only the default's constructor call shows
+    if isinstance(annotation, (TypeVar, ParamSpec)):
+        qualified = (
+            annotation.__bound__ not in (None, type(None))
+            or bool(getattr(annotation, '__constraints__', ()))
+            or annotation.__covariant__
+            or annotation.__contravariant__
+        )
+        if not qualified:
+            return f'``{annotation.__name__}``'
+    # spell a Callable over a bare ParamSpec unbracketed, where the default
+    # lists the ParamSpec as one parameter type
+    origin = typing.get_origin(annotation)
+    args = typing.get_args(annotation)
+    if (origin is Callable) and args and isinstance(args[0], ParamSpec):
+        params, result = (format_annotation(arg, config) for arg in args)
+        return f'{format_annotation(Callable, config)}\\ \\[{params}, {result}]'
+    return None
+
 
 # Autosummary settings
 autosummary_generate = True
