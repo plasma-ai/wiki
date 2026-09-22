@@ -185,20 +185,21 @@ document each area in full:
 - **Descriptions live in the child page's frontmatter** and end in a period;
   ``wiki update`` propagates them onto parent index rows, and placeholder
   ``desc: ...`` values get filled in promptly.
-- **Wikilinks stay inside the wiki unless a folder is allowlisted.** A
-  prefix-free target is relative to the wiki root and names something inside
-  it; a ``./`` or ``../`` target is relative to the page's folder, as Obsidian
-  reads it, and must leave the wiki for a file — or another wiki's page — under
-  a folder the wiki lists in ``links.external`` (see :doc:`/configuration`).
-  Files elsewhere are referenced in backticks, never linked, and a folder is
-  linked as ``folder/_index``, never ``folder``. Stale prose links are soft
-  lint notes, as is a link to a real file outside every allowlisted folder;
-  broken generated-index links, prose links naming a folder — this wiki's or
-  an allowlisted wiki's — and a ``./`` or ``../`` link that lands inside the
-  wiki are hard issues. The allowlist is a lint rule alone: ``wiki read`` never
-  serves an external target, and Obsidian, which cannot see outside the vault,
-  shows an external link unresolved — do not click it: Obsidian creates the
-  missing target at that path.
+- **Wikilinks stay inside the wiki unless a folder is allowlisted.** Every
+  target is read from the wiki root: a prefix-free target names something
+  inside the wiki, and a ``./`` or ``../`` target must leave it for a file —
+  or another wiki's page — under a folder the wiki lists in
+  ``links.external``, whose entry is the link's prefix (see
+  :doc:`/configuration`). Files elsewhere are referenced in backticks, never
+  linked, and a folder is linked as ``folder/_index``, never ``folder``.
+  Stale prose links are soft lint notes; broken generated-index links, prose
+  links naming a folder — this wiki's or an allowlisted wiki's — a ``./`` or
+  ``../`` link that lands inside the wiki, and a ``./`` or ``../`` link
+  outside every allowlisted folder are hard issues. The allowlist is a lint
+  rule alone: ``wiki read`` never serves an external target, and Obsidian,
+  which cannot see outside the vault, shows an external link unresolved —
+  the bundled Wiki Root Links plugin makes Obsidian read such a link from the
+  wiki root and turns a click on it into a notice.
 - **Markdown formatters need the wiki plugin.** Generic formatters corrupt the
   ``***`` delimiter and ``[[wikilinks]]``; the sanctioned fixes are the
   ``mdformat-wiki`` plugin or excluding the wiki root (see the formatter

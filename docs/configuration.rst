@@ -331,23 +331,26 @@ indexing depend on the machine.
 ``links`` — external link folders
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Lets prose wikilinks reach files outside the wiki. A wikilink is read from
-one of two places: a prefix-free target (``[[core/design]]``) is read from
-the wiki root and must name something inside it, while a target carrying a
-``.`` or ``..`` segment anywhere (most often at its start, as ``./`` or
-``../``) is read from the folder of the page that carries it — as Obsidian
-and markdown read it — and must leave the wiki. From a root-level
-page a sibling wiki's page is ``[[../math/lemmas]]``; from ``nodes/verify.md``
-the same file is ``[[../../math/lemmas]]``. ``wiki lint`` accepts such a link
-when its target lands under a folder this block lists and the file, its
-``.md`` form, or the folder exists there; judges a target inside another wiki
-by that wiki's own page rules (below); notes a missing target as a ``Stale
-link``; and, when a link reaches a real file outside every listed folder,
-notes the entry to add (and, for a folder holding an ``_index.md``, the index
-page a wiki would link it by; a target whose entry the policy would refuse —
-through a symlink alias of the wiki, at the filesystem root, or through a
-folder name carrying a backslash — is noted stale instead). The block is a
-lint rule and nothing more:
+Lets prose wikilinks reach files outside the wiki. Every wikilink target is
+read from the wiki root: a prefix-free target (``[[core/design]]``) must name
+something inside the wiki, and a target carrying a ``.`` or ``..`` segment
+anywhere (most often at its start, as ``./`` or ``../``) must leave it,
+reaching a file or another wiki's page only under a folder this block lists,
+whose entry is the link's prefix. A sibling wiki's page is
+``[[../math/lemmas]]`` from every page, at the root or in ``nodes/verify.md``
+alike. ``wiki lint`` accepts such a link when its target lands under a
+listed folder and the file, its ``.md`` form, or the folder exists there;
+judges a target inside another wiki by that wiki's own page rules (below);
+notes a missing target under a listed folder as a ``Stale link``, unless
+the same text read from the page's folder names something in the wiki, in
+which case the author meant that in-wiki target and the link is the hard
+``points inside the wiki through './' or '../'`` issue naming its
+prefix-free form; and fails a ``./`` or ``../`` link that lands outside
+every listed folder, whatever is on disk, as the hard ``points outside every
+links.external folder`` issue naming the entry to add (no entry is named
+for a target the policy would refuse to list — through a symlink alias of
+the wiki, at the filesystem root, or through a folder name carrying a
+backslash). The block is a lint rule and nothing more:
 ``wiki read``, ``wiki map``, ``wiki match``, ``wiki search``, ``wiki update``,
 and ``wiki new`` stay confined to the wiki root (a name under a listed folder
 still fails with ``Path is outside wiki root``), generated index rows never
@@ -364,12 +367,12 @@ but seeds none.
      }
    }
 
-Entries are folder paths relative to the *wiki root*; the links themselves
-are relative to the *page*. With the block above, ``notes/meeting.md`` links
-the ``src/main.py`` beside the wiki as ``[[../../src/main.py]]`` — one ``..``
-per folder of depth — so the same external file is spelled differently from
-pages at different depths, and moving a page to another depth breaks its
-external links (in-wiki links, being root-relative, survive the move).
+Entries and links are both relative to the wiki root, so an entry is the
+literal prefix of every link it admits. With the block above, the
+``src/main.py`` beside the wiki is ``[[../src/main.py]]`` from
+``overview.md`` at the root and from ``notes/meeting.md`` alike — one
+spelling per file — and moving a page to another depth never changes any of
+its links.
 
 ``links.external``
    List of strings, default ``[]``. Each entry names a folder outside the
@@ -382,8 +385,8 @@ external links (in-wiki links, being root-relative, survive the move).
    - An ancestor of the wiki root (``..`` for the enclosing repository)
      admits everything beneath it, sibling wikis included. Prefer the
      narrowest folder that holds what you link.
-   - Containment is byte-lexical: a link's text is joined onto the page's
-     folder and compared with the entry before any stat follows. An entry
+   - Containment is byte-lexical: a link's text is joined onto the wiki
+     root and compared with the entry before any stat follows. An entry
      and a link must therefore agree in case and Unicode form — ``../Src``
      does not admit a link into ``src/``, even on a case-insensitive
      filesystem — and a case variant of the wiki's own folder name
@@ -440,26 +443,36 @@ one wiki. A target under a plain folder, with no wiki marker on the path
 down to it, is judged by existence alone; a stray ``_index.md`` there has no
 effect.
 
-Obsidian reads a prefix-free link from the vault root and a ``./`` or ``../``
-link from the note's folder — the same two bases ``wiki lint`` uses — so
-nothing lint accepts renders as a different note in Obsidian. An external
-target lies outside the vault, though, so Obsidian shows the link
-unresolved; do not click it: Obsidian creates the missing target at that
-path, and for a path that escapes the vault it creates folders outside the
-vault through a known bug. See :doc:`/guide/obsidian`.
+With the bundled Wiki Root Links plugin enabled, Obsidian resolves a
+wikilink as ``wiki lint`` does: a prefix-free target from the vault root —
+the wiki root — and never a ``./`` or ``../`` target to a note in the vault.
+An external target lies outside the vault, so Obsidian shows the link
+unresolved; the plugin turns a click on it into a notice, or opens a
+markdown target in the sibling wiki's own vault when Obsidian registers that
+vault on this machine. Without the plugin, Obsidian reads a ``./`` or ``../``
+link from the note's folder, so a correct external link may open a
+different in-wiki note, and a click on an unresolved one creates the missing
+target at that path — as folders outside the vault, through a known bug — so
+do not click it. See :doc:`/guide/obsidian`.
 
 The settings file is committed with the wiki and takes effect on every clone
-without a consent step, and ``wiki lint`` stats the target of a ``./`` or
-``../`` link that leaves the wiki even when no listed folder holds it — the
-outside note fires only when something real is there — so a page can reveal
-whether a file exists at any path reachable from it by ``..``, within the
-lint user's permissions. The probes never read content and never raise (a
-path the filesystem cannot stat reads as missing), and lint output travels
-(stderr, ``--json``, CI logs): list the narrowest folder that holds what you
-link. Restoring a deleted settings file as ``{}`` drops the list, as it drops
-every other block. Every earlier plasma-wiki version ignores the block and
-notes external links as stale — soft notes only — so a wiki may carry it
-before every clone upgrades.
+without a consent step. A ``./`` or ``../`` link that lands under no listed
+folder is judged without a probe — the verdict reads the link text and the
+settings alone — and the stats that word its message reveal only whether the
+target is a folder (the entry named is the target itself when a folder is
+there, else its parent); under a listed folder ``wiki lint`` stats the
+target, so a page can reveal whether a file exists at any path beneath a
+listed folder, within the lint user's permissions, and the probes that word
+a fix stay inside the wiki or under listed folders. The probes never read
+content and never raise (a path the filesystem cannot stat reads as
+missing), and lint output travels (stderr, ``--json``, CI logs): list the
+narrowest folder that holds what you link. Restoring a deleted settings file
+as ``{}`` drops the list, as it drops every other block. A plasma-wiki 1.4.0
+or 1.5.0 clone reads a ``./`` or ``../`` link from the page's folder: a
+root-relative ``[[../x]]`` on a nested page is a stale or outside note there,
+and one that re-enters the wiki from that folder — ``[[../overview]]`` from
+``notes/deep.md`` beside an in-wiki ``overview.md`` — fails as
+``relative_link``, so upgrade every clone of a shared wiki together.
 
 The trust store: ``~/.wiki/settings.json``
 ------------------------------------------
@@ -505,10 +518,11 @@ Environment variables
 
 ``OFFLINE_MODE``
    ``true`` or ``false`` (case-insensitive), unset meaning ``false``. When
-   ``true``, ``wiki init`` and ``wiki config`` skip the Obsidian plugin
-   downloads with a warning ("Re-run ``wiki config`` online to finish
-   setup"). Any other value is rejected before any filesystem change — e.g.
-   ``OFFLINE_MODE=1`` fails ``wiki init`` outright. See
+   ``true``, ``wiki init`` and ``wiki config`` skip the Front Matter Title
+   plugin download with a warning ("Re-run ``wiki config`` online to finish
+   setup"); the bundled Wiki Root Links plugin is copied from the package
+   and needs no network. Any other value is rejected before any filesystem
+   change — e.g. ``OFFLINE_MODE=1`` fails ``wiki init`` outright. See
    :doc:`/guide/obsidian`.
 
 ``WIKI_CONFIG_DIR``

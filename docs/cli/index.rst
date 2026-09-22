@@ -124,9 +124,10 @@ Scaffolds a wiki: creates the root directory, seeds ``.wiki/settings.json``
 knobs are discoverable), stages the Obsidian config template under
 ``.wiki/obsidian/``, writes the root ``_index.md``, sweeps any existing tree
 the same way ``wiki update`` would, materializes the ``.wiki/cache/`` counts
-cache, installs the Obsidian config into ``.obsidian/`` (downloading pinned
-plugin code — failures are stderr warnings, not errors), and configures the
-git merge driver (see :doc:`/guide/merge-driver`).
+cache, installs the Obsidian config into ``.obsidian/`` (downloading the
+pinned Front Matter Title code — failures are stderr warnings, not errors —
+and copying the bundled Wiki Root Links plugin from the package and enabling
+it), and configures the git merge driver (see :doc:`/guide/merge-driver`).
 
 Re-running ``init`` on an initialized wiki (root ``_index.md`` present) prints
 ``Wiki already initialized at: <path>`` and exits 0 without changing anything;
@@ -135,8 +136,9 @@ Re-running ``init`` on an initialized wiki (root ``_index.md`` present) prints
 ``init`` refuses to scaffold inside an enclosing wiki, refuses an invalid wiki
 name (naming the violated rule) before any write, refuses a re-init sweep over
 merge conflict markers, and fails on an invalid ``OFFLINE_MODE`` value before
-touching the filesystem (``OFFLINE_MODE=true`` skips the plugin downloads with
-a warning; see :doc:`/configuration`).
+touching the filesystem (``OFFLINE_MODE=true`` skips the Front Matter Title
+download with a warning; the bundled plugin needs no network; see
+:doc:`/configuration`).
 
 .. list-table::
    :header-rows: 1
@@ -175,10 +177,11 @@ a warning; see :doc:`/configuration`).
 
 Installs or refreshes the wiki's editor and git integration. The command
 syncs the staged ``.wiki/obsidian/`` template into ``.obsidian/`` — plugin
-settings are copied, pinned plugin code is downloaded from the upstream
-release and verified against pinned sha256 digests, and top-level ``.json``
-files are created when absent or merged when present (arrays union-merged,
-dicts deep-merged with the source winning). It restores a missing
+settings are copied, the pinned Front Matter Title code is downloaded from
+the upstream release and verified against pinned sha256 digests, the bundled
+Wiki Root Links plugin is copied from the package and enabled, and top-level
+``.json`` files are created when absent or merged when present (arrays
+union-merged, dicts deep-merged with the source winning). It restores a missing
 ``.wiki/settings.json`` as ``{}``, registers the ``merge.wiki`` driver in the
 repository's local git config, and writes the ``**/_index.md merge=wiki`` line
 to ``.gitattributes`` when that file has no uncommitted changes — it never
@@ -188,9 +191,10 @@ Because the merge driver lives in each clone's local git config while
 ``.gitattributes`` only names it, every contributor runs ``wiki config`` once
 per clone.
 
-The command exits 0 even when a plugin download fails — download failures
-(network, ``OFFLINE_MODE=true``, a digest mismatch) are stderr warnings, never
-the exit code; re-run online to finish setup. It fails (exit 2) on an
+The command exits 0 even when the Front Matter Title download fails —
+download failures (network, ``OFFLINE_MODE=true``, a digest mismatch) are
+stderr warnings, never the exit code; re-run online to finish setup, while
+the bundled plugin installs either way. It fails (exit 2) on an
 unresolvable wiki, malformed ``.obsidian/*.json``, or an untrusted
 ``.wiki/wiki.py`` hook. Obsidian's Restricted Mode step is manual; the
 reminder prints on stderr only when attached to a terminal.
@@ -641,18 +645,21 @@ period, unparseable ``created:``/``updated:`` stamps, broken links in the
 generated index block, prose wikilinks naming a folder rather than its
 ``_index`` page (in this wiki, or in another wiki a ``links.external``
 folder admits, judged by that wiki's own settings), prose wikilinks written
-with ``./`` or ``../`` that land inside the wiki (a prefixed target is read
-from the page's folder and must leave the wiki; the issue names the
-prefix-free form), dangling or nested region markers, and — when the
+with ``./`` or ``../`` that land inside the wiki (every target is read from
+the wiki root, and a prefixed target must leave the wiki; the issue names the
+prefix-free form — as it does for a prefixed link that misses under a
+``links.external`` folder while naming something in the wiki from the page's
+folder), prose wikilinks written with ``./`` or ``../`` that land outside
+every ``links.external`` folder (whatever is on disk; the issue names the
+entry to add), dangling or nested region markers, and — when the
 ``titles.required`` setting is on — missing titles.
 
 **Notes** (soft, stderr) flag placeholder (``...``) descriptions, descriptions
 over 500 characters, empty index content sections, CRLF line endings, stale
 ``[[wikilinks]]`` in authored prose (inside the wiki, or under a
 ``links.external`` folder present on this machine; the note suggests the
-prefix-free target, or the page-relative spelling of an allowlisted file,
-when one resolves), a ``./`` or ``../`` link reaching a real file outside
-every ``links.external`` folder (naming the entry to add), a
+root-relative form of the target, or the root-relative spelling of an
+allowlisted file, when one resolves), a
 ``links.external`` entry naming no folder on this machine (noted once per
 run; links into it go unchecked), an indexed path this machine's git ignores
 (a personal ``core.excludesFile`` rule — the row ships where the file cannot,
@@ -669,7 +676,7 @@ the notes too — counted in the closing summary and typed as
 
 A ``<!-- start: no-lint -->`` ... ``<!-- end: no-lint -->`` region suppresses
 the position-based rules (conflict markers, escaped wikilinks, wrap mangles,
-stale-link and outside-link notes, directory-link and relative-link issues)
+stale-link notes, outside-link, directory-link and relative-link issues)
 for the lines it wraps; a malformed pair is itself an issue and suppresses
 nothing.
 

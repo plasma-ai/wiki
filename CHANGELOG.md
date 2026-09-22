@@ -7,8 +7,63 @@ may include breaking changes, each listed under a Breaking heading.
 
 ## [Unreleased]
 
+### Breaking
+
+- Every prose wikilink is read from the wiki root: a prefix-free target must
+  name something inside the wiki, and a `./` or `../` target (any target
+  carrying a `.` or `..` segment) must leave it, reaching a file or another
+  wiki's page only under a `links.external` folder, whose entry is the link's
+  literal prefix — so one spelling names an external file from every page
+  (`[[../src/main.py]]` from `overview.md` and from `notes/meeting.md` alike)
+  and moving a page never changes its links. A `./` or `../` link that lands
+  outside every `links.external` folder fails `wiki lint` as a new hard issue,
+  `outside_link`, whatever is on disk (with `path` and `target` payload fields,
+  plus `folder` — the entry to add — and `canonical` — the root-relative
+  spelling the page-folder reading names — when present; `target` is the bare
+  target as written, the alias riding only in the prose), in place of the
+  `link_outside` note: `LinkOutsideEvent`, the `on_link_outside` hook, and the
+  `link_outside` JSON kind are removed. A `./` or `../` link that misses under a
+  listed folder while naming anything in the wiki from the page's folder — the
+  slip `[[../overview]]` from a nested page, meaning the in-wiki `overview.md` —
+  fails as `relative_link` with the prefix-free fix. A `./` or `../` link
+  authored from a nested page under 1.4.0 or 1.5.0 climbs one folder too far
+  under the root reading and draws one of those issues, or a stale note with the
+  root-relative fix (`(use [[../src/main.py]])` for `[[../../src/main.py]]` from
+  `notes/meeting.md`); `relative_link` rows drop the `external` field, and
+  `canonical` in `link_stale` and `directory_link` rows is root-relative.
+  `[[..]]` names the folder holding the wiki and follows the outside-folder
+  rule. A 1.4.0 or 1.5.0 clone reads a root-relative `../x` from the page's
+  folder, notes it stale or as its outside note on a nested page, and fails it
+  as `relative_link` when it re-enters the wiki from that folder, so upgrade
+  every clone of a shared wiki together. A wiki with no `./` or `../` link in
+  prose draws no new issue and exits as before.
+
+### Added
+
+- The Wiki Root Links Obsidian plugin, bundled with the package under its
+  Apache-2.0 licence: `wiki init` and `wiki config` copy it into
+  `.obsidian/plugins/wiki-root-links/` and enable it in `community-plugins.json`
+  on every run, beside Front Matter Title, with no download (it installs
+  offline) and no change to the staged `.wiki/obsidian/`; Obsidian's Restricted
+  Mode toggle enables both plugins in one step. Desktop only. With it enabled,
+  Obsidian never resolves a `./` or `../` wikilink to a note in the vault, so
+  the graph, backlinks, and reading view show such a link unresolved as
+  `wiki lint` reads it, and a follow of one — a click, the follow-link hotkey, a
+  graph node — never creates folders outside the vault: a markdown target inside
+  a vault Obsidian registers on this machine opens in that vault through an
+  `obsidian://open` URI, and any other target draws a notice naming the
+  root-relative path (with ` (not found)` when nothing is there). The plugin
+  never hands a filesystem path to the operating system and reads no wiki
+  settings; when a method it wraps is unavailable it says so at load and falls
+  back to stock behaviour.
+
 ### Changed
 
+- The fix `wiki lint` suggests for an absolute wikilink target under a
+  `links.external` folder is root-relative (`(use [[../src/main.py]])` from
+  every page).
+- The Restricted Mode reminder `wiki init` and `wiki config` print names both
+  plugins: `then enable Front Matter Title and Wiki Root Links if needed`.
 - The strict reader's quoting verdicts and composed frontmatter blocks are held
   for one operation rather than for the life of the process: each `Wiki`
   operation (`update`, `lint`, and the rest) memoizes them while it runs and
