@@ -32,7 +32,11 @@ from wiki.constants import (
 from wiki.typing import Link, PathLike
 
 from . import _obsidian, _search, format
-from ._obsidian import _OBSIDIAN_PLUGIN_DIGESTS, _OBSIDIAN_PLUGINS
+from ._obsidian import (
+    _FIRST_PARTY_PLUGINS,
+    _OBSIDIAN_PLUGIN_DIGESTS,
+    _OBSIDIAN_PLUGINS,
+)
 from .event import Event
 
 __all__ = ['Wiki']
@@ -870,16 +874,17 @@ class Wiki:
     def update_config(self: Wiki) -> list[str]:
         """Install ``.wiki/obsidian/`` into ``.obsidian/``.
 
-        Copies each bundled plugin's settings under
-        ``.wiki/obsidian/plugins/`` into ``.obsidian/plugins/`` and
-        downloads pinned plugin code from its upstream release. Each
-        top-level ``.json`` file (like ``community-plugins.json``) is
-        created from source when absent, else merged: arrays are
-        union-merged and dicts deep-merged with source winning. Other
-        installed plugins are left untouched. A missing
-        ``.wiki/obsidian/`` is seeded from the stock template first, so
-        an adopted tree gets the full setup. Also guarantees the
-        declared-root marker: a missing ``.wiki/settings.json`` is
+        Copies each staged plugin's settings under
+        ``.wiki/obsidian/plugins/`` into ``.obsidian/plugins/``,
+        downloads pinned plugin code from its upstream release, and
+        copies the bundled Wiki Root Links plugin from the package and
+        enables it. Each top-level ``.json`` file (like
+        ``community-plugins.json``) is created from source when absent,
+        else merged: arrays are union-merged and dicts deep-merged with
+        source winning. Other installed plugins are left untouched. A
+        missing ``.wiki/obsidian/`` is seeded from the stock template
+        first, so an adopted tree gets the full setup. Also guarantees
+        the declared-root marker: a missing ``.wiki/settings.json`` is
         restored as ``{}`` with a notice.
 
         Returns:
@@ -980,6 +985,12 @@ class Wiki:
                                 os.umask(umask)
                                 os.chmod(tmp, 0o666 & ~umask)
                             os.replace(tmp, dest)
+        # copy each bundled plugin from the package into the vault: shipped
+        # beside the modules, so no staged tree, download, or network is needed
+        assets_dir = pathlib.Path(__file__).parent.parent / '_assets' / 'plugins'
+        for plugin_id in _FIRST_PARTY_PLUGINS:
+            target = obsidian_dir / 'plugins' / plugin_id
+            shutil.copytree(assets_dir / plugin_id, target, dirs_exist_ok=True)
         # create or merge each top-level json file
         for source in sorted(config_dir.glob('*.json')):
             target = obsidian_dir / source.name
@@ -1005,6 +1016,26 @@ class Wiki:
             )
             result = json.dumps(merged, indent=2)
             wiki.util.fs.write_atomic(target, result + '\n')
+        # enable the bundled plugins in a separate write: the merge above runs
+        # only for staged files, and the staged community-plugins.json lists
+        # only the pinned downloads
+        target = obsidian_dir / 'community-plugins.json'
+        if target.exists():
+            try:
+                target_data = json.loads(target.read_text(encoding='utf-8'))
+            except json.JSONDecodeError as e:
+                raise ValueError(
+                    f'Malformed JSON in .obsidian/{target.name}: {e}'
+                ) from e
+        else:
+            target_data = []
+        merged = _obsidian.merge_settings(
+            target_data=target_data,
+            source_data=list(_FIRST_PARTY_PLUGINS),
+            name=target.name,
+        )
+        result = json.dumps(merged, indent=2)
+        wiki.util.fs.write_atomic(target, result + '\n')
         return warnings
 
     def _refuse_enclosing_wiki(self: Wiki, folder: pathlib.Path) -> None:
@@ -5645,6 +5676,7 @@ class Wiki:
                     fix = ''
                     fields = {'path': str(relpath), 'target': target}
                     if canonical is not None:
+                        fix = f' (use [[{canonical}{anchor}{alias}]])'
                         fields['canonical'] = canonical + anchor
                     result.append(
                         Issue(
@@ -5674,7 +5706,6 @@ class Wiki:
                     index_target = index_target.with_suffix('').as_posix()
                     result.append(
                         Issue(
-                        fix = f' (use [[{canonical}{anchor}{alias}]])'
                             f'{relpath}: Link [[{target}{alias}]] targets a'
                             ' folder, not a page'
                             f' (use [[{index_target}{anchor}{alias}]])',
@@ -5713,7 +5744,21 @@ class Wiki:
                             f'add {entry!r} to links.external in {WIKI_SETTINGS}'
                             ' to allow it'
                         )
-                        continue
+                        fields['folder'] = entry
+                    if canonical is not None:
+                        fixes.append(f'use [[{canonical}{anchor}{alias}]]')
+                        fields['canonical'] = canonical + anchor
+                    options = ', or '.join(fixes)
+                    fix = f' ({options})' if fixes else ''
+                    result.append(
+                        Issue(
+                            f'{relpath}: Link [[{target}{alias}]] points outside'
+                            f' every links.external folder{fix}',
+                            kind='outside_link',
+                            **fields,
+                        )
+                    )
+                    continue
                 elif os.path.isdir(folder):
                     # a page by stem is live wherever it lies
                     if os.path.exists(page_form):
@@ -5739,21 +5784,28 @@ class Wiki:
                         continue
                     # the literal file or folder is there
                     if os.path.exists(joined):
-                        fields['folder'] = entry
+                        continue
+                    # a miss that names anything in the wiki from the page's
+                    # folder is the in-wiki target the author meant, spelled as
+                    # Obsidian reads it: the relative-link issue naming the
+                    # prefix-free form
+                    canonical = self._canonical_link_target(path, page_target)
                     if canonical is not None:
-                        fixes.append(f'use [[{canonical}{anchor}{alias}]]')
-                        fields['canonical'] = canonical + anchor
-                    options = ', or '.join(fixes)
-                    fix = f' ({options})' if fixes else ''
-                    result.append(
-                        Issue(
-                            f'{relpath}: Link [[{target}{alias}]] points outside'
-                            f' every links.external folder{fix}',
-                            kind='outside_link',
-                            **fields,
+                        if target in reported:
+                            continue
+                        reported.add(target)
+                        result.append(
+                            Issue(
+                                f'{relpath}: Link [[{target}{alias}]] points inside'
+                                f" the wiki through './' or '../'"
+                                f' (use [[{canonical}{anchor}{alias}]])',
+                                kind='relative_link',
+                                path=str(relpath),
+                                target=target,
+                                canonical=canonical + anchor,
+                            )
                         )
-                    )
-                    continue
+                        continue
                 else:
                     # an entry naming no folder on this machine leaves nothing
                     # to check: the run-level note names it once
@@ -5786,27 +5838,6 @@ class Wiki:
             else:
                 self.on_link_stale(path=str(relpath), target=target + alias)
         return result
-                    # a miss that names anything in the wiki from the page's
-                    # folder is the in-wiki target the author meant, spelled as
-                    # Obsidian reads it: the relative-link issue naming the
-                    # prefix-free form
-                    canonical = self._canonical_link_target(path, page_target)
-                    if canonical is not None:
-                        if target in reported:
-                            continue
-                        reported.add(target)
-                        result.append(
-                            Issue(
-                                f'{relpath}: Link [[{target}{alias}]] points inside'
-                                f" the wiki through './' or '../'"
-                                f' (use [[{canonical}{anchor}{alias}]])',
-                                kind='relative_link',
-                                path=str(relpath),
-                                target=target,
-                                canonical=canonical + anchor,
-                            )
-                        )
-                        continue
 
 
 # ------ issues

@@ -2074,8 +2074,14 @@ def test_config_applies_obsidian(tmp_path: pathlib.Path) -> None:
     # the plugin is enabled and its curated settings are written
     plugin_id = 'obsidian-front-matter-title-plugin'
     cp_file = root / '.obsidian' / 'community-plugins.json'
-    assert plugin_id in json.loads(cp_file.read_text(encoding='utf-8'))
+    enabled = json.loads(cp_file.read_text(encoding='utf-8'))
+    assert plugin_id in enabled
     assert (root / '.obsidian' / 'plugins' / plugin_id / 'data.json').is_file()
+    # the bundled plugin is copied from the package and enabled on every run
+    bundled = root / '.obsidian' / 'plugins' / 'wiki-root-links'
+    assert 'wiki-root-links' in enabled
+    assert (bundled / 'main.js').is_file()
+    assert (bundled / 'manifest.json').is_file()
 
 
 @pytest.mark.online
@@ -2118,7 +2124,13 @@ def test_config_adopts_undeclared_tree(tmp_path: pathlib.Path) -> None:
     plugin_id = 'obsidian-front-matter-title-plugin'
     assert (root / '.wiki' / 'obsidian' / 'community-plugins.json').is_file()
     cp_file = root / '.obsidian' / 'community-plugins.json'
-    assert plugin_id in json.loads(cp_file.read_text(encoding='utf-8'))
+    enabled = json.loads(cp_file.read_text(encoding='utf-8'))
+    assert plugin_id in enabled
+    # the bundled plugin is copied from the package and enabled as well
+    bundled = root / '.obsidian' / 'plugins' / 'wiki-root-links'
+    assert 'wiki-root-links' in enabled
+    assert (bundled / 'main.js').is_file()
+    assert (bundled / 'manifest.json').is_file()
     # the merge driver setup completes: repo config plus attribute map
     driver = _git(tmp_path, 'config', 'merge.wiki.driver').stdout.strip()
     assert driver == 'wiki _merge %O %A %B %L %P'

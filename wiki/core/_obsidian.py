@@ -30,6 +30,9 @@ _OBSIDIAN_PLUGIN_DIGESTS = {
         ),
     },
 }
+# bundled plugins, copied from _assets/plugins/<id>/ into every vault the
+# install configures and enabled beside the pinned downloads
+_FIRST_PARTY_PLUGINS = ('wiki-root-links',)
 
 
 class PluginChecksumError(Exception):

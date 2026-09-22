@@ -22,11 +22,13 @@ import subprocess
 import tomllib
 
 import wiki
+from wiki.core._obsidian import _FIRST_PARTY_PLUGINS
 
 __all__ = [
     'test_version_strings_agree',
     'test_package_data_ships_in_build',
     'test_gitignore_spares_tracked_lookalike_paths',
+    'test_first_party_plugin_manifest',
 ]
 
 _REPO_ROOT = pathlib.Path(__file__).parent.parent
@@ -80,9 +82,10 @@ def test_version_strings_agree() -> None:
 def test_package_data_ships_in_build() -> None:
     """The runtime-consumed package data is present and listed for the build.
 
-    ``config`` seeds Obsidian config from ``_assets/obsidian``, ``_merge``
-    dispatches to ``_assets/git/merge_index.sh``, and ``install`` copies
-    ``skills/`` -- all resolved beside the modules at runtime, so a build
+    ``config`` seeds Obsidian config from ``_assets/obsidian`` and copies
+    the bundled plugin from ``_assets/plugins``, ``_merge`` dispatches to
+    ``_assets/git/merge_index.sh``, and ``install`` copies ``skills/`` --
+    all resolved beside the modules at runtime, so a build
     that omits them fails at install time, long after the change that
     caused it. Poetry ships these non-Python trees only because
     ``[tool.poetry] include`` lists them, so each must be present in the
@@ -94,6 +97,8 @@ def test_package_data_ships_in_build() -> None:
     included = {entry['path'] for entry in pyproject['tool']['poetry']['include']}
     for tree, probe in (
         ('wiki/_assets', 'git/merge_index.sh'),
+        ('wiki/_assets', 'plugins/wiki-root-links/main.js'),
+        ('wiki/_assets', 'plugins/wiki-root-links/manifest.json'),
         ('wiki/skills', 'wiki/SKILL.md'),
     ):
         assert (_REPO_ROOT / tree / probe).is_file(), (
@@ -108,10 +113,12 @@ def test_gitignore_spares_tracked_lookalike_paths(tmp_path: pathlib.Path) -> Non
     """The ignore patterns spare the tracked paths they nearly name.
 
     The agent-config ignores (``.claude``, ``.codex``) sit one character
-    away from the tracked plugin manifests, and the ``.obsidian/`` ignore
-    sits beside the packaged seed assets under ``wiki/_assets/obsidian``
-    -- an over-broadened pattern would silently drop those files from
-    every clone, surfacing only at the next fresh checkout.
+    away from the tracked plugin manifests, the ``.obsidian/`` ignore
+    sits beside the packaged seed assets under ``wiki/_assets/obsidian``,
+    and the ``*.manifest`` ignore sits beside the bundled Obsidian plugin's
+    ``manifest.json`` -- an over-broadened pattern would silently drop
+    those files from every clone, surfacing only at the next fresh
+    checkout.
     """
     repo = tmp_path / 'repo'
     repo.mkdir()
@@ -133,6 +140,8 @@ def test_gitignore_spares_tracked_lookalike_paths(tmp_path: pathlib.Path) -> Non
     assert not _check_ignore(repo, '.claude-plugin/plugin.json')
     assert not _check_ignore(repo, '.codex-plugin/plugin.json')
     assert not _check_ignore(repo, 'wiki/_assets/obsidian/community-plugins.json')
+    assert not _check_ignore(repo, 'wiki/_assets/plugins/wiki-root-links/main.js')
+    assert not _check_ignore(repo, 'wiki/_assets/plugins/wiki-root-links/manifest.json')
     assert not _check_ignore(repo, 'examples/hello/.wiki/settings.json')
     # genuine junk stays hidden (the copy carries the real rules), including
     # the deliberate library-convention uv.lock ignore and the Obsidian
@@ -140,3 +149,25 @@ def test_gitignore_spares_tracked_lookalike_paths(tmp_path: pathlib.Path) -> Non
     assert _check_ignore(repo, 'uv.lock')
     assert _check_ignore(repo, '__pycache__/mod.pyc')
     assert _check_ignore(repo, 'examples/hello/.obsidian/app.json')
+
+
+def test_first_party_plugin_manifest() -> None:
+    """Each bundled Obsidian plugin's manifest agrees with its install.
+
+    ``update_config`` copies ``_assets/plugins/<id>/`` into a vault's
+    ``.obsidian/plugins/<id>/`` and enables ``<id>``, and Obsidian loads
+    the folder only when the manifest's ``id`` spells that name; the
+    plugin reads the vault's filesystem, so it declares itself desktop
+    only. The version is the plugin's own semver, bumped only when the
+    plugin changes, so it stays outside the release lockstep.
+    """
+    plugins = _REPO_ROOT / 'wiki' / '_assets' / 'plugins'
+    assert sorted(folder.name for folder in plugins.iterdir()) == sorted(
+        _FIRST_PARTY_PLUGINS
+    )
+    for plugin_id in _FIRST_PARTY_PLUGINS:
+        folder = plugins / plugin_id
+        manifest = json.loads((folder / 'manifest.json').read_text(encoding='utf-8'))
+        assert manifest['id'] == plugin_id
+        assert manifest['isDesktopOnly'] is True
+        assert (folder / 'main.js').is_file()

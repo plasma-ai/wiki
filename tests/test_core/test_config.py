@@ -1,8 +1,9 @@
 """Behavioral tests for ``Wiki.update_config``.
 
 The Obsidian install: staged plugin downloads (stubbed at the
-``_download`` boundary), config merging, returned warnings vs
-notices, and the ``OFFLINE_MODE`` matrix.
+``_download`` boundary), the bundled plugin copied from the package,
+config merging, returned warnings vs notices, and the ``OFFLINE_MODE``
+matrix.
 """
 
 from __future__ import annotations
@@ -11,6 +12,8 @@ import hashlib
 import json
 import os
 import pathlib
+import shutil
+from typing import Optional
 
 import pytest
 
@@ -22,6 +25,8 @@ from ._helpers import _capture_notices
 
 __all__ = [
     'test_update_config_installs_plugin',
+    'test_update_config_installs_first_party_plugin',
+    'test_update_config_first_party_plugin_survives_existing_staged_dir',
     'test_update_config_refuses_a_checksum_mismatch',
     'test_update_config_offline_warns',
     'test_update_config_keeps_notices_off_warnings',
@@ -68,7 +73,7 @@ def test_update_config_installs_plugin(
     tmp_path: pathlib.Path,
     stub_download: None,
 ) -> None:
-    """``update_config`` installs the bundled plugin into ``.obsidian/``."""
+    """``update_config`` installs the staged plugin into ``.obsidian/``."""
     # init seeds the front matter title plugin into .wiki/obsidian
     wiki = Wiki(tmp_path)
     wiki.init()
@@ -90,6 +95,81 @@ def test_update_config_installs_plugin(
     expected = 0o666 & ~umask
     assert (plugin / 'main.js').stat().st_mode & 0o777 == expected
     assert (plugin / 'manifest.json').stat().st_mode & 0o777 == expected
+
+
+@pytest.mark.parametrize(
+    argnames='enabled',
+    argvalues=[
+        pytest.param(None, id='absent'),
+        pytest.param(['other-plugin'], id='without-id'),
+        pytest.param(['wiki-root-links'], id='with-id'),
+    ],
+)
+def test_update_config_installs_first_party_plugin(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: Optional[list[str]],
+) -> None:
+    """``update_config`` copies the bundled plugin from the package and enables it.
+
+    The plugin ships beside the modules, so the install needs no
+    network: offline, the only warning is the Front Matter Title skip.
+    The id is enabled exactly once whatever ``community-plugins.json``
+    held before the run.
+    """
+    wiki = Wiki(tmp_path)
+    wiki.init()
+    monkeypatch.setenv(OFFLINE_MODE, 'true')
+
+    # seed the enabled-plugins list the run starts from
+    cp_file = tmp_path / '.obsidian' / 'community-plugins.json'
+    if enabled is not None:
+        cp_file.parent.mkdir()
+        cp_file.write_text(json.dumps(enabled), encoding='utf-8')
+
+    # the plugin files are the packaged assets, byte for byte
+    warnings = wiki.update_config()
+    plugin_id = 'wiki-root-links'
+    package = pathlib.Path(_obsidian.__file__).parent.parent
+    source = package / '_assets' / 'plugins' / plugin_id
+    plugin = tmp_path / '.obsidian' / 'plugins' / plugin_id
+    for asset in ('main.js', 'manifest.json'):
+        assert (plugin / asset).read_bytes() == (source / asset).read_bytes()
+    # enabled once, with any prior entries kept
+    merged = json.loads(cp_file.read_text(encoding='utf-8'))
+    assert merged.count(plugin_id) == 1
+    for item in enabled or []:
+        assert item in merged
+    # the offline skip is the only warning; the bundled install never warns
+    assert len(warnings) == 1
+    assert 'OFFLINE_MODE' in warnings[0]
+    assert plugin_id not in warnings[0]
+
+
+def test_update_config_first_party_plugin_survives_existing_staged_dir(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The bundled install does not depend on the staged tree.
+
+    A ``.wiki/obsidian/`` that carries neither ``plugins/`` nor
+    ``community-plugins.json`` is left as it is (it exists, so it is not
+    re-seeded), yet the plugin directory is still copied and the id
+    still enabled: both steps read the package and the vault only.
+    """
+    wiki = Wiki(tmp_path)
+    wiki.init()
+    config_dir = tmp_path / '.wiki' / 'obsidian'
+    shutil.rmtree(config_dir / 'plugins')
+    (config_dir / 'community-plugins.json').unlink()
+
+    # no staged plugin means no download and no warning
+    assert wiki.update_config() == []
+    plugin_id = 'wiki-root-links'
+    plugin = tmp_path / '.obsidian' / 'plugins' / plugin_id
+    assert (plugin / 'main.js').is_file()
+    assert (plugin / 'manifest.json').is_file()
+    cp_file = tmp_path / '.obsidian' / 'community-plugins.json'
+    assert json.loads(cp_file.read_text(encoding='utf-8')) == [plugin_id]
 
 
 def test_update_config_refuses_a_checksum_mismatch(
@@ -241,6 +321,7 @@ def test_update_config_is_idempotent(
     assert cp_file.read_text(encoding='utf-8') == first
     enabled = json.loads(first)
     assert enabled.count('obsidian-front-matter-title-plugin') == 1
+    assert enabled.count('wiki-root-links') == 1
 
 
 def test_update_config_seeds_missing_config_dir(

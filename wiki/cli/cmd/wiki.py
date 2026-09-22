@@ -73,7 +73,7 @@ _resolve_refusing_inside = functools.partial(resolve_wiki, inside='refuse')
 # manual step: Obsidian gates community plugins behind "Restricted Mode"
 _OBSIDIAN_SETUP_HINT = (
     'In Obsidian: Settings -> Community plugins -> turn off Restricted'
-    ' Mode, then enable Front Matter Title if needed.'
+    ' Mode, then enable Front Matter Title and Wiki Root Links if needed.'
 )
 
 # condensed-mode narration categories, as (event class, one, many, check_one,
@@ -298,7 +298,8 @@ def init(app: typer.Typer) -> typer.Typer:
         wiki = Wiki(path)
         wiki.on_notice = _echo_notice
         wiki.init(name, settings=settings)
-        # materialize Obsidian config (downloads community plugins)
+        # materialize Obsidian config (downloads community plugins, copies the
+        # bundled Wiki Root Links plugin from the package and enables it)
         warnings = wiki.update_config()
         # configure git merge driver
         configure_git_merge_driver(path)
@@ -338,12 +339,14 @@ def config(
         """Install or refresh the Obsidian integration config.
 
         Copies .wiki/obsidian/ into .obsidian/ (downloading pinned plugin
-        code), restores a missing .wiki/settings.json ({}), registers the
-        git merge driver in the repo's local config, and writes the
-        **/_index.md glob to .gitattributes when that file has no pending
-        edits (you commit it yourself). Run once per clone. Exits 0 even
-        when a plugin download fails -- download failures are stderr
-        warnings (re-run online to finish setup), never the exit code.
+        code), copies the bundled Wiki Root Links plugin from the package
+        and enables it, restores a missing .wiki/settings.json ({}),
+        registers the git merge driver in the repo's local config, and
+        writes the **/_index.md glob to .gitattributes when that file has
+        no pending edits (you commit it yourself). Run once per clone.
+        Exits 0 even when a plugin download fails -- download failures are
+        stderr warnings (re-run online to finish setup), never the exit
+        code.
         """
         # merge Obsidian config, streaming notices (the restored-marker
         # line the help text documents) to stderr
