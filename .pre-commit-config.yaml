@@ -8,12 +8,6 @@ repos:
         entry: reject
         language: fail
         files: \.rej$
-      - id: node-test
-        name: node --test
-        entry: node --test tests/plugin/*.test.js
-        language: system
-        pass_filenames: false
-        files: ^(wiki/_assets/plugins|tests/plugin)/.*\.js$
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
@@ -54,6 +48,14 @@ repos:
         additional_dependencies:
           - eslint@10.11.0
           - "@eslint/js@10.0.1"
+  - repo: local
+    hooks:
+      - id: node-test
+        name: node --test
+        entry: node --test tests/plugin/*.test.js
+        language: system
+        pass_filenames: false
+        files: ^(wiki/_assets/plugins|tests/plugin)/.*\.js$
   - repo: https://github.com/hukkin/mdformat
     rev: 1.0.0
     hooks:

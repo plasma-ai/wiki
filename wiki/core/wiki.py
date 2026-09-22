@@ -73,6 +73,10 @@ _NONMAPPING = 'not a key: value mapping'
 _UNADDRESSABLE = 'keys are not column-0 key: value lines'
 _UNREPAIRABLE = 'its repair would break the YAML'
 
+# the relative_link finding's body, emitted for a prefixed in-root target and
+# for an outside miss the page's folder resolves, so both spell it identically
+_RELATIVE_LINK_TEXT = "points inside the wiki through './' or '../'"
+
 # the remedy lint appends to an invalid_yaml finding, per
 # cause (see format.frontmatter_issues)
 _YAML_ADVICE = {
@@ -997,9 +1001,8 @@ class Wiki:
             # atomically, so a crash mid-copy never leaves Obsidian a torn file
             for asset in _BUNDLED_PLUGIN_ASSETS:
                 bundled = _BUNDLED_PLUGIN_DIR.joinpath(plugin_id, asset)
-                wiki.util.fs.write_atomic(
-                    target / asset, bundled.read_text(encoding='utf-8')
-                )
+                text = bundled.read_text(encoding='utf-8')
+                wiki.util.fs.write_atomic(target / asset, text)
         # create or merge each top-level json file
         for source in sorted(config_dir.glob('*.json')):
             target = obsidian_dir / source.name
@@ -1015,9 +1018,7 @@ class Wiki:
                 target_data = json.loads(target.read_text(encoding='utf-8'))
             # undecodable bytes are corruption too, and escape json's own error
             except (UnicodeDecodeError, json.JSONDecodeError) as e:
-                raise ValueError(
-                    f'Malformed JSON in .obsidian/{source.name}: {e}'
-                ) from e
+                raise _malformed_json_error(f'.obsidian/{source.name}', e) from e
             # merge per the install policy (arrays union, dicts deep)
             merged = _obsidian.merge_settings(
                 target_data=target_data,
@@ -1035,9 +1036,7 @@ class Wiki:
                 target_data = json.loads(target.read_text(encoding='utf-8'))
             # undecodable bytes are corruption too, and escape json's own error
             except (UnicodeDecodeError, json.JSONDecodeError) as e:
-                raise ValueError(
-                    f'Malformed JSON in .obsidian/{target.name}: {e}'
-                ) from e
+                raise _malformed_json_error(f'.obsidian/{target.name}', e) from e
         else:
             target_data = []
         merged = _obsidian.merge_settings(
@@ -5684,9 +5683,8 @@ class Wiki:
             joined = pathlib.Path(os.path.normpath(self._root / page_target))
             # the page form is the text plus '.md', as the in-root probe reads
             # it, so a trailing slash never names a page
-            page_form = pathlib.Path(
-                os.path.normpath(self._root / (page_target + '.md'))
-            )
+            page_name = page_target + '.md'
+            page_form = pathlib.Path(os.path.normpath(self._root / page_name))
             if self._inside_root(joined):
                 # a prefixed target landing inside the wiki is a hard issue naming
                 # the prefix-free form, the one spelling of an in-wiki target
@@ -5707,8 +5705,8 @@ class Wiki:
                         fields['canonical'] = canonical + anchor
                     result.append(
                         Issue(
-                            f'{relpath}: Link [[{target}{alias}]] points inside'
-                            f" the wiki through './' or '../'{fix}",
+                            f'{relpath}: Link [[{target}{alias}]]'
+                            f' {_RELATIVE_LINK_TEXT}{fix}',
                             kind='relative_link',
                             **fields,
                         )
@@ -5750,13 +5748,14 @@ class Wiki:
                 if folder is None:
                     # a target under no allowlisted folder is a hard issue
                     # whatever is on disk: the verdict reads the link text and
-                    # the settings, and the probes below only word its fixes --
-                    # the entry that would admit the target, and what the text
-                    # names from the page's folder (the root itself names none)
+                    # the settings, and the probes below only word its fixes
                     if target in reported:
                         continue
                     reported.add(target)
                     entry = self._outside_entry(joined)
+                    # the mirror from the page's folder, the base an Obsidian
+                    # habit spells from, words the 'use' fix; the root itself
+                    # names no page, so a mirror landing there names none
                     mirror = pathlib.Path(os.path.normpath(path.parent / page_target))
                     if mirror == self._root:
                         canonical = None
@@ -5812,10 +5811,9 @@ class Wiki:
                     # the literal file or folder is there
                     if os.path.exists(joined):
                         continue
-                    # a miss that names anything in the wiki from the page's
-                    # folder is the in-wiki target the author meant, spelled as
-                    # Obsidian reads it: the relative-link issue naming the
-                    # prefix-free form
+                    # a miss that names anything in the wiki from the page's folder
+                    # is the in-wiki target the author meant, spelled as Obsidian
+                    # reads it: the relative-link issue naming the prefix-free form
                     canonical = self._canonical_link_target(path, page_target)
                     if canonical is not None:
                         if target in reported:
@@ -5823,8 +5821,8 @@ class Wiki:
                         reported.add(target)
                         result.append(
                             Issue(
-                                f'{relpath}: Link [[{target}{alias}]] points inside'
-                                f" the wiki through './' or '../'"
+                                f'{relpath}: Link [[{target}{alias}]]'
+                                f' {_RELATIVE_LINK_TEXT}'
                                 f' (use [[{canonical}{anchor}{alias}]])',
                                 kind='relative_link',
                                 path=str(relpath),
@@ -5840,11 +5838,8 @@ class Wiki:
             if target in reported:
                 continue
             reported.add(target)
-            # name the fix when a reading resolves: the root-relative spelling
-            # of an allowlisted file the text missed -- as written and
-            # normalized, else as read from the page's folder, the base an
-            # Obsidian habit spells from -- and for a prefix-free or in-root
-            # absolute miss the root-relative form
+            # name the fix when a reading resolves; the page-folder mirror is the
+            # prefixed arm's second rung, wording the fix an Obsidian habit missed
             if absolute and self._inside_root(joined):
                 canonical = self._root_relative_form(joined)
             elif absolute:
@@ -6340,3 +6335,8 @@ def _encloses_wiki_error(nested: pathlib.Path) -> ValueError:
     return ValueError(
         f'Path encloses the wiki at: {nested}; run the command from that declared root.'
     )
+
+
+def _malformed_json_error(name: str, e: Exception) -> ValueError:
+    """Build the malformed-JSON error, naming the user-editable file."""
+    return ValueError(f'Malformed JSON in {name}: {e}')

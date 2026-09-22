@@ -143,8 +143,7 @@ Use the `/wiki` skill to manage wikis, or drive the `wiki` CLI directly.
 Initialize a wiki in the current project and configure integrations:
 
 - `wiki init` — scaffold a new wiki with a root index
-- `wiki config` — install the Obsidian plugins (Front Matter Title and the
-  bundled Wiki Root Links) and the git merge driver
+- `wiki config` — install Obsidian plugins and the git merge driver
 
 The merge driver itself lives in each clone's local git config; the committed
 `.gitattributes` only names it, so every contributor runs `wiki config` once

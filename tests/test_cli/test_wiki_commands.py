@@ -1184,10 +1184,11 @@ def test_links_external_end_to_end(tmp_path: pathlib.Path) -> None:
     no entry (naming the entry to add -- the nearest folder above a path
     through a file -- and, for the spelling that climbs once per folder,
     the root-relative form), a prefixed link that lands inside the wiki,
-    and a folder the sibling wiki indexes -- each typed in ``--json``,
-    and each suggested fix lints clean once adopted. ``wiki read`` stays
-    confined to the root, a malformed block fails lint but never update,
-    and a malformed sibling settings file is named.
+    and a folder the sibling wiki indexes -- each typed in ``--json``;
+    issues print on stdout and notes ride stderr, and each suggested fix
+    lints clean once adopted. ``wiki read`` stays confined to the root,
+    a malformed block fails lint but never update, and a malformed
+    sibling settings file is named.
     """
     root = tmp_path / 'wiki'
     settings = '{"links": {"external": ["../src", "../math", "../missing"]}}'
@@ -1212,14 +1213,12 @@ def test_links_external_end_to_end(tmp_path: pathlib.Path) -> None:
         ' [[../missing/z]].',
     )
     _write(root / 'links.md', links)
-    _write(
-        root / 'core' / 'page.md',
-        _page(
-            name='Page',
-            desc='A page.',
-            body='See [[../src/main.py]], [[../../src/main.py]], and [[./page]].',
-        ),
+    page = _page(
+        name='Page',
+        desc='A page.',
+        body='See [[../src/main.py]], [[../../src/main.py]], and [[./page]].',
     )
+    _write(root / 'core' / 'page.md', page)
     assert _wiki(root, 'update', '--path', str(root)).returncode == 0
     # the undeclared and in-wiki links are the issues; the notes sort the rest
     lint = _wiki(root, 'lint', '--path', str(root))
@@ -1288,13 +1287,15 @@ def test_links_external_end_to_end(tmp_path: pathlib.Path) -> None:
     ]
     # the alias rides in the prose alone
     aliased = [issue for issue in outside if issue['target'] == '../docs/y']
-    assert '[[../docs/y|Doc]]' in aliased[0]['text']
+    aliased_issue, *_ = aliased
+    assert '[[../docs/y|Doc]]' in aliased_issue['text']
     relative = [
         issue for issue in document['issues'] if issue['kind'] == 'relative_link'
     ]
     relative_rows = [(row['path'], row['target'], row['canonical']) for row in relative]
     assert relative_rows == [('core/page.md', './page', 'core/page')]
-    assert 'external' not in relative[0]
+    relative_issue, *_ = relative
+    assert 'external' not in relative_issue
     note_kinds = {note['kind'] for note in document['notes']}
     assert 'link_outside' not in note_kinds
     missing = [
@@ -1312,10 +1313,8 @@ def test_links_external_end_to_end(tmp_path: pathlib.Path) -> None:
     data = json.loads(config.read_text(encoding='utf-8'))
     data['links']['external'].extend(['../docs', '../idx'])
     config.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
-    _write(
-        root / 'core' / 'page.md',
-        _page('Page', 'A page.', 'See [[../src/main.py]].'),
-    )
+    page = _page('Page', 'A page.', 'See [[../src/main.py]].')
+    _write(root / 'core' / 'page.md', page)
     _write(root / 'g2.md', _page('G2', 'G2.', 'See [[../math/g2/_index]].'))
     assert _wiki(root, 'update', '--path', str(root)).returncode == 0
     lint = _wiki(root, 'lint', '--path', str(root))

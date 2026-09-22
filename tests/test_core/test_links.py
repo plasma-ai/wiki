@@ -1046,19 +1046,18 @@ def test_lint_external_probe_never_raises(tmp_path: pathlib.Path) -> None:
     # limit reads as missing: stale under an entry, the issue under none; an
     # unreadable file is live, and the entry under the locked parent is noted
     clause = 'to links.external in .wiki/settings.json to allow it'
-    assert sorted(issues) == sorted(
-        [
-            '_index.md: Link [[../a\x00b/x]] points outside every links.external folder',
-            '_index.md: Link [[../unlisted/a\x00b]] points outside every'
-            f" links.external folder (add '../unlisted' {clause})",
-            '_index.md: Link [[../unlisted/locked/x]] points outside every'
-            f" links.external folder (add '../unlisted/locked' {clause})",
-            'notes/meeting.md: Link [[../unlisted/a\x00b]] points outside every'
-            f" links.external folder (add '../unlisted' {clause})",
-            f'notes/meeting.md: Link [[../unlisted/{long_name}]] points outside every'
-            f" links.external folder (add '../unlisted' {clause})",
-        ]
-    )
+    expected = [
+        '_index.md: Link [[../a\x00b/x]] points outside every links.external folder',
+        '_index.md: Link [[../unlisted/a\x00b]] points outside every'
+        f" links.external folder (add '../unlisted' {clause})",
+        '_index.md: Link [[../unlisted/locked/x]] points outside every'
+        f" links.external folder (add '../unlisted/locked' {clause})",
+        'notes/meeting.md: Link [[../unlisted/a\x00b]] points outside every'
+        f" links.external folder (add '../unlisted' {clause})",
+        f'notes/meeting.md: Link [[../unlisted/{long_name}]] points outside every'
+        f" links.external folder (add '../unlisted' {clause})",
+    ]
+    assert sorted(issues) == sorted(expected)
     assert all(issue.kind == 'outside_link' for issue in issues)
     assert not any('canonical' in issue.fields for issue in issues)
     folders = {issue.fields['target']: issue.fields.get('folder') for issue in issues}

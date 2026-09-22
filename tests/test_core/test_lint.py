@@ -2090,9 +2090,8 @@ def test_lint_relative_root_link_steers_to_index_before_update(
     _make_wiki(root, folders={'notes': ['meeting']})
     (root / '_index.md').unlink()
     page = root / 'notes' / 'meeting.md'
-    text = page.read_text(encoding='utf-8').replace(
-        'Content for meeting.', 'See [[.]].'
-    )
+    body = 'See [[.]].'
+    text = page.read_text(encoding='utf-8').replace('Content for meeting.', body)
     page.write_text(text, encoding='utf-8')
 
     issues = [issue for issue in Wiki(root).lint() if 'points inside the wiki' in issue]

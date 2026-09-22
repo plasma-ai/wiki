@@ -170,6 +170,7 @@ def test_bundled_plugin_manifest_agrees_with_its_install() -> None:
         '_assets/plugins folders must match _BUNDLED_PLUGINS '
         '(update_config installs exactly the ids the tuple names)'
     )
+    # each manifest spells its folder name, is desktop only, and ships every asset
     for plugin_id in _obsidian._BUNDLED_PLUGINS:
         folder = plugins / plugin_id
         manifest = json.loads((folder / 'manifest.json').read_text(encoding='utf-8'))

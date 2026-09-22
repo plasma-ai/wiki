@@ -18,7 +18,7 @@ from typing import Optional
 import pytest
 
 from wiki.constants import OFFLINE_MODE
-from wiki.core import _obsidian, wiki as wiki_module
+from wiki.core import _obsidian
 from wiki.core.wiki import Wiki
 
 from ._helpers import _capture_notices
@@ -46,7 +46,7 @@ __all__ = [
 
 
 @pytest.fixture
-def stub_download(monkeypatch: pytest.MonkeyPatch) -> None:
+def _stub_download(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub the plugin download with a marker write (no real network).
 
     The digest pins follow the marker bytes, so the stubbed install
@@ -70,7 +70,7 @@ def stub_download(monkeypatch: pytest.MonkeyPatch) -> None:
 # ------ plugin install and merge
 
 
-@pytest.mark.usefixtures('stub_download')
+@pytest.mark.usefixtures('_stub_download')
 def test_update_config_installs_plugin(tmp_path: pathlib.Path) -> None:
     """``update_config`` installs the staged plugin into ``.obsidian/``."""
     # init seeds the front matter title plugin into .wiki/obsidian
@@ -97,17 +97,30 @@ def test_update_config_installs_plugin(tmp_path: pathlib.Path) -> None:
 
 
 @pytest.mark.parametrize(
-    argnames='enabled',
+    argnames=('enabled', 'expected_enabled'),
     argvalues=[
-        pytest.param(None, id='absent'),
-        pytest.param(['other-plugin'], id='without-id'),
-        pytest.param(['wiki-root-links'], id='with-id'),
+        pytest.param(
+            None,
+            ['obsidian-front-matter-title-plugin', 'wiki-root-links'],
+            id='absent',
+        ),
+        pytest.param(
+            ['other-plugin'],
+            ['other-plugin', 'obsidian-front-matter-title-plugin', 'wiki-root-links'],
+            id='without-id',
+        ),
+        pytest.param(
+            ['wiki-root-links'],
+            ['wiki-root-links', 'obsidian-front-matter-title-plugin'],
+            id='with-id',
+        ),
     ],
 )
 def test_update_config_installs_bundled_plugin(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
     enabled: Optional[list[str]],
+    expected_enabled: list[str],
 ) -> None:
     """``update_config`` copies the bundled plugin from the package and enables it.
 
@@ -127,28 +140,16 @@ def test_update_config_installs_bundled_plugin(
         cp_file.parent.mkdir()
         cp_file.write_text(json.dumps(enabled), encoding='utf-8')
 
-    # install from a copy of the package folder with a stray file beside the
-    # assets: an OS sidecar the by-name copy must leave behind
-    plugin_id = 'wiki-root-links'
-    plugins_dir = tmp_path / 'plugins'
-    plugin_dir = plugins_dir / plugin_id
-    plugin_dir.mkdir(parents=True)
-    for asset in _obsidian._BUNDLED_PLUGIN_ASSETS:
-        shipped = _obsidian._BUNDLED_PLUGIN_DIR.joinpath(plugin_id, asset)
-        (plugin_dir / asset).write_bytes(shipped.read_bytes())
-    (plugin_dir / '.DS_Store').write_bytes(b'')
-    monkeypatch.setattr(wiki_module, '_BUNDLED_PLUGIN_DIR', plugins_dir)
-
     # the plugin files are the packaged assets, byte for byte
+    plugin_id = 'wiki-root-links'
     warnings = wiki.update_config()
     source = _obsidian._BUNDLED_PLUGIN_DIR / plugin_id
     plugin = tmp_path / '.obsidian' / 'plugins' / plugin_id
     for asset in ('main.js', 'manifest.json'):
         assert (plugin / asset).read_bytes() == (source / asset).read_bytes()
-    # and nothing else: the copy names each file, so the stray file never
-    # reaches the vault
+    # and nothing else: the vault folder holds exactly the named assets
     installed = sorted(entry.name for entry in plugin.iterdir())
-    assert installed == ['main.js', 'manifest.json']
+    assert installed == sorted(_obsidian._BUNDLED_PLUGIN_ASSETS)
     # installed assets honor the umask like every write_atomic surface,
     # never mkstemp's owner-only temp mode
     umask = os.umask(0)
@@ -156,16 +157,15 @@ def test_update_config_installs_bundled_plugin(
     expected = 0o666 & ~umask
     for asset in ('main.js', 'manifest.json'):
         assert (plugin / asset).stat().st_mode & 0o777 == expected
-    # enabled once, with any prior entries kept
+    # enabled once, appended after any prior entries (an ordered union)
     merged = json.loads(cp_file.read_text(encoding='utf-8'))
-    assert merged.count(plugin_id) == 1
-    for item in enabled or []:
-        assert item in merged
+    assert merged == expected_enabled
     # the offline skip is the only warning; the bundled install never warns
     warning_count = len(warnings)
     assert warning_count == 1
-    assert 'OFFLINE_MODE' in warnings[0]
-    assert plugin_id not in warnings[0]
+    warning, *_ = warnings
+    assert 'OFFLINE_MODE' in warning
+    assert plugin_id not in warning
 
 
 def test_update_config_bundled_plugin_survives_existing_staged_dir(
@@ -180,12 +180,15 @@ def test_update_config_bundled_plugin_survives_existing_staged_dir(
     """
     wiki = Wiki(tmp_path)
     wiki.init()
+
+    # the staged tree carries neither plugins/ nor community-plugins.json
     config_dir = tmp_path / '.wiki' / 'obsidian'
     shutil.rmtree(config_dir / 'plugins')
     (config_dir / 'community-plugins.json').unlink()
 
     # no staged plugin means no download and no warning
     assert wiki.update_config() == []
+    # the plugin is still copied and enabled from the package and the vault
     plugin_id = 'wiki-root-links'
     plugin = tmp_path / '.obsidian' / 'plugins' / plugin_id
     assert (plugin / 'main.js').is_file()
@@ -261,7 +264,7 @@ def test_update_config_offline_warns(
     assert plugin_id in json.loads(cp_file.read_text(encoding='utf-8'))
 
 
-@pytest.mark.usefixtures('stub_download')
+@pytest.mark.usefixtures('_stub_download')
 def test_update_config_keeps_notices_off_warnings(tmp_path: pathlib.Path) -> None:
     """Restoring the root marker is a notice, never a returned warning.
 
@@ -281,7 +284,7 @@ def test_update_config_keeps_notices_off_warnings(tmp_path: pathlib.Path) -> Non
     assert (tmp_path / '.wiki' / 'settings.json').is_file()
 
 
-@pytest.mark.usefixtures('stub_download')
+@pytest.mark.usefixtures('_stub_download')
 def test_update_config_preserves_existing(tmp_path: pathlib.Path) -> None:
     """``update_config`` merges into existing config without clobbering it."""
     # init seeds the front matter title plugin into .wiki/obsidian
@@ -322,7 +325,7 @@ def test_update_config_preserves_existing(tmp_path: pathlib.Path) -> None:
     assert app == {'existing': 1, 'setting': True}
 
 
-@pytest.mark.usefixtures('stub_download')
+@pytest.mark.usefixtures('_stub_download')
 def test_update_config_is_idempotent(tmp_path: pathlib.Path) -> None:
     """Re-running ``update_config`` leaves the merged config unchanged."""
     wiki = Wiki(tmp_path)
@@ -341,7 +344,7 @@ def test_update_config_is_idempotent(tmp_path: pathlib.Path) -> None:
     assert enabled.count('wiki-root-links') == 1
 
 
-@pytest.mark.usefixtures('stub_download')
+@pytest.mark.usefixtures('_stub_download')
 def test_update_config_seeds_missing_config_dir(tmp_path: pathlib.Path) -> None:
     """A missing ``.wiki/obsidian`` is seeded from the stock template.
 
@@ -366,7 +369,7 @@ def test_update_config_seeds_missing_config_dir(tmp_path: pathlib.Path) -> None:
 # ------ config validation
 
 
-@pytest.mark.usefixtures('stub_download')
+@pytest.mark.usefixtures('_stub_download')
 def test_update_config_rejects_type_mismatch(tmp_path: pathlib.Path) -> None:
     """``update_config`` raises on a top-level JSON type mismatch."""
     wiki = Wiki(tmp_path)
@@ -390,7 +393,7 @@ def test_update_config_rejects_type_mismatch(tmp_path: pathlib.Path) -> None:
         pytest.param(b'{ "\xff\xfe": 1 }', id='undecodable-bytes'),
     ],
 )
-@pytest.mark.usefixtures('stub_download')
+@pytest.mark.usefixtures('_stub_download')
 def test_update_config_reports_malformed_target_json(
     tmp_path: pathlib.Path,
     payload: bytes,
@@ -423,7 +426,7 @@ def test_update_config_reports_malformed_target_json(
         pytest.param(b'["\xff\xfe"]', id='undecodable-bytes'),
     ],
 )
-@pytest.mark.usefixtures('stub_download')
+@pytest.mark.usefixtures('_stub_download')
 def test_update_config_reports_malformed_enabled_list(
     tmp_path: pathlib.Path,
     payload: bytes,
