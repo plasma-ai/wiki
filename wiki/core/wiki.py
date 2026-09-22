@@ -1014,11 +1014,7 @@ class Wiki:
             # load source and target for merge; the target is user-editable, so
             # name the file on bad JSON instead of a bare, undiagnosable error
             source_data = json.loads(source.read_text(encoding='utf-8'))
-            try:
-                target_data = json.loads(target.read_text(encoding='utf-8'))
-            # undecodable bytes are corruption too, and escape json's own error
-            except (UnicodeDecodeError, json.JSONDecodeError) as e:
-                raise _malformed_json_error(f'.obsidian/{source.name}', e) from e
+            target_data = _read_vault_json(target)
             # merge per the install policy (arrays union, dicts deep)
             merged = _obsidian.merge_settings(
                 target_data=target_data,
@@ -1031,14 +1027,7 @@ class Wiki:
         # only for staged files, and the staged community-plugins.json lists
         # only the pinned downloads
         target = obsidian_dir / 'community-plugins.json'
-        if target.exists():
-            try:
-                target_data = json.loads(target.read_text(encoding='utf-8'))
-            # undecodable bytes are corruption too, and escape json's own error
-            except (UnicodeDecodeError, json.JSONDecodeError) as e:
-                raise _malformed_json_error(f'.obsidian/{target.name}', e) from e
-        else:
-            target_data = []
+        target_data = _read_vault_json(target) if target.exists() else []
         merged = _obsidian.merge_settings(
             target_data=target_data,
             source_data=list(_BUNDLED_PLUGINS),
@@ -6363,3 +6352,13 @@ def _encloses_wiki_error(nested: pathlib.Path) -> ValueError:
 def _malformed_json_error(name: str, e: Exception) -> ValueError:
     """Build the malformed-JSON error, naming the user-editable file."""
     return ValueError(f'Malformed JSON in {name}: {e}')
+
+
+def _read_vault_json(target: pathlib.Path) -> Any:
+    """Return a user-editable ``.obsidian/`` file's JSON, naming it on bad JSON."""
+    try:
+        text = target.read_text(encoding='utf-8')
+        return json.loads(text)
+    # undecodable bytes are corruption too, and escape json's own error
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise _malformed_json_error(f'.obsidian/{target.name}', e) from e
