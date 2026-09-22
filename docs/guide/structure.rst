@@ -36,8 +36,8 @@ excluded from the tree entirely:
 - **Dot-prefixed files and directories** — which is how ``.wiki/``, ``.git/``,
   and ``.obsidian/`` stay out of the indexes by construction.
 - **Symlinked files and directories** — never followed, never indexed.
-- **The name ``_index``** — reserved in every folder for the index itself.
-- **Paths matching ``exclude.patterns``** — opt-in gitignore-style globs in
+- **The name** ``_index`` — reserved in every folder for the index itself.
+- **Paths matching** ``exclude.patterns`` — opt-in gitignore-style globs in
   ``.wiki/settings.json`` (see :doc:`/configuration`).
 - **Paths the enclosing git repository ignores** — no configuration needed:
   what the repo's own rules (its ``.gitignore`` files and
@@ -227,7 +227,8 @@ recompute on the next run.
 ``wiki search`` keeps a second derived store beside the counts,
 ``.wiki/cache/search.db``, on the same contract: each search refreshes the
 index for added, changed, and removed pages (by mtime and size) before
-ranking, a corrupt database is deleted and rebuilt, and a schema change drops
+ranking, a corrupt or read-only database, or one whose journal file the
+process cannot write, is deleted and rebuilt, and a schema change drops
 and rebuilds the tables. Deleting the cache directory therefore also costs a
 full reindex on the next search. ``wiki map`` and ``wiki search`` recreate
 the directory silently; only ``wiki update`` announces the recreation.

@@ -349,15 +349,14 @@ prefix-free form; and fails a ``./`` or ``../`` link that lands outside
 every listed folder, whatever is on disk, as the hard ``points outside every
 links.external folder`` issue naming the entry to add (no entry is named
 for a target the policy would refuse to list — one whose folder is the
-filesystem root itself, one reached through a symlink alias of the wiki, or
-one under a folder name carrying a NUL or a backslash). The block is a lint
-rule and nothing more: ``wiki read``, ``wiki map``, ``wiki match``,
+filesystem root itself, one that resolves inside the wiki through a symlink
+alias, or one under a folder name carrying a NUL or a backslash). The block is
+a lint rule and nothing more: ``wiki read``, ``wiki map``, ``wiki match``,
 ``wiki search``, ``wiki update``, and ``wiki new`` stay confined to the wiki
-root (a name under a listed folder still fails with
-``Path is outside wiki root``),
-generated index rows never carry an external target, and ``wiki map`` never
-shows an external folder. ``wiki lint`` reads the block on every run, links
-or none; ``wiki update`` never reads it; ``wiki init`` validates a block
+root (a name under a listed folder still fails with ``Path is outside wiki
+root``), generated index rows never carry an external target, and ``wiki map``
+never shows an external folder. ``wiki lint`` reads the block on every run,
+links or none; ``wiki update`` never reads it; ``wiki init`` validates a block
 passed through ``--settings`` but seeds none.
 
 .. code-block:: json
@@ -554,7 +553,8 @@ it holds:
    size. It shares the cache directory's ``.gitignore``. SQLite may leave
    transient ``search.db-wal``/``search.db-shm`` journal files beside it
    while a query holds the database open. Safe to delete at any time; a
-   missing or corrupt database is rebuilt on the next search.
+   missing, corrupt, or read-only database, or one whose journal file the
+   process cannot write, is discarded and rebuilt on the next search.
 
 ``.wiki/obsidian/``
    The staged Obsidian configuration template that ``wiki init`` and

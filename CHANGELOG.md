@@ -37,8 +37,8 @@ may include breaking changes, each listed under a Breaking heading.
   every such link as `relative_link` — the outside-the-wiki spelling it offers
   (`[[../../src/main.py]]` for `[[../src/main.py]]` from `notes/meeting.md`)
   climbs one folder too far — so upgrade every clone of a shared wiki together.
-  A wiki with no `./` or `../` link in prose draws no new issue and exits as
-  before.
+  A wiki with no `./` or `../` link and no absolute path into the wiki in prose
+  draws no new issue and exits as before.
 - An absolute path to a target inside the wiki fails `wiki lint` as a new hard
   issue, `absolute_link`, naming the prefix-free form (`(use [[core/design]])`
   for `[[/Users/me/repo/wiki/core/design]]`): an in-wiki target has one
@@ -54,7 +54,7 @@ may include breaking changes, each listed under a Breaking heading.
   are the prefix-free form `wiki lint` reads; a format the vault already carries
   is left alone on every run.
 - The Wiki Root Links Obsidian plugin, bundled with the package under its
-  Apache-2.0 licence: `wiki init` and `wiki config` copy it into
+  Apache-2.0 license: `wiki init` and `wiki config` copy it into
   `.obsidian/plugins/wiki-root-links/` and enable it in `community-plugins.json`
   on every run, beside Front Matter Title, with no download (it installs
   offline) and no change to the staged `.wiki/obsidian/`; Obsidian's Restricted
@@ -72,7 +72,7 @@ may include breaking changes, each listed under a Breaking heading.
   `Inside the vault: overview (not found)` when nothing is there). The plugin
   never hands a filesystem path to the operating system and reads no wiki
   settings; when the link resolver or the link-opening method it wraps is
-  unavailable it says so at load and falls back to stock behaviour.
+  unavailable it says so at load and falls back to stock behavior.
 
 ### Changed
 
@@ -112,6 +112,9 @@ may include breaking changes, each listed under a Breaking heading.
   `search.db-shm` otherwise fails every search immediately with
   `database is locked` instead of rebuilding as it does under the SQLite that
   `uv` and Homebrew Pythons carry. `Wiki.search` rebuilds the same way.
+- `wiki init` and `wiki config` fail a `.obsidian/*.json` file holding bytes
+  that are not UTF-8 as `Malformed JSON in .obsidian/<file>: ...`, naming the
+  file as they do for bad JSON, instead of the bare codec error.
 
 ## [1.5.0] - 2026-09-19
 

@@ -236,7 +236,7 @@ the error code, never ``--check``'s pending-changes 1):
   unsupported, unless the nested root sits under an ``exclude.patterns``
   subtree — an excluded nested root drops out of the sweep entirely (see
   :doc:`/configuration`).
-- **A legacy ``_config/settings.json`` layout**, refused with a migration
+- **A legacy** ``_config/settings.json`` **layout**, refused with a migration
   message.
 
 What ``wiki lint`` checks
@@ -479,19 +479,20 @@ its meaning:
    absent folder keeps its own spelling. The clause is omitted for an entry
    the policy would refuse: the filesystem root itself (a target that is the
    root, or a file or absent name directly under it, whose folder is the
-   root), a symlink alias of the wiki itself, or a folder name carrying a
-   NUL or a backslash. The ``use`` clause names what the same text read from
-   the page's folder reaches: the prefix-free form of an in-wiki target (the
-   folder-relative slip ``[[../overview]]`` from ``notes/deep.md`` names
-   ``(use [[overview]])``), or the root-relative spelling of a file under a
-   listed folder (``[[../../src/main.py]]`` from ``notes/meeting.md``, one
-   ``..`` too many, names ``(use [[../src/main.py]])``); with neither clause
-   the ``(...)`` tail is omitted. Add the entry to allow the link, or put
-   the reference in backticks. An anchor and alias ride along, and a target
-   reports once per file. Typed ``outside_link`` in ``--json``, with
-   ``path``, ``target`` (the bare target as written, anchor kept, alias
-   absent — the alias rides only in the prose), and, when present,
-   ``folder`` (the entry) and ``canonical`` (the ``use`` form) fields.
+   root), a folder that resolves inside the wiki through a symlink alias, or a
+   folder name carrying a NUL or a backslash. The ``use`` clause names what
+   the same text read from the page's folder reaches: the prefix-free form of
+   an in-wiki target (the folder-relative slip ``[[../overview]]`` from
+   ``notes/deep.md`` names ``(use [[overview]])``), or the root-relative
+   spelling of a file under a listed folder (``[[../../src/main.py]]`` from
+   ``notes/meeting.md``, one ``..`` too many, names ``(use
+   [[../src/main.py]])``); with neither clause the ``(...)`` tail is omitted.
+   Add the entry to allow the link, or put the reference in backticks. An
+   anchor and alias ride along, and a target reports once per file. Typed
+   ``outside_link`` in ``--json``, with ``path``, ``target`` (the bare target
+   as written, anchor kept, alias absent — the alias rides only in the prose),
+   and, when present, ``folder`` (the entry) and ``canonical`` (the ``use``
+   form) fields.
 
 ``Nested '<!-- start: no-lint -->' (line N)`` / ``Dangling '<!-- start: no-lint -->' (line N)`` / ``Dangling '<!-- end: no-lint -->' (line N)``
    A malformed region directive (below): a second start inside an open
@@ -592,20 +593,20 @@ wrapped lines:
    <!-- end: no-lint -->
 
 Each marker stands alone on its line. The region suppresses the positional
-rules — conflict markers, escaped wikilinks, wrap mangles, stale-link
-notes, outside-link, directory-link and relative-link issues — for the
-wrapped lines only; file-level checks are unaffected. Content inside fenced
-or inline code is already masked, so those code samples need no region. The
-link rules — the stale-link notes, the outside-link, directory-link and
-relative-link issues — also skip a wikilink inside an HTML comment or an
+rules — conflict markers, escaped wikilinks, wrap mangles, stale-link notes,
+outside-link, directory-link, relative-link and absolute-link issues — for the
+wrapped lines only; file-level checks are unaffected. Content inside fenced or
+inline code is already masked, so those code samples need no region. The link
+rules — the stale-link notes, the outside-link, directory-link, relative-link
+and absolute-link issues — also skip a wikilink inside an HTML comment or an
 indented code block, so a link sample in either needs no wrapping; the
 escaped-wikilink and wrap-mangle checks do not mask those, so an
-escaped-bracket sample or a deliberately wrapped line in a comment or
-indented block still does. A nested or dangling marker is itself a hard
-issue, and a malformed pair suppresses nothing. Conflict markers in
-particular *must* be wrapped: the scan that makes update refuse the sweep
-deliberately looks inside code fences (a real conflict can land there), so
-only a ``no-lint`` region sanctions them.
+escaped-bracket sample or a deliberately wrapped line in a comment or indented
+block still does. A nested or dangling marker is itself a hard issue, and a
+malformed pair suppresses nothing. Conflict markers in particular *must* be
+wrapped: the scan that makes update refuse the sweep deliberately looks inside
+code fences (a real conflict can land there), so only a ``no-lint`` region
+sanctions them.
 
 Update narration reference
 --------------------------
@@ -694,7 +695,7 @@ Both commands are safe to run at any time, as often as you like:
   word-count cache and the ``wiki search`` index (``search.db``). Delete it
   freely: update recreates the directory and its counts (with a notice), and
   the next ``wiki search`` rebuilds the index.
-- **A restored ``.wiki/settings.json`` is empty.** Update restores the
+- **A restored** ``.wiki/settings.json`` **is empty.** Update restores the
   missing marker as ``{}`` — all defaults. If the file held custom settings,
   restore it from version control instead of relying on the marker restore;
   see :doc:`/configuration`.

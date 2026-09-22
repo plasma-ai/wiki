@@ -157,17 +157,17 @@ hands a filesystem path to the operating system, so a link naming a script
 or an application is never run, opened, or revealed in the file manager. It
 reads no wiki settings — the ``links.external`` allowlist stays a lint rule.
 
-The plugin is bundled with the package under the same Apache-2.0 licence:
+The plugin is bundled with the package under the same Apache-2.0 license:
 ``wiki init`` and ``wiki config`` copy it into
 ``.obsidian/plugins/wiki-root-links/`` and enable it in
 ``community-plugins.json`` on every run, with no download and no digest,
 offline or not, and never write it into the staged ``.wiki/obsidian/``. It
 is desktop only — the phone build has no filesystem access it could use, so
-stock behaviour applies there. The methods it wraps are Obsidian internals,
+stock behavior applies there. The methods it wraps are Obsidian internals,
 not a public API: when the resolver or the link-opening method is
 unavailable after an Obsidian update, the plugin says so in a notice at load
-and installs the layers it can, and on any error it falls back to stock
-behaviour.
+and installs the layers it can, and on an error inside a method it wraps it
+falls back to stock behavior.
 
 One step cannot be automated: Obsidian gates community plugins behind
 Restricted Mode. When ``wiki init`` or ``wiki config`` completes with no
