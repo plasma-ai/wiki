@@ -1178,13 +1178,16 @@ def test_exclude_patterns_end_to_end(tmp_path: pathlib.Path) -> None:
 def test_links_external_end_to_end(tmp_path: pathlib.Path) -> None:
     """``links.external`` flows through init, lint, ``--json``, and read.
 
-    A seeded allowlist admits a source file and a sibling wiki's page;
-    lint notes a missing file as stale, a real file under no entry with
-    the entry to add, an entry naming no folder once per run, and fails a
-    prefixed link that lands inside the wiki or names a folder the
-    sibling wiki indexes -- each typed in ``--json``. ``wiki read`` stays
-    confined to the root, a malformed block fails lint but never update,
-    and a malformed sibling settings file is named.
+    A seeded allowlist admits a source file and a sibling wiki's page
+    from a page at any depth; lint notes a missing file as stale and an
+    entry naming no folder once per run, and fails a ``../`` link under
+    no entry (naming the entry to add and, for the spelling that climbs
+    once per folder, the root-relative form), a prefixed link that lands
+    inside the wiki, and a folder the sibling wiki indexes -- each typed
+    in ``--json``, and each suggested fix lints clean once adopted.
+    ``wiki read`` stays confined to the root, a malformed block fails
+    lint but never update, and a malformed sibling settings file is
+    named.
     """
     root = tmp_path / 'wiki'
     settings = '{"links": {"external": ["../src", "../math", "../missing"]}}'
@@ -1205,37 +1208,48 @@ def test_links_external_end_to_end(tmp_path: pathlib.Path) -> None:
         name='Links',
         desc='Links.',
         body='See [[../src/main.py]], [[../src/gone.py]], [[../math/lemmas]],'
-        ' [[../docs/x]], [[../docs/y]], [[../idx]], and [[../missing/z]].',
+        ' [[../docs/x]], [[../docs/y|Doc]], [[../idx]], and [[../missing/z]].',
     )
     _write(root / 'links.md', links)
     _write(
         root / 'core' / 'page.md',
-        _page('Page', 'A page.', 'See [[../../src/main.py]] and [[../src/main.py]].'),
+        _page(
+            name='Page',
+            desc='A page.',
+            body='See [[../src/main.py]], [[../../src/main.py]], and [[./page]].',
+        ),
     )
     assert _wiki(root, 'update', '--path', str(root)).returncode == 0
-    # the short nested link is the one issue; the notes sort the rest
+    # the undeclared and in-wiki links are the issues; the notes sort the rest
     lint = _wiki(root, 'lint', '--path', str(root))
     assert lint.returncode == 1
+    clause = 'to links.external in .wiki/settings.json to allow it'
     assert (
-        'core/page.md: Link [[../src/main.py]] points inside the wiki through'
-        " './' or '../' (use [[../../src/main.py]] for the path outside the wiki)"
+        'core/page.md: Link [[../../src/main.py]] points outside every links.external'
+        f" folder (add '../../src' {clause}, or use [[../src/main.py]])"
+    ) in lint.stdout
+    assert (
+        "core/page.md: Link [[./page]] points inside the wiki through './' or '../'"
+        ' (use [[core/page]])'
+    ) in lint.stdout
+    assert (
+        'links.md: Link [[../docs/x]] points outside every links.external folder'
+        f" (add '../docs' {clause})"
+    ) in lint.stdout
+    assert (
+        'links.md: Link [[../docs/y|Doc]] points outside every links.external folder'
+        f" (add '../docs' {clause})"
+    ) in lint.stdout
+    assert (
+        'links.md: Link [[../idx]] points outside every links.external folder'
+        f" (add '../idx' {clause})"
     ) in lint.stdout
     assert 'links.md: Stale link [[../src/gone.py]]' in lint.stderr
-    assert 'links.md: Stale link [[../docs/x]]' in lint.stderr
-    assert (
-        "links.md: Link [[../docs/y]] points outside the wiki (add '../docs' to"
-        ' links.external in .wiki/settings.json to allow it)'
-    ) in lint.stderr
-    assert (
-        "links.md: Link [[../idx]] points outside the wiki (add '../idx' to"
-        ' links.external in .wiki/settings.json to allow it, and link'
-        ' [[../idx/_index]] if a wiki indexes the folder)'
-    ) in lint.stderr
     assert (
         "links.external entry '../missing' names no folder on this machine;"
         ' links into it are not checked'
     ) in lint.stderr
-    assert 'Stale link [[../src/main.py]]' not in lint.stderr
+    assert '[[../src/main.py]]' not in lint.stderr
     assert '[[../math/lemmas]]' not in lint.stderr
     assert '[[../missing/z]]' not in lint.stderr
     # a bare folder of the sibling wiki is that wiki's directory link
@@ -1249,16 +1263,34 @@ def test_links_external_end_to_end(tmp_path: pathlib.Path) -> None:
     # --json carries every finding typed
     document = json.loads(_wiki(root, 'lint', '--path', str(root), '--json').stdout)
     kinds = {issue['kind'] for issue in document['issues']}
-    assert kinds == {'directory_link', 'relative_link'}
-    outside = [note for note in document['notes'] if note['kind'] == 'link_outside']
+    assert kinds == {'directory_link', 'outside_link', 'relative_link'}
+    outside = [issue for issue in document['issues'] if issue['kind'] == 'outside_link']
     outside_rows = [
-        (note['path'], note['folder'], note.get('canonical', 'absent'))
-        for note in outside
+        (
+            issue['path'],
+            issue['target'],
+            issue['folder'],
+            issue.get('canonical', 'absent'),
+        )
+        for issue in outside
     ]
     assert outside_rows == [
-        ('links.md', '../docs', 'absent'),
-        ('links.md', '../idx', '../idx/_index'),
+        ('links.md', '../docs/x', '../docs', 'absent'),
+        ('links.md', '../docs/y', '../docs', 'absent'),
+        ('links.md', '../idx', '../idx', 'absent'),
+        ('core/page.md', '../../src/main.py', '../../src', '../src/main.py'),
     ]
+    # the alias rides in the prose alone
+    aliased = [issue for issue in outside if issue['target'] == '../docs/y']
+    assert '[[../docs/y|Doc]]' in aliased[0]['text']
+    relative = [
+        issue for issue in document['issues'] if issue['kind'] == 'relative_link'
+    ]
+    relative_rows = [(row['path'], row['target'], row['canonical']) for row in relative]
+    assert relative_rows == [('core/page.md', './page', 'core/page')]
+    assert 'external' not in relative[0]
+    note_kinds = {note['kind'] for note in document['notes']}
+    assert 'link_outside' not in note_kinds
     missing = [
         note for note in document['notes'] if note['kind'] == 'link_folder_missing'
     ]
@@ -1267,23 +1299,29 @@ def test_links_external_end_to_end(tmp_path: pathlib.Path) -> None:
     assert 'path' not in missing[0]
     stale = [note for note in document['notes'] if note['kind'] == 'link_stale']
     stale_targets = {note['target'] for note in stale}
-    assert stale_targets == {'../src/gone.py', '../docs/x'}
-    # with both links fixed, lint is clean
+    assert stale_targets == {'../src/gone.py'}
+    # with every suggested fix adopted, lint is clean: the entries admit the
+    # docs page and the folder, and the missing docs file notes stale
+    config = root / '.wiki' / 'settings.json'
+    data = json.loads(config.read_text(encoding='utf-8'))
+    data['links']['external'].extend(['../docs', '../idx'])
+    config.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
     _write(
         root / 'core' / 'page.md',
-        _page('Page', 'A page.', 'See [[../../src/main.py]].'),
+        _page('Page', 'A page.', 'See [[../src/main.py]].'),
     )
     _write(root / 'g2.md', _page('G2', 'G2.', 'See [[../math/g2/_index]].'))
     assert _wiki(root, 'update', '--path', str(root)).returncode == 0
     lint = _wiki(root, 'lint', '--path', str(root))
     assert lint.returncode == 0, lint.stdout + lint.stderr
+    assert 'links.md: Stale link [[../src/gone.py]]' in lint.stderr
+    assert 'links.md: Stale link [[../docs/x]]' in lint.stderr
+    assert "links.external entry '../missing' names no folder" in lint.stderr
     # the allowlist is a lint rule alone: read stays confined to the root
     read = _wiki(root, 'read', '../src/main.py', '--path', str(root))
     assert read.returncode == 2
     assert 'outside wiki root' in (read.stdout + read.stderr).lower()
     # a malformed block fails lint, naming the file and key, never update
-    config = root / '.wiki' / 'settings.json'
-    data = json.loads(config.read_text(encoding='utf-8'))
     data['links'] = {'external': ['src']}
     config.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
     update = _wiki(root, 'update', '--path', str(root))

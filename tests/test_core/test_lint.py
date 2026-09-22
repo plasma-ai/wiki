@@ -288,12 +288,14 @@ def test_lint_issues_are_typed(tmp_path: pathlib.Path) -> None:
         encoding='utf-8',
     )
     # a period-less desc, an unparseable stamp, both wrap mangles, a directory
-    # link, a relative link, and a dangling region marker on one messy page
+    # link, a relative link, an outside link, and a dangling region marker on
+    # one messy page
     (tmp_path / 'data' / 'messy.md').write_text(
         '---\nname: messy\ndesc: No trailing period\n'
         'created: not-a-stamp\n---\n\n# messy\n\n'
         'a twenty-\nclass system, that\n+ wraps into a marker.\n\n'
-        'See [[core]] and [[./keep]] for more.\n\n<!-- start: no-lint -->\n',
+        'See [[core]], [[./keep]], and [[../gone]] for more.\n\n'
+        '<!-- start: no-lint -->\n',
         encoding='utf-8',
     )
     # frontmatter a strict YAML reader rejects
@@ -357,6 +359,7 @@ def test_lint_issues_are_typed(tmp_path: pathlib.Path) -> None:
         'missing_period',
         'missing_title',
         'nested_wiki_root',
+        'outside_link',
         'region_marker',
         'relative_link',
         'requires_update',
@@ -1984,39 +1987,16 @@ def test_long_desc_is_note_only(tmp_path: pathlib.Path) -> None:
 @pytest.mark.parametrize(
     argnames=('link', 'fix'),
     argvalues=[
-        # the root page, written as if relative to the page's folder
-        ('../overview', 'overview'),
         # a root page missed through './', named from the root
         ('./overview', 'overview'),
-        # a sibling page through './'
+        # a sibling page through './', named from the page's folder
         ('./sibling', 'notes/sibling'),
-        # an indexed folder: the fix is its index page
-        ('../core', 'core/_index'),
-        # an excluded folder keeps its bare form
-        ('../vendor', 'vendor'),
-        # a raw file at the root
-        ('../Makefile', 'Makefile'),
-        # the root itself
-        ('..', '_index'),
         # an interior '..' segment reads the same way
         ('sibling/../sibling', 'notes/sibling'),
-        # a folder the walk reaches whose index is not minted yet
-        ('../drafts', 'drafts/_index'),
         # nothing exists there: the issue stands without a fix
         ('./gone', None),
     ],
-    ids=[
-        'page',
-        'dot-root-page',
-        'dot-sibling',
-        'indexed-folder',
-        'excluded-folder',
-        'raw-file',
-        'root',
-        'interior',
-        'unminted-folder',
-        'missing',
-    ],
+    ids=['dot-root-page', 'dot-sibling', 'interior', 'missing'],
 )
 def test_lint_relative_prefix_inside_wiki_is_issue(
     tmp_path: pathlib.Path,
@@ -2027,33 +2007,20 @@ def test_lint_relative_prefix_inside_wiki_is_issue(
 ) -> None:
     """A ``./`` or ``../`` link that lands inside the wiki is a hard issue.
 
-    A prefixed target is read from the page's folder, as Obsidian and
-    markdown read it, and means "outside the wiki"; one that resolves
-    inside is written wrong, so lint fails it and names the prefix-free
-    form -- a page by stem, an indexed folder's ``_index`` page, an
-    excluded folder's bare form, a raw file's path, or the page the text
-    names when read from the root -- with the anchor and alias riding
-    along, and no fix when nothing exists either way. The link
-    reports once however often the prose repeats it, and is never also
-    noted as stale.
+    Every target is read from the wiki root, and a prefixed target means
+    "outside the wiki"; one that resolves inside is written wrong, so
+    lint fails it and names the prefix-free form -- a page by stem read
+    from the root, or the page the text names from the page's folder, the
+    base Obsidian reads it from -- with the anchor and alias riding
+    along, and no fix when nothing exists either way. The link reports
+    once however often the prose repeats it, and is never also noted as
+    stale.
     """
-    _make_wiki(
-        tmp_path,
-        folders={'notes': ['meeting', 'sibling'], 'core': ['design']},
-    )
+    _make_wiki(tmp_path, folders={'notes': ['meeting', 'sibling']})
     (tmp_path / 'overview.md').write_text(
         '---\nname: overview\ndesc: An overview.\n---\n\n# overview\n\nText.\n',
         encoding='utf-8',
     )
-    (tmp_path / 'Makefile').write_text('all:\n', encoding='utf-8')
-    # a folder carrying an index on disk that the walk will not enter
-    vendor = tmp_path / 'vendor'
-    vendor.mkdir()
-    (vendor / '_index.md').write_text(
-        '---\nname: vendored\ndesc: A vendored index.\n---\n\n# vendored\n\n***\n',
-        encoding='utf-8',
-    )
-    _set_exclude_patterns(tmp_path, ['vendor'])
     name = 'meeting.md' if kind == 'page' else '_index.md'
     marker = 'Content for meeting.' if kind == 'page' else 'Overview of notes.'
     page = tmp_path / 'notes' / name
@@ -2061,8 +2028,6 @@ def test_lint_relative_prefix_inside_wiki_is_issue(
     text = page.read_text(encoding='utf-8').replace(marker, body)
     page.write_text(text, encoding='utf-8')
     Wiki(tmp_path).update()
-    # a folder created after the update, its index not minted yet
-    (tmp_path / 'drafts').mkdir()
 
     # the issue names the prefix-free spelling; the link never also notes
     wiki = Wiki(tmp_path)
@@ -2080,11 +2045,11 @@ def test_lint_relative_prefix_inside_wiki_is_issue(
 def test_lint_relative_root_link_names_the_index_page(tmp_path: pathlib.Path) -> None:
     """A prefixed link to the wiki root itself is steered to its index page.
 
-    ``[[.]]`` from a root page and ``[[..]]`` from a nested one land on
-    the root, whose fix is ``_index`` -- never the stem of a file beside
-    the wiki that shares the root folder's name; a link re-entering the
-    wiki through that folder name (``[[../wiki/overview]]``) is steered to
-    the prefix-free page.
+    ``[[.]]`` lands on the root, whose fix is ``_index``; so does a link
+    re-entering the wiki through the root folder's own name
+    (``[[../wiki]]``) -- never the stem of a file beside the wiki that
+    shares that name -- while one re-entering to a page
+    (``[[../wiki/overview]]``) is steered to the prefix-free page.
     """
     root = tmp_path / 'wiki'
     _make_wiki(root, folders={'notes': ['meeting']})
@@ -2094,25 +2059,20 @@ def test_lint_relative_root_link_names_the_index_page(tmp_path: pathlib.Path) ->
         encoding='utf-8',
     )
     Wiki(root).update()
-    links = {
-        '_index.md': 'See [[.]] and [[../wiki/overview]] now.',
-        'notes/meeting.md': 'See [[..]] now.',
-    }
-    for page, body in links.items():
-        path = root / page
-        marker = 'Root overview.' if page == '_index.md' else 'Content for meeting.'
-        text = path.read_text(encoding='utf-8').replace(marker, body)
-        path.write_text(text, encoding='utf-8')
+    path = root / '_index.md'
+    body = 'See [[.]], [[../wiki]], and [[../wiki/overview]] now.'
+    text = path.read_text(encoding='utf-8').replace('Root overview.', body)
+    path.write_text(text, encoding='utf-8')
 
     # the root links are steered to the index page; the re-entry to the page it names
     issues = Wiki(root).lint()
     expected = [
         "_index.md: Link [[.]] points inside the wiki through './' or '../'"
         ' (use [[_index]])',
+        "_index.md: Link [[../wiki]] points inside the wiki through './' or '../'"
+        ' (use [[_index]])',
         "_index.md: Link [[../wiki/overview]] points inside the wiki through './' or"
         " '../' (use [[overview]])",
-        "notes/meeting.md: Link [[..]] points inside the wiki through './' or '../'"
-        ' (use [[_index]])',
     ]
     assert sorted(issues) == sorted(expected)
 
@@ -2122,21 +2082,22 @@ def test_lint_relative_root_link_steers_to_index_before_update(
 ) -> None:
     """The root's fix is its index page even while that page is missing.
 
-    A root whose ``_index.md`` has not been minted yet still links by it;
-    the bare ``.`` form would be the relative-link issue itself.
+    A root whose ``_index.md`` has not been minted yet still links by it,
+    from a page at any depth, since ``.`` names the root from every page;
+    the bare form is the relative-link issue itself.
     """
     root = tmp_path / 'wiki'
     _make_wiki(root, folders={'notes': ['meeting']})
     (root / '_index.md').unlink()
     page = root / 'notes' / 'meeting.md'
     text = page.read_text(encoding='utf-8').replace(
-        'Content for meeting.', 'See [[..]].'
+        'Content for meeting.', 'See [[.]].'
     )
     page.write_text(text, encoding='utf-8')
 
     issues = [issue for issue in Wiki(root).lint() if 'points inside the wiki' in issue]
     assert issues == [
-        "notes/meeting.md: Link [[..]] points inside the wiki through './' or '../'"
+        "notes/meeting.md: Link [[.]] points inside the wiki through './' or '../'"
         ' (use [[_index]])'
     ]
 
