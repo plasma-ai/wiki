@@ -70,10 +70,8 @@ def stub_download(monkeypatch: pytest.MonkeyPatch) -> None:
 # ------ plugin install and merge
 
 
-def test_update_config_installs_plugin(
-    tmp_path: pathlib.Path,
-    stub_download: None,
-) -> None:
+@pytest.mark.usefixtures('stub_download')
+def test_update_config_installs_plugin(tmp_path: pathlib.Path) -> None:
     """``update_config`` installs the staged plugin into ``.obsidian/``."""
     # init seeds the front matter title plugin into .wiki/obsidian
     wiki = Wiki(tmp_path)
@@ -263,10 +261,8 @@ def test_update_config_offline_warns(
     assert plugin_id in json.loads(cp_file.read_text(encoding='utf-8'))
 
 
-def test_update_config_keeps_notices_off_warnings(
-    tmp_path: pathlib.Path,
-    stub_download: None,
-) -> None:
+@pytest.mark.usefixtures('stub_download')
+def test_update_config_keeps_notices_off_warnings(tmp_path: pathlib.Path) -> None:
     """Restoring the root marker is a notice, never a returned warning.
 
     The returned warnings mean setup needs another run and gate the
@@ -285,10 +281,8 @@ def test_update_config_keeps_notices_off_warnings(
     assert (tmp_path / '.wiki' / 'settings.json').is_file()
 
 
-def test_update_config_preserves_existing(
-    tmp_path: pathlib.Path,
-    stub_download: None,
-) -> None:
+@pytest.mark.usefixtures('stub_download')
+def test_update_config_preserves_existing(tmp_path: pathlib.Path) -> None:
     """``update_config`` merges into existing config without clobbering it."""
     # init seeds the front matter title plugin into .wiki/obsidian
     wiki = Wiki(tmp_path)
@@ -328,10 +322,8 @@ def test_update_config_preserves_existing(
     assert app == {'existing': 1, 'setting': True}
 
 
-def test_update_config_is_idempotent(
-    tmp_path: pathlib.Path,
-    stub_download: None,
-) -> None:
+@pytest.mark.usefixtures('stub_download')
+def test_update_config_is_idempotent(tmp_path: pathlib.Path) -> None:
     """Re-running ``update_config`` leaves the merged config unchanged."""
     wiki = Wiki(tmp_path)
     wiki.init()
@@ -349,10 +341,8 @@ def test_update_config_is_idempotent(
     assert enabled.count('wiki-root-links') == 1
 
 
-def test_update_config_seeds_missing_config_dir(
-    tmp_path: pathlib.Path,
-    stub_download: None,
-) -> None:
+@pytest.mark.usefixtures('stub_download')
+def test_update_config_seeds_missing_config_dir(tmp_path: pathlib.Path) -> None:
     """A missing ``.wiki/obsidian`` is seeded from the stock template.
 
     An adopted index tree (or a wiki whose ``.wiki/`` was lost) has no
@@ -376,10 +366,8 @@ def test_update_config_seeds_missing_config_dir(
 # ------ config validation
 
 
-def test_update_config_rejects_type_mismatch(
-    tmp_path: pathlib.Path,
-    stub_download: None,
-) -> None:
+@pytest.mark.usefixtures('stub_download')
+def test_update_config_rejects_type_mismatch(tmp_path: pathlib.Path) -> None:
     """``update_config`` raises on a top-level JSON type mismatch."""
     wiki = Wiki(tmp_path)
     wiki.init()
@@ -402,9 +390,9 @@ def test_update_config_rejects_type_mismatch(
         pytest.param(b'{ "\xff\xfe": 1 }', id='undecodable-bytes'),
     ],
 )
+@pytest.mark.usefixtures('stub_download')
 def test_update_config_reports_malformed_target_json(
     tmp_path: pathlib.Path,
-    stub_download: None,
     payload: bytes,
 ) -> None:
     """A malformed existing ``.obsidian`` JSON names the file instead of a bare error.
