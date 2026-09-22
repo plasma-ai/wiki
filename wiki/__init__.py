@@ -7,4 +7,4 @@ from . import cli, constants, core, typing, util
 from .constants import *
 from .core import *
 
-__version__ = '1.5.0'
+__version__ = '1.6.0'
