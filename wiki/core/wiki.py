@@ -32,7 +32,13 @@ from wiki.constants import (
 from wiki.typing import Link, PathLike
 
 from . import _obsidian, _search, format
-from ._obsidian import _OBSIDIAN_PLUGIN_DIGESTS, _OBSIDIAN_PLUGINS
+from ._obsidian import (
+    _BUNDLED_PLUGIN_ASSETS,
+    _BUNDLED_PLUGIN_DIR,
+    _BUNDLED_PLUGINS,
+    _OBSIDIAN_PLUGIN_DIGESTS,
+    _OBSIDIAN_PLUGINS,
+)
 from .event import Event
 
 __all__ = ['Wiki']
@@ -66,6 +72,10 @@ _WalkStep = tuple[pathlib.Path, list[pathlib.Path]]
 _NONMAPPING = 'not a key: value mapping'
 _UNADDRESSABLE = 'keys are not column-0 key: value lines'
 _UNREPAIRABLE = 'its repair would break the YAML'
+
+# the relative_link finding's body, emitted for a prefixed in-root target and
+# for an outside miss the page's folder resolves, so both spell it identically
+_RELATIVE_LINK_TEXT = "points inside the wiki through './' or '../'"
 
 # the remedy lint appends to an invalid_yaml finding, per
 # cause (see format.frontmatter_issues)
@@ -870,16 +880,17 @@ class Wiki:
     def update_config(self: Wiki) -> list[str]:
         """Install ``.wiki/obsidian/`` into ``.obsidian/``.
 
-        Copies each bundled plugin's settings under
-        ``.wiki/obsidian/plugins/`` into ``.obsidian/plugins/`` and
-        downloads pinned plugin code from its upstream release. Each
-        top-level ``.json`` file (like ``community-plugins.json``) is
-        created from source when absent, else merged: arrays are
-        union-merged and dicts deep-merged with source winning. Other
-        installed plugins are left untouched. A missing
-        ``.wiki/obsidian/`` is seeded from the stock template first, so
-        an adopted tree gets the full setup. Also guarantees the
-        declared-root marker: a missing ``.wiki/settings.json`` is
+        Copies each staged plugin's settings under
+        ``.wiki/obsidian/plugins/`` into ``.obsidian/plugins/``,
+        downloads pinned plugin code from its upstream release, and
+        copies the bundled Wiki Root Links plugin from the package and
+        enables it. Each top-level ``.json`` file (like
+        ``community-plugins.json``) is created from source when absent,
+        else merged: arrays are union-merged and dicts deep-merged with
+        source winning. Other installed plugins are left untouched. A
+        missing ``.wiki/obsidian/`` is seeded from the stock template
+        first, so an adopted tree gets the full setup. Also guarantees
+        the declared-root marker: a missing ``.wiki/settings.json`` is
         restored as ``{}`` with a notice.
 
         Returns:
@@ -980,6 +991,18 @@ class Wiki:
                                 os.umask(umask)
                                 os.chmod(tmp, 0o666 & ~umask)
                             os.replace(tmp, dest)
+        # copy each bundled plugin from the package into the vault: shipped
+        # beside the modules, so no staged tree, download, or network is needed
+        for plugin_id in _BUNDLED_PLUGINS:
+            target = obsidian_dir / 'plugins' / plugin_id
+            target.mkdir(parents=True, exist_ok=True)
+            # copy the plugin's files by name (a stray file beside them in the
+            # package folder -- an OS sidecar, an editor backup -- never ships),
+            # atomically, so a crash mid-copy never leaves Obsidian a torn file
+            for asset in _BUNDLED_PLUGIN_ASSETS:
+                bundled = _BUNDLED_PLUGIN_DIR.joinpath(plugin_id, asset)
+                text = bundled.read_text(encoding='utf-8')
+                wiki.util.fs.write_atomic(target / asset, text)
         # create or merge each top-level json file
         for source in sorted(config_dir.glob('*.json')):
             target = obsidian_dir / source.name
@@ -993,10 +1016,9 @@ class Wiki:
             source_data = json.loads(source.read_text(encoding='utf-8'))
             try:
                 target_data = json.loads(target.read_text(encoding='utf-8'))
-            except json.JSONDecodeError as e:
-                raise ValueError(
-                    f'Malformed JSON in .obsidian/{source.name}: {e}'
-                ) from e
+            # undecodable bytes are corruption too, and escape json's own error
+            except (UnicodeDecodeError, json.JSONDecodeError) as e:
+                raise _malformed_json_error(f'.obsidian/{source.name}', e) from e
             # merge per the install policy (arrays union, dicts deep)
             merged = _obsidian.merge_settings(
                 target_data=target_data,
@@ -1005,6 +1027,25 @@ class Wiki:
             )
             result = json.dumps(merged, indent=2)
             wiki.util.fs.write_atomic(target, result + '\n')
+        # enable the bundled plugins in a separate write: the merge above runs
+        # only for staged files, and the staged community-plugins.json lists
+        # only the pinned downloads
+        target = obsidian_dir / 'community-plugins.json'
+        if target.exists():
+            try:
+                target_data = json.loads(target.read_text(encoding='utf-8'))
+            # undecodable bytes are corruption too, and escape json's own error
+            except (UnicodeDecodeError, json.JSONDecodeError) as e:
+                raise _malformed_json_error(f'.obsidian/{target.name}', e) from e
+        else:
+            target_data = []
+        merged = _obsidian.merge_settings(
+            target_data=target_data,
+            source_data=list(_BUNDLED_PLUGINS),
+            name=target.name,
+        )
+        result = json.dumps(merged, indent=2)
+        wiki.util.fs.write_atomic(target, result + '\n')
         return warnings
 
     def _refuse_enclosing_wiki(self: Wiki, folder: pathlib.Path) -> None:
@@ -1404,10 +1445,16 @@ class Wiki:
           ``_index`` page -- in this wiki, or in another wiki a
           ``links.external`` folder admits, judged by that wiki's own
           settings -- flagged with the ``/_index`` form as the fix),
-          relative links inside the wiki (a ``./`` or ``../`` target,
-          read from the page's folder, that lands inside the wiki;
-          flagged with the prefix-free form as the fix), and -- under
-          ``titles.required`` -- a missing or unfilled ``title:``.
+          relative links inside the wiki (a ``./`` or ``../`` target
+          that lands inside the wiki -- every target is read from the
+          wiki root; flagged with the prefix-free form as the fix, as is
+          a prefixed target that misses under a ``links.external`` folder
+          while naming something in the wiki from the page's folder),
+          outside links under no allowlisted folder (a ``./`` or
+          ``../`` target that lands outside every ``links.external``
+          folder, whatever is on disk; flagged with the entry to add),
+          and -- under ``titles.required`` -- a missing or unfilled
+          ``title:``.
 
         Every line begins with the relevant path; an out-of-date file's
         diff follows its ``Requires update`` header, indented.
@@ -1422,11 +1469,10 @@ class Wiki:
         stale links in user content (index bodies and pages -- the
         generated link block's broken-link check is the hard surface; a
         target outside the root resolves only under a folder
-        ``links.external`` allowlists), a link to a real file outside
-        every allowlisted folder (noted with the entry to add), a
-        ``links.external`` entry naming no folder on this machine (noted
-        once per run; links into it go unchecked), and CRLF line endings
-        (which the next ``update`` normalizes) are soft notes (stderr)
+        ``links.external`` allowlists), a ``links.external`` entry
+        naming no folder on this machine (noted once per run; links into
+        it go unchecked), and CRLF line endings (which the next
+        ``update`` normalizes) are soft notes (stderr)
         and do not count as issues.
 
         Args:
@@ -2696,26 +2742,6 @@ class Wiki:
             event = LinkStaleEvent(message, **kwargs)
         return self.on_notice(event, logging_level=logging_level)
 
-    def on_link_outside(
-        self: Wiki,
-        message: Optional[str] = None,
-        *,
-        logging_level: int = logging.INFO,
-        event: Optional[LinkOutsideEvent] = None,
-        **kwargs: Any,
-    ) -> Event:
-        """Handle an outside-link notice event.
-
-        Constructs a ``LinkOutsideEvent`` from ``message`` and the
-        payload kwargs (the live-site path) unless a pre-built ``event``
-        is passed through, then delegates to ``on_notice``. Override in
-        subclasses to intercept this notice kind alone; override
-        ``on_notice`` to intercept every notice.
-        """
-        if event is None:
-            event = LinkOutsideEvent(message, **kwargs)
-        return self.on_notice(event, logging_level=logging_level)
-
     def on_link_folder_missing(
         self: Wiki,
         message: Optional[str] = None,
@@ -3419,15 +3445,15 @@ class Wiki:
     def _external_index_target(
         self: Wiki,
         joined: pathlib.Path,
-        page: pathlib.Path,
     ) -> Optional[str]:
         """Return the ``_index`` form of a folder another wiki indexes, or ``None``.
 
-        ``joined`` is an external target read from ``page``'s folder; when
-        the wiki enclosing it indexes that folder -- judged by the instance
+        ``joined`` is an external target read from the wiki root; when the
+        wiki enclosing it indexes that folder -- judged by the instance
         built from that wiki's settings, exclusions included -- the folder
         is the directory link there as at home, and the fix is its index
-        page spelled from ``page``'s folder, the base the link reads from.
+        page spelled relative to the wiki root, the base every link reads
+        from.
         """
         guest = self._link_wiki(joined)
         if guest is None:
@@ -3441,55 +3467,66 @@ class Wiki:
         inner = guest_wiki._root / joined.relative_to(guest_root)
         if not guest_wiki._is_indexed_dir(inner):
             return None
-        index_target = pathlib.Path(os.path.relpath(index_path, page.parent))
+        index_target = pathlib.Path(os.path.relpath(index_path, self._root))
         return index_target.with_suffix('').as_posix()
 
     def _outside_entry(
         self: Wiki,
         joined: pathlib.Path,
-        page_form: pathlib.Path,
     ) -> Optional[str]:
         """Return the ``links.external`` entry that would admit ``joined``, or ``None``.
 
-        ``joined`` is a target outside the wiki that no entry covers, and
-        ``page_form`` its ``.md`` page form. The entry is the target when it
-        is itself a folder, else the folder holding it, spelled relative to
-        the wiki root; ``None`` when nothing real is there (the link is
-        stale) or when no entry could admit it -- a chain of ``..`` clamped
-        at the filesystem root, a symlink alias of the wiki itself, or a
-        folder name carrying a backslash names a folder the policy refuses.
+        ``joined`` is a target outside the wiki that no entry covers. The
+        entry words the outside-link issue: the target when a folder is
+        there, else the target's folder, spelled relative to the wiki root;
+        a file, FIFO, or socket on the path can never become a folder, so
+        the entry is the folder above it, while an absent folder keeps its
+        own spelling. ``None`` when no entry could admit the target -- a
+        chain of ``..`` clamped at the filesystem root, a folder name
+        carrying a NUL or a backslash (a folder the policy refuses), or a
+        symlink alias of the wiki itself.
         """
-        if not (os.path.exists(page_form) or os.path.exists(joined)):
-            return None
         if os.path.isdir(joined):
             holder = joined
         else:
             holder = joined.parent
+            # find the nearest ancestor on disk from the filesystem root down,
+            # as _link_wiki finds its anchor, without spelling every ancestor
+            # of a target thousands of segments long
+            anchor, *parts = holder.parts
+            nearest = pathlib.Path(anchor)
+            for part in parts:
+                candidate = nearest / part
+                if not os.path.exists(candidate):
+                    break
+                nearest = candidate
+            if not os.path.isdir(nearest):
+                holder = nearest.parent
         if holder.parent == holder:
-            return None
-        if self._inside_root(pathlib.Path(os.path.realpath(holder))):
             return None
         entry = pathlib.Path(os.path.relpath(holder, self._root))
         spelling = entry.as_posix()
-        # a folder name carrying '\\' spells an entry the policy refuses
-        if '\\' in spelling:
+        # a folder name carrying a NUL or '\\' spells an entry the policy
+        # refuses; it is refused before the alias realpath, which raises on a
+        # NUL where the os.path probes read one as missing
+        if ('\x00' in spelling) or ('\\' in spelling):
+            return None
+        if self._inside_root(pathlib.Path(os.path.realpath(holder))):
             return None
         return spelling
 
     def _external_spelling(
         self: Wiki,
         reading: pathlib.Path,
-        page: pathlib.Path,
     ) -> Optional[str]:
-        """Return the page-relative spelling of the allowlisted file ``reading`` names.
+        """Return the root-relative spelling of the allowlisted file ``reading`` names.
 
-        ``reading`` is a target read as if from the wiki root, or an
-        absolute target; when it lands under an allowlisted folder present
-        on this machine and names a real file, page, or folder there, the
-        fix is the same path spelled from ``page``'s folder, the form the
-        scan reads -- a folder another wiki indexes by its index page, the
-        directory-link rule's fix. ``None`` otherwise: a target that
-        reaches nothing has no fix to suggest.
+        ``reading`` is a normalized absolute target; when it lands under an
+        allowlisted folder present on this machine and names a real file,
+        page, or folder there, the fix is the same path spelled relative to
+        the wiki root, the form the scan reads -- a folder another wiki
+        indexes by its index page, the directory-link rule's fix. ``None``
+        otherwise: a target that reaches nothing has no fix to suggest.
         """
         if self._inside_root(reading):
             return None
@@ -3501,14 +3538,14 @@ class Wiki:
         # the page form is spelled through the parent, since with_name refuses
         # the filesystem root a chain of '..' can reach
         page_form = reading.parent / (reading.name + '.md')
-        spelling = pathlib.Path(os.path.relpath(reading, page.parent))
+        spelling = pathlib.Path(os.path.relpath(reading, self._root))
         if os.path.exists(page_form):
             return spelling.as_posix()
         # a wiki whose settings will not read cannot say whether it indexes a
         # folder there, so no hint is drawn from it; only a link whose own
         # verdict needs that wiki fails the run naming it
         try:
-            index_target = self._external_index_target(reading, page)
+            index_target = self._external_index_target(reading)
         except ValueError:
             return None
         if index_target is not None:
@@ -5561,25 +5598,30 @@ class Wiki:
     ) -> list[Issue]:
         """Check wikilinks in content; return the hard issues.
 
-        Two spellings, one rule each: a prefix-free target is read from
-        the wiki root and must name something inside it; a target
-        carrying a ``.`` or ``..`` segment (most often leading, as ``./``
-        or ``../``) is read from the page's folder, as Obsidian and
-        markdown read it, and must leave the wiki -- one that lands inside
-        is a hard issue naming the prefix-free form. A directory link (a
-        target naming an indexed folder rather than its ``_index`` page)
-        is a hard issue naming the ``/_index`` form, in this wiki or in an
-        allowlisted wiki judged by its own settings. Outside the wiki a
-        target is live under a present ``links.external`` folder when the
-        file, its ``.md`` form, or the folder exists; under an absent
-        entry it is left to the run-level note; a real file under no
-        entry draws the outside note (``on_link_outside``). A stale link
-        is a soft note (``on_link_stale``) -- the generated link block's
-        broken-link check is the hard surface -- naming the spelling that
-        would resolve when one does. A target reports once per file with
-        its display text riding into the fix; code samples, HTML comments,
-        and well-formed ``no-lint`` regions (parsed from this content) are
-        exempt from every rule.
+        One base: every wikilink target is read from the wiki root -- a
+        prefix-free target must name something inside the wiki, and a
+        target carrying a ``.`` or ``..`` segment (most often leading, as
+        ``./`` or ``../``) must leave it, reaching a file or another
+        wiki's page only under a ``links.external`` folder, whose entry is
+        the link's prefix. A prefixed target that lands inside the wiki is
+        a hard issue naming the prefix-free form; one that lands outside
+        every ``links.external`` folder is a hard issue naming the entry
+        to add, whatever is on disk. A directory link (a target naming an
+        indexed folder rather than its ``_index`` page) is a hard issue
+        naming the ``/_index`` form, in this wiki or in an allowlisted
+        wiki judged by its own settings. Under a present ``links.external``
+        folder a target is live when the file, its ``.md`` form, or the
+        folder exists; one that misses there while naming something in
+        the wiki from the page's folder (the base Obsidian reads ``../``
+        from) is the relative-link issue, since the author meant that
+        target; under an absent entry it is left to the run-level note.
+        The page's folder never moves a target: it words a fix, and judges
+        that one miss. A stale link is a soft note (``on_link_stale``) --
+        the generated link block's broken-link check is the hard surface
+        -- naming the spelling that would resolve when one does. A target
+        reports once per file with its display text riding into the fix;
+        code samples, HTML comments, and well-formed ``no-lint`` regions
+        (parsed from this content) are exempt from every rule.
         """
         # initialize issues and the targets already reported for this file:
         # the scan is content-local, so a repeat of a target carries no line
@@ -5623,62 +5665,48 @@ class Wiki:
             if not page_target:
                 continue
             # a target carrying '[' is junk no name can carry (a stray bracket,
-            # or one swallowed from the text): never live, never read from the
-            # page's folder, so the stale note quotes it as written
+            # or one swallowed from the text): never live, never joined, so
+            # the stale note quotes it as written
             if '[' in page_target:
                 if target in reported:
                     continue
                 reported.add(target)
                 self.on_link_stale(path=str(relpath), target=target + alias)
                 continue
-            # a target carrying a '.' or '..' segment (most often
-            # leading, as './' or '../') is read from the page's folder,
-            # as Obsidian and markdown read it, and must leave the wiki;
-            # a prefix-free target is read from the root and must stay
-            # inside; an absolute target is read as written
+            # every target is read from the wiki root: a target carrying a
+            # '.' or '..' segment (most often leading, as './' or '../')
+            # must leave the wiki, a prefix-free target must stay inside,
+            # and an absolute target is read as written
             absolute = os.path.isabs(page_target)
             segments = page_target.split('/')
             prefixed = (not absolute) and (('.' in segments) or ('..' in segments))
-            base = path.parent if prefixed else self._root
-            joined = pathlib.Path(os.path.normpath(base / page_target))
+            joined = pathlib.Path(os.path.normpath(self._root / page_target))
             # the page form is the text plus '.md', as the in-root probe reads
             # it, so a trailing slash never names a page
-            page_form = pathlib.Path(os.path.normpath(base / (page_target + '.md')))
+            page_name = page_target + '.md'
+            page_form = pathlib.Path(os.path.normpath(self._root / page_name))
             if self._inside_root(joined):
                 # a prefixed target landing inside the wiki is a hard issue naming
-                # the prefix-free form (the one spelling every reader resolves from
-                # the root) and the allowlisted file the text reaches when read
-                # from the root, if any
+                # the prefix-free form, the one spelling of an in-wiki target
                 if prefixed:
                     if target in reported:
                         continue
                     reported.add(target)
                     canonical = self._root_relative_form(joined)
-                    reading = pathlib.Path(os.path.normpath(self._root / page_target))
-                    # a miss from the page's folder may name a page from the root,
-                    # the in-wiki mirror of the outside alternative
-                    if (canonical is None) and self._inside_root(reading):
-                        canonical = self._root_relative_form(reading)
-                    external = self._external_spelling(reading, path)
-                    fixes = []
-                    if canonical is not None:
-                        fixes.append(f'[[{canonical}{anchor}{alias}]]')
-                    if external is not None:
-                        fixes.append(
-                            f'[[{external}{anchor}{alias}]] for the path outside'
-                            ' the wiki'
-                        )
-                    options = ', or '.join(fixes)
-                    fix = f' (use {options})' if fixes else ''
+                    # a miss from the root may name the target from the page's
+                    # folder, the base an Obsidian habit spells from; the folder
+                    # never moves a target, it words the fix
+                    if canonical is None:
+                        canonical = self._canonical_link_target(path, page_target)
+                    fix = ''
                     fields = {'path': str(relpath), 'target': target}
                     if canonical is not None:
+                        fix = f' (use [[{canonical}{anchor}{alias}]])'
                         fields['canonical'] = canonical + anchor
-                    if external is not None:
-                        fields['external'] = external + anchor
                     result.append(
                         Issue(
-                            f'{relpath}: Link [[{target}{alias}]] points inside'
-                            f" the wiki through './' or '../'{fix}",
+                            f'{relpath}: Link [[{target}{alias}]]'
+                            f' {_RELATIVE_LINK_TEXT}{fix}',
                             kind='relative_link',
                             **fields,
                         )
@@ -5718,35 +5746,52 @@ class Wiki:
             elif not absolute:
                 folder = self._external_folder(joined)
                 if folder is None:
-                    # a real file under no allowlisted folder: name the entry
-                    # that would admit it rather than call the link stale
-                    entry = self._outside_entry(joined, page_form)
-                    if entry is not None:
-                        if target in reported:
-                            continue
-                        reported.add(target)
-                        # a folder holding an index file may be another wiki's,
-                        # where the link the entry admits is its index page
-                        canonical = None
-                        index_path = joined / WIKI_INDEX
-                        if os.path.isfile(index_path):
-                            spelling = os.path.relpath(index_path, path.parent)
-                            index_target = pathlib.Path(spelling).with_suffix('')
-                            canonical = index_target.as_posix() + anchor + alias
-                        self.on_link_outside(
-                            path=str(relpath),
-                            target=target + alias,
-                            folder=entry,
-                            canonical=canonical,
-                        )
+                    # a target under no allowlisted folder is a hard issue
+                    # whatever is on disk: the verdict reads the link text and
+                    # the settings, and the probes below only word its fixes
+                    if target in reported:
                         continue
+                    reported.add(target)
+                    entry = self._outside_entry(joined)
+                    # the mirror from the page's folder, the base an Obsidian
+                    # habit spells from, words the 'use' fix; the root itself
+                    # names no page, so a mirror landing there names none
+                    mirror = pathlib.Path(os.path.normpath(path.parent / page_target))
+                    if mirror == self._root:
+                        canonical = None
+                    elif self._inside_root(mirror):
+                        canonical = self._root_relative_form(mirror)
+                    else:
+                        canonical = self._external_spelling(mirror)
+                    fixes = []
+                    fields = {'path': str(relpath), 'target': target}
+                    if entry is not None:
+                        fixes.append(
+                            f'add {entry!r} to links.external in {WIKI_SETTINGS}'
+                            ' to allow it'
+                        )
+                        fields['folder'] = entry
+                    if canonical is not None:
+                        fixes.append(f'use [[{canonical}{anchor}{alias}]]')
+                        fields['canonical'] = canonical + anchor
+                    options = ', or '.join(fixes)
+                    fix = f' ({options})' if fixes else ''
+                    result.append(
+                        Issue(
+                            f'{relpath}: Link [[{target}{alias}]] points outside'
+                            f' every links.external folder{fix}',
+                            kind='outside_link',
+                            **fields,
+                        )
+                    )
+                    continue
                 elif os.path.isdir(folder):
                     # a page by stem is live wherever it lies
                     if os.path.exists(page_form):
                         continue
                     # inside another wiki its own rules apply, exclusions
                     # included: a folder that wiki indexes is the directory link
-                    index_target = self._external_index_target(joined, path)
+                    index_target = self._external_index_target(joined)
                     if index_target is not None:
                         if target in reported:
                             continue
@@ -5766,6 +5811,26 @@ class Wiki:
                     # the literal file or folder is there
                     if os.path.exists(joined):
                         continue
+                    # a miss that names anything in the wiki from the page's folder
+                    # is the in-wiki target the author meant, spelled as Obsidian
+                    # reads it: the relative-link issue naming the prefix-free form
+                    canonical = self._canonical_link_target(path, page_target)
+                    if canonical is not None:
+                        if target in reported:
+                            continue
+                        reported.add(target)
+                        result.append(
+                            Issue(
+                                f'{relpath}: Link [[{target}{alias}]]'
+                                f' {_RELATIVE_LINK_TEXT}'
+                                f' (use [[{canonical}{anchor}{alias}]])',
+                                kind='relative_link',
+                                path=str(relpath),
+                                target=target,
+                                canonical=canonical + anchor,
+                            )
+                        )
+                        continue
                 else:
                     # an entry naming no folder on this machine leaves nothing
                     # to check: the run-level note names it once
@@ -5773,19 +5838,17 @@ class Wiki:
             if target in reported:
                 continue
             reported.add(target)
-            # name the fix when a reading resolves: the page-relative spelling
-            # of an allowlisted file the text missed -- as written and
-            # normalized, else as read from the wiki root -- and for a
-            # prefix-free or in-root absolute miss the root-relative form
+            # name the fix when a reading resolves; the page-folder mirror is the
+            # prefixed arm's second rung, wording the fix an Obsidian habit missed
             if absolute and self._inside_root(joined):
                 canonical = self._root_relative_form(joined)
             elif absolute:
-                canonical = self._external_spelling(joined, path)
+                canonical = self._external_spelling(joined)
             elif prefixed:
-                canonical = self._external_spelling(joined, path)
+                canonical = self._external_spelling(joined)
                 if canonical is None:
-                    reading = pathlib.Path(os.path.normpath(self._root / page_target))
-                    canonical = self._external_spelling(reading, path)
+                    mirror = pathlib.Path(os.path.normpath(path.parent / page_target))
+                    canonical = self._external_spelling(mirror)
             else:
                 canonical = self._canonical_link_target(path, page_target)
             if (canonical is not None) and (canonical != page_target):
@@ -6147,26 +6210,6 @@ class LinkStaleEvent(Event):
         return result
 
 
-class LinkOutsideEvent(Event):
-    """Emitted when lint notes a wikilink leaving the wiki for an unlisted file."""
-
-    path: str
-    target: str
-    folder: str
-    canonical: Optional[str] = None
-
-    @property
-    def description(self: LinkOutsideEvent) -> str:
-        """Return the outside-link note line."""
-        result = (
-            f'{self.path}: Link [[{self.target}]] points outside the wiki (add'
-            f' {self.folder!r} to links.external in {WIKI_SETTINGS} to allow it'
-        )
-        if self.canonical:
-            result += f', and link [[{self.canonical}]] if a wiki indexes the folder'
-        return result + ')'
-
-
 class LinkFolderMissingEvent(Event):
     """Emitted when lint finds a ``links.external`` entry naming no folder."""
 
@@ -6208,7 +6251,6 @@ _NOTICE_HOOKS = {
     ContentEmptyEvent: 'on_content_empty',
     CrlfNoticeEvent: 'on_crlf_notice',
     LinkStaleEvent: 'on_link_stale',
-    LinkOutsideEvent: 'on_link_outside',
     LinkFolderMissingEvent: 'on_link_folder_missing',
 }
 
@@ -6293,3 +6335,8 @@ def _encloses_wiki_error(nested: pathlib.Path) -> ValueError:
     return ValueError(
         f'Path encloses the wiki at: {nested}; run the command from that declared root.'
     )
+
+
+def _malformed_json_error(name: str, e: Exception) -> ValueError:
+    """Build the malformed-JSON error, naming the user-editable file."""
+    return ValueError(f'Malformed JSON in {name}: {e}')

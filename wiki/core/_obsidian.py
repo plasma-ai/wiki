@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.resources
 import pathlib
 import shutil
 from typing import Union
@@ -30,6 +31,14 @@ _OBSIDIAN_PLUGIN_DIGESTS = {
         ),
     },
 }
+# bundled plugins, copied from _assets/plugins/<id>/ into every vault the
+# install configures and enabled beside the pinned downloads
+_BUNDLED_PLUGINS = ('wiki-root-links',)
+# a bundled plugin's files, copied by name from _assets/plugins/<id>/ so
+# nothing else in the package folder ever reaches a vault
+_BUNDLED_PLUGIN_ASSETS = ('main.js', 'manifest.json')
+# the package folder the bundled plugins ship in, one <id>/ folder each
+_BUNDLED_PLUGIN_DIR = importlib.resources.files('wiki').joinpath('_assets', 'plugins')
 
 
 class PluginChecksumError(Exception):

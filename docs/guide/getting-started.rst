@@ -71,7 +71,7 @@ under the current directory, named after the project:
    $ wiki init
    Initialized wiki at: /home/user/myproject/wiki
 
-   In Obsidian: Settings -> Community plugins -> turn off Restricted Mode, then enable Front Matter Title if needed.
+   In Obsidian: Settings -> Community plugins -> turn off Restricted Mode, then enable Front Matter Title and Wiki Root Links if needed.
 
 The command sets up:
 
@@ -83,9 +83,9 @@ The command sets up:
   ``desc: ...`` placeholder to fill in.
 - ``wiki/.wiki/obsidian/`` and ``wiki/.obsidian/`` — the Obsidian integration:
   a staged config template and its materialized copy, including a pinned
-  community plugin downloaded at setup time. The Restricted Mode step in the
-  hint above is the one manual action Obsidian requires. See
-  :doc:`/guide/obsidian`.
+  community plugin downloaded at setup time and the bundled Wiki Root Links
+  plugin copied from the package. The Restricted Mode step in the hint above
+  is the one manual action Obsidian requires. See :doc:`/guide/obsidian`.
 - ``wiki/.wiki/cache/`` — a derived word-counts cache; it ignores itself via
   its own ``.gitignore`` and can be deleted at any time.
 - The git merge driver for ``_index.md`` files, registered in the repository's

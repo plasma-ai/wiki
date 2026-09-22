@@ -1,8 +1,9 @@
 """Behavioral tests for ``Wiki.update_config``.
 
 The Obsidian install: staged plugin downloads (stubbed at the
-``_download`` boundary), config merging, returned warnings vs
-notices, and the ``OFFLINE_MODE`` matrix.
+``_download`` boundary), the bundled plugin copied from the package,
+config merging, returned warnings vs notices, and the ``OFFLINE_MODE``
+matrix.
 """
 
 from __future__ import annotations
@@ -11,6 +12,8 @@ import hashlib
 import json
 import os
 import pathlib
+import shutil
+from typing import Optional
 
 import pytest
 
@@ -22,6 +25,8 @@ from ._helpers import _capture_notices
 
 __all__ = [
     'test_update_config_installs_plugin',
+    'test_update_config_installs_bundled_plugin',
+    'test_update_config_bundled_plugin_survives_existing_staged_dir',
     'test_update_config_refuses_a_checksum_mismatch',
     'test_update_config_offline_warns',
     'test_update_config_keeps_notices_off_warnings',
@@ -30,6 +35,7 @@ __all__ = [
     'test_update_config_seeds_missing_config_dir',
     'test_update_config_rejects_type_mismatch',
     'test_update_config_reports_malformed_target_json',
+    'test_update_config_reports_malformed_enabled_list',
     'test_update_config_offline_mode',
     'test_update_config_rejects_bad_offline_mode',
     'test_init_rejects_bad_offline_mode_before_scaffolding',
@@ -40,7 +46,7 @@ __all__ = [
 
 
 @pytest.fixture
-def stub_download(monkeypatch: pytest.MonkeyPatch) -> None:
+def _stub_download(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub the plugin download with a marker write (no real network).
 
     The digest pins follow the marker bytes, so the stubbed install
@@ -64,11 +70,9 @@ def stub_download(monkeypatch: pytest.MonkeyPatch) -> None:
 # ------ plugin install and merge
 
 
-def test_update_config_installs_plugin(
-    tmp_path: pathlib.Path,
-    stub_download: None,
-) -> None:
-    """``update_config`` installs the bundled plugin into ``.obsidian/``."""
+@pytest.mark.usefixtures('_stub_download')
+def test_update_config_installs_plugin(tmp_path: pathlib.Path) -> None:
+    """``update_config`` installs the staged plugin into ``.obsidian/``."""
     # init seeds the front matter title plugin into .wiki/obsidian
     wiki = Wiki(tmp_path)
     wiki.init()
@@ -90,6 +94,108 @@ def test_update_config_installs_plugin(
     expected = 0o666 & ~umask
     assert (plugin / 'main.js').stat().st_mode & 0o777 == expected
     assert (plugin / 'manifest.json').stat().st_mode & 0o777 == expected
+
+
+@pytest.mark.parametrize(
+    argnames=('enabled', 'expected_enabled'),
+    argvalues=[
+        pytest.param(
+            None,
+            ['obsidian-front-matter-title-plugin', 'wiki-root-links'],
+            id='absent',
+        ),
+        pytest.param(
+            ['other-plugin'],
+            ['other-plugin', 'obsidian-front-matter-title-plugin', 'wiki-root-links'],
+            id='without-id',
+        ),
+        pytest.param(
+            ['wiki-root-links'],
+            ['wiki-root-links', 'obsidian-front-matter-title-plugin'],
+            id='with-id',
+        ),
+    ],
+)
+def test_update_config_installs_bundled_plugin(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: Optional[list[str]],
+    expected_enabled: list[str],
+) -> None:
+    """``update_config`` copies the bundled plugin from the package and enables it.
+
+    The plugin ships beside the modules, so the install needs no
+    network: offline, the only warning is the Front Matter Title skip.
+    The vault folder holds the plugin's two files and nothing else, and
+    the id is enabled exactly once whatever ``community-plugins.json``
+    held before the run.
+    """
+    wiki = Wiki(tmp_path)
+    wiki.init()
+    monkeypatch.setenv(OFFLINE_MODE, 'true')
+
+    # seed the enabled-plugins list the run starts from
+    cp_file = tmp_path / '.obsidian' / 'community-plugins.json'
+    if enabled is not None:
+        cp_file.parent.mkdir()
+        cp_file.write_text(json.dumps(enabled), encoding='utf-8')
+
+    # the plugin files are the packaged assets, byte for byte
+    plugin_id = 'wiki-root-links'
+    warnings = wiki.update_config()
+    source = _obsidian._BUNDLED_PLUGIN_DIR / plugin_id
+    plugin = tmp_path / '.obsidian' / 'plugins' / plugin_id
+    for asset in ('main.js', 'manifest.json'):
+        assert (plugin / asset).read_bytes() == (source / asset).read_bytes()
+    # and nothing else: the vault folder holds exactly the named assets
+    installed = sorted(entry.name for entry in plugin.iterdir())
+    assert installed == sorted(_obsidian._BUNDLED_PLUGIN_ASSETS)
+    # installed assets honor the umask like every write_atomic surface,
+    # never mkstemp's owner-only temp mode
+    umask = os.umask(0)
+    os.umask(umask)
+    expected = 0o666 & ~umask
+    for asset in ('main.js', 'manifest.json'):
+        assert (plugin / asset).stat().st_mode & 0o777 == expected
+    # enabled once, appended after any prior entries (an ordered union)
+    merged = json.loads(cp_file.read_text(encoding='utf-8'))
+    assert merged == expected_enabled
+    # the offline skip is the only warning; the bundled install never warns
+    warning_count = len(warnings)
+    assert warning_count == 1
+    warning, *_ = warnings
+    assert 'OFFLINE_MODE' in warning
+    assert plugin_id not in warning
+
+
+def test_update_config_bundled_plugin_survives_existing_staged_dir(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The bundled install does not depend on the staged tree.
+
+    A ``.wiki/obsidian/`` that carries neither ``plugins/`` nor
+    ``community-plugins.json`` is left as it is (it exists, so it is not
+    re-seeded), yet the plugin directory is still copied and the id
+    still enabled: both steps read the package and the vault only.
+    """
+    wiki = Wiki(tmp_path)
+    wiki.init()
+
+    # the staged tree carries neither plugins/ nor community-plugins.json
+    config_dir = tmp_path / '.wiki' / 'obsidian'
+    shutil.rmtree(config_dir / 'plugins')
+    (config_dir / 'community-plugins.json').unlink()
+
+    # no staged plugin means no download and no warning
+    assert wiki.update_config() == []
+    # the plugin is still copied and enabled from the package and the vault
+    plugin_id = 'wiki-root-links'
+    plugin = tmp_path / '.obsidian' / 'plugins' / plugin_id
+    assert (plugin / 'main.js').is_file()
+    assert (plugin / 'manifest.json').is_file()
+    cp_file = tmp_path / '.obsidian' / 'community-plugins.json'
+    enabled = json.loads(cp_file.read_text(encoding='utf-8'))
+    assert enabled == [plugin_id]
 
 
 def test_update_config_refuses_a_checksum_mismatch(
@@ -158,10 +264,8 @@ def test_update_config_offline_warns(
     assert plugin_id in json.loads(cp_file.read_text(encoding='utf-8'))
 
 
-def test_update_config_keeps_notices_off_warnings(
-    tmp_path: pathlib.Path,
-    stub_download: None,
-) -> None:
+@pytest.mark.usefixtures('_stub_download')
+def test_update_config_keeps_notices_off_warnings(tmp_path: pathlib.Path) -> None:
     """Restoring the root marker is a notice, never a returned warning.
 
     The returned warnings mean setup needs another run and gate the
@@ -180,10 +284,8 @@ def test_update_config_keeps_notices_off_warnings(
     assert (tmp_path / '.wiki' / 'settings.json').is_file()
 
 
-def test_update_config_preserves_existing(
-    tmp_path: pathlib.Path,
-    stub_download: None,
-) -> None:
+@pytest.mark.usefixtures('_stub_download')
+def test_update_config_preserves_existing(tmp_path: pathlib.Path) -> None:
     """``update_config`` merges into existing config without clobbering it."""
     # init seeds the front matter title plugin into .wiki/obsidian
     wiki = Wiki(tmp_path)
@@ -223,10 +325,8 @@ def test_update_config_preserves_existing(
     assert app == {'existing': 1, 'setting': True}
 
 
-def test_update_config_is_idempotent(
-    tmp_path: pathlib.Path,
-    stub_download: None,
-) -> None:
+@pytest.mark.usefixtures('_stub_download')
+def test_update_config_is_idempotent(tmp_path: pathlib.Path) -> None:
     """Re-running ``update_config`` leaves the merged config unchanged."""
     wiki = Wiki(tmp_path)
     wiki.init()
@@ -241,12 +341,11 @@ def test_update_config_is_idempotent(
     assert cp_file.read_text(encoding='utf-8') == first
     enabled = json.loads(first)
     assert enabled.count('obsidian-front-matter-title-plugin') == 1
+    assert enabled.count('wiki-root-links') == 1
 
 
-def test_update_config_seeds_missing_config_dir(
-    tmp_path: pathlib.Path,
-    stub_download: None,
-) -> None:
+@pytest.mark.usefixtures('_stub_download')
+def test_update_config_seeds_missing_config_dir(tmp_path: pathlib.Path) -> None:
     """A missing ``.wiki/obsidian`` is seeded from the stock template.
 
     An adopted index tree (or a wiki whose ``.wiki/`` was lost) has no
@@ -270,10 +369,8 @@ def test_update_config_seeds_missing_config_dir(
 # ------ config validation
 
 
-def test_update_config_rejects_type_mismatch(
-    tmp_path: pathlib.Path,
-    stub_download: None,
-) -> None:
+@pytest.mark.usefixtures('_stub_download')
+def test_update_config_rejects_type_mismatch(tmp_path: pathlib.Path) -> None:
     """``update_config`` raises on a top-level JSON type mismatch."""
     wiki = Wiki(tmp_path)
     wiki.init()
@@ -289,14 +386,24 @@ def test_update_config_rejects_type_mismatch(
         wiki.update_config()
 
 
+@pytest.mark.parametrize(
+    argnames='payload',
+    argvalues=[
+        pytest.param(b'{ "a": 1, }', id='bad-json'),
+        pytest.param(b'{ "\xff\xfe": 1 }', id='undecodable-bytes'),
+    ],
+)
+@pytest.mark.usefixtures('_stub_download')
 def test_update_config_reports_malformed_target_json(
     tmp_path: pathlib.Path,
-    stub_download: None,
+    payload: bytes,
 ) -> None:
     """A malformed existing ``.obsidian`` JSON names the file instead of a bare error.
 
     The target is user-editable, so a hand-edit or truncated write must
-    surface a diagnosable message rather than an undiagnosable JSON error.
+    surface a diagnosable message rather than an undiagnosable JSON
+    error; bytes no UTF-8 decoder reads are corruption too, and would
+    otherwise escape as a bare decode error.
     """
     wiki = Wiki(tmp_path)
     wiki.init()
@@ -306,9 +413,41 @@ def test_update_config_reports_malformed_target_json(
     (config_dir / 'app.json').write_text(json.dumps({'a': 1}), encoding='utf-8')
     obsidian_dir = tmp_path / '.obsidian'
     obsidian_dir.mkdir(exist_ok=True)
-    (obsidian_dir / 'app.json').write_text('{ "a": 1, }', encoding='utf-8')
+    (obsidian_dir / 'app.json').write_bytes(payload)
 
     with pytest.raises(ValueError, match=r'\.obsidian/app\.json'):
+        wiki.update_config()
+
+
+@pytest.mark.parametrize(
+    argnames='payload',
+    argvalues=[
+        pytest.param(b'[ "a", ]', id='bad-json'),
+        pytest.param(b'["\xff\xfe"]', id='undecodable-bytes'),
+    ],
+)
+@pytest.mark.usefixtures('_stub_download')
+def test_update_config_reports_malformed_enabled_list(
+    tmp_path: pathlib.Path,
+    payload: bytes,
+) -> None:
+    """A malformed vault ``community-plugins.json`` names the file at the enable step.
+
+    With no staged ``community-plugins.json`` the merge loop never reads
+    the vault's list, so the enable step is the first to parse the
+    user-edited file and must surface the same diagnosable message,
+    for bytes no UTF-8 decoder reads as much as for bad JSON.
+    """
+    wiki = Wiki(tmp_path)
+    wiki.init()
+
+    # the staged list is gone, and the vault's own list is hand-corrupted
+    (tmp_path / '.wiki' / 'obsidian' / 'community-plugins.json').unlink()
+    obsidian_dir = tmp_path / '.obsidian'
+    obsidian_dir.mkdir(exist_ok=True)
+    (obsidian_dir / 'community-plugins.json').write_bytes(payload)
+
+    with pytest.raises(ValueError, match=r'\.obsidian/community-plugins\.json'):
         wiki.update_config()
 
 

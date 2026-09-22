@@ -1,0 +1,10 @@
+{
+  "id": "wiki-root-links",
+  "name": "Wiki Root Links",
+  "version": "1.0.0",
+  "minAppVersion": "1.12.7",
+  "description": "Reads ./ and ../ links from the vault root, as wiki lint reads a wikilink: they never resolve to a note in this vault, a click never creates folders outside it, and a markdown target opens in the registered vault that holds it, else a notice names the path.",
+  "author": "Plasma AI",
+  "authorUrl": "https://github.com/plasma-ai/wiki",
+  "isDesktopOnly": true
+}

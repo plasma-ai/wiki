@@ -241,21 +241,16 @@ are folder paths relative to the wiki root, climbing out of it with ``..``:
      }
    }
 
-The links themselves are relative to the page, as Obsidian and markdown read
-a ``./`` or ``../`` link, so the same file takes one more ``..`` per folder of
-page depth. In ``overview.md`` at the wiki root:
+The links are read from the wiki root, like the entries, so an entry is the
+literal prefix of every link it admits and one spelling names a file from
+every page. In ``overview.md`` at the wiki root and in ``notes/meeting.md``
+one folder down alike:
 
 .. code-block:: markdown
 
    See [[../src/main.py]] and [[../math/lemmas|the lemmas]].
 
-In ``notes/meeting.md``, one folder down:
-
-.. code-block:: markdown
-
-   See [[../../src/main.py]] and [[../../math/lemmas|the lemmas]].
-
-A prefix-free target is still read from the wiki root and names something
+A prefix-free target is read from the wiki root too and names something
 inside it. List every link opening with ``./`` or ``../`` with ``wiki match``;
 it over-reports (code samples where lint sees no link) and under-reports
 (``[[..]]``, ``[[.]]``, an interior ``..`` segment, and a target padded with
@@ -272,19 +267,26 @@ folder — exists under a listed folder on this machine, and judges a target
 inside another wiki by that wiki's own rules: a folder it indexes is the
 ``targets a folder, not a page (use [[../math/g2/_index]])`` issue, as at
 home. A prefixed link that lands inside the wiki is a hard issue, ``points
-inside the wiki through './' or '../'``, naming the prefix-free form (or the
-page-relative spelling of the outside file the text would have reached); a
-missing target is a ``Stale link`` note, suggesting the page-relative
-spelling when the text read from the wiki root reaches a listed file; a real
-file under no listed folder is the note ``points outside the wiki (add
-'../docs' to links.external in .wiki/settings.json to allow it)``; and an
-entry naming no folder on this machine is noted once per run, its links
-unchecked. The allowlist is a lint rule alone: ``wiki read ../src/main.py``
-still fails with ``Path is outside wiki root`` (read another wiki with
-``wiki read --path <its root>``), and ``wiki map`` never shows an external
-folder. In Obsidian an external target lies outside the vault and shows
-unresolved — do not click it: Obsidian creates the missing target at that
-path. See :doc:`/configuration` for the entry grammar.
+inside the wiki through './' or '../'``, naming the prefix-free form — as is
+one that misses under a listed folder while the same text read from the
+page's folder names something in the wiki (``[[../overview]]`` from
+``notes/meeting.md``, meaning the in-wiki ``overview.md``); a missing target
+under a listed folder is otherwise a ``Stale link`` note, suggesting the
+root-relative spelling when the text read from the page's folder reaches a
+listed file; a link under no listed folder is the hard issue ``points
+outside every links.external folder (add '../docs' to links.external in
+.wiki/settings.json to allow it)``, whatever is on disk; and an entry naming
+no folder on this machine is noted once per run, its links unchecked. The
+allowlist is a lint rule alone: ``wiki read ../src/main.py`` still fails
+with ``Path is outside wiki root`` (read another wiki with ``wiki read
+--path <its root>``), and ``wiki map`` never shows an external folder. In
+Obsidian an external target lies outside the vault and shows unresolved; the
+bundled Wiki Root Links plugin turns a click on it into a notice, or opens a
+markdown target in the sibling wiki's own registered vault, and without the
+plugin Obsidian reads the link from the note's folder — do not click it
+there: Obsidian creates the missing target at that path. See
+:doc:`/configuration` for the entry grammar and :doc:`/guide/obsidian` for
+the plugin.
 
 Preview before writing
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -368,19 +370,18 @@ markers (formatter and line-wrap damage), descriptions missing their trailing
 period, prose wikilinks naming a folder rather than its ``_index`` page (in
 this wiki, or in another wiki a ``links.external`` folder admits), prose
 wikilinks written with ``./`` or ``../`` that land inside the wiki (the
-prefix-free form is the fix), unparseable ``created:``/``updated:`` stamps, a
+prefix-free form is the fix) or outside every ``links.external`` folder (the
+entry to add is named), unparseable ``created:``/``updated:`` stamps, a
 nested ``.wiki/settings.json`` declaring a foreign wiki root, dangling or
 nested region markers, and — under ``titles.required`` — a missing or
 unfilled ``title:``.
 
 Notes flag soft hygiene: placeholder (``...``) and oversized descriptions,
-empty index content sections, CRLF line endings, stale ``[[wikilinks]]`` in
-prose, and a prose link to a real file outside every ``links.external``
-folder (naming the entry to add). A prefix-free target is read from the wiki
-root and a ``./`` or ``../`` target from the page's folder, so a stale note
-suggests the form the author likely meant when one resolves: the
-root-relative ``(use [[canonical]])`` for a prefix-free slip, or the
-page-relative spelling of an allowlisted file for a prefixed or absolute one.
+empty index content sections, CRLF line endings, and stale ``[[wikilinks]]``
+in prose. Every target is read from the wiki root, so a stale note suggests
+the root-relative form the author likely meant when one resolves: ``(use
+[[canonical]])`` for a prefix-free slip, or the root-relative spelling of an
+allowlisted file for a prefixed or absolute one.
 Five environment notes ride along and count in the closing summary: a
 ``.gitattributes`` ``merge=wiki`` mapping with no ``merge.wiki.driver``
 configured in the clone (the fresh-clone state — run ``wiki config``); an

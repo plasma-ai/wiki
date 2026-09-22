@@ -6,7 +6,8 @@ A wiki doubles as an Obsidian vault. Index link rows and cross-references use
 and the ``.obsidian/`` vault configuration lives at the wiki root — so the
 wiki root opens directly as a vault. The ``wiki config`` command materializes
 that vault configuration, installing a curated plugin setup that makes the
-wiki's naming scheme render properly inside Obsidian.
+wiki's naming scheme render properly inside Obsidian and makes Obsidian read
+wikilinks as ``wiki lint`` does, from the wiki root.
 
 ``wiki init`` runs the same setup on a fresh wiki, so a wiki you just
 scaffolded needs nothing more. Run ``wiki config`` when you clone an existing
@@ -27,8 +28,10 @@ The ``wiki config`` command
    created from the stock template bundled with the package. An existing
    ``.wiki/obsidian/`` is left untouched.
 2. **Installs the vault configuration.** The staged configuration under
-   ``.wiki/obsidian/`` is copied into ``.obsidian/`` at the wiki root, and
-   the pinned plugin code is downloaded (the merge rules are below).
+   ``.wiki/obsidian/`` is copied into ``.obsidian/`` at the wiki root, the
+   pinned Front Matter Title code is downloaded, and the bundled Wiki Root
+   Links plugin is copied from the package and enabled (the merge rules are
+   below).
 3. **Restores the settings marker.** A missing ``.wiki/settings.json`` is
    restored as ``{}`` (all defaults) with a notice on stderr — the file
    declares the wiki root; see :doc:`/configuration`.
@@ -43,13 +46,14 @@ Options:
    declaring ``.wiki/settings.json``, else the outermost ``_index.md``
    chain), else ``{cwd}/wiki/``.
 
-``wiki config`` exits 0 even when a plugin download fails: download failures
-(no network connection, a changed upstream asset, offline mode) are warnings
-on stderr and never affect the exit code. Re-run ``wiki config`` online to
-finish setup. Setting the ``OFFLINE_MODE`` environment variable to ``true``
-skips the downloads outright with the same re-run warning; any value other
-than ``true`` or ``false`` (case-insensitive) is rejected before anything is
-written.
+``wiki config`` exits 0 even when the Front Matter Title download fails:
+download failures (no network connection, a changed upstream asset, offline
+mode) are warnings on stderr and never affect the exit code. Re-run
+``wiki config`` online to finish setup. Setting the ``OFFLINE_MODE``
+environment variable to ``true`` skips that download outright with the same
+re-run warning — the bundled Wiki Root Links plugin is copied from the
+package either way and needs no network; any value other than ``true`` or
+``false`` (case-insensitive) is rejected before anything is written.
 
 What gets installed
 -------------------
@@ -113,6 +117,52 @@ downloaded asset is verified against a sha256 digest pinned in the package
 before anything is installed; a changed upstream asset is refused with a
 warning rather than installed.
 
+The Wiki Root Links plugin
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Every wikilink target is read from the wiki root: a prefix-free target must
+name something inside the wiki, and a target carrying a ``.`` or ``..``
+segment must leave it, reaching a file or another wiki's page only under a
+``links.external`` folder, whose entry is the link's prefix (see
+:doc:`/configuration`). Stock Obsidian reads a ``./`` or ``../`` link from
+the note's folder instead, so the integration installs the bundled Wiki Root
+Links plugin, which makes Obsidian read links as ``wiki lint`` does. It
+reads every internal link this way, including a markdown-style link whose
+target carries a ``.`` or ``..`` segment (``[text](../page.md)``), which
+``wiki lint`` does not check: lint reads wikilinks alone. It wraps
+Obsidian's link resolver so that a target carrying a ``.`` or ``..`` segment
+never resolves to a note in the vault, and it intercepts a follow of such a
+link — a click in reading view or Live Preview, or any path Obsidian routes
+through its link-opening method — so Obsidian never creates the missing
+target as folders outside the vault. On a follow, when the target is a
+markdown file inside a vault Obsidian registers on this machine — a sibling
+wiki opened as its own vault — the plugin opens it there through an
+``obsidian://open`` URI, switching to that vault's window; otherwise (the
+vault unregistered, the target a folder or a non-markdown file, or nothing
+at the path) it shows a notice naming the root-relative path, with a
+trailing ``(not found)`` when nothing is there, and opens nothing. A dot
+link that lands back inside the vault — the spelling ``wiki lint`` fails as
+``relative_link`` — draws a notice naming its prefix-free form
+(``Inside the vault: use [[overview]]``; a folder holding an ``_index.md``
+is named by its ``/_index`` page), with a trailing ``(not found)`` when
+nothing is there (``Inside the vault: overview (not found)``), and opens
+nothing. That URI is the only thing the plugin ever dispatches: it never
+hands a filesystem path to the operating system, so a link naming a script
+or an application is never run, opened, or revealed in the file manager. It
+reads no wiki settings — the ``links.external`` allowlist stays a lint rule.
+
+The plugin is bundled with the package under the same Apache-2.0 licence:
+``wiki init`` and ``wiki config`` copy it into
+``.obsidian/plugins/wiki-root-links/`` and enable it in
+``community-plugins.json`` on every run, with no download and no digest,
+offline or not, and never write it into the staged ``.wiki/obsidian/``. It
+is desktop only — the phone build has no filesystem access it could use, so
+stock behaviour applies there. The methods it wraps are Obsidian internals,
+not a public API: when the resolver or the link-opening method is
+unavailable after an Obsidian update, the plugin says so in a notice at load
+and installs the layers it can, and on any error it falls back to stock
+behaviour.
+
 One step cannot be automated: Obsidian gates community plugins behind
 Restricted Mode. When ``wiki init`` or ``wiki config`` completes with no
 download warnings, the CLI prints the reminder (on stderr, only when attached
@@ -122,17 +172,20 @@ plugin download prints its warning in place of the reminder — re-run
 
 .. code-block:: text
 
-   In Obsidian: Settings -> Community plugins -> turn off Restricted Mode, then enable Front Matter Title if needed.
+   In Obsidian: Settings -> Community plugins -> turn off Restricted Mode, then enable Front Matter Title and Wiki Root Links if needed.
 
 How the vault maps onto the wiki
 --------------------------------
 
-Open the wiki root as a vault. Every markdown page is a note, every folder is
-a section, and each folder's ``_index.md`` is its section index — with the
-Front Matter Title plugin active, indexes display as their folder's name and
-pages as their leaf name. The generated link rows in every index are ordinary
-wikilinks: click through them to navigate the tree, and the graph view shows
-the wiki's structure because the index links *are* its structure.
+Open the wiki root as a vault — not a folder above it: Obsidian resolves a
+prefix-free link from the vault root, and the Wiki Root Links plugin joins a
+``./`` or ``../`` target onto it, so both agree with ``wiki lint`` only when
+the vault root is the wiki root. Every markdown page is a note, every folder
+is a section, and each folder's ``_index.md`` is its section index — with
+the Front Matter Title plugin active, indexes display as their folder's name
+and pages as their leaf name. The generated link rows in every index are
+ordinary wikilinks: click through them to navigate the tree, and the graph
+view shows the wiki's structure because the index links *are* its structure.
 
 Day-to-day use
 --------------
@@ -147,16 +200,25 @@ Day-to-day use
 - ``wiki update`` never linkifies prose: author ``[[wikilink]]``
   cross-references in page bodies by hand (Obsidian's link suggestions help
   here).
-- Obsidian and ``wiki lint`` read wikilinks from the same places: a
-  prefix-free target (``[[topics/example]]``) from the vault root — the wiki
-  root — and a ``./`` or ``../`` target from the note's own folder, so
-  nothing lint accepts renders as a different note in Obsidian. A prefixed
-  target must leave the wiki, reaching a file, folder, or another wiki's
-  page under a ``links.external`` folder (see :doc:`/configuration`); that
-  target lies outside the vault, so
-  Obsidian shows the link unresolved — do not click it: Obsidian creates the
-  missing target at that path, as folders outside the vault, through a known
-  bug.
+- Every wikilink target is read from the wiki root, by ``wiki lint`` and,
+  with the Wiki Root Links plugin enabled, by Obsidian: a prefix-free target
+  (``[[topics/example]]``) names a note in the vault, and a ``./`` or ``../``
+  target leaves the wiki for a file, folder, or another wiki's page under a
+  ``links.external`` folder (see :doc:`/configuration`), so Obsidian shows it
+  unresolved and the plugin turns a follow into a notice, or opens a markdown
+  target in a sibling wiki's own registered vault. Stock Obsidian — the
+  plugin disabled, a phone, a clone that has not run ``wiki config`` — reads
+  a ``./`` or ``../`` link from the note's folder instead, and ``wiki lint``
+  says nothing about it, since the link is correct: a correct ``[[../tools]]``
+  from ``sub/page.md`` beside an in-wiki ``tools.md`` (a wiki at ``wiki/``
+  with a ``tools/`` folder beside it) opens that in-wiki note there, and
+  renaming that note rewrites the link into an in-wiki link; a click on an
+  unresolved ``./`` or ``../`` link there creates the missing target at that
+  path, as folders outside the vault, through a known bug — do not click it.
+  Enable the plugin on every machine that opens the vault.
+- Link an outside file, never embed it: ``![[../img.png]]`` shows unresolved,
+  since Obsidian cannot render a file outside the vault; write
+  ``[[../img.png]]`` instead.
 - Keep markdown-formatting plugins away from the wiki: a formatter that
   rewrites ``***`` into ``---`` or backslash-escapes ``[[`` brackets corrupts
   the generated region. ``wiki lint`` names these damage signatures when they

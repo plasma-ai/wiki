@@ -94,10 +94,10 @@ excluded from indexing with gitignore-style globs in `exclude.patterns` —
 excluded paths are never walked or linted, though `wiki read` still serves them.
 Prose wikilinks stay inside the wiki unless `links.external` lists folders
 outside it, as paths relative to the wiki root (`../src`, `../math`): a `./` or
-`../` link, read from the page's folder as Obsidian reads it, may then target a
-file or another wiki's page under a listed folder. The allowlist is a lint rule
-alone — `wiki lint` checks such links in place, while `wiki read` and every
-other command stay confined to the wiki root.
+`../` link, read from the wiki root like every other link, may then target a
+file or another wiki's page under a listed folder, whose entry is the link's
+prefix. The allowlist is a lint rule alone — `wiki lint` checks such links in
+place, while `wiki read` and every other command stay confined to the wiki root.
 
 Frontmatter timestamps default to UTC in ISO-8601. To change them, set a
 timezone (any IANA name) and format (a strftime string) under `timestamp` in
@@ -168,17 +168,16 @@ Maintain indexes as files are added and removed:
 - `wiki new` — create an indexed folder with an authored desc and content
 
 `wiki lint` exits 1 on issues and 0 on a clean wiki (soft notes go to stderr and
-never affect the exit code — a stale wikilink in prose, or a prose link to a
-real file outside every allowlisted folder, is a note, while a broken link in a
-generated index block, a prose link naming a folder rather than its `_index`
-page, a `./` or `../` prose link that lands inside the wiki, or frontmatter a
-strict YAML reader rejects, is an issue). Scripts should read `wiki lint --json`
-— one JSON document on stdout listing every issue and note with a `severity` and
-`kind` — rather than parse the prose; the exit code is unchanged. A page that
-must display otherwise-flagged content — sample conflict markers, stale link
-examples — wraps those lines in a `<!-- start: no-lint -->` ...
-`<!-- end: no-lint -->` region, which suppresses the positional rules, notes
-included, for just that span.
+never affect the exit code — a stale wikilink in prose is a note, while a broken
+link in a generated index block, a prose link naming a folder rather than its
+`_index` page, a `./` or `../` prose link that lands inside the wiki or outside
+every allowlisted folder, or frontmatter a strict YAML reader rejects, is an
+issue). Scripts should read `wiki lint --json` — one JSON document on stdout
+listing every issue and note with a `severity` and `kind` — rather than parse
+the prose; the exit code is unchanged. A page that must display
+otherwise-flagged content — sample conflict markers, stale link examples — wraps
+those lines in a `<!-- start: no-lint -->` ... `<!-- end: no-lint -->` region,
+which suppresses the positional rules, notes included, for just that span.
 
 Browse structure, search across content, and read entries:
 
@@ -292,6 +291,12 @@ Obsidian plugin by Snezhig, which displays each note's `name` frontmatter as its
 title. The plugin is licensed GPL-3.0; `wiki init`/`wiki config` download
 version 4.1.0 from the upstream GitHub release at setup time rather than
 redistributing it.
+
+`wiki` also bundles its own Wiki Root Links Obsidian plugin, licensed Apache-2.0
+with the package: `wiki init`/`wiki config` copy it into the vault so Obsidian
+reads a `./` or `../` link from the wiki root as `wiki lint` does, never as a
+note in the vault, and a click on one draws a notice or opens a markdown target
+in a sibling wiki's own registered vault.
 
 ## License
 

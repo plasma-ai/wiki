@@ -137,43 +137,49 @@ rather than authoring or auditing page by page yourself:
   block whose repair would leave a strict reader worse off (an accepted block
   rejected, or authored lines folded into a quoted value), which it leaves
   untouched.
-- **Wikilinks stay inside the wiki unless a folder is allowlisted.** A wikilink
-  (`[[...]]`) has two spellings, one rule each: a prefix-free target
-  (`[[core/design]]`) is relative to the wiki root and must name something
-  inside it; a target starting with `./` or `../` (or carrying a `.` or `..`
-  segment anywhere) is relative to the page's folder, as Obsidian and markdown
-  read it, and must leave the wiki — one `..` per folder of depth, so the same
-  external file is spelled differently from different pages
-  (`[[../math/lemmas]]` from a root-level page, `[[../../math/lemmas]]` from
-  `nodes/verify.md`). Such a link is live only under a folder the wiki
-  allowlists in `links.external` in `.wiki/settings.json`: a list of folder
-  paths relative to the wiki root (not the page), each climbing out of it with
-  leading `..`, e.g. `{"links": {"external": ["../src", "../math"]}}`. List the
-  narrowest folder holding the targets, and a folder, never a file. Under an
-  allowlisted folder the target is live when the file, its `.md` page, or the
-  folder exists; a target inside another wiki (a folder holding
-  `.wiki/settings.json`) follows that wiki's own settings, so a folder it
-  indexes fails lint exactly as at home
+- **Wikilinks stay inside the wiki unless a folder is allowlisted.** Every
+  wikilink (`[[...]]`) target is read from the wiki root, one rule per spelling:
+  a prefix-free target (`[[core/design]]`) must name something inside the wiki;
+  a target starting with `./` or `../` (or carrying a `.` or `..` segment
+  anywhere) must leave the wiki, so one spelling names an external file from
+  every page (`[[../math/lemmas]]` from a root-level page and from
+  `nodes/verify.md` alike) and moving a page never changes its links. Such a
+  link is live only under a folder the wiki allowlists in `links.external` in
+  `.wiki/settings.json`: a list of folder paths relative to the wiki root, each
+  climbing out of it with leading `..`, e.g.
+  `{"links": {"external": ["../src", "../math"]}}`; an entry is the literal
+  prefix of every link it admits. List the narrowest folder holding the targets,
+  and a folder, never a file. Under an allowlisted folder the target is live
+  when the file, its `.md` page, or the folder exists; a target inside another
+  wiki (a folder holding `.wiki/settings.json`) follows that wiki's own
+  settings, so a folder it indexes fails lint exactly as at home
   (`Link [[../math/g2]] targets a folder, not a page (use [[../math/g2/_index]])`).
   Link a file or the `_index` page, never a bare folder — stricter link checkers
   reject a bare folder link too. A prefixed link that lands inside the wiki
   fails lint (`points inside the wiki through './' or '../'`), naming the
-  prefix-free spelling (of the page-relative reading when something exists
-  there, else of the same text read from the wiki root; the root itself is
-  `_index`), or the page-relative spelling of the outside file the same text
-  reaches when read from the wiki root
-  (`(use [[../../src/main.py]] for the path outside the wiki)`); a link to a
-  real file outside every allowlisted folder draws the note
-  `points outside the wiki (add '../docs' to links.external in .wiki/settings.json to allow it)`
-  (for a folder holding an `_index.md`, adding
-  `, and link [[../docs/_index]] if a wiki indexes the folder`). Link when the
-  reader should open the file; a passing mention, or anything outside every
-  allowlisted folder, goes in backticks. The allowlist is a lint rule alone:
-  `wiki read` never serves an external target (use `wiki read --path <its root>`
-  for another wiki, `cat` for a file), generated index rows never carry one, and
-  `wiki map` never shows an external folder. Obsidian cannot see outside the
-  vault, so an external link shows unresolved there — do not click it: Obsidian
-  creates the missing target at that path, as folders outside the vault.
+  prefix-free spelling (of the target read from the wiki root, else of the same
+  text read from the page's folder; the root itself is `_index`); so does one
+  that misses under an allowlisted folder while the same text read from the
+  page's folder names something in the wiki — the slip `[[../overview]]` from a
+  nested page, meaning the in-wiki `overview.md`, fails with
+  `(use [[overview]])`. A prefixed link outside every allowlisted folder fails
+  lint whatever is on disk with
+  `points outside every links.external folder (add '../docs' to links.external in .wiki/settings.json to allow it)`,
+  adding `, or use [[overview]]` when the same text read from the page's folder
+  names something in the wiki, or the root-relative spelling of an allowlisted
+  file it reaches (`, or use [[../src/main.py]]` for `[[../../src/main.py]]`
+  from `notes/meeting.md`, one `..` too many). Link when the reader should open
+  the file; a passing mention, or anything outside every allowlisted folder,
+  goes in backticks. The allowlist is a lint rule alone: `wiki read` never
+  serves an external target (use `wiki read --path <its root>` for another wiki,
+  `cat` for a file), generated index rows never carry one, and `wiki map` never
+  shows an external folder. Obsidian cannot see outside the vault, so an
+  external link shows unresolved there; the bundled Wiki Root Links plugin,
+  which `wiki init` and `wiki config` install, makes Obsidian read the link from
+  the wiki root and turns a click on it into a notice (or opens a markdown
+  target in the sibling wiki's own registered vault), while stock Obsidian reads
+  it from the note's folder and a click creates the missing target at that path,
+  as folders outside the vault — do not click it there.
   `wiki match '\[\[\.\.?/' --lines` lists every link opening with `./` or `../`
   (code samples included; the `wiki lint` findings are the authoritative list).
 - **Lint's output contract.** `wiki lint` prints issues to stdout and soft notes
@@ -185,13 +191,11 @@ rather than authoring or auditing page by page yourself:
   streams: a stderr note is not a blocking issue.
 - **Stale wikilinks are soft notes.** A `[[...]]` in index or page prose whose
   target no longer exists — inside the wiki or under a `links.external` folder —
-  draws a stderr note from `wiki lint` without failing the run; when the same
-  text read from the wiki root names a real allowlisted file (a link written
-  root-relative or absolute), the note suggests its page-relative spelling, and
-  a target missing only by a trailing slash the same path without it. A prose
-  link to a real file outside every allowlisted folder is the
-  `points outside the wiki` note naming the entry to add; a `links.external`
-  entry naming no folder on this machine draws one note per run
+  draws a stderr note from `wiki lint` without failing the run; the note
+  suggests the root-relative form the author likely meant when one resolves (an
+  absolute spelling of an allowlisted file draws its `../` spelling, and a
+  target missing only by a trailing slash the same path without it). A
+  `links.external` entry naming no folder on this machine draws one note per run
   (`links.external entry '../src' names no folder on this machine; links into it are not checked`)
   and the links into it draw no notes — an environment condition, so leave them
   alone. Broken links in the generated index link block — the rows `wiki update`
@@ -199,9 +203,11 @@ rather than authoring or auditing page by page yourself:
   announced, with the cause named when the target is merely excluded rather than
   deleted), as is a prose wikilink naming a folder rather than the folder's
   index page — in this wiki or in another wiki a `links.external` folder admits:
-  link `[[folder/_index]]`, never `[[folder]]` — and a `./` or `../` prose link
-  that lands inside the wiki (`points inside the wiki through './' or '../'`),
-  which names the prefix-free spelling to write instead.
+  link `[[folder/_index]]`, never `[[folder]]` — a `./` or `../` prose link that
+  lands inside the wiki (`points inside the wiki through './' or '../'`), which
+  names the prefix-free spelling to write instead, and a `./` or `../` prose
+  link outside every `links.external` folder
+  (`points outside every links.external folder`), which names the entry to add.
 - **Descriptions end in a period.** `wiki lint` fails a `desc` (or an authored
   link description) that lacks a trailing period; the seeded `...` placeholder
   only draws a soft note. Author the desc in the child page's frontmatter —

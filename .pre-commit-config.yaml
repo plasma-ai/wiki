@@ -40,6 +40,22 @@ repos:
     rev: v0.11.0.1
     hooks:
       - id: shellcheck
+  - repo: https://github.com/pre-commit/mirrors-eslint
+    rev: v10.11.0
+    hooks:
+      - id: eslint
+        files: ^((wiki/_assets/plugins|tests/plugin)/.*|eslint\.config)\.js$
+        additional_dependencies:
+          - eslint@10.11.0
+          - "@eslint/js@10.0.1"
+  - repo: local
+    hooks:
+      - id: node-test
+        name: node --test
+        entry: node --test tests/plugin/*.test.js
+        language: system
+        pass_filenames: false
+        files: ^(wiki/_assets/plugins|tests/plugin)/.*\.js$
   - repo: https://github.com/hukkin/mdformat
     rev: 1.0.0
     hooks:
