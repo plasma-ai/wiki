@@ -50,7 +50,7 @@ repos:
     rev: v10.11.0
     hooks:
       - id: eslint
-        files: ^(wiki/_assets/plugins|tests/plugin)/.*\.js$
+        files: ^((wiki/_assets/plugins|tests/plugin)/.*|eslint\.config)\.js$
         additional_dependencies:
           - eslint@10.11.0
           - "@eslint/js@10.0.1"

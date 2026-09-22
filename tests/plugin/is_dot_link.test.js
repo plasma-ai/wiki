@@ -30,19 +30,20 @@ const rows = [
   // a markdown file by its explicit name, and by stem
   ['page-explicit-md', '../docs/guide.md', true],
   ['page-stem', '../docs/guide', true],
-  // a folder, the entry itself, and the wiki's parent
+  // a folder, and the entry itself
   ['plain-folder', '../src/pkg', true],
   ['entry-itself', '../src', true],
-  ['parent', '..', true],
   // a dot-prefixed leaf, and segments with spaces and colons
   ['dot-leaf', '../dotdir/.zshrc', true],
   ['spaces-and-colon', '../sp ace/a:b', true],
   // a trailing slash
   ['page-trailing-slash', '../docs/guide/', true],
+  // a stray bracket is junk: no '..' segment is seen
+  ['stray-bracket', '[../src/main.py', false],
   // surrounding spaces and tabs are not part of the target
-  ['leading-space', ' ../../src/main.py', true],
-  ['trailing-space', '../../src/main.py ', true],
-  ['tabs-both', '\t../../src/main.py\t', true],
+  ['leading-space', ' ../src/main.py', true],
+  ['trailing-space', '../src/main.py ', true],
+  ['tabs-both', '\t../src/main.py\t', true],
   // a folder name carrying a backslash, and an interior '..' that
   // normalizes out
   ['backslash-folder', '../we\\ird/x', true],
@@ -55,19 +56,25 @@ const rows = [
   ['absolute-dot', '/../x', false],
   // a backslash is not a separator: no '..' segment is seen
   ['backslash-separator', '..\\src\\main.py', false],
-  // spellings landing inside the wiki
-  ['page', '../overview', true],
+  // spellings landing inside the wiki, and the wiki's parent
   ['dot-root-page', './overview', true],
   ['dot-sibling', './sibling', true],
-  ['indexed-folder', '../core', true],
-  ['raw-file', '../Makefile', true],
   ['root', '..', true],
   ['dot-root', '.', true],
   ['interior', 'sibling/../sibling', true],
   ['missing', './gone', true],
+  // misses under a present entry whose page-folder mirror names an in-wiki
+  // target
+  ['page', '../overview', true],
+  ['raw-file', '../Makefile', true],
+  ['indexed-folder', '../core', true],
   // an alias and an anchor ride outside the target
   ['aliased', '../src/main.py|label', true],
   ['anchored', '../docs/guide#h', true],
+  // the alias is cut before the trim and the anchor after it, as lint reads
+  // them: a space before the anchor stays part of the target
+  ['space-before-anchor', '.. #a', false],
+  ['space-before-alias', '.. |x', true],
   // a same-page anchor, and a prefix-free target
   ['same-page-anchor', '#heading', false],
   ['prefix-free', 'core/design', false],
