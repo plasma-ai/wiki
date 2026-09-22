@@ -127,17 +127,25 @@ segment must leave it, reaching a file or another wiki's page only under a
 :doc:`/configuration`). Stock Obsidian reads a ``./`` or ``../`` link from
 the note's folder instead, so the integration installs the bundled Wiki Root
 Links plugin, which makes Obsidian read links as ``wiki lint`` does. It
-wraps Obsidian's link resolver so that a target carrying a ``.`` or ``..``
-segment never resolves to a note in the vault — the graph, backlinks, and
-reading view show such a link unresolved — and it intercepts a follow of
-such a link (a click, the follow-link hotkey, a graph node) so Obsidian
-never creates the missing target as folders outside the vault. On a follow,
-when the target is a markdown file inside a vault Obsidian registers on this
-machine — a sibling wiki opened as its own vault — the plugin opens it there
-through an ``obsidian://open`` URI, switching to that vault's window;
-otherwise (the vault unregistered, the target a folder or a non-markdown
-file, or nothing at the path) it shows a notice naming the root-relative
-path, with `` (not found)`` appended when nothing is there, and opens
+reads every internal link this way, including a markdown-style link whose
+target carries a ``.`` or ``..`` segment (``[text](../page.md)``), which
+``wiki lint`` does not check: lint reads wikilinks alone. It wraps
+Obsidian's link resolver so that a target carrying a ``.`` or ``..`` segment
+never resolves to a note in the vault, and it intercepts a follow of such a
+link — a click in reading view or Live Preview, or any path Obsidian routes
+through its link-opening method — so Obsidian never creates the missing
+target as folders outside the vault. On a follow, when the target is a
+markdown file inside a vault Obsidian registers on this machine — a sibling
+wiki opened as its own vault — the plugin opens it there through an
+``obsidian://open`` URI, switching to that vault's window; otherwise (the
+vault unregistered, the target a folder or a non-markdown file, or nothing
+at the path) it shows a notice naming the root-relative path, with a
+trailing ``(not found)`` when nothing is there, and opens nothing. A dot
+link that lands back inside the vault — the spelling ``wiki lint`` fails as
+``relative_link`` — draws a notice naming its prefix-free form
+(``Inside the vault: use [[overview]]``; a folder holding an ``_index.md``
+is named by its ``/_index`` page), with a trailing ``(not found)`` when
+nothing is there (``Inside the vault: overview (not found)``), and opens
 nothing. That URI is the only thing the plugin ever dispatches: it never
 hands a filesystem path to the operating system, so a link naming a script
 or an application is never run, opened, or revealed in the file manager. It
@@ -150,9 +158,10 @@ The plugin is bundled with the package under the same Apache-2.0 licence:
 offline or not, and never write it into the staged ``.wiki/obsidian/``. It
 is desktop only — the phone build has no filesystem access it could use, so
 stock behaviour applies there. The methods it wraps are Obsidian internals,
-not a public API: when one is unavailable after an Obsidian update, the
-plugin says so in a notice at load and installs the layers it can, and on
-any error it falls back to stock behaviour.
+not a public API: when the resolver or the link-opening method is
+unavailable after an Obsidian update, the plugin says so in a notice at load
+and installs the layers it can, and on any error it falls back to stock
+behaviour.
 
 One step cannot be automated: Obsidian gates community plugins behind
 Restricted Mode. When ``wiki init`` or ``wiki config`` completes with no

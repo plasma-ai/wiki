@@ -295,9 +295,9 @@ redistributing it.
 
 `wiki` also bundles its own Wiki Root Links Obsidian plugin, licensed Apache-2.0
 with the package: `wiki init`/`wiki config` copy it into the vault so Obsidian
-reads a `./` or `../` wikilink from the wiki root as `wiki lint` does, never as
-a note in the vault, and a click on one draws a notice or opens a markdown
-target in a sibling wiki's own registered vault.
+reads a `./` or `../` link from the wiki root as `wiki lint` does, never as a
+note in the vault, and a click on one draws a notice or opens a markdown target
+in a sibling wiki's own registered vault.
 
 ## License
 

@@ -460,18 +460,22 @@ its meaning:
    outside the wiki and under no ``links.external`` folder — whatever is on
    disk: the verdict reads the link text and the settings, nothing else.
    The ``add`` clause names the entry that would admit the link, spelled
-   relative to the wiki root — the target's folder, or the target itself
-   when a folder is there — and is omitted for an entry the policy would
-   refuse: a folder at the filesystem root, a symlink alias of the wiki
-   itself, or a folder name carrying a backslash. The ``use`` clause names
-   what the same text read from the page's folder reaches: the prefix-free
-   form of an in-wiki target (the folder-relative slip ``[[../overview]]``
-   from ``notes/deep.md`` names ``(use [[overview]])``), or the
-   root-relative spelling of a file under a listed folder
-   (``[[../../src/main.py]]`` from ``notes/meeting.md``, one ``..`` too
-   many, names ``(use [[../src/main.py]])``); with neither clause the
-   ``(...)`` tail is omitted. Add the entry to allow the link, or put the
-   reference in backticks. An anchor and alias ride along, and a target
+   relative to the wiki root: the target itself when a folder is there, else
+   the target's folder. A file, FIFO, or socket on the path can never become
+   a folder, so the entry is the folder above it — ``[[../src/main.py/x]]``
+   with a file at ``../src/main.py`` names ``(add '../src' ...)`` — while an
+   absent folder keeps its own spelling. The clause is omitted for an entry
+   the policy would refuse: the filesystem root itself (a target that is the
+   root, or a file or absent name directly under it, whose folder is the
+   root), a symlink alias of the wiki itself, or a folder name carrying a
+   NUL or a backslash. The ``use`` clause names what the same text read from
+   the page's folder reaches: the prefix-free form of an in-wiki target (the
+   folder-relative slip ``[[../overview]]`` from ``notes/deep.md`` names
+   ``(use [[overview]])``), or the root-relative spelling of a file under a
+   listed folder (``[[../../src/main.py]]`` from ``notes/meeting.md``, one
+   ``..`` too many, names ``(use [[../src/main.py]])``); with neither clause
+   the ``(...)`` tail is omitted. Add the entry to allow the link, or put
+   the reference in backticks. An anchor and alias ride along, and a target
    reports once per file. Typed ``outside_link`` in ``--json``, with
    ``path``, ``target`` (the bare target as written, anchor kept, alias
    absent — the alias rides only in the prose), and, when present,

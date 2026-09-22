@@ -199,7 +199,8 @@ document each area in full:
   rule alone: ``wiki read`` never serves an external target, and Obsidian,
   which cannot see outside the vault, shows an external link unresolved —
   the bundled Wiki Root Links plugin makes Obsidian read such a link from the
-  wiki root and turns a click on it into a notice.
+  wiki root and turns a click on it into a notice (or opens a markdown target
+  in the sibling wiki's own registered vault).
 - **Markdown formatters need the wiki plugin.** Generic formatters corrupt the
   ``***`` delimiter and ``[[wikilinks]]``; the sanctioned fixes are the
   ``mdformat-wiki`` plugin or excluding the wiki root (see the formatter

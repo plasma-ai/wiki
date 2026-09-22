@@ -33,10 +33,12 @@ may include breaking changes, each listed under a Breaking heading.
   `canonical` in `link_stale` and `directory_link` rows is root-relative.
   `[[..]]` names the folder holding the wiki and follows the outside-folder
   rule. A 1.4.0 or 1.5.0 clone reads a root-relative `../x` from the page's
-  folder, notes it stale or as its outside note on a nested page, and fails it
-  as `relative_link` when it re-enters the wiki from that folder, so upgrade
-  every clone of a shared wiki together. A wiki with no `./` or `../` link in
-  prose draws no new issue and exits as before.
+  folder: on a root page the two readings agree, and on a nested page it fails
+  every such link as `relative_link` — the outside-the-wiki spelling it offers
+  (`[[../../src/main.py]]` for `[[../src/main.py]]` from `notes/meeting.md`)
+  climbs one folder too far — so upgrade every clone of a shared wiki together.
+  A wiki with no `./` or `../` link in prose draws no new issue and exits as
+  before.
 
 ### Added
 
@@ -46,16 +48,20 @@ may include breaking changes, each listed under a Breaking heading.
   on every run, beside Front Matter Title, with no download (it installs
   offline) and no change to the staged `.wiki/obsidian/`; Obsidian's Restricted
   Mode toggle enables both plugins in one step. Desktop only. With it enabled,
-  Obsidian never resolves a `./` or `../` wikilink to a note in the vault, so
-  the graph, backlinks, and reading view show such a link unresolved as
-  `wiki lint` reads it, and a follow of one — a click, the follow-link hotkey, a
-  graph node — never creates folders outside the vault: a markdown target inside
-  a vault Obsidian registers on this machine opens in that vault through an
-  `obsidian://open` URI, and any other target draws a notice naming the
-  root-relative path (with ` (not found)` when nothing is there). The plugin
+  Obsidian reads a `./` or `../` link — a wikilink or a markdown-style
+  `[text](../page.md)` link, which `wiki lint` does not check — as `wiki lint`
+  reads a wikilink, never resolving it to a note in the vault, and a follow of
+  one — a click in reading view or Live Preview, or any path Obsidian routes
+  through its link-opening method — never creates folders outside the vault: a
+  markdown target inside a vault Obsidian registers on this machine opens in
+  that vault through an `obsidian://open` URI, any other target draws a notice
+  naming the root-relative path (with ` (not found)` when nothing is there), and
+  a dot link that lands back inside the vault draws a notice naming its
+  prefix-free form (`Inside the vault: use [[overview]]`, or
+  `Inside the vault: overview (not found)` when nothing is there). The plugin
   never hands a filesystem path to the operating system and reads no wiki
-  settings; when a method it wraps is unavailable it says so at load and falls
-  back to stock behaviour.
+  settings; when the link resolver or the link-opening method it wraps is
+  unavailable it says so at load and falls back to stock behaviour.
 
 ### Changed
 

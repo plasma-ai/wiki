@@ -48,7 +48,7 @@ __all__ = [
     'test_lint_undeclared_external_link_is_issue',
     'test_lint_missed_link_under_entry_is_judged_by_its_mirror',
     'test_lint_moved_page_keeps_external_links',
-    'test_lint_parent_folder_link',
+    'test_lint_parent_folder_link_follows_the_outside_rule',
     'test_lint_external_links_spare_samples_and_regions',
     'test_lint_external_symlink_probe_follows_its_text',
     'test_links_resolve_from_the_real_root',
@@ -274,12 +274,25 @@ def test_links_policy_accepts_missing_and_ancestor_folders(
             '../docs/guide/',
             'stale-fix:../docs/guide',
         ),
-        # a stray bracket is junk no name carries: stale as written, never joined
-        (['../src'], {'src/main.py'}, 'nested', '[../src/main.py', 'stale'),
+        # a trailing slash on a folder is dropped, and the folder is live
+        (['../docs'], {'docs/guide/'}, 'root', '../docs/guide/', 'live'),
+        # a stray bracket is junk no name carries: stale as written, never
+        # joined, even with the file the join would find in place
+        (
+            ['../src'],
+            {'src/main.py', 'wiki/[../src/main.py'},
+            'nested',
+            '[../src/main.py',
+            'stale',
+        ),
         # surrounding spaces and tabs are not part of the target
         (['../src'], {'src/main.py'}, 'nested', ' ../src/main.py', 'live'),
         (['../src'], {'src/main.py'}, 'nested', '../src/main.py ', 'live'),
         (['../src'], {'src/main.py'}, 'nested', '\t../src/main.py\t', 'live'),
+        # the trim runs before the anchor split, so a dot segment followed by a
+        # space and an anchor is the prefix-free target '.. ', read inside the
+        # wiki even when '..' itself is an entry
+        (['..'], set(), 'root', '.. #a', 'stale'),
         # a backslash is no separator: the text is one prefix-free segment,
         # read inside the wiki, where nothing matches it
         (['../src'], {'src/main.py'}, 'root', '..\\src\\main.py', 'stale'),
@@ -339,10 +352,12 @@ def test_links_policy_accepts_missing_and_ancestor_folders(
         'file-entry-shadows-ancestor',
         'page-trailing-slash',
         'page-trailing-slash-nested',
+        'folder-trailing-slash',
         'stray-bracket',
         'leading-space',
         'trailing-space',
         'tabs-both',
+        'space-before-anchor',
         'backslash-separator',
         'missing-file',
         'deep-missing-file',
@@ -377,16 +392,18 @@ def test_lint_judges_external_targets_by_the_allowlist(
     folder exists, and stale otherwise; under an entry naming no folder
     here -- absent, or a file -- it is skipped, and only that entry's note
     fires; under no entry a ``../`` link is the hard outside-link issue
-    whatever is on disk, naming the entry to add (the target when it is a
-    folder, else its parent) and, when the text names an allowlisted file
-    from the page's folder, that file's root-relative spelling; an
-    absolute target leaving the wiki is never live, but is steered to its
-    root-relative spelling when it lands under an entry; a ``..`` chain
-    clamped at the filesystem root and a folder name the policy refuses
-    name no entry; surrounding whitespace is not part of the target, a
-    stray bracket makes the text junk (stale as written), a backslash is
-    no separator, and a path of thousands of segments is judged like any
-    other.
+    whatever is on disk, naming the entry to add (the target when a folder
+    is there, else its folder; a file, FIFO, or socket on the path names
+    the folder above it, and an absent folder keeps its own spelling) and,
+    when the text names an allowlisted file from the page's folder, that
+    file's root-relative spelling; an absolute target leaving the wiki is
+    never live, but is steered to its root-relative spelling when it lands
+    under an entry; a ``..`` chain clamped at the filesystem root and a
+    folder name the policy refuses name no entry; surrounding whitespace
+    is not part of the target but a space before the anchor is (the trim
+    runs before the anchor split), a stray bracket makes the text junk
+    (stale as written), a backslash is no separator, and a path of
+    thousands of segments is judged like any other.
     """
     root = tmp_path / 'wiki'
     _make_wiki(root, folders={'notes': ['meeting'], 'notes/deep': ['page']})
@@ -423,7 +440,10 @@ def test_lint_judges_external_targets_by_the_allowlist(
             ' links into it are not checked'
         ]
     elif verdict == 'stale':
-        assert (issues, notes) == ([], [f'{relpath}: Stale link [[{link}]]'])
+        # the stray-bracket row plants a folder the name rules refuse: only
+        # the link issues count
+        link_issues = [issue for issue in issues if 'Link [[' in issue]
+        assert (link_issues, notes) == ([], [f'{relpath}: Stale link [[{link}]]'])
     elif verdict.startswith('stale-fix:'):
         fix = verdict.partition(':')[2]
         expected = f'{relpath}: Stale link [[{link}]] (use [[{fix}]])'
@@ -550,6 +570,10 @@ def test_lint_stale_external_link_suggests_root_relative_spelling(
         ([], {'docs/y.md'}, 'root', '../docs/y', 'issue:../docs'),
         ([], {'docs/'}, 'root', '../docs', 'issue:../docs'),
         ([], set(), 'root', '../docs', 'issue:..'),
+        # a file on the path can never become a folder, so the entry is the
+        # nearest folder above it, however deep the path runs past the file
+        ([], {'src/main.py'}, 'root', '../src/main.py/x', 'issue:../src'),
+        ([], {'src/main.py'}, 'root', '../src/main.py/x/y', 'issue:../src'),
         # an entry that does not cover the target is no entry
         (['../src'], {'docs/y.md'}, 'root', '../docs/y', 'issue:../docs'),
         # the alias rides in the prose alone
@@ -562,6 +586,8 @@ def test_lint_stale_external_link_suggests_root_relative_spelling(
         ([], set(), 'nested', '../core', 'issue:..:core/_index'),
         ([], set(), 'nested', '../vendor', 'issue:..:vendor'),
         ([], set(), 'nested', '../drafts', 'issue:..:drafts/_index'),
+        # the anchor rides into the offered spelling, the alias into the prose alone
+        ([], set(), 'nested', '../overview#h|label', 'issue:..:overview'),
         # the spelling that climbs once per folder names the allowlisted file
         (
             ['../src'],
@@ -570,9 +596,13 @@ def test_lint_stale_external_link_suggests_root_relative_spelling(
             '../../src/main.py',
             'issue:../../src:../src/main.py',
         ),
-        # the wiki's parent folder itself: the root mirror names no fix
+        # the wiki's parent folder itself: from the root and one folder down,
+        # the root mirror names no fix
         ([], set(), 'root', '..', 'issue:..'),
         ([], set(), 'nested', '..', 'issue:..'),
+        # a chain clamped at the filesystem root still names the target's
+        # folder when the path runs past the clamp
+        ([], set(), 'root', '{filesystem_root}/etc/passwd', 'issue:{holder_root}/etc'),
         # no entry could admit the target: a chain clamped at the filesystem
         # root, a folder name the policy refuses, and an alias of the wiki
         ([], set(), 'root', '{filesystem_root}', 'issue'),
@@ -585,6 +615,8 @@ def test_lint_stale_external_link_suggests_root_relative_spelling(
         'file-present',
         'folder-present',
         'folder-absent',
+        'file-on-path',
+        'file-on-path-deep',
         'uncovered-entry',
         'aliased',
         'mirror-page',
@@ -592,9 +624,11 @@ def test_lint_stale_external_link_suggests_root_relative_spelling(
         'mirror-indexed-folder',
         'mirror-excluded-folder',
         'mirror-unminted-folder',
+        'mirror-anchored-alias',
         'obsidian-habit',
         'parent-root-page',
         'parent-nested-page',
+        'clamped-holder',
         'filesystem-root',
         'backslash-folder',
         'alias-root-page',
@@ -613,40 +647,32 @@ def test_lint_undeclared_external_link_is_issue(
 
     The verdict reads the link text and the settings alone: under no
     entry, or an entry that does not cover the target, the issue names
-    the entry to add -- the target's parent, or the target itself when a
-    folder is there -- and offers what the text names from the page's
-    folder, the base Obsidian reads ``../`` from: an in-wiki page, file,
-    or folder in its prefix-free form, or an allowlisted file in its
-    root-relative spelling. No entry is named for a ``..`` chain clamped
-    at the filesystem root, a folder name the policy refuses, or a
-    symlink alias of the wiki, and ``[[..]]`` names ``..`` with no fix,
-    since the root mirror is no target. The link reports once however
-    often the prose repeats it, is never also a stale note, and its
-    alias rides in the prose alone.
+    the entry to add -- the target itself when a folder is there, else
+    its folder; a file, FIFO, or socket on the path names the folder
+    above it, and an absent folder keeps its own spelling -- and offers
+    what the text names from the page's folder, the base Obsidian reads
+    ``../`` from: an in-wiki page, file, or folder in its prefix-free
+    form, or an allowlisted file in its root-relative spelling. No entry
+    is named for a ``..`` chain clamped at the filesystem root, a folder
+    name the policy refuses, or a symlink alias of the wiki, while a path
+    running past the clamp still names its folder; ``[[..]]`` from the
+    root or one folder down names ``..`` with no fix, since the root
+    mirror is no target. The link reports once however often the prose
+    repeats it, is never also a stale note or another link issue, its
+    anchor rides into the offered spelling, and its alias rides in the
+    prose alone.
     """
     root = tmp_path / 'wiki'
     _make_wiki(root, folders={'notes': ['meeting'], 'core': ['design']})
     _plant(tmp_path, tree)
     (tmp_path / 'wiki_alias').symlink_to(root, target_is_directory=True)
-    (root / 'overview.md').write_text(
-        '---\nname: overview\ndesc: An overview.\n---\n\n# overview\n\nText.\n',
-        encoding='utf-8',
-    )
-    (root / 'Makefile').write_text('all:\n', encoding='utf-8')
-    # a folder carrying an index on disk that the walk will not enter
-    vendor = root / 'vendor'
-    vendor.mkdir()
-    (vendor / '_index.md').write_text(
-        '---\nname: vendored\ndesc: A vendored index.\n---\n\n# vendored\n\n***\n',
-        encoding='utf-8',
-    )
-    _set_exclude_patterns(root, ['vendor'])
-    Wiki(root).update()
-    # a folder created after the update, its index not minted yet
-    (root / 'drafts').mkdir()
-    # the placeholder spells enough climbs to reach the filesystem root
+    _plant_mirror_targets(root)
+    # the placeholders spell enough climbs to reach the filesystem root, and
+    # that root's spelling from the wiki root
     climbs = '/'.join(['..'] * len(root.resolve().parts))
+    holder_root = '/'.join(['..'] * (len(root.resolve().parts) - 1))
     link = link.format(filesystem_root=climbs)
+    verdict = verdict.format(holder_root=holder_root)
     relpath = _link_from(root, page, f'{link}]] and again [[{link}')
     _set_links_external(root, external)
     wiki = Wiki(root)
@@ -654,10 +680,12 @@ def test_lint_undeclared_external_link_is_issue(
     # the issue reports once, worded from the settings and the mirror; the
     # link never also notes
     notices = _capture_notices(wiki)
-    issues = [issue for issue in wiki.lint() if issue.kind == 'outside_link']
+    issues = [issue for issue in wiki.lint() if 'Link [[' in issue]
     folder, _sep, canonical = verdict.partition(':')[2].partition(':')
     target, pipe, label = link.partition('|')
     alias = pipe + label
+    _stem, hash_sign, heading = target.partition('#')
+    anchor = hash_sign + heading
     fixes = []
     fields = {'path': relpath, 'target': target}
     if folder:
@@ -666,14 +694,15 @@ def test_lint_undeclared_external_link_is_issue(
         )
         fields['folder'] = folder
     if canonical:
-        fixes.append(f'use [[{canonical}{alias}]]')
-        fields['canonical'] = canonical
+        fixes.append(f'use [[{canonical}{anchor}{alias}]]')
+        fields['canonical'] = canonical + anchor
     options = ', or '.join(fixes)
     tail = f' ({options})' if fixes else ''
     assert issues == [
         f'{relpath}: Link [[{link}]] points outside every links.external folder{tail}'
     ]
     issue, *_ = issues
+    assert issue.kind == 'outside_link'
     assert issue.fields == fields
     assert not any('[[' in event.description for event in notices)
 
@@ -692,7 +721,11 @@ def test_lint_undeclared_external_link_is_issue(
         (set(), 'root', '../overview', 'stale'),
         # a real target beside the wiki is live, whatever the mirror names
         ({'overview.md'}, 'nested', '../overview', 'live'),
+        ({'overview/'}, 'nested', '../overview', 'live'),
         ({'folder_b/file_b.md'}, 'nested', '../folder_b/file_b', 'live'),
+        # a target reached through a symlink alias of the wiki is live too,
+        # since containment is lexical
+        (set(), 'nested', '../wiki_alias/overview', 'live'),
     ],
     ids=[
         'page',
@@ -702,7 +735,9 @@ def test_lint_undeclared_external_link_is_issue(
         'unminted-folder',
         'root-page',
         'live-page',
+        'live-folder',
         'live-nested-page',
+        'live-through-alias',
     ],
 )
 def test_lint_missed_link_under_entry_is_judged_by_its_mirror(
@@ -719,10 +754,12 @@ def test_lint_missed_link_under_entry_is_judged_by_its_mirror(
     page's folder -- a page by stem, a raw file, a folder the walk
     indexes (minted or not), or one it excludes -- is the in-wiki target
     the author meant, spelled as Obsidian reads it: a hard issue naming
-    the prefix-free form, never also a stale note. From a root page the
-    mirror is the root reading itself, so the miss is a bare stale note;
-    a real target beside the wiki is live with nothing said, whatever
-    the mirror names.
+    the prefix-free form, reported once however often the prose repeats
+    it, never also a stale note. From a root page the mirror is the root
+    reading itself, so the miss is a bare stale note; a real target
+    beside the wiki -- a page or a bare folder -- is live with nothing
+    said, whatever the mirror names, and so is a target reached through
+    a symlink alias of the wiki, since containment is lexical.
     """
     root = tmp_path / 'wiki'
     _make_wiki(
@@ -730,27 +767,14 @@ def test_lint_missed_link_under_entry_is_judged_by_its_mirror(
         folders={'notes': ['meeting'], 'core': ['design'], 'folder_b': ['file_b']},
     )
     _plant(tmp_path, tree)
-    (root / 'overview.md').write_text(
-        '---\nname: overview\ndesc: An overview.\n---\n\n# overview\n\nText.\n',
-        encoding='utf-8',
-    )
-    (root / 'Makefile').write_text('all:\n', encoding='utf-8')
-    # a folder carrying an index on disk that the walk will not enter
-    vendor = root / 'vendor'
-    vendor.mkdir()
-    (vendor / '_index.md').write_text(
-        '---\nname: vendored\ndesc: A vendored index.\n---\n\n# vendored\n\n***\n',
-        encoding='utf-8',
-    )
-    _set_exclude_patterns(root, ['vendor'])
-    Wiki(root).update()
-    # a folder created after the update, its index not minted yet
-    (root / 'drafts').mkdir()
-    relpath = _link_from(root, page, link)
+    (tmp_path / 'wiki_alias').symlink_to(root, target_is_directory=True)
+    _plant_mirror_targets(root)
+    relpath = _link_from(root, page, f'{link}]] and again [[{link}')
     _set_links_external(root, ['..'])
     wiki = Wiki(root)
 
-    # the mirror judges the miss; a live target and a root-page miss draw no issue
+    # the mirror judges the miss, once; a live target and a root-page miss draw
+    # no issue
     notices = _capture_notices(wiki)
     issues = [issue for issue in wiki.lint() if 'Link [[' in issue]
     notes = [event.description for event in notices if '[[' in event.description]
@@ -802,13 +826,13 @@ def test_lint_moved_page_keeps_external_links(tmp_path: pathlib.Path) -> None:
         assert notices == []
 
 
-@pytest.mark.parametrize('page', ['root', 'nested'])
+@pytest.mark.parametrize('page', ['root', 'nested', 'deep'])
 @pytest.mark.parametrize(
     argnames='external',
     argvalues=[['..'], []],
     ids=['declared', 'undeclared'],
 )
-def test_lint_parent_folder_link(
+def test_lint_parent_folder_link_follows_the_outside_rule(
     tmp_path: pathlib.Path,
     page: str,
     external: list[str],
@@ -818,28 +842,37 @@ def test_lint_parent_folder_link(
     Read from the wiki root, ``..`` names the wiki's parent folder from
     any page: live as a bare folder when ``links.external`` lists it,
     with no steer to the index page, and the outside-link issue naming
-    ``..`` otherwise.
+    ``..`` otherwise. A page two or more folders down is also offered
+    its enclosing folder's index page, the in-wiki target ``..`` names
+    from its own folder.
     """
     root = tmp_path / 'wiki'
-    _make_wiki(root, folders={'notes': ['meeting']})
+    _make_wiki(root, folders={'notes': ['meeting'], 'notes/deep': ['page']})
     relpath = _link_from(root, page, '..')
     _set_links_external(root, external)
     wiki = Wiki(root)
 
-    # the folder link is live under its entry, and the issue under none
+    # the folder link is live under its entry, and the issue under none; from
+    # two folders down the mirror names the enclosing folder's index
     notices = _capture_notices(wiki)
     issues = wiki.lint()
     notes = [event.description for event in notices if '[[' in event.description]
     if external:
         assert (issues, notes) == ([], [])
     else:
+        fixes = ["add '..' to links.external in .wiki/settings.json to allow it"]
+        fields = {'path': relpath, 'target': '..', 'folder': '..'}
+        if page == 'deep':
+            fixes.append('use [[notes/_index]]')
+            fields['canonical'] = 'notes/_index'
+        options = ', or '.join(fixes)
         assert issues == [
-            f"{relpath}: Link [[..]] points outside every links.external folder (add '..'"
-            ' to links.external in .wiki/settings.json to allow it)'
+            f'{relpath}: Link [[..]] points outside every links.external folder'
+            f' ({options})'
         ]
         issue, *_ = issues
         assert issue.kind == 'outside_link'
-        assert issue.fields == {'path': relpath, 'target': '..', 'folder': '..'}
+        assert issue.fields == fields
         assert notes == []
 
 
@@ -978,6 +1011,7 @@ def test_lint_external_probe_never_raises(tmp_path: pathlib.Path) -> None:
     _make_sibling_wiki(tmp_path / 'math')
     tree = {'src/locked/', 'src/secret.txt', 'unlisted/locked/', 'parent/inner/'}
     _plant(tmp_path, tree)
+    # a name past the filesystem's length limit
     long_name = 'a' * 300
     links = (
         '../src/locked/x]], [[../src/secret.txt]], [[../src/a\x00b]],'
@@ -1548,6 +1582,26 @@ def _make_sibling_wiki(path: pathlib.Path) -> None:
     )
     _set_exclude_patterns(path, ['vendor'])
     Wiki(path).update()
+
+
+def _plant_mirror_targets(root: pathlib.Path) -> None:
+    """Plant the mirror targets: a page, a raw file, an excluded folder, an unminted one."""
+    (root / 'overview.md').write_text(
+        '---\nname: overview\ndesc: An overview.\n---\n\n# overview\n\nText.\n',
+        encoding='utf-8',
+    )
+    (root / 'Makefile').write_text('all:\n', encoding='utf-8')
+    # a folder carrying an index on disk that the walk will not enter
+    vendor = root / 'vendor'
+    vendor.mkdir()
+    (vendor / '_index.md').write_text(
+        '---\nname: vendored\ndesc: A vendored index.\n---\n\n# vendored\n\n***\n',
+        encoding='utf-8',
+    )
+    _set_exclude_patterns(root, ['vendor'])
+    Wiki(root).update()
+    # a folder created after the update, its index not minted yet
+    (root / 'drafts').mkdir()
 
 
 def _set_links_external(path: pathlib.Path, folders: list[str]) -> None:

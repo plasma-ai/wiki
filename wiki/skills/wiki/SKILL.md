@@ -14,7 +14,8 @@ user-authored notes.
 Initialize a wiki in the current project and configure integrations:
 
 - `wiki init` — scaffold a new wiki with a root index
-- `wiki config` — install Obsidian plugins and the git merge driver
+- `wiki config` — install the Obsidian plugins (Front Matter Title and the
+  bundled Wiki Root Links) and the git merge driver
 - `wiki trust` — authorize a wiki to run its `.wiki/wiki.py` hook
 
 Maintain indexes as files are added and removed:

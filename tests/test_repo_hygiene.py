@@ -22,13 +22,13 @@ import subprocess
 import tomllib
 
 import wiki
-from wiki.core._obsidian import _FIRST_PARTY_PLUGINS
+from wiki.core import _obsidian
 
 __all__ = [
     'test_version_strings_agree',
     'test_package_data_ships_in_build',
     'test_gitignore_spares_tracked_lookalike_paths',
-    'test_first_party_plugin_manifest',
+    'test_bundled_plugin_manifest_agrees_with_its_install',
 ]
 
 _REPO_ROOT = pathlib.Path(__file__).parent.parent
@@ -151,23 +151,38 @@ def test_gitignore_spares_tracked_lookalike_paths(tmp_path: pathlib.Path) -> Non
     assert _check_ignore(repo, 'examples/hello/.obsidian/app.json')
 
 
-def test_first_party_plugin_manifest() -> None:
+def test_bundled_plugin_manifest_agrees_with_its_install() -> None:
     """Each bundled Obsidian plugin's manifest agrees with its install.
 
-    ``update_config`` copies ``_assets/plugins/<id>/`` into a vault's
-    ``.obsidian/plugins/<id>/`` and enables ``<id>``, and Obsidian loads
-    the folder only when the manifest's ``id`` spells that name; the
-    plugin reads the vault's filesystem, so it declares itself desktop
-    only. The version is the plugin's own semver, bumped only when the
-    plugin changes, so it stays outside the release lockstep.
+    ``update_config`` copies the plugin's files, ``main.js`` and
+    ``manifest.json``, from ``_assets/plugins/<id>/`` into a vault's
+    ``.obsidian/plugins/<id>/`` by name and enables ``<id>``, and
+    Obsidian loads the folder only when the manifest's ``id`` spells
+    that name; the plugin reads the vault's filesystem, so it declares
+    itself desktop only. The version is the plugin's own semver, bumped
+    only when the plugin changes, so it stays outside the release
+    lockstep.
     """
+    # every plugin folder is a declared bundled plugin, and vice versa
     plugins = _REPO_ROOT / 'wiki' / '_assets' / 'plugins'
-    assert sorted(folder.name for folder in plugins.iterdir()) == sorted(
-        _FIRST_PARTY_PLUGINS
+    bundled = sorted(folder.name for folder in plugins.iterdir() if folder.is_dir())
+    assert bundled == sorted(_obsidian._BUNDLED_PLUGINS), (
+        '_assets/plugins folders must match _BUNDLED_PLUGINS '
+        '(update_config installs exactly the ids the tuple names)'
     )
-    for plugin_id in _FIRST_PARTY_PLUGINS:
+    for plugin_id in _obsidian._BUNDLED_PLUGINS:
         folder = plugins / plugin_id
         manifest = json.loads((folder / 'manifest.json').read_text(encoding='utf-8'))
-        assert manifest['id'] == plugin_id
-        assert manifest['isDesktopOnly'] is True
-        assert (folder / 'main.js').is_file()
+        assert manifest['id'] == plugin_id, (
+            f'{plugin_id}/manifest.json id must spell the folder name '
+            '(Obsidian loads .obsidian/plugins/<id>/ only when the manifest agrees)'
+        )
+        assert manifest['isDesktopOnly'] is True, (
+            f'{plugin_id}/manifest.json must declare isDesktopOnly '
+            '(the plugin reads the vault filesystem, which mobile lacks)'
+        )
+        for asset in _obsidian._BUNDLED_PLUGIN_ASSETS:
+            assert (folder / asset).is_file(), (
+                f'{plugin_id}/{asset} is copied by name from '
+                '_BUNDLED_PLUGIN_ASSETS and must exist in the package'
+            )

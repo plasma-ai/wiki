@@ -1181,13 +1181,13 @@ def test_links_external_end_to_end(tmp_path: pathlib.Path) -> None:
     A seeded allowlist admits a source file and a sibling wiki's page
     from a page at any depth; lint notes a missing file as stale and an
     entry naming no folder once per run, and fails a ``../`` link under
-    no entry (naming the entry to add and, for the spelling that climbs
-    once per folder, the root-relative form), a prefixed link that lands
-    inside the wiki, and a folder the sibling wiki indexes -- each typed
-    in ``--json``, and each suggested fix lints clean once adopted.
-    ``wiki read`` stays confined to the root, a malformed block fails
-    lint but never update, and a malformed sibling settings file is
-    named.
+    no entry (naming the entry to add -- the nearest folder above a path
+    through a file -- and, for the spelling that climbs once per folder,
+    the root-relative form), a prefixed link that lands inside the wiki,
+    and a folder the sibling wiki indexes -- each typed in ``--json``,
+    and each suggested fix lints clean once adopted. ``wiki read`` stays
+    confined to the root, a malformed block fails lint but never update,
+    and a malformed sibling settings file is named.
     """
     root = tmp_path / 'wiki'
     settings = '{"links": {"external": ["../src", "../math", "../missing"]}}'
@@ -1208,7 +1208,8 @@ def test_links_external_end_to_end(tmp_path: pathlib.Path) -> None:
         name='Links',
         desc='Links.',
         body='See [[../src/main.py]], [[../src/gone.py]], [[../math/lemmas]],'
-        ' [[../docs/x]], [[../docs/y|Doc]], [[../idx]], and [[../missing/z]].',
+        ' [[../docs/x]], [[../docs/y|Doc]], [[../docs/y.md/x]], [[../idx]], and'
+        ' [[../missing/z]].',
     )
     _write(root / 'links.md', links)
     _write(
@@ -1239,6 +1240,10 @@ def test_links_external_end_to_end(tmp_path: pathlib.Path) -> None:
     assert (
         'links.md: Link [[../docs/y|Doc]] points outside every links.external folder'
         f" (add '../docs' {clause})"
+    ) in lint.stdout
+    assert (
+        'links.md: Link [[../docs/y.md/x]] points outside every links.external'
+        f" folder (add '../docs' {clause})"
     ) in lint.stdout
     assert (
         'links.md: Link [[../idx]] points outside every links.external folder'
@@ -1277,6 +1282,7 @@ def test_links_external_end_to_end(tmp_path: pathlib.Path) -> None:
     assert outside_rows == [
         ('links.md', '../docs/x', '../docs', 'absent'),
         ('links.md', '../docs/y', '../docs', 'absent'),
+        ('links.md', '../docs/y.md/x', '../docs', 'absent'),
         ('links.md', '../idx', '../idx', 'absent'),
         ('core/page.md', '../../src/main.py', '../../src', '../src/main.py'),
     ]
@@ -1301,7 +1307,7 @@ def test_links_external_end_to_end(tmp_path: pathlib.Path) -> None:
     stale_targets = {note['target'] for note in stale}
     assert stale_targets == {'../src/gone.py'}
     # with every suggested fix adopted, lint is clean: the entries admit the
-    # docs page and the folder, and the missing docs file notes stale
+    # docs page and the folder, and the missing docs files note stale
     config = root / '.wiki' / 'settings.json'
     data = json.loads(config.read_text(encoding='utf-8'))
     data['links']['external'].extend(['../docs', '../idx'])
@@ -1316,6 +1322,7 @@ def test_links_external_end_to_end(tmp_path: pathlib.Path) -> None:
     assert lint.returncode == 0, lint.stdout + lint.stderr
     assert 'links.md: Stale link [[../src/gone.py]]' in lint.stderr
     assert 'links.md: Stale link [[../docs/x]]' in lint.stderr
+    assert 'links.md: Stale link [[../docs/y.md/x]]' in lint.stderr
     assert "links.external entry '../missing' names no folder" in lint.stderr
     # the allowlist is a lint rule alone: read stays confined to the root
     read = _wiki(root, 'read', '../src/main.py', '--path', str(root))

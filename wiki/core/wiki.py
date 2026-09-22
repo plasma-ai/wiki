@@ -33,7 +33,9 @@ from wiki.typing import Link, PathLike
 
 from . import _obsidian, _search, format
 from ._obsidian import (
-    _FIRST_PARTY_PLUGINS,
+    _BUNDLED_PLUGIN_ASSETS,
+    _BUNDLED_PLUGIN_DIR,
+    _BUNDLED_PLUGINS,
     _OBSIDIAN_PLUGIN_DIGESTS,
     _OBSIDIAN_PLUGINS,
 )
@@ -987,10 +989,17 @@ class Wiki:
                             os.replace(tmp, dest)
         # copy each bundled plugin from the package into the vault: shipped
         # beside the modules, so no staged tree, download, or network is needed
-        assets_dir = pathlib.Path(__file__).parent.parent / '_assets' / 'plugins'
-        for plugin_id in _FIRST_PARTY_PLUGINS:
+        for plugin_id in _BUNDLED_PLUGINS:
             target = obsidian_dir / 'plugins' / plugin_id
-            shutil.copytree(assets_dir / plugin_id, target, dirs_exist_ok=True)
+            target.mkdir(parents=True, exist_ok=True)
+            # copy the plugin's files by name (a stray file beside them in the
+            # package folder -- an OS sidecar, an editor backup -- never ships),
+            # atomically, so a crash mid-copy never leaves Obsidian a torn file
+            for asset in _BUNDLED_PLUGIN_ASSETS:
+                bundled = _BUNDLED_PLUGIN_DIR.joinpath(plugin_id, asset)
+                wiki.util.fs.write_atomic(
+                    target / asset, bundled.read_text(encoding='utf-8')
+                )
         # create or merge each top-level json file
         for source in sorted(config_dir.glob('*.json')):
             target = obsidian_dir / source.name
@@ -1004,7 +1013,8 @@ class Wiki:
             source_data = json.loads(source.read_text(encoding='utf-8'))
             try:
                 target_data = json.loads(target.read_text(encoding='utf-8'))
-            except json.JSONDecodeError as e:
+            # undecodable bytes are corruption too, and escape json's own error
+            except (UnicodeDecodeError, json.JSONDecodeError) as e:
                 raise ValueError(
                     f'Malformed JSON in .obsidian/{source.name}: {e}'
                 ) from e
@@ -1023,7 +1033,8 @@ class Wiki:
         if target.exists():
             try:
                 target_data = json.loads(target.read_text(encoding='utf-8'))
-            except json.JSONDecodeError as e:
+            # undecodable bytes are corruption too, and escape json's own error
+            except (UnicodeDecodeError, json.JSONDecodeError) as e:
                 raise ValueError(
                     f'Malformed JSON in .obsidian/{target.name}: {e}'
                 ) from e
@@ -1031,7 +1042,7 @@ class Wiki:
             target_data = []
         merged = _obsidian.merge_settings(
             target_data=target_data,
-            source_data=list(_FIRST_PARTY_PLUGINS),
+            source_data=list(_BUNDLED_PLUGINS),
             name=target.name,
         )
         result = json.dumps(merged, indent=2)
@@ -1437,7 +1448,9 @@ class Wiki:
           settings -- flagged with the ``/_index`` form as the fix),
           relative links inside the wiki (a ``./`` or ``../`` target
           that lands inside the wiki -- every target is read from the
-          wiki root; flagged with the prefix-free form as the fix),
+          wiki root; flagged with the prefix-free form as the fix, as is
+          a prefixed target that misses under a ``links.external`` folder
+          while naming something in the wiki from the page's folder),
           outside links under no allowlisted folder (a ``./`` or
           ``../`` target that lands outside every ``links.external``
           folder, whatever is on disk; flagged with the entry to add),
@@ -3465,17 +3478,31 @@ class Wiki:
         """Return the ``links.external`` entry that would admit ``joined``, or ``None``.
 
         ``joined`` is a target outside the wiki that no entry covers. The
-        entry words the outside-link issue: the target when it is itself a
-        folder, else the folder holding it, spelled relative to the wiki
-        root; ``None`` when no entry could admit the target -- a chain of
-        ``..`` clamped at the filesystem root, a folder name carrying a NUL
-        or a backslash (a folder the policy refuses), or a symlink alias of
-        the wiki itself.
+        entry words the outside-link issue: the target when a folder is
+        there, else the target's folder, spelled relative to the wiki root;
+        a file, FIFO, or socket on the path can never become a folder, so
+        the entry is the folder above it, while an absent folder keeps its
+        own spelling. ``None`` when no entry could admit the target -- a
+        chain of ``..`` clamped at the filesystem root, a folder name
+        carrying a NUL or a backslash (a folder the policy refuses), or a
+        symlink alias of the wiki itself.
         """
         if os.path.isdir(joined):
             holder = joined
         else:
             holder = joined.parent
+            # find the nearest ancestor on disk from the filesystem root down,
+            # as _link_wiki finds its anchor, without spelling every ancestor
+            # of a target thousands of segments long
+            anchor, *parts = holder.parts
+            nearest = pathlib.Path(anchor)
+            for part in parts:
+                candidate = nearest / part
+                if not os.path.exists(candidate):
+                    break
+                nearest = candidate
+            if not os.path.isdir(nearest):
+                holder = nearest.parent
         if holder.parent == holder:
             return None
         entry = pathlib.Path(os.path.relpath(holder, self._root))

@@ -659,20 +659,20 @@ over 500 characters, empty index content sections, CRLF line endings, stale
 ``[[wikilinks]]`` in authored prose (inside the wiki, or under a
 ``links.external`` folder present on this machine; the note suggests the
 root-relative form of the target, or the root-relative spelling of an
-allowlisted file, when one resolves), a
-``links.external`` entry naming no folder on this machine (noted once per
-run; links into it go unchecked), an indexed path this machine's git ignores
-(a personal ``core.excludesFile`` rule — the row ships where the file cannot,
-so every other clone reds on a broken link), a gitignore fence the probe
-cannot read inside an enclosing repository (``git check-ignore`` failed — git
-off ``PATH`` or a broken install — so indexing proceeds unfenced and adopts
-what the repository ignores), and a ``.gitattributes`` mapping ``merge=wiki``
-with no ``merge.wiki.driver`` configured — the fresh-clone state where index
-merges silently fall back to a plain text merge until ``wiki config``
-registers the driver. Resolver diagnostics (an upward resolution, a missing
-settings marker or root index, an outer index above the declared root) join
-the notes too — counted in the closing summary and typed as
-``resolver_notice`` rows in ``--json`` — beside their stderr prose.
+allowlisted file, when one resolves), a ``links.external`` entry naming no
+folder on this machine (noted once per run; links into it go unchecked), an
+indexed path this machine's git ignores (a personal ``core.excludesFile`` rule
+— the row ships where the file cannot, so every other clone reds on a broken
+link), a gitignore fence the probe cannot read inside an enclosing repository
+(``git check-ignore`` failed — git off ``PATH`` or a broken install — so
+indexing proceeds unfenced and adopts what the repository ignores), and a
+``.gitattributes`` mapping ``merge=wiki`` with no ``merge.wiki.driver``
+configured — the fresh-clone state where index merges silently fall back to a
+plain text merge until ``wiki config`` registers the driver. Resolver
+diagnostics (an upward resolution, a missing settings marker or root index,
+an outer index above the declared root) join the notes too — counted in the
+closing summary and typed as ``resolver_notice`` rows in ``--json`` — beside
+their stderr prose.
 
 A ``<!-- start: no-lint -->`` ... ``<!-- end: no-lint -->`` region suppresses
 the position-based rules (conflict markers, escaped wikilinks, wrap mangles,

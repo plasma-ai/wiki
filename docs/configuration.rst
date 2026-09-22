@@ -348,16 +348,17 @@ which case the author meant that in-wiki target and the link is the hard
 prefix-free form; and fails a ``./`` or ``../`` link that lands outside
 every listed folder, whatever is on disk, as the hard ``points outside every
 links.external folder`` issue naming the entry to add (no entry is named
-for a target the policy would refuse to list — through a symlink alias of
-the wiki, at the filesystem root, or through a folder name carrying a
-backslash). The block is a lint rule and nothing more:
-``wiki read``, ``wiki map``, ``wiki match``, ``wiki search``, ``wiki update``,
-and ``wiki new`` stay confined to the wiki root (a name under a listed folder
-still fails with ``Path is outside wiki root``), generated index rows never
-carry an external target, and ``wiki map`` never shows an external folder.
-``wiki lint`` reads the block on every run, links or none; ``wiki update``
-never reads it; ``wiki init`` validates a block passed through ``--settings``
-but seeds none.
+for a target the policy would refuse to list — one whose folder is the
+filesystem root itself, one reached through a symlink alias of the wiki, or
+one under a folder name carrying a NUL or a backslash). The block is a lint
+rule and nothing more: ``wiki read``, ``wiki map``, ``wiki match``,
+``wiki search``, ``wiki update``, and ``wiki new`` stay confined to the wiki
+root (a name under a listed folder still fails with
+``Path is outside wiki root``),
+generated index rows never carry an external target, and ``wiki map`` never
+shows an external folder. ``wiki lint`` reads the block on every run, links
+or none; ``wiki update`` never reads it; ``wiki init`` validates a block
+passed through ``--settings`` but seeds none.
 
 .. code-block:: json
 
@@ -459,20 +460,26 @@ The settings file is committed with the wiki and takes effect on every clone
 without a consent step. A ``./`` or ``../`` link that lands under no listed
 folder is judged without a probe — the verdict reads the link text and the
 settings alone — and the stats that word its message reveal only whether the
-target is a folder (the entry named is the target itself when a folder is
-there, else its parent); under a listed folder ``wiki lint`` stats the
-target, so a page can reveal whether a file exists at any path beneath a
-listed folder, within the lint user's permissions, and the probes that word
-a fix stay inside the wiki or under listed folders. The probes never read
-content and never raise (a path the filesystem cannot stat reads as
-missing), and lint output travels (stderr, ``--json``, CI logs): list the
+target is a folder and whether a file, FIFO, or socket stands on the path
+above it, and where (the entry named is the target itself when a folder is
+there, else its parent, or the folder above a file, FIFO, or socket on the
+path, since one can never become a folder; an absent folder reads like a
+real one and keeps its own spelling); under a listed folder ``wiki lint``
+stats the target, so a page can reveal whether a file exists at any path
+beneath a listed folder, within the lint user's permissions, and the probes
+that word a fix stay inside the wiki or under listed folders. The probes
+never read content and never raise (a path the filesystem cannot stat reads
+as missing), and lint output travels (stderr, ``--json``, CI logs): list the
 narrowest folder that holds what you link. Restoring a deleted settings file
 as ``{}`` drops the list, as it drops every other block. A plasma-wiki 1.4.0
-or 1.5.0 clone reads a ``./`` or ``../`` link from the page's folder: a
-root-relative ``[[../x]]`` on a nested page is a stale or outside note there,
-and one that re-enters the wiki from that folder — ``[[../overview]]`` from
-``notes/deep.md`` beside an in-wiki ``overview.md`` — fails as
-``relative_link``, so upgrade every clone of a shared wiki together.
+or 1.5.0 clone reads a ``./`` or ``../`` link from the page's folder. On a
+root page the two readings agree, and that clone notes an unlisted or missing
+target rather than failing it. On a nested page every root-relative
+``[[../x]]`` lands inside the wiki under the page-folder reading and fails as
+``relative_link`` — ``[[../src/main.py]]`` from ``notes/meeting.md`` draws
+``(use [[../../src/main.py]] for the path outside the wiki)``, a spelling
+that climbs one folder too far under the root reading — so upgrade every
+clone of a shared wiki together.
 
 The trust store: ``~/.wiki/settings.json``
 ------------------------------------------
