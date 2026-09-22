@@ -3,18 +3,19 @@
 ``links.external`` (``.wiki/settings.json``): policy validation and the
 init-seed refusal, the verdicts for targets under an allowlisted folder
 (pages by stem, literal files, folders), the root-relative spelling an
-absolute link is steered to, the issue naming the entry to add for a
-``../`` link under no allowlisted folder, the miss under an entry judged
-by what the text names from the page's folder, the once-per-run note
-for an entry naming no folder on this machine, sample and region
-masking, the symlink probe posture, another wiki's folders judged by its
-own settings (its notices riding the host's funnel; a marker at the home
-or config home never a wiki), and the unchanged root boundary of the
-name-taking operations and the generated index rows. The in-wiki relative-prefix
-issue is covered beside the link tests in ``test_lint``. The other-wiki tests
-assume no ``.wiki/settings.json`` sits above pytest's base temporary
-directory, where a marker would read as an enclosing wiki (the CLI suite
-assumes the same of its root resolver).
+absolute link to an allowlisted file is steered to, the issue naming the
+entry to add for a ``../`` link under no allowlisted folder, the miss
+under an entry judged by what the text names from the page's folder, the
+once-per-run note for an entry naming no folder on this machine, sample
+and region masking, the symlink probe posture, another wiki's folders
+judged by its own settings (its notices riding the host's funnel; a
+marker at the home or config home never a wiki), and the unchanged root
+boundary of the name-taking operations and the generated index rows. The
+in-wiki relative-prefix and absolute-path issues are covered beside the
+link tests in ``test_lint``. The other-wiki tests assume no
+``.wiki/settings.json`` sits above pytest's base temporary directory,
+where a marker would read as an enclosing wiki (the CLI suite assumes
+the same of its root resolver).
 """
 
 from __future__ import annotations
@@ -321,14 +322,6 @@ def test_links_policy_accepts_missing_and_ancestor_folders(
             'stale-fix:../src/main.py',
         ),
         ([], {'src/main.py'}, 'root', '{absolute}/src/main.py', 'stale'),
-        # an absolute target inside the wiki that misses keeps its in-wiki hint
-        (
-            [],
-            set(),
-            'root',
-            '{absolute}/wiki/notes/meeting/',
-            'stale-fix:notes/meeting',
-        ),
         # a '..' chain clamped at the filesystem root: no entry could admit it
         (['../src'], set(), 'root', '{filesystem_root}', 'issue'),
     ],
@@ -372,7 +365,6 @@ def test_links_policy_accepts_missing_and_ancestor_folders(
         'no-block-missing',
         'absolute-under-entry',
         'absolute-not-allowlisted',
-        'absolute-inside-trailing-slash',
         'clamped-at-filesystem-root',
     ],
 )

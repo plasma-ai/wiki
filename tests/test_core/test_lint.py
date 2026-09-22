@@ -87,6 +87,7 @@ __all__ = [
     'test_quoted_placeholder_desc_is_soft',
     'test_long_desc_is_note_only',
     'test_lint_relative_prefix_inside_wiki_is_issue',
+    'test_lint_absolute_link_inside_wiki_is_issue',
     'test_lint_relative_root_link_names_the_index_page',
     'test_lint_relative_root_link_steers_to_index_before_update',
     'test_lint_link_text_ignores_padding_but_not_a_stray_bracket',
@@ -288,13 +289,13 @@ def test_lint_issues_are_typed(tmp_path: pathlib.Path) -> None:
         encoding='utf-8',
     )
     # a period-less desc, an unparseable stamp, both wrap mangles, a directory
-    # link, a relative link, an outside link, and a dangling region marker on
-    # one messy page
+    # link, a relative link, an absolute link, an outside link, and a dangling
+    # region marker on one messy page
     (tmp_path / 'data' / 'messy.md').write_text(
         '---\nname: messy\ndesc: No trailing period\n'
         'created: not-a-stamp\n---\n\n# messy\n\n'
         'a twenty-\nclass system, that\n+ wraps into a marker.\n\n'
-        'See [[core]], [[./keep]], and [[../gone]] for more.\n\n'
+        f'See [[core]], [[./keep]], [[{tmp_path}/keep]], and [[../gone]] for more.\n\n'
         '<!-- start: no-lint -->\n',
         encoding='utf-8',
     )
@@ -342,6 +343,7 @@ def test_lint_issues_are_typed(tmp_path: pathlib.Path) -> None:
     assert all(str(issue).startswith(issue.fields['path']) for issue in issues)
     kinds = {issue.kind for issue in issues}
     assert kinds == {
+        'absolute_link',
         'bare_page',
         'broken_link',
         'conflict_markers',
@@ -2039,6 +2041,81 @@ def test_lint_relative_prefix_inside_wiki_is_issue(
         f" through './' or '../'{tail}"
     ]
     assert flagged[0].kind == 'relative_link'
+    assert not any('Stale link' in event.description for event in notices)
+
+
+@page_index
+@bare_anchored
+@pytest.mark.parametrize(
+    argnames=('suffix', 'fix'),
+    argvalues=[
+        # the root itself, named by its index page as the prefixed arm does
+        ('', '_index'),
+        # an indexed folder is named by its index page, never its bare form
+        ('/notes', 'notes/_index'),
+        # a root page by its absolute path, named from the root
+        ('/overview', 'overview'),
+        # a nested page reads the same way
+        ('/notes/sibling', 'notes/sibling'),
+        # a trailing slash misses the page form; the fix drops it
+        ('/notes/sibling/', 'notes/sibling'),
+        # nothing exists there: the issue stands without a fix
+        ('/gone', None),
+    ],
+    ids=[
+        'root-itself',
+        'folder',
+        'root-page',
+        'nested-page',
+        'trailing-slash',
+        'missing',
+    ],
+)
+def test_lint_absolute_link_inside_wiki_is_issue(
+    tmp_path: pathlib.Path,
+    kind: str,
+    anchor: str,
+    suffix: str,
+    fix: Optional[str],
+) -> None:
+    """An absolute path to a target inside the wiki is a hard issue.
+
+    An in-wiki target has one spelling, the prefix-free form every clone
+    reads alike; an absolute path spells this machine's layout, so lint
+    fails it and names the prefix-free form with the anchor and alias
+    riding along, and no fix when nothing exists there. The link reports
+    once however often the prose repeats it, and is never also noted as
+    stale.
+    """
+    root = tmp_path.resolve()
+    _make_wiki(root, folders={'notes': ['meeting', 'sibling']})
+    (root / 'overview.md').write_text(
+        '---\nname: overview\ndesc: An overview.\n---\n\n# overview\n\nText.\n',
+        encoding='utf-8',
+    )
+    name = 'meeting.md' if kind == 'page' else '_index.md'
+    marker = 'Content for meeting.' if kind == 'page' else 'Overview of notes.'
+    page = root / 'notes' / name
+    link = f'{root}{suffix}'
+    body = f'See [[{link}{anchor}|Here]] and [[{link}{anchor}|Here]] again.'
+    text = page.read_text(encoding='utf-8').replace(marker, body)
+    page.write_text(text, encoding='utf-8')
+    Wiki(root).update()
+
+    # the issue names the prefix-free spelling; the link never also notes
+    wiki = Wiki(root)
+    notices = _capture_notices(wiki)
+    flagged = [issue for issue in wiki.lint() if 'points inside the wiki' in issue]
+    tail = '' if fix is None else f' (use [[{fix}{anchor}|Here]])'
+    assert flagged == [
+        f'notes/{name}: Link [[{link}{anchor}|Here]] points inside the wiki'
+        f' through an absolute path{tail}'
+    ]
+    assert flagged[0].kind == 'absolute_link'
+    fields = {'path': f'notes/{name}', 'target': f'{link}{anchor}'}
+    if fix is not None:
+        fields['canonical'] = fix + anchor
+    assert flagged[0].fields == fields
     assert not any('Stale link' in event.description for event in notices)
 
 

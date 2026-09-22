@@ -649,10 +649,12 @@ with ``./`` or ``../`` that land inside the wiki (every target is read from
 the wiki root, and a prefixed target must leave the wiki; the issue names the
 prefix-free form — as it does for a prefixed link that misses under a
 ``links.external`` folder while naming something in the wiki from the page's
-folder), prose wikilinks written with ``./`` or ``../`` that land outside
-every ``links.external`` folder (whatever is on disk; the issue names the
-entry to add), dangling or nested region markers, and — when the
-``titles.required`` setting is on — missing titles.
+folder), prose wikilinks whose target is an absolute path landing inside the
+wiki (the path spells one machine's layout; the issue names the prefix-free
+form, as the ``./``/``../`` issue does), prose wikilinks written with ``./``
+or ``../`` that land outside every ``links.external`` folder (whatever is on
+disk; the issue names the entry to add), dangling or nested region markers,
+and — when the ``titles.required`` setting is on — missing titles.
 
 **Notes** (soft, stderr) flag placeholder (``...``) descriptions, descriptions
 over 500 characters, empty index content sections, CRLF line endings, stale
@@ -676,9 +678,9 @@ their stderr prose.
 
 A ``<!-- start: no-lint -->`` ... ``<!-- end: no-lint -->`` region suppresses
 the position-based rules (conflict markers, escaped wikilinks, wrap mangles,
-stale-link notes, outside-link, directory-link and relative-link issues)
-for the lines it wraps; a malformed pair is itself an issue and suppresses
-nothing.
+stale-link notes, outside-link, directory-link, relative-link and
+absolute-link issues) for the lines it wraps; a malformed pair is itself an
+issue and suppresses nothing.
 
 .. list-table::
    :header-rows: 1

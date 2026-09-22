@@ -455,6 +455,18 @@ its meaning:
    reports once per file. Typed ``relative_link`` in ``--json``, with
    ``path``, ``target``, and (when a fix resolves) ``canonical`` fields.
 
+``Link [[target]] points inside the wiki through an absolute path (use [[canonical]])``
+   A prose wikilink whose target is an absolute path to something inside
+   the wiki. An in-wiki target has one spelling, the prefix-free form every
+   clone reads alike, and an absolute path spells this machine's layout, so
+   the message names the prefix-free form as the ``relative_link`` issue
+   does — a page by stem, an indexed folder's ``_index`` page, or the bare
+   path of a raw file or unindexed folder — and omits the ``(use ...)`` tail
+   when nothing exists there. An anchor and alias ride along, and a target
+   reports once per file. Typed ``absolute_link`` in ``--json``, with
+   ``path``, ``target``, and (when a fix resolves) ``canonical`` fields. An
+   absolute target outside the wiki is never live and draws the stale note.
+
 ``Link [[target]] points outside every links.external folder (add '<folder>' to links.external in .wiki/settings.json to allow it, or use [[canonical]])``
    A prose wikilink written with a ``./`` or ``../`` segment that lands
    outside the wiki and under no ``links.external`` folder — whatever is on

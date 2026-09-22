@@ -1462,6 +1462,8 @@ class Wiki:
         A ``<!-- start: no-lint -->`` ... ``<!-- end: no-lint -->`` region
         suppresses the positional rules (conflict markers, escaped
         wikilinks, wrap mangles, stale, outside, directory, and relative
+          absolute links inside the wiki (an absolute path to an in-wiki
+          target; flagged with the prefix-free form as the fix),
         links) for the lines it wraps; file-level checks ignore regions,
         and a nested or dangling region marker is itself a hard issue.
 
@@ -5606,8 +5608,10 @@ class Wiki:
         the link's prefix. A prefixed target that lands inside the wiki is
         a hard issue naming the prefix-free form; one that lands outside
         every ``links.external`` folder is a hard issue naming the entry
-        to add, whatever is on disk. A directory link (a target naming an
-        indexed folder rather than its ``_index`` page) is a hard issue
+        to add, whatever is on disk; an absolute target that lands inside
+        the wiki is a hard issue naming the prefix-free form too, since the
+        path spells one machine's layout. A directory link (a target naming
+        an indexed folder rather than its ``_index`` page) is a hard issue
         naming the ``/_index`` form, in this wiki or in an allowlisted
         wiki judged by its own settings. Under a present ``links.external``
         folder a target is live when the file, its ``.md`` form, or the
@@ -5698,6 +5702,27 @@ class Wiki:
                     # never moves a target, it words the fix
                     if canonical is None:
                         canonical = self._canonical_link_target(path, page_target)
+                # an absolute target landing inside the wiki is a hard issue
+                # naming the prefix-free form, the one spelling every clone reads
+                if absolute:
+                    if target in reported:
+                        continue
+                    reported.add(target)
+                    canonical = self._root_relative_form(joined)
+                    fix = ''
+                    fields = {'path': str(relpath), 'target': target}
+                    if canonical is not None:
+                        fix = f' (use [[{canonical}{anchor}{alias}]])'
+                        fields['canonical'] = canonical + anchor
+                    result.append(
+                        Issue(
+                            f'{relpath}: Link [[{target}{alias}]] points inside'
+                            f' the wiki through an absolute path{fix}',
+                            kind='absolute_link',
+                            **fields,
+                        )
+                    )
+                    continue
                     fix = ''
                     fields = {'path': str(relpath), 'target': target}
                     if canonical is not None:
@@ -5840,9 +5865,7 @@ class Wiki:
             reported.add(target)
             # name the fix when a reading resolves; the page-folder mirror is the
             # prefixed arm's second rung, wording the fix an Obsidian habit missed
-            if absolute and self._inside_root(joined):
-                canonical = self._root_relative_form(joined)
-            elif absolute:
+            if absolute:
                 canonical = self._external_spelling(joined)
             elif prefixed:
                 canonical = self._external_spelling(joined)

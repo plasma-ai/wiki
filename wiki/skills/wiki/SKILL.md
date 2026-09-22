@@ -158,12 +158,15 @@ rather than authoring or auditing page by page yourself:
   reject a bare folder link too. A prefixed link that lands inside the wiki
   fails lint (`points inside the wiki through './' or '../'`), naming the
   prefix-free spelling (of the target read from the wiki root, else of the same
-  text read from the page's folder; the root itself is `_index`); so does one
-  that misses under an allowlisted folder while the same text read from the
-  page's folder names something in the wiki — the slip `[[../overview]]` from a
-  nested page, meaning the in-wiki `overview.md`, fails with
-  `(use [[overview]])`. A prefixed link outside every allowlisted folder fails
-  lint whatever is on disk with
+  text read from the page's folder; the root itself is `_index`); so does an
+  absolute path to an in-wiki target
+  (`points inside the wiki through an absolute path`), which names the
+  prefix-free spelling when something exists there, since an absolute path
+  spells one machine's layout; and so does a prefixed link that misses under an
+  allowlisted folder while the same text read from the page's folder names
+  something in the wiki — the slip `[[../overview]]` from a nested page, meaning
+  the in-wiki `overview.md`, fails with `(use [[overview]])`. A prefixed link
+  outside every allowlisted folder fails lint whatever is on disk with
   `points outside every links.external folder (add '../docs' to links.external in .wiki/settings.json to allow it)`,
   adding `, or use [[overview]]` when the same text read from the page's folder
   names something in the wiki, or the root-relative spelling of an allowlisted
@@ -205,8 +208,10 @@ rather than authoring or auditing page by page yourself:
   index page — in this wiki or in another wiki a `links.external` folder admits:
   link `[[folder/_index]]`, never `[[folder]]` — a `./` or `../` prose link that
   lands inside the wiki (`points inside the wiki through './' or '../'`), which
-  names the prefix-free spelling to write instead, and a `./` or `../` prose
-  link outside every `links.external` folder
+  names the prefix-free spelling to write instead, an absolute prose link that
+  lands inside the wiki (`points inside the wiki through an absolute path`),
+  which names the prefix-free spelling when something exists there, and a `./`
+  or `../` prose link outside every `links.external` folder
   (`points outside every links.external folder`), which names the entry to add.
 - **Descriptions end in a period.** `wiki lint` fails a `desc` (or an authored
   link description) that lacks a trailing period; the seeded `...` placeholder

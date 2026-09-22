@@ -39,6 +39,12 @@ may include breaking changes, each listed under a Breaking heading.
   climbs one folder too far — so upgrade every clone of a shared wiki together.
   A wiki with no `./` or `../` link in prose draws no new issue and exits as
   before.
+- An absolute path to a target inside the wiki fails `wiki lint` as a new hard
+  issue, `absolute_link`, naming the prefix-free form (`(use [[core/design]])`
+  for `[[/Users/me/repo/wiki/core/design]]`): an in-wiki target has one
+  spelling, and an absolute path spells one machine's layout, which no other
+  clone shares. The issue carries `path`, `target`, and `canonical` when a
+  target exists there. An absolute target outside the wiki stays a stale note.
 
 ### Added
 
