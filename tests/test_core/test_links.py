@@ -385,17 +385,16 @@ def test_lint_judges_external_targets_by_the_allowlist(
     here -- absent, or a file -- it is skipped, and only that entry's note
     fires; under no entry a ``../`` link is the hard outside-link issue
     whatever is on disk, naming the entry to add (the target when a folder
-    is there, else its folder; a file, FIFO, or socket on the path names
-    the folder above it, and an absent folder keeps its own spelling) and,
-    when the text names an allowlisted file from the page's folder, that
-    file's root-relative spelling; an absolute target leaving the wiki is
-    never live, but is steered to its root-relative spelling when it lands
-    under an entry; a ``..`` chain clamped at the filesystem root and a
-    folder name the policy refuses name no entry; surrounding whitespace
-    is not part of the target but a space before the anchor is (the trim
-    runs before the anchor split), a stray bracket makes the text junk
-    (stale as written), a backslash is no separator, and a path of
-    thousands of segments is judged like any other.
+    is there, else its folder, and an absent folder keeps its own
+    spelling) and, when the text names an allowlisted file from the page's
+    folder, that file's root-relative spelling; an absolute target leaving
+    the wiki is never live, but is steered to its root-relative spelling
+    when it lands under an entry; a ``..`` chain clamped at the filesystem
+    root and a folder name the policy refuses name no entry; surrounding
+    whitespace is not part of the target but a space before the anchor is
+    (the trim runs before the anchor split), a stray bracket makes the
+    text junk (stale as written), a backslash is no separator, and a path
+    of thousands of segments is judged like any other.
     """
     root = tmp_path / 'wiki'
     _make_wiki(root, folders={'notes': ['meeting'], 'notes/deep': ['page']})
@@ -640,19 +639,18 @@ def test_lint_undeclared_external_link_is_issue(
     The verdict reads the link text and the settings alone: under no
     entry, or an entry that does not cover the target, the issue names
     the entry to add -- the target itself when a folder is there, else
-    its folder; a file, FIFO, or socket on the path names the folder
-    above it, and an absent folder keeps its own spelling -- and offers
-    what the text names from the page's folder, the base Obsidian reads
-    ``../`` from: an in-wiki page, file, or folder in its prefix-free
-    form, or an allowlisted file in its root-relative spelling. No entry
-    is named for a ``..`` chain clamped at the filesystem root, a folder
-    name the policy refuses, or a symlink alias of the wiki, while a path
-    running past the clamp still names its folder; ``[[..]]`` from the
-    root or one folder down names ``..`` with no fix, since the root
-    mirror is no target. The link reports once however often the prose
-    repeats it, is never also a stale note or another link issue, its
-    anchor rides into the offered spelling, and its alias rides in the
-    prose alone.
+    its folder; a file on the path names the folder above it, and an
+    absent folder keeps its own spelling -- and offers what the text
+    names from the page's folder, the base Obsidian reads ``../`` from:
+    an in-wiki page, file, or folder in its prefix-free form, or an
+    allowlisted file in its root-relative spelling. No entry is named
+    for a ``..`` chain clamped at the filesystem root, a folder name the
+    policy refuses, or a symlink alias of the wiki, while a path running
+    past the clamp still names its folder; ``[[..]]`` from the root or
+    one folder down names ``..`` with no fix, since the root mirror is no
+    target. The link reports once however often the prose repeats it, is
+    never also a stale note or another link issue, its anchor rides into
+    the offered spelling, and its alias rides in the prose alone.
     """
     root = tmp_path / 'wiki'
     _make_wiki(root, folders={'notes': ['meeting'], 'core': ['design']})

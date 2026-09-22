@@ -442,13 +442,10 @@ def test_search_rebuilds_a_corrupt_index(
     assert wiki.search('corrupttoken')[0][0] == 'core/page.md'
 
 
-@pytest.mark.parametrize(
-    argnames='member',
-    argvalues=['index', 'companions'],
-    ids=['index', 'companions'],
-)
+@pytest.mark.parametrize('member', ['index', 'companions'])
 def test_search_heals_a_readonly_index_family(
     tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
     member: str,
 ) -> None:
     """A read-only index or its stale WAL companions rebuild, never fatal.
@@ -458,7 +455,11 @@ def test_search_heals_a_readonly_index_family(
     that read-only index also mints WAL companions mirroring its mode,
     and they outlive a permission fix on the database itself: every later
     query would fail writing the stale read-only ``-shm``, so the open
-    discards the family up front.
+    discards the family up front. Stock SQLite reports the stale ``-shm``
+    as read-only, a fault the query gate cures too, so the companions
+    row's connection fails the write lock as Apple's system library does
+    -- with a lock the gate propagates -- and only the up-front discard
+    passes it.
     """
     wiki = _make_wiki(tmp_path, folders={'core': []})
     (tmp_path / 'core' / 'page.md').write_text(
@@ -481,6 +482,24 @@ def test_search_heals_a_readonly_index_family(
         os.chmod(cache, 0o644)
         shm = cache.with_name(cache.name + '-shm')
         assert shm.stat().st_mode & 0o200 == 0
+
+        class LockedConnection(sqlite3.Connection):
+            """Fail the write lock with a lock while the stale -shm stands."""
+
+            def execute(self, sql: str, *args: object) -> sqlite3.Cursor:
+                stale = shm.exists() and shm.stat().st_mode & 0o200 == 0
+                if 'BEGIN IMMEDIATE' in sql and stale:
+                    error = sqlite3.OperationalError('database is locked')
+                    error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+                    raise error
+                return super().execute(sql, *args)
+
+        original_connect = sqlite3.connect
+
+        def connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+            return original_connect(*args, factory=LockedConnection, **kwargs)
+
+        monkeypatch.setattr(sqlite3, 'connect', connect)
 
     assert wiki.search('regrowtoken')[0][0] == 'core/page.md'
     # the rebuild leaves no read-only file in the family

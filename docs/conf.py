@@ -108,8 +108,8 @@ def typehints_formatter(annotation: Any, config: Config) -> Optional[str]:
     origin = typing.get_origin(annotation)
     args = typing.get_args(annotation)
     if (origin is Callable) and args and isinstance(args[0], ParamSpec):
-        params, result = (format_annotation(arg, config) for arg in args)
-        return f'{format_annotation(Callable, config)}\\ \\[{params}, {result}]'
+        params, returns = (format_annotation(arg, config) for arg in args)
+        return f'{format_annotation(Callable, config)}\\ \\[{params}, {returns}]'
     return None
 
 

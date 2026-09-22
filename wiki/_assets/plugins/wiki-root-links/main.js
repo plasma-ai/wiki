@@ -18,8 +18,8 @@
 // notice names its prefix-free form and nothing opens. The only string that
 // ever leaves the plugin is an obsidian:// URI: a filesystem path is never
 // handed to the operating system, so a link naming a script or an app can
-// run nothing. Any fault of the plugin's own falls through to stock
-// behaviour.
+// run nothing. Any fault of the plugin's own inside a patched method falls
+// through to stock behavior.
 //
 // The vault root is the wiki root: `wiki init` and `wiki config` install
 // the plugin only into the vault of a root they configure.
@@ -182,7 +182,7 @@ module.exports = class WikiRootLinks extends Plugin {
           if (result !== undefined) return result;
         }
       } catch {
-        // stock behaviour covers any fault of the plugin's own
+        // stock behavior covers any fault of the plugin's own
       }
       return original.call(this, linktext, ...rest);
     };
@@ -196,7 +196,7 @@ module.exports = class WikiRootLinks extends Plugin {
 
   // Route a followed dot link to the Open step, answering in openLinkText's
   // shape; undefined leaves a vault with no local filesystem to stock
-  // behaviour.
+  // behavior.
   follow(linktext) {
     if (!(this.app.vault.adapter instanceof FileSystemAdapter)) return undefined;
     this.openOutside(linktext);

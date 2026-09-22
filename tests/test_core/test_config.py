@@ -189,6 +189,9 @@ def test_update_config_bundled_plugin_survives_existing_staged_dir(
 
     # no staged plugin means no download and no warning
     assert wiki.update_config() == []
+    # the staged tree is left as it is: neither path is recreated
+    assert not (config_dir / 'plugins').exists()
+    assert not (config_dir / 'community-plugins.json').exists()
     # the plugin is still copied and enabled from the package and the vault
     plugin_id = 'wiki-root-links'
     plugin = tmp_path / '.obsidian' / 'plugins' / plugin_id

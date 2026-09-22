@@ -298,9 +298,7 @@ def init(app: typer.Typer) -> typer.Typer:
         wiki = Wiki(path)
         wiki.on_notice = _echo_notice
         wiki.init(name, settings=settings)
-        # materialize Obsidian config (downloads community plugins, copies the
-        # bundled Wiki Root Links plugin from the package and enables it, seeds
-        # the new-link format when the vault has none)
+        # materialize Obsidian config (plugins, new-link format seed)
         warnings = wiki.update_config()
         # configure git merge driver
         configure_git_merge_driver(path)

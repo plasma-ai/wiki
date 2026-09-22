@@ -187,7 +187,7 @@ class Wiki:
         try:
             result = json.loads(path.read_text(encoding='utf-8'))
         except (ValueError, RecursionError) as e:
-            raise ValueError(f'Malformed JSON in {WIKI_SETTINGS}: {e}') from e
+            raise _malformed_json_error(WIKI_SETTINGS, e) from e
         if not isinstance(result, dict):
             raise ValueError(f'{WIKI_SETTINGS} must be a JSON object.')
         return result
@@ -1475,9 +1475,10 @@ class Wiki:
 
         A ``<!-- start: no-lint -->`` ... ``<!-- end: no-lint -->`` region
         suppresses the positional rules (conflict markers, escaped
-        wikilinks, wrap mangles, stale, outside, directory, and relative
-        links) for the lines it wraps; file-level checks ignore regions,
-        and a nested or dangling region marker is itself a hard issue.
+        wikilinks, wrap mangles, stale, outside, directory, relative, and
+        absolute links) for the lines it wraps; file-level checks ignore
+        regions, and a nested or dangling region marker is itself a hard
+        issue.
 
         Placeholder and oversized descriptions, empty content sections,
         stale links in user content (index bodies and pages -- the
@@ -3498,7 +3499,7 @@ class Wiki:
         own spelling. ``None`` when no entry could admit the target -- a
         chain of ``..`` clamped at the filesystem root, a folder name
         carrying a NUL or a backslash (a folder the policy refuses), or a
-        symlink alias of the wiki itself.
+        folder that resolves inside the wiki through a symlink alias.
         """
         if os.path.isdir(joined):
             holder = joined
