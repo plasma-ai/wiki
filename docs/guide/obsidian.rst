@@ -32,10 +32,16 @@ The ``wiki config`` command
    pinned Front Matter Title code is downloaded, and the bundled Wiki Root
    Links plugin is copied from the package and enabled (the merge rules are
    below).
-3. **Restores the settings marker.** A missing ``.wiki/settings.json`` is
+3. **Seeds the link format.** When the vault's ``app.json`` has no
+   ``newLinkFormat``, it is set to ``absolute`` (vault-absolute paths), so
+   the links Obsidian's autocomplete writes are the prefix-free form
+   ``wiki lint`` reads; a format the vault already carries is left alone (an
+   ``app.json`` you stage under ``.wiki/obsidian/`` is merged like any
+   staged file, staged side winning — see the merge rules below).
+4. **Restores the settings marker.** A missing ``.wiki/settings.json`` is
    restored as ``{}`` (all defaults) with a notice on stderr — the file
    declares the wiki root; see :doc:`/configuration`.
-4. **Wires the git merge driver.** The ``merge.wiki`` driver is registered in
+5. **Wires the git merge driver.** The ``merge.wiki`` driver is registered in
    the enclosing repository's local git config and the ``**/_index.md`` glob
    is written to ``.gitattributes``; see :doc:`/guide/merge-driver`.
 
@@ -198,8 +204,9 @@ Day-to-day use
 - After creating, moving, or deleting notes, run ``wiki update`` to stitch
   the changes into the indexes, and ``wiki lint`` to check wiki health.
 - ``wiki update`` never linkifies prose: author ``[[wikilink]]``
-  cross-references in page bodies by hand (Obsidian's link suggestions help
-  here).
+  cross-references in page bodies by hand; Obsidian's link suggestions write
+  the prefix-free form under the vault-absolute new-link format the install
+  seeds (step 3 above) — a format the vault already carries stands.
 - Every wikilink target is read from the wiki root, by ``wiki lint`` and,
   with the Wiki Root Links plugin enabled, by Obsidian: a prefix-free target
   (``[[topics/example]]``) names a note in the vault, and a ``./`` or ``../``

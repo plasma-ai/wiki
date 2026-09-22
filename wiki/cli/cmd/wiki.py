@@ -299,7 +299,8 @@ def init(app: typer.Typer) -> typer.Typer:
         wiki.on_notice = _echo_notice
         wiki.init(name, settings=settings)
         # materialize Obsidian config (downloads community plugins, copies the
-        # bundled Wiki Root Links plugin from the package and enables it)
+        # bundled Wiki Root Links plugin from the package and enables it, seeds
+        # the new-link format when the vault has none)
         warnings = wiki.update_config()
         # configure git merge driver
         configure_git_merge_driver(path)
@@ -340,10 +341,12 @@ def config(
 
         Copies .wiki/obsidian/ into .obsidian/ (downloading pinned plugin
         code), copies the bundled Wiki Root Links plugin from the package
-        and enables it, restores a missing .wiki/settings.json ({}),
-        registers the git merge driver in the repo's local config, and
-        writes the **/_index.md glob to .gitattributes when that file has
-        no pending edits (you commit it yourself). Run once per clone.
+        and enables it, seeds Obsidian's new-link format (newLinkFormat:
+        absolute in .obsidian/app.json) when the vault has none (a value
+        you have chosen stands), restores a missing .wiki/settings.json
+        ({}), registers the git merge driver in the repo's local config,
+        and writes the **/_index.md glob to .gitattributes when that file
+        has no pending edits (you commit it yourself). Run once per clone.
         Exits 0 even when a plugin download fails -- download failures are
         stderr warnings (re-run online to finish setup), never the exit
         code.

@@ -127,7 +127,8 @@ the same way ``wiki update`` would, materializes the ``.wiki/cache/`` counts
 cache, installs the Obsidian config into ``.obsidian/`` (downloading the
 pinned Front Matter Title code — failures are stderr warnings, not errors —
 and copying the bundled Wiki Root Links plugin from the package and enabling
-it), and configures the git merge driver (see :doc:`/guide/merge-driver`).
+it, and seeding Obsidian's new-link format when the vault has none), and
+configures the git merge driver (see :doc:`/guide/merge-driver`).
 
 Re-running ``init`` on an initialized wiki (root ``_index.md`` present) prints
 ``Wiki already initialized at: <path>`` and exits 0 without changing anything;
@@ -179,7 +180,8 @@ Installs or refreshes the wiki's editor and git integration. The command
 syncs the staged ``.wiki/obsidian/`` template into ``.obsidian/`` — plugin
 settings are copied, the pinned Front Matter Title code is downloaded from
 the upstream release and verified against pinned sha256 digests, the bundled
-Wiki Root Links plugin is copied from the package and enabled, and top-level
+Wiki Root Links plugin is copied from the package and enabled, Obsidian's
+new-link format is seeded when the vault has none, and top-level
 ``.json`` files are created when absent or merged when present (arrays
 union-merged, dicts deep-merged with the source winning). It restores a missing
 ``.wiki/settings.json`` as ``{}``, registers the ``merge.wiki`` driver in the

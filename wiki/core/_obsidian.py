@@ -39,6 +39,9 @@ _BUNDLED_PLUGINS = ('wiki-root-links',)
 _BUNDLED_PLUGIN_ASSETS = ('main.js', 'manifest.json')
 # the package folder the bundled plugins ship in, one <id>/ folder each
 _BUNDLED_PLUGIN_DIR = importlib.resources.files('wiki').joinpath('_assets', 'plugins')
+# app.json keys seeded where the vault has none of its own: absolute new
+# links make Obsidian's autocomplete write the prefix-free spelling lint reads
+_APP_DEFAULTS = {'newLinkFormat': 'absolute'}
 
 
 class PluginChecksumError(Exception):

@@ -48,6 +48,11 @@ may include breaking changes, each listed under a Breaking heading.
 
 ### Added
 
+- `wiki init` and `wiki config` seed Obsidian's new-link format to
+  vault-absolute paths (`newLinkFormat: absolute` in `.obsidian/app.json`) when
+  the vault has no value of its own, so the links Obsidian's autocomplete writes
+  are the prefix-free form `wiki lint` reads; a format the vault already carries
+  is left alone on every run.
 - The Wiki Root Links Obsidian plugin, bundled with the package under its
   Apache-2.0 licence: `wiki init` and `wiki config` copy it into
   `.obsidian/plugins/wiki-root-links/` and enable it in `community-plugins.json`

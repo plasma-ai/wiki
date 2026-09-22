@@ -13,7 +13,7 @@ import json
 import os
 import pathlib
 import shutil
-from typing import Optional
+from typing import Any, Optional, Union
 
 import pytest
 
@@ -31,6 +31,7 @@ __all__ = [
     'test_update_config_offline_warns',
     'test_update_config_keeps_notices_off_warnings',
     'test_update_config_preserves_existing',
+    'test_update_config_seeds_the_link_format_once',
     'test_update_config_is_idempotent',
     'test_update_config_seeds_missing_config_dir',
     'test_update_config_rejects_type_mismatch',
@@ -320,9 +321,71 @@ def test_update_config_preserves_existing(tmp_path: pathlib.Path) -> None:
     assert 'other-plugin' in enabled
     assert 'obsidian-front-matter-title-plugin' in enabled
 
-    # the top-level app.json is deep-merged, not replaced
+    # the top-level app.json is deep-merged, not replaced, and gains the
+    # seeded link format it had no value for
     app = json.loads((obsidian_dir / 'app.json').read_text(encoding='utf-8'))
-    assert app == {'existing': 1, 'setting': True}
+    assert app == {'existing': 1, 'setting': True, 'newLinkFormat': 'absolute'}
+
+
+@pytest.mark.parametrize(
+    argnames=('app', 'staged', 'expected_app'),
+    argvalues=[
+        pytest.param(None, None, {'newLinkFormat': 'absolute'}, id='absent'),
+        pytest.param(
+            {'existing': 1},
+            None,
+            {'existing': 1, 'newLinkFormat': 'absolute'},
+            id='without-key',
+        ),
+        pytest.param(
+            {'newLinkFormat': 'relative'},
+            None,
+            {'newLinkFormat': 'relative'},
+            id='chosen',
+        ),
+        pytest.param(
+            None,
+            {'newLinkFormat': 'relative'},
+            {'newLinkFormat': 'relative'},
+            id='staged',
+        ),
+    ],
+)
+@pytest.mark.usefixtures('_stub_download')
+def test_update_config_seeds_the_link_format_once(
+    tmp_path: pathlib.Path,
+    app: Optional[dict[str, Any]],
+    staged: Optional[dict[str, Any]],
+    expected_app: dict[str, Any],
+) -> None:
+    """``update_config`` seeds the new-link format only where the vault has none.
+
+    Obsidian's autocomplete then writes the prefix-free form lint reads,
+    while a format a user has chosen stays as chosen on every later run,
+    as does one the staged ``.wiki/obsidian/app.json`` carries, which the
+    merge writes to the vault before the seed step looks.
+    """
+    wiki = Wiki(tmp_path)
+    wiki.init()
+
+    # seed the vault's app.json the run starts from
+    app_file = tmp_path / '.obsidian' / 'app.json'
+    if app is not None:
+        app_file.parent.mkdir(exist_ok=True)
+        app_file.write_text(json.dumps(app), encoding='utf-8')
+    # stage app.json in the tool's own form: an absent vault file is created as
+    # a verbatim copy of it, so the second run's rewrite must match its bytes
+    if staged is not None:
+        staged_file = tmp_path / '.wiki' / 'obsidian' / 'app.json'
+        staged_file.write_text(json.dumps(staged, indent=2) + '\n', encoding='utf-8')
+
+    wiki.update_config()
+    seeded = json.loads(app_file.read_text(encoding='utf-8'))
+    assert seeded == expected_app
+    # a second run changes nothing
+    before = app_file.read_bytes()
+    wiki.update_config()
+    assert app_file.read_bytes() == before
 
 
 @pytest.mark.usefixtures('_stub_download')
@@ -369,23 +432,44 @@ def test_update_config_seeds_missing_config_dir(tmp_path: pathlib.Path) -> None:
 # ------ config validation
 
 
+@pytest.mark.parametrize(
+    argnames=('staged', 'vault'),
+    argvalues=[
+        pytest.param([1, 2], {'a': 1}, id='staged-list'),
+        pytest.param(None, [1, 2], id='vault-list'),
+    ],
+)
 @pytest.mark.usefixtures('_stub_download')
-def test_update_config_rejects_type_mismatch(tmp_path: pathlib.Path) -> None:
-    """``update_config`` raises on a top-level JSON type mismatch."""
+def test_update_config_rejects_type_mismatch(
+    tmp_path: pathlib.Path,
+    staged: Optional[list[int]],
+    vault: Union[dict[str, int], list[int]],
+) -> None:
+    """``update_config`` raises on a top-level JSON type mismatch naming the file.
+
+    A staged list against a vault dict fails in the staged merge; a vault
+    list with nothing staged reaches the app.json seed step, which has no
+    keys to keep and must refuse through the same merge rather than crash.
+    """
     wiki = Wiki(tmp_path)
     wiki.init()
 
-    # a list source against a dict target cannot be merged
+    # the staged side, when present, and the vault side cannot be merged
     config_dir = tmp_path / '.wiki' / 'obsidian'
-    (config_dir / 'app.json').write_text(json.dumps([1, 2]), encoding='utf-8')
+    if staged is not None:
+        (config_dir / 'app.json').write_text(json.dumps(staged), encoding='utf-8')
     obsidian_dir = tmp_path / '.obsidian'
     obsidian_dir.mkdir(exist_ok=True)
-    (obsidian_dir / 'app.json').write_text(json.dumps({'a': 1}), encoding='utf-8')
+    (obsidian_dir / 'app.json').write_text(json.dumps(vault), encoding='utf-8')
 
     with pytest.raises(TypeError, match=r'\.obsidian/app\.json'):
         wiki.update_config()
 
 
+@pytest.mark.parametrize(
+    argnames='staged',
+    argvalues=[pytest.param(True, id='merged'), pytest.param(False, id='seeded')],
+)
 @pytest.mark.parametrize(
     argnames='payload',
     argvalues=[
@@ -396,6 +480,7 @@ def test_update_config_rejects_type_mismatch(tmp_path: pathlib.Path) -> None:
 @pytest.mark.usefixtures('_stub_download')
 def test_update_config_reports_malformed_target_json(
     tmp_path: pathlib.Path,
+    staged: bool,
     payload: bytes,
 ) -> None:
     """A malformed existing ``.obsidian`` JSON names the file instead of a bare error.
@@ -403,14 +488,19 @@ def test_update_config_reports_malformed_target_json(
     The target is user-editable, so a hand-edit or truncated write must
     surface a diagnosable message rather than an undiagnosable JSON
     error; bytes no UTF-8 decoder reads are corruption too, and would
-    otherwise escape as a bare decode error.
+    otherwise escape as a bare decode error. With no staged ``app.json``
+    (a stock install stages none) the merge loop never reads the vault's
+    file, so the seed step is the first to parse it and must surface the
+    same message.
     """
     wiki = Wiki(tmp_path)
     wiki.init()
 
-    # an already-installed top-level config is then corrupted by hand
+    # the vault's app.json is hand-corrupted, with or without a staged copy
+    # for the merge loop to read first
     config_dir = tmp_path / '.wiki' / 'obsidian'
-    (config_dir / 'app.json').write_text(json.dumps({'a': 1}), encoding='utf-8')
+    if staged:
+        (config_dir / 'app.json').write_text(json.dumps({'a': 1}), encoding='utf-8')
     obsidian_dir = tmp_path / '.obsidian'
     obsidian_dir.mkdir(exist_ok=True)
     (obsidian_dir / 'app.json').write_bytes(payload)

@@ -33,6 +33,7 @@ from wiki.typing import Link, PathLike
 
 from . import _obsidian, _search, format
 from ._obsidian import (
+    _APP_DEFAULTS,
     _BUNDLED_PLUGIN_ASSETS,
     _BUNDLED_PLUGIN_DIR,
     _BUNDLED_PLUGINS,
@@ -887,10 +888,14 @@ class Wiki:
         enables it. Each top-level ``.json`` file (like
         ``community-plugins.json``) is created from source when absent,
         else merged: arrays are union-merged and dicts deep-merged with
-        source winning. Other installed plugins are left untouched. A
-        missing ``.wiki/obsidian/`` is seeded from the stock template
-        first, so an adopted tree gets the full setup. Also guarantees
-        the declared-root marker: a missing ``.wiki/settings.json`` is
+        source winning. Seeds the ``app.json`` keys the vault has no
+        value for -- Obsidian's new-link format, set to vault-absolute
+        paths so the links its autocomplete writes are the prefix-free
+        form lint reads -- and leaves a value the vault already carries
+        alone. Other installed plugins are left untouched. A missing
+        ``.wiki/obsidian/`` is seeded from the stock template first, so
+        an adopted tree gets the full setup. Also guarantees the
+        declared-root marker: a missing ``.wiki/settings.json`` is
         restored as ``{}`` with a notice.
 
         Returns:
@@ -1035,6 +1040,24 @@ class Wiki:
         )
         result = json.dumps(merged, indent=2)
         wiki.util.fs.write_atomic(target, result + '\n')
+        # seed the app.json keys the vault has no value for, in a separate
+        # write: the staged merge lets the staged side win on every run, and a
+        # default must yield to the choice a user has made
+        target = obsidian_dir / 'app.json'
+        target_data = _read_vault_json(target) if target.exists() else {}
+        # a file holding no object has no keys to keep; the merge names it
+        chosen = target_data.keys() if isinstance(target_data, dict) else ()
+        missing = {
+            key: value for key, value in _APP_DEFAULTS.items() if key not in chosen
+        }
+        if missing:
+            merged = _obsidian.merge_settings(
+                target_data=target_data,
+                source_data=missing,
+                name=target.name,
+            )
+            result = json.dumps(merged, indent=2)
+            wiki.util.fs.write_atomic(target, result + '\n')
         return warnings
 
     def _refuse_enclosing_wiki(self: Wiki, folder: pathlib.Path) -> None:
@@ -1439,6 +1462,8 @@ class Wiki:
           wiki root; flagged with the prefix-free form as the fix, as is
           a prefixed target that misses under a ``links.external`` folder
           while naming something in the wiki from the page's folder),
+          absolute links inside the wiki (an absolute path to an in-wiki
+          target; flagged with the prefix-free form as the fix),
           outside links under no allowlisted folder (a ``./`` or
           ``../`` target that lands outside every ``links.external``
           folder, whatever is on disk; flagged with the entry to add),
@@ -1451,8 +1476,6 @@ class Wiki:
         A ``<!-- start: no-lint -->`` ... ``<!-- end: no-lint -->`` region
         suppresses the positional rules (conflict markers, escaped
         wikilinks, wrap mangles, stale, outside, directory, and relative
-          absolute links inside the wiki (an absolute path to an in-wiki
-          target; flagged with the prefix-free form as the fix),
         links) for the lines it wraps; file-level checks ignore regions,
         and a nested or dangling region marker is itself a hard issue.
 
@@ -5679,18 +5702,6 @@ class Wiki:
             page_name = page_target + '.md'
             page_form = pathlib.Path(os.path.normpath(self._root / page_name))
             if self._inside_root(joined):
-                # a prefixed target landing inside the wiki is a hard issue naming
-                # the prefix-free form, the one spelling of an in-wiki target
-                if prefixed:
-                    if target in reported:
-                        continue
-                    reported.add(target)
-                    canonical = self._root_relative_form(joined)
-                    # a miss from the root may name the target from the page's
-                    # folder, the base an Obsidian habit spells from; the folder
-                    # never moves a target, it words the fix
-                    if canonical is None:
-                        canonical = self._canonical_link_target(path, page_target)
                 # an absolute target landing inside the wiki is a hard issue
                 # naming the prefix-free form, the one spelling every clone reads
                 if absolute:
@@ -5712,6 +5723,18 @@ class Wiki:
                         )
                     )
                     continue
+                # a prefixed target landing inside the wiki is a hard issue naming
+                # the prefix-free form, the one spelling of an in-wiki target
+                if prefixed:
+                    if target in reported:
+                        continue
+                    reported.add(target)
+                    canonical = self._root_relative_form(joined)
+                    # a miss from the root may name the target from the page's
+                    # folder, the base an Obsidian habit spells from; the folder
+                    # never moves a target, it words the fix
+                    if canonical is None:
+                        canonical = self._canonical_link_target(path, page_target)
                     fix = ''
                     fields = {'path': str(relpath), 'target': target}
                     if canonical is not None:
