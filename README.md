@@ -4,6 +4,7 @@
 [![build](https://github.com/plasma-ai/wiki/actions/workflows/build.yaml/badge.svg)](https://github.com/plasma-ai/wiki/actions/workflows/build.yaml)
 [![docs](https://github.com/plasma-ai/wiki/actions/workflows/docs.yaml/badge.svg)](https://github.com/plasma-ai/wiki/actions/workflows/docs.yaml)
 [![lint](https://github.com/plasma-ai/wiki/actions/workflows/lint.yaml/badge.svg)](https://github.com/plasma-ai/wiki/actions/workflows/lint.yaml)
+[![scan](https://github.com/plasma-ai/wiki/actions/workflows/scan.yaml/badge.svg)](https://github.com/plasma-ai/wiki/actions/workflows/scan.yaml)
 [![tests](https://github.com/plasma-ai/wiki/actions/workflows/tests.yaml/badge.svg)](https://github.com/plasma-ai/wiki/actions/workflows/tests.yaml)
 [![codecov](https://codecov.io/gh/plasma-ai/wiki/branch/main/graph/badge.svg?token=D8LJA7CZ2K)](https://codecov.io/gh/plasma-ai/wiki)
 [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](https://github.com/pre-commit/pre-commit)
