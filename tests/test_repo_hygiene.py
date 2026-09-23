@@ -136,17 +136,17 @@ def test_gitignore_spares_tracked_lookalike_paths(tmp_path: pathlib.Path) -> Non
         check=True,
     )
     shutil.copy(_REPO_ROOT / '.gitignore', repo / '.gitignore')
-    # tracked manifests, seed assets, and wiki config stay committable
+    # tracked manifests, seed assets, wiki config, and the lockfile stay committable
     assert not _check_ignore(repo, '.claude-plugin/plugin.json')
     assert not _check_ignore(repo, '.codex-plugin/plugin.json')
     assert not _check_ignore(repo, 'wiki/_assets/obsidian/community-plugins.json')
     assert not _check_ignore(repo, 'wiki/_assets/plugins/wiki-root-links/main.js')
     assert not _check_ignore(repo, 'wiki/_assets/plugins/wiki-root-links/manifest.json')
     assert not _check_ignore(repo, 'examples/hello/.wiki/settings.json')
+    assert not _check_ignore(repo, 'uv.lock')
     # genuine junk stays hidden (the copy carries the real rules), including
-    # the deliberate library-convention uv.lock ignore and the Obsidian
-    # sidecar a `wiki config` run leaves inside the committed sample wiki
-    assert _check_ignore(repo, 'uv.lock')
+    # the Obsidian sidecar a `wiki config` run leaves inside the committed
+    # sample wiki
     assert _check_ignore(repo, '__pycache__/mod.pyc')
     assert _check_ignore(repo, 'examples/hello/.obsidian/app.json')
 
