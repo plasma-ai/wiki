@@ -7,10 +7,20 @@
     "email": "eng@plasma.ai",
     "url": "https://plasma.ai"
   },
+  "homepage": "https://github.com/plasma-ai/wiki",
+  "repository": "https://github.com/plasma-ai/wiki",
+  "license": "Apache-2.0",
+  "keywords": ["wiki"],
   "skills": "./wiki/skills/",
   "interface": {
     "displayName": "Wiki",
     "shortDescription": "Indexed knowledge bases with command-line tools for agents.",
-    "category": "Development"
+    "longDescription": "A wiki keeps project knowledge as plain markdown, indexed at every level by _index.md files, read by consulting the index and opening only the pages a task needs. The wiki CLI regenerates index link blocks and page frontmatter from the filesystem, lints structure and links, searches pages by full text, and installs a git merge driver that auto-resolves the generated region of index files, so parallel agent edits conflict only on authored prose.",
+    "developerName": "Plasma AI",
+    "category": "Development",
+    "capabilities": ["Interactive", "Read", "Write"],
+    "websiteURL": "https://plasma.ai",
+    "privacyPolicyURL": "https://plasma.ai/privacy",
+    "termsOfServiceURL": "https://plasma.ai/terms"
   }
 }
