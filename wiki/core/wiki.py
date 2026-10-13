@@ -788,6 +788,55 @@ class Wiki:
         """
         return self._name_violation(name) is None
 
+    def order_index(self: Wiki, text: str) -> str:
+        """Reorder an ``_index.md``'s link rows into the order update writes.
+
+        The index merge driver resolves the link block to both sides' rows,
+        appending each row only the other side carries above the ``***``
+        delimiter; this moves every row to its :meth:`_sort_links` place and
+        renders the rows as ``update`` does, so a clean merge of two current
+        indexes is itself current. Rows already in order, and a text with no
+        delimiter or no rows, come back unchanged byte for byte; the lines
+        around the rows never change.
+
+        Args:
+            text: Raw index content.
+
+        Returns:
+            The index content with its rows in order.
+
+        """
+        lines = text.split('\n')
+        _, start = format.extract_frontmatter(lines)
+        # find the first delimiter after the frontmatter, where the rows
+        # format.parse_index reads end
+        end = None
+        for i in range(start, len(lines)):
+            if lines[i].rstrip() == self.index_delimiter:
+                end = i
+                break
+        if end is None:
+            return text
+        # find the first link row above it
+        first = None
+        for i in range(start, end):
+            if format.match_link_row(lines[i]) is not None:
+                first = i
+                break
+        if first is None:
+            return text
+        # sort the parsed rows, keeping the bytes when the order holds
+        _, links, _ = format.parse_index(text, delimiter=self.index_delimiter)
+        ordered = self._sort_links(links)
+        if ordered == links:
+            return text
+        # render each row and a blank line after it, as format.render_index does
+        rows = []
+        for target, label, desc in ordered:
+            rows.append(format.format_link(target, label, desc))
+            rows.append('')
+        return '\n'.join([*lines[:first], *rows, *lines[end:]])
+
     @format.run_scoped
     def init(
         self: Wiki,

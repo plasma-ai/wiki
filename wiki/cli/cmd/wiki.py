@@ -20,6 +20,7 @@ from wiki.cli.utils import (
     _no_wiki_error,
     command,
     configure_git_merge_driver,
+    load_wiki_class,
     parse_settings,
     parse_slice,
     refuse_nested_init,
@@ -1071,17 +1072,21 @@ def merge(app: typer.Typer) -> typer.Typer:
         moves an absolute script path silently breaks on. The real pathname
         (%P) dispatches internally, so the registration string never changes:
         an ``_index.md`` below a declared wiki root gets the field-aware
-        index merge, everything else git's default text merge.
+        index merge, everything else git's default text merge. A clean
+        index merge leaves its link rows in the order ``wiki update``
+        writes them.
         """
         # dispatch on the real pathname: an _index.md below a declared wiki
         # root -> field-aware index merge (git runs merge drivers at the
         # worktree toplevel, so the repo-relative %P resolves from the cwd)
         folder = pathlib.Path(pathname).parent
-        in_wiki = any(
-            (ancestor / WIKI_SETTINGS).is_file()
-            for ancestor in (folder, *folder.parents)
-        )
-        if pathlib.PurePosixPath(pathname).name == WIKI_INDEX and in_wiki:
+        root = None
+        for ancestor in (folder, *folder.parents):
+            if (ancestor / WIKI_SETTINGS).is_file():
+                root = ancestor
+                break
+        index = pathlib.PurePosixPath(pathname).name == WIKI_INDEX
+        if index and (root is not None):
             package = pathlib.Path(__file__).parent.parent.parent
             script = package / '_assets' / 'git' / 'merge_index.sh'
             cmd = ['bash', f'{script}', ours, base, theirs, marker_size]
@@ -1094,6 +1099,11 @@ def merge(app: typer.Typer) -> typer.Typer:
             cmd = ['git', 'merge-file', size, ours, base, theirs]
         # pass the exit code through (nonzero tells git the merge left conflicts)
         result = subprocess.run(cmd)
+        # order a clean index merge's rows as update writes them -- the script
+        # appends each row only theirs carries below ours' (a conflicted
+        # merge is resolved by hand, then updated)
+        if index and (root is not None) and (result.returncode == 0):
+            _order_index(root, pathlib.Path(ours))
         raise SystemExit(result.returncode)
 
     return app
@@ -1207,3 +1217,30 @@ def _echo_notice(event: Event, **kwargs: Any) -> Event:
     """
     typer.echo(event.description, err=True)
     return event
+
+
+def _order_index(root: pathlib.Path, path: pathlib.Path) -> None:
+    """Put a merged ``_index.md``'s link rows in ``wiki update``'s order.
+
+    The order is the wiki's own (a ``.wiki/wiki.py`` hook may set it), so
+    a hook that cannot load -- untrusted, or failing on import -- leaves
+    the rows as merged, for the ``wiki update`` that reports the hook; so
+    does a merged file that is not UTF-8. The file is read and written as
+    bytes, so the lines around the rows keep their endings.
+
+    Args:
+        root: Wiki root the index sits under.
+        path: The merged index git hands the driver (%A).
+
+    """
+    try:
+        cls = load_wiki_class(root)
+    except (PermissionError, RuntimeError, TypeError):
+        return
+    try:
+        text = path.read_bytes().decode('utf-8')
+    except UnicodeDecodeError:
+        return
+    ordered = cls(root).order_index(text)
+    if ordered != text:
+        path.write_bytes(ordered.encode('utf-8'))

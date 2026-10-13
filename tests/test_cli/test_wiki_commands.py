@@ -14,6 +14,7 @@ import json
 import pathlib
 import re
 import shutil
+from typing import Optional
 
 import pytest
 
@@ -106,7 +107,10 @@ __all__ = [
     'test_merge_driver_carries_separators_and_comments_verbatim',
     'test_merge_driver_merges_comments_as_authored_lines',
     'test_merge_driver_replaces_a_block_body_whole',
-    'test_merge_unions_link_rows',
+    'test_merge_orders_rows_as_update_writes_them',
+    'test_merge_keeps_each_sides_deletions',
+    'test_merge_orders_rows_by_the_wikis_hook',
+    'test_merge_deletes_nothing_a_damaged_side_hides',
     'test_merge_keeps_frontmatter_when_side_is_mangled',
     'test_merge_dispatches_on_pathname',
     'test_merge_driver_skips_non_wiki_index_files',
@@ -2873,75 +2877,229 @@ def test_merge_driver_replaces_a_block_body_whole(tmp_path: pathlib.Path) -> Non
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
-def test_merge_unions_link_rows(tmp_path: pathlib.Path) -> None:
-    """Concurrent index merges keep the union of both sides' link rows.
+@pytest.mark.parametrize(
+    argnames=('theirs', 'ours', 'labels'),
+    argvalues=[
+        (('api', None), ('extra', None), ['api', 'design', 'extra']),
+        (('api', 'ref'), ('extra', 'guide'), ['[guide] extra', '[ref] api', 'design']),
+        (('alpha/', None), ('beta', None), ['alpha/', 'beta', 'design']),
+    ],
+    ids=['pages', 'categories', 'folder'],
+)
+def test_merge_orders_rows_as_update_writes_them(
+    tmp_path: pathlib.Path,
+    theirs: tuple[str, Optional[str]],
+    ours: tuple[str, Optional[str]],
+    labels: list[str],
+) -> None:
+    """A clean merge of two current indexes is current: its rows sit where update writes them.
 
-    A one-side resolution silently drops the rows only the other side
-    added -- each drop resurfacing as a hand-restored row or a
-    post-merge regeneration commit. The union keeps both sides' rows,
-    desc continuations included; a row deleted on one side rides back
-    in, and the next update prunes it against the filesystem -- deletion
-    custody lives with update, never with the merge.
+    The driver keeps both sides' rows, the other side's riding in below
+    ours; left there, a row that sorts above ours' would fail
+    ``update --check`` and ``lint`` on a merged tree that each side had
+    passed. Desc continuations travel with their rows.
     """
     root = tmp_path / 'wiki'
-    # a real repo whose wiki has the driver registered by init
     assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
     _git(tmp_path, 'config', 'user.email', 't@t')
     _git(tmp_path, 'config', 'user.name', 't')
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     _write(root / 'core' / '_index.md', _index('Core', 'Core concepts.', 'Text.'))
-    _write(root / 'core' / 'design.md', _page('design', 'The design page.', 'Body.'))
-    _write(root / 'core' / 'shared.md', _page('shared', 'The shared page.', 'Body.'))
+    _add_entry(root / 'core', 'design', None)
     assert _wiki(root, 'update', '--path', str(root)).returncode == 0
     _git(tmp_path, 'add', '-A')
     _git(tmp_path, 'commit', '-q', '-m', 'base')
 
-    # theirs adds a page whose block-scalar desc rides its row as a
-    # continuation line after update
+    # each side adds its own entry under core/ and updates
     _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
-    _write(
-        root / 'core' / 'api.md',
-        '---\nname: api\ndesc: |\n  The api page, opening line.\n'
-        '  Second continuation line.\n---\n\n# api\n\nBody.\n',
-    )
+    _add_entry(root / 'core', *theirs)
     assert _wiki(root, 'update', '--path', str(root)).returncode == 0
     _git(tmp_path, 'add', '-A')
-    _git(tmp_path, 'commit', '-q', '-m', 'theirs adds api')
-
-    # ours adds a different page and deletes shared (custodian deletion)
+    _git(tmp_path, 'commit', '-q', '-m', 'theirs')
     _git(tmp_path, 'checkout', '-q', 'main')
-    _write(root / 'core' / 'extra.md', _page('extra', 'The extra page.', 'Body.'))
-    (root / 'core' / 'shared.md').unlink()
+    _add_entry(root / 'core', *ours)
     assert _wiki(root, 'update', '--path', str(root)).returncode == 0
     _git(tmp_path, 'add', '-A')
-    _git(tmp_path, 'commit', '-q', '-m', 'ours adds extra, deletes shared')
+    _git(tmp_path, 'commit', '-q', '-m', 'ours')
 
-    # the merge is clean and keeps the union of both sides' rows,
-    # theirs-only continuations included
+    # the merge is clean and lays the rows out in update's order
     merge = _git(tmp_path, 'merge', 'theirs')
     assert merge.returncode == 0, merge.stdout + merge.stderr
     merged = (root / 'core' / '_index.md').read_text(encoding='utf-8')
-    assert '<<<<<<<' not in merged
-    assert '[[core/design|design]]' in merged
-    assert '[[core/extra|extra]]' in merged
-    assert '[[core/api|api]]' in merged
-    assert 'Second continuation line.' in merged
-    # the deleted side's row rides back in: union, never one-side custody
-    assert '[[core/shared|shared]]' in merged
-    # exactly once each: the union dedups rows present on both sides, and
-    # theirs' heading/preamble above its first row never rides over
-    assert merged.count('[[core/design|design]]') == 1
-    assert merged.count('[[_index|..]]') == 1
-    assert merged.count('# core') == 1
+    assert _row_labels(merged) == ['..', *labels]
 
-    # the post-merge update prunes the stale row against the filesystem
-    result = _wiki(root, 'update', '--path', str(root))
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert 'Pruned 1 broken link' in result.stderr
-    converged = (root / 'core' / '_index.md').read_text(encoding='utf-8')
-    assert '[[core/shared|shared]]' not in converged
-    assert '[[core/api|api]]' in converged
-    assert 'Second continuation line.' in converged
+    # the merged tree is current as merged, continuation lines included
+    check = _wiki(root, 'update', '--path', str(root), '--check')
+    assert check.returncode == 0, check.stdout + check.stderr
+    lint = _wiki(root, 'lint', '--path', str(root))
+    assert lint.returncode == 0, lint.stdout + lint.stderr
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_merge_keeps_each_sides_deletions(tmp_path: pathlib.Path) -> None:
+    """A row one side deleted and the other left alone stays deleted.
+
+    The union never drops a row only one side added, but a row base had
+    is the deleting side's to remove: ridden back in, it would point at a
+    page the merged tree no longer has, failing ``lint`` and
+    ``update --check`` until an update pruned it.
+    """
+    root = tmp_path / 'wiki'
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'core' / '_index.md', _index('Core', 'Core concepts.', 'Text.'))
+    for name in ('design', 'shared', 'zeta'):
+        _add_entry(root / 'core', name, None)
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # theirs adds api and deletes zeta; ours adds extra and deletes shared
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    _add_entry(root / 'core', 'api', None)
+    (root / 'core' / 'zeta.md').unlink()
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    _add_entry(root / 'core', 'extra', None)
+    (root / 'core' / 'shared.md').unlink()
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'ours')
+
+    # the merge keeps both additions and both deletions, and is current
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    merged = (root / 'core' / '_index.md').read_text(encoding='utf-8')
+    assert _row_labels(merged) == ['..', 'api', 'design', 'extra']
+    check = _wiki(root, 'update', '--path', str(root), '--check')
+    assert check.returncode == 0, check.stdout + check.stderr
+    lint = _wiki(root, 'lint', '--path', str(root))
+    assert lint.returncode == 0, lint.stdout + lint.stderr
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
+    argnames=('trusted', 'labels'),
+    argvalues=[
+        (True, ['[ref] api', '[guide] extra', 'design']),
+        (False, ['[guide] extra', 'design', '[ref] api']),
+    ],
+    ids=['trusted', 'untrusted'],
+)
+def test_merge_orders_rows_by_the_wikis_hook(
+    tmp_path: pathlib.Path,
+    trusted: bool,
+    labels: list[str],
+) -> None:
+    """The merge orders rows by the wiki's own class, and only a hook it may run.
+
+    A ``.wiki/wiki.py`` hook may reorder categories, so the driver sorts
+    with the class the hook names. An untrusted hook never runs: the rows
+    stay as merged, the other side's below ours, for the update that
+    waits on ``wiki trust`` -- and the merge itself stays clean.
+    """
+    root = tmp_path / 'wiki'
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'core' / '_index.md', _index('Core', 'Core concepts.', 'Text.'))
+    _add_entry(root / 'core', 'design', None)
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    _add_entry(root / 'core', 'api', 'ref')
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    _add_entry(root / 'core', 'extra', 'guide')
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'ours')
+
+    # the hook puts ref ahead of guide
+    _write(
+        root / '.wiki' / 'wiki.py',
+        'from wiki.core.wiki import Wiki\n\n'
+        "__all__ = ['Ordered']\n\n\n"
+        'class Ordered(Wiki):\n'
+        "    category_order = ['ref', 'guide']\n",
+    )
+    if trusted:
+        assert _wiki(tmp_path, 'trust', '--path', str(root)).returncode == 0
+
+    # the merge is clean either way; only the trusted hook orders the rows
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    merged = (root / 'core' / '_index.md').read_text(encoding='utf-8')
+    assert _row_labels(merged) == ['..', *labels]
+    if trusted:
+        check = _wiki(root, 'update', '--path', str(root), '--check')
+        assert check.returncode == 0, check.stdout + check.stderr
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
+    argnames='damaged',
+    argvalues=['theirs', 'main'],
+    ids=['theirs', 'ours'],
+)
+def test_merge_deletes_nothing_a_damaged_side_hides(
+    tmp_path: pathlib.Path,
+    damaged: str,
+) -> None:
+    """A side whose rows a formatter escaped deletes none of them.
+
+    Escaped rows are invisible to the driver, so their absence says
+    nothing about what that side deleted. An asset row's desc is
+    authored in the index alone, so a row dropped on that evidence
+    would lose it for good: the update that re-adds the row seeds
+    ``...``.
+    """
+    root = tmp_path / 'wiki'
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    (root / 'core').mkdir()
+    (root / 'core' / 'diagram.png').write_bytes(b'\x89PNG\r\n')
+    _add_entry(root / 'core', 'design', None)
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    index = root / 'core' / '_index.md'
+    base = index.read_text(encoding='utf-8')
+    row = '[[core/diagram.png|diagram.png]]: The diagram.'
+    _write(index, base.replace('[[core/diagram.png|diagram.png]]: ...', row))
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # the damaged side's formatter escapes its rows; the other side adds a page
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    for branch in ('theirs', 'main'):
+        _git(tmp_path, 'checkout', '-q', branch)
+        if branch == damaged:
+            text = index.read_text(encoding='utf-8')
+            _write(index, text.replace('[[', '\\[\\[').replace(']]', '\\]\\]'))
+        else:
+            _add_entry(root / 'core', 'extra', None)
+            assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+        _git(tmp_path, 'add', '-A')
+        _git(tmp_path, 'commit', '-q', '-m', branch)
+
+    # the merge is clean, and the update after it repairs the escapes
+    # with the asset's authored desc intact
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    update = _wiki(root, 'update', '--path', str(root))
+    assert update.returncode == 0, update.stdout + update.stderr
+    converged = index.read_text(encoding='utf-8')
+    assert _row_labels(converged) == ['..', 'design', 'diagram.png', 'extra']
+    assert row in converged
     lint = _wiki(root, 'lint', '--path', str(root))
     assert lint.returncode == 0, lint.stdout + lint.stderr
 
@@ -3409,3 +3567,21 @@ def _page(name: str, desc: str, body: str) -> str:
 def _index(name: str, desc: str, body: str) -> str:
     """Return a minimal authored folder index with a content marker."""
     return f'---\nname: {name}\ndesc: {desc}\n---\n\n# {name}\n\n{body}\n\n***\n'
+
+
+def _add_entry(folder: pathlib.Path, name: str, category: Optional[str]) -> None:
+    """Add a page under ``folder``, or for a ``name/`` a folder holding one.
+
+    The page's desc is a two-line block scalar, so its index row carries a
+    continuation line; ``category`` sets its ``category:`` when given.
+    """
+    page = folder / name / 'note.md' if name.endswith('/') else folder / f'{name}.md'
+    lines = ['---', 'desc: |', f'  The {name} page.', '  Second continuation line.']
+    if category is not None:
+        lines.append(f'category: {category}')
+    _write(page, '\n'.join([*lines, '---', '', 'Body.', '']))
+
+
+def _row_labels(index: str) -> list[str]:
+    """Return the labels of an index's link rows, top to bottom."""
+    return re.findall(r'^\[\[.+?\|(.+?)\]\]', index, flags=re.MULTILINE)

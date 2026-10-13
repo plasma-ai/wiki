@@ -10,10 +10,11 @@ set -euo pipefail
 # must never conflict -- and the remaining authored keys
 # (title/desc/created/category/tags/sources) get a normal three-way
 # merge that may produce conflicts. The link block resolves to the union
-# of both sides' rows: ours' layout wins and rows present only in theirs
+# of both sides' rows less each row one side deleted and the other left
+# as base had it: ours' layout wins and rows present only in theirs
 # (with their desc continuations) are appended above the closing ***, so
-# a merge never silently drops one side's additions -- the next wiki
-# update re-sorts the block and prunes whatever rows went stale. title
+# a merge never silently drops one side's additions, and `wiki _merge`
+# then moves a clean merge's rows into the order wiki update writes. title
 # is authored (update never invents a value), so it must stay out of
 # REGENERATED_KEYS -- normalizing it to ours would silently discard
 # theirs' titles; the H1 rides ours' link-block layout, so a merged-in
@@ -299,8 +300,8 @@ git merge-file --marker-size="$MARKER_SIZE" -p -L ours -L base -L theirs \
 
 # link block: union both sides' rows -- ours' layout wins, and each row
 # present only in theirs rides over with its desc continuations, so the
-# merge never silently drops one side's additions (the next wiki update
-# re-sorts the block and prunes whatever rows went stale)
+# merge never silently drops one side's additions -- less the rows one
+# side deleted (`wiki _merge` then orders the rows of a clean merge)
 if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
     # rows key on their [[target| prefix (mirrors Python _LINK_ROW);
     # continuation and blank lines ride with the row that precedes them,
@@ -311,7 +312,12 @@ if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
     # not regenerate (an asset, a child still on the placeholder) -- and
     # then theirs' text lands, as a three-way merge would land it; a row
     # only theirs has rides over, appended directly above ours' closing ***
-    # (the region ends at its first ***, so the anchor is unambiguous)
+    # (the region ends at its first ***, so the anchor is unambiguous); a
+    # row base had that one side dropped while the other left base's text
+    # alone is a deletion and stays out, as a three-way merge would leave
+    # it -- unless the dropping side's block carries formatter escape
+    # damage (a \[ line, mirroring Python escaped_wikilink_lines), whose
+    # unread rows say nothing of what it deleted
     awk '
         # a row block without its trailing blank lines (CRLF and
         # whitespace-only ones included): the text a side edited, whatever
@@ -322,6 +328,13 @@ if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
         }
         function flush() {
             if (row == "") return
+            # theirs deleted a row ours left alone: drop it
+            if (((1, row) in text) && !((2, row) in text) && !damaged[2] \
+                && body(held) == body(text[1, row])) {
+                row = ""
+                held = ""
+                return
+            }
             if (((2, row) in text) && ((1, row) in text) \
                 && body(held) == body(text[1, row]) \
                 && body(text[2, row]) != body(text[1, row]))
@@ -338,6 +351,7 @@ if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
         FNR == 1 { key = "" }
         part < 3 {
             if ($0 ~ /^\*\*\*[[:space:]]*$/) { key = ""; next }
+            if ($0 ~ /^\\\[/) damaged[part] = 1
             if ($0 ~ /^\[\[.*\|/) {
                 key = $0
                 sub(/\|.*$/, "", key)
@@ -346,10 +360,17 @@ if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
             if (key != "") text[part, key] = text[part, key] $0 "\n"
             next
         }
+        !done && /^\\\[/ { damaged[3] = 1 }
         /^\*\*\*[[:space:]]*$/ && !done {
             flush()
-            for (i = 1; i <= count; i++)
-                if (!(order[i] in ours)) printf "%s", text[2, order[i]]
+            for (i = 1; i <= count; i++) {
+                k = order[i]
+                if (k in ours) continue
+                # ours deleted a row theirs left alone: keep it out
+                if (((1, k) in text) && !damaged[3] \
+                    && body(text[2, k]) == body(text[1, k])) continue
+                printf "%s", text[2, k]
+            }
             done = 1
             print
             next

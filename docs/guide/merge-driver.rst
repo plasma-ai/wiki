@@ -77,25 +77,34 @@ Link block
    The H1 heading and the generated link rows, up to and including the
    ``***`` line, resolve to the union of both sides' rows: the current
    branch's layout wins, and each row present only on the other side rides
-   over — desc continuations included — appended above the closing ``***``.
-   A row both sides carry keeps the current branch's text, unless only the
-   other side changed it against the base — an authored desc on a row
-   ``wiki update`` does not regenerate, such as an asset's — in which case
-   the other side's text lands. No row is silently dropped, and an edit only
-   one side made is never lost; when both sides edit the same row, the
-   current branch's text wins. ``wiki update`` owns this region, and the
-   post-merge run re-sorts the block and prunes whatever carried rows have
-   no target on the merged filesystem.
+   over — desc continuations included. A row both sides carry keeps the
+   current branch's text, unless only the other side changed it against the
+   base — an authored desc on a row ``wiki update`` does not regenerate, such
+   as an asset's — in which case the other side's text lands. A row the base
+   had that one side deleted and the other left as it was stays deleted, as
+   a three-way merge would leave it — unless the deleting side's rows carry
+   formatter escape damage (``\[\[``): rows the driver cannot read say
+   nothing about what that side deleted. No row only one side added is
+   dropped, and an edit only one side made is never lost; when both sides
+   edit the same row, the current branch's text wins.
+
+   When the whole file merges cleanly, the driver then puts the rows in the
+   order ``wiki update`` writes them, sorting with the wiki's own class — a
+   trusted ``.wiki/wiki.py`` hook's ``category_order`` included — and
+   rendering them as update does, so a clean merge of two current indexes is
+   current as merged. An untrusted hook leaves the rows as merged, the other
+   side's below the current branch's, for the ``wiki update`` that waits on
+   ``wiki trust``.
 
 Below ``***``
    Authored index prose gets a normal three-way merge that can conflict, like
    any other file.
 
-A merge of two branches that each added pages, ran ``wiki update``, and
-edited different prose therefore resolves cleanly — the competing link rows
-and timestamps that git's text merge would trip over are resolved
-automatically, and only genuinely concurrent edits to the same authored
-content surface as conflicts.
+A merge of two branches that each added or deleted pages, ran
+``wiki update``, and edited different prose therefore resolves cleanly and
+checks clean as merged — the competing link rows and timestamps that git's
+text merge would trip over are resolved automatically, and only genuinely
+concurrent edits to the same authored content surface as conflicts.
 
 Residual conflicts
 ------------------
@@ -164,12 +173,14 @@ files, silently, at its first merge. ``wiki lint`` notes the gap
 (soft, and a typed row in ``lint --json``) until ``wiki config`` registers
 the driver.
 
-Run ``wiki update`` after every merge. It regenerates the link blocks from
-the merged filesystem: carried-over rows sort into place (and any whose
-target a branch deleted are pruned), labels and descriptions refresh, and a
-merged-in ``title:`` finally shows in the H1 — during the merge the H1 rides
-the current branch's link-block layout, so it lags the merged frontmatter
-until this update.
+Run ``wiki update`` after a merge that conflicted, or that merged in an
+index's ``title:``. A clean merge's rows need no update — the driver already
+ordered them and kept each side's deletions — but during the merge the H1
+rides the current branch's link-block layout, so a merged-in ``title:``
+shows in the H1 only after an update, and resolving conflicts by hand can
+leave rows to regenerate. The update regenerates the link blocks from the
+merged filesystem: rows sort into place, any whose target is gone are
+pruned, and labels and descriptions refresh.
 
 Plumbing: the hidden ``_merge`` command
 ---------------------------------------
@@ -183,7 +194,10 @@ holding ``.wiki/settings.json``) gets the region-aware index merge described
 above, and every other file — including an ``_index.md`` outside any wiki,
 such as a static-site generator's content page — gets git's default three-way
 text merge. The exit code passes through to git: nonzero means conflicts were
-left in the file.
+left in the file. After a clean index merge the command orders the rows,
+loading the wiki's class as every command does — except that a hook it may
+not run (untrusted, or failing to load) skips the ordering rather than
+failing the merge.
 
 The dispatch is per-file and policy-free — it never reads
 ``exclude.patterns`` (a malformed ``exclude`` block must not fail a git
