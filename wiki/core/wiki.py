@@ -799,9 +799,9 @@ class Wiki:
         the current branch's rows. This rewrites the H1 from the text's own
         frontmatter -- the authored ``title``, else the ``name`` -- and
         moves every row to its :meth:`_sort_links` place, rendered as
-        ``update`` renders it, so a clean merge of two current indexes is
-        itself current. An H1 or a row order already in form keeps its
-        bytes, a text with no delimiter comes back unchanged, and the
+        ``update`` renders it, so a clean merge's H1 and row order match
+        what update writes. An H1 or a row order already in form keeps
+        its bytes, a text with no delimiter comes back unchanged, and the
         frontmatter and the content below the delimiter never change.
 
         Args:

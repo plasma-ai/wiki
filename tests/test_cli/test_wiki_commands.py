@@ -111,6 +111,9 @@ __all__ = [
     'test_merge_keeps_each_sides_deletions',
     'test_merge_carries_a_merged_title_into_the_h1',
     'test_merge_orders_rows_by_the_wikis_hook',
+    'test_merge_leaves_an_index_another_class_wrote',
+    'test_merge_keeps_a_row_one_side_changed_and_the_other_deleted',
+    'test_merge_leaves_a_non_utf8_index_as_merged',
     'test_merge_deletes_nothing_a_damaged_side_hides',
     'test_merge_keeps_frontmatter_when_side_is_mangled',
     'test_merge_dispatches_on_pathname',
@@ -124,6 +127,23 @@ __all__ = [
     'test_trust_store_exemption_survives_symlinked_home',
     'test_root_resolution_survives_a_symlink_loop_home',
 ]
+
+# a hook ordering the ref category ahead of guide
+_ORDERED_HOOK = (
+    'from wiki.core.wiki import Wiki\n\n'
+    "__all__ = ['Ordered']\n\n\n"
+    'class Ordered(Wiki):\n'
+    "    category_order = ['ref', 'guide']\n"
+)
+
+# a hook that loads, then raises when it sorts rows
+_RAISING_HOOK = (
+    'from wiki.core.wiki import Wiki\n\n'
+    "__all__ = ['Broken']\n\n\n"
+    'class Broken(Wiki):\n'
+    '    def _sort_links(self, links):\n'
+    "        raise RuntimeError('broken hook')\n"
+)
 
 pytestmark = pytest.mark.skipif(
     WIKI is None,
@@ -2938,12 +2958,14 @@ def test_merge_orders_rows_as_update_writes_them(
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
 def test_merge_keeps_each_sides_deletions(tmp_path: pathlib.Path) -> None:
-    """A row one side deleted and the other left alone stays deleted.
+    r"""A row one side deleted and the other left alone stays deleted.
 
     The union never drops a row only one side added, but a row base had
     is the deleting side's to remove: ridden back in, it would point at a
     page the merged tree no longer has, failing ``lint`` and
-    ``update --check`` until an update pruned it.
+    ``update --check`` until an update pruned it. A desc carrying display
+    math puts a ``\[`` line in the link block, which is no formatter's
+    escape damage and so suspends no deletion.
     """
     root = tmp_path / 'wiki'
     assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
@@ -2953,6 +2975,10 @@ def test_merge_keeps_each_sides_deletions(tmp_path: pathlib.Path) -> None:
     _write(root / 'core' / '_index.md', _index('Core', 'Core concepts.', 'Text.'))
     for name in ('design', 'shared', 'zeta'):
         _add_entry(root / 'core', name, None)
+    _write(
+        root / 'core' / 'math.md',
+        '---\ndesc: |\n  The math page shows\n  \\[ x^2 \\]\n  is never negative.\n---\n\nBody.\n',
+    )
     assert _wiki(root, 'update', '--path', str(root)).returncode == 0
     _git(tmp_path, 'add', '-A')
     _git(tmp_path, 'commit', '-q', '-m', 'base')
@@ -2975,7 +3001,7 @@ def test_merge_keeps_each_sides_deletions(tmp_path: pathlib.Path) -> None:
     merge = _git(tmp_path, 'merge', 'theirs')
     assert merge.returncode == 0, merge.stdout + merge.stderr
     merged = (root / 'core' / '_index.md').read_text(encoding='utf-8')
-    assert _row_labels(merged) == ['..', 'api', 'design', 'extra']
+    assert _row_labels(merged) == ['..', 'api', 'design', 'extra', 'math']
     check = _wiki(root, 'update', '--path', str(root), '--check')
     assert check.returncode == 0, check.stdout + check.stderr
     lint = _wiki(root, 'lint', '--path', str(root))
@@ -3035,24 +3061,28 @@ def test_merge_carries_a_merged_title_into_the_h1(
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
 @pytest.mark.parametrize(
-    argnames=('trusted', 'labels'),
+    argnames=('hook', 'trusted', 'labels'),
     argvalues=[
-        (True, ['[ref] api', '[guide] extra', 'design']),
-        (False, ['[guide] extra', 'design', '[ref] api']),
+        (_ORDERED_HOOK, True, ['[ref] api', '[guide] extra', 'design']),
+        (_ORDERED_HOOK, False, ['[guide] extra', 'design', '[ref] api']),
+        ('import nonexistent_module\n', True, ['[guide] extra', 'design', '[ref] api']),
+        (_RAISING_HOOK, True, ['[guide] extra', 'design', '[ref] api']),
     ],
-    ids=['trusted', 'untrusted'],
+    ids=['trusted', 'untrusted', 'import-fails', 'sort-raises'],
 )
 def test_merge_orders_rows_by_the_wikis_hook(
     tmp_path: pathlib.Path,
+    hook: str,
     trusted: bool,
     labels: list[str],
 ) -> None:
-    """The merge orders rows by the wiki's own class, and only a hook it may run.
+    """The merge orders rows by the wiki's own class, and only a hook that runs.
 
     A ``.wiki/wiki.py`` hook may reorder categories, so the driver sorts
-    with the class the hook names. An untrusted hook never runs: the rows
-    stay as merged, the other side's below ours, for the update that
-    waits on ``wiki trust`` -- and the merge itself stays clean.
+    with the class the hook names. A hook that does not run -- untrusted,
+    failing on import, or raising once loaded -- leaves the rows as merged,
+    the other side's below ours, for the update that reports it, and the
+    merge itself stays clean: the driver's exit code is the merge's.
     """
     root = tmp_path / 'wiki'
     assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
@@ -3075,25 +3105,150 @@ def test_merge_orders_rows_by_the_wikis_hook(
     _git(tmp_path, 'add', '-A')
     _git(tmp_path, 'commit', '-q', '-m', 'ours')
 
-    # the hook puts ref ahead of guide
-    _write(
-        root / '.wiki' / 'wiki.py',
-        'from wiki.core.wiki import Wiki\n\n'
-        "__all__ = ['Ordered']\n\n\n"
-        'class Ordered(Wiki):\n'
-        "    category_order = ['ref', 'guide']\n",
-    )
+    # the hook arrives after both sides updated without it
+    _write(root / '.wiki' / 'wiki.py', hook)
     if trusted:
         assert _wiki(tmp_path, 'trust', '--path', str(root)).returncode == 0
 
-    # the merge is clean either way; only the trusted hook orders the rows
+    # the merge is clean every way; only a hook that runs orders the rows
     merge = _git(tmp_path, 'merge', 'theirs')
     assert merge.returncode == 0, merge.stdout + merge.stderr
     merged = (root / 'core' / '_index.md').read_text(encoding='utf-8')
     assert _row_labels(merged) == ['..', *labels]
-    if trusted:
+    if hook == _ORDERED_HOOK and trusted:
         check = _wiki(root, 'update', '--path', str(root), '--check')
         assert check.returncode == 0, check.stdout + check.stderr
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_merge_leaves_an_index_another_class_wrote(tmp_path: pathlib.Path) -> None:
+    """Rows the current branch's index holds in another class's order stay as merged.
+
+    An embedder's update may order categories its own way with no hook in
+    the wiki (``ref`` ahead of ``guide`` here), so the driver's own class
+    would re-sort a current index into a stale one. It sorts only when it
+    leaves ours' pre-merge index as written.
+    """
+    root = tmp_path / 'wiki'
+    index = root / 'core' / '_index.md'
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    head = (
+        '---\nname: core\ndesc: Core concepts.\ntags: []\nsources: []\n'
+        'created: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\n---\n\n'
+        '# core\n\n[[_index|..]]\n\n[[core/api|[ref] api]]: The api page.\n\n'
+        '[[core/extra|[guide] extra]]: The extra page.\n\n'
+    )
+    design = '[[core/design|design]]: The design page.\n\n'
+    _write(index, f'{head}{design}***\n')
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # each side adds a row where that class orders it
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    _write(index, f'{head}[[core/beta|beta]]: The beta page.\n\n{design}***\n')
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    _write(index, f'{head}{design}[[core/zeta|zeta]]: The zeta page.\n\n***\n')
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
+
+    # the merge is clean, and ours' order stands with theirs' row below
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    labels = _row_labels(index.read_text(encoding='utf-8'))
+    assert labels == ['..', '[ref] api', '[guide] extra', 'design', 'zeta', 'beta']
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
+    argnames='deleting',
+    argvalues=['theirs', 'main'],
+    ids=['theirs-deletes', 'ours-deletes'],
+)
+def test_merge_keeps_a_row_one_side_changed_and_the_other_deleted(
+    tmp_path: pathlib.Path,
+    deleting: str,
+) -> None:
+    """A row one side changed and the other deleted stays, never silently dropped.
+
+    Only a row left as base had it is the deleting side's to remove: an
+    asset row's desc is authored in the index alone, so dropping the
+    edited row would lose the edit for good.
+    """
+    root = tmp_path / 'wiki'
+    index = root / 'core' / '_index.md'
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    (root / 'core').mkdir()
+    (root / 'core' / 'diagram.png').write_bytes(b'\x89PNG\r\n')
+    _add_entry(root / 'core', 'design', None)
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # one side deletes the asset; the other authors its row's desc
+    edited = '[[core/diagram.png|diagram.png]]: The flow diagram.'
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    for branch in ('theirs', 'main'):
+        _git(tmp_path, 'checkout', '-q', branch)
+        if branch == deleting:
+            (root / 'core' / 'diagram.png').unlink()
+            assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+        else:
+            text = index.read_text(encoding='utf-8')
+            _write(index, text.replace('[[core/diagram.png|diagram.png]]: ...', edited))
+        _git(tmp_path, 'add', '-A')
+        _git(tmp_path, 'commit', '-q', '-m', branch)
+
+    # the merge is clean and keeps the edited row
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    assert edited in index.read_text(encoding='utf-8')
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_merge_leaves_a_non_utf8_index_as_merged(tmp_path: pathlib.Path) -> None:
+    """An index no UTF-8 reader parses merges clean, its bytes and rows as merged.
+
+    The driver's script merges bytes; the ordering step reads text, so a
+    byte that does not decode leaves the result as the script wrote it
+    rather than failing the merge.
+    """
+    root = tmp_path / 'wiki'
+    index = root / 'core' / '_index.md'
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(index, _index('Core', 'Core concepts.', 'Text.'))
+    _add_entry(root / 'core', 'design', None)
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    base = index.read_bytes() + b'\nCaf\xe9 notes.\n'
+    index.write_bytes(base)
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # each side adds a row by hand, theirs one that sorts first
+    design = b'[[core/design|design]]'
+    alpha = b'[[core/alpha|alpha]]: Alpha.\n\n'
+    zeta = b'[[core/zeta|zeta]]: Zeta.\n\n'
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    index.write_bytes(base.replace(design, alpha + design))
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    index.write_bytes(base.replace(b'\n\n***', b'\n\n' + zeta + b'***'))
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
+
+    # the merge is clean, the byte survives, and the rows stay as merged
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    merged = index.read_bytes()
+    assert b'Caf\xe9 notes.' in merged
+    assert _row_labels(merged.decode('latin-1')) == ['..', 'design', 'zeta', 'alpha']
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')

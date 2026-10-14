@@ -1073,8 +1073,7 @@ def merge(app: typer.Typer) -> typer.Typer:
         (%P) dispatches internally, so the registration string never changes:
         an ``_index.md`` below a declared wiki root gets the field-aware
         index merge, everything else git's default text merge. A clean
-        index merge leaves its H1 and link rows as ``wiki update``
-        writes them.
+        index merge gets the H1 and row order ``wiki update`` writes.
         """
         # dispatch on the real pathname: an _index.md below a declared wiki
         # root -> field-aware index merge (git runs merge drivers at the
@@ -1090,6 +1089,8 @@ def merge(app: typer.Typer) -> typer.Typer:
             package = pathlib.Path(__file__).parent.parent.parent
             script = package / '_assets' / 'git' / 'merge_index.sh'
             cmd = ['bash', f'{script}', ours, base, theirs, marker_size]
+            # judge ours' index before the script writes the merge over it
+            wiki = _index_canonicalizer(root, pathlib.Path(ours))
         # any other file class: git's default three-way text merge -- an
         # _index.md outside every declared wiki (a site generator's content
         # page) is not tool-owned, and the index merge would resolve its
@@ -1097,13 +1098,14 @@ def merge(app: typer.Typer) -> typer.Typer:
         else:
             size = f'--marker-size={marker_size}'
             cmd = ['git', 'merge-file', size, ours, base, theirs]
+            wiki = None
         # pass the exit code through (nonzero tells git the merge left conflicts)
         result = subprocess.run(cmd)
-        # bring a clean index merge's H1 and rows to update's form -- the
-        # script keeps ours' H1 and appends each row only theirs carries
+        # bring a clean index merge's H1 and row order to update's form --
+        # the script keeps ours' H1 and appends each row only theirs carries
         # below ours' (a conflicted merge is resolved by hand, then updated)
-        if index and (root is not None) and (result.returncode == 0):
-            _canonicalize_index(root, pathlib.Path(ours))
+        if (wiki is not None) and (result.returncode == 0):
+            _canonicalize_index(wiki, pathlib.Path(ours))
         raise SystemExit(result.returncode)
 
     return app
@@ -1219,28 +1221,56 @@ def _echo_notice(event: Event, **kwargs: Any) -> Event:
     return event
 
 
-def _canonicalize_index(root: pathlib.Path, path: pathlib.Path) -> None:
-    """Bring a merged ``_index.md``'s H1 and link rows to ``wiki update``'s form.
+def _index_canonicalizer(root: pathlib.Path, path: pathlib.Path) -> Optional[Wiki]:
+    """Return the engine to canonicalize a merged ``_index.md`` with, if any.
 
-    The row order is the wiki's own (a ``.wiki/wiki.py`` hook may set it),
-    so a hook that cannot load -- untrusted, or failing on import -- leaves
-    the index as merged, for the ``wiki update`` that reports the hook; so
-    does a merged file that is not UTF-8. The file is read and written as
-    bytes, so the lines it leaves alone keep their endings.
+    The engine is the wiki's own class (a ``.wiki/wiki.py`` hook may order
+    rows its own way), and it serves only when it leaves the current
+    branch's index as written: an index another class wrote -- an
+    embedder's update with its own category order -- stays as merged, since
+    this class would make it stale.
 
     Args:
         root: Wiki root the index sits under.
+        path: The current branch's index (%A), read before the merge.
+
+    Returns:
+        The engine, or ``None`` to leave the merged index as it is.
+
+    """
+    # NOTE: a merge driver passes the merge's exit code through untouched
+    #   (patterns: conventions/cli/errors/exit-codes), and the index merge
+    #   stands without this step, so any failure here -- a hook that will
+    #   not load, construct or run, bytes that are not UTF-8 -- leaves the
+    #   index as merged rather than failing a clean merge
+    try:
+        wiki = load_wiki_class(root)(root)
+        text = path.read_bytes().decode('utf-8')
+        if wiki.canonicalize_index(text) != text:
+            return None
+    except Exception:
+        return None
+    return wiki
+
+
+def _canonicalize_index(wiki: Wiki, path: pathlib.Path) -> None:
+    """Bring a merged ``_index.md``'s H1 and row order to ``wiki update``'s form.
+
+    The file is read and written as bytes, so the lines it leaves alone
+    keep their endings. A failed write fails the merge: a file written in
+    part cannot stand as merged.
+
+    Args:
+        wiki: The engine :func:`_index_canonicalizer` returned.
         path: The merged index git hands the driver (%A).
 
     """
-    try:
-        cls = load_wiki_class(root)
-    except (PermissionError, RuntimeError, TypeError):
-        return
+    # NOTE: as in _index_canonicalizer, a failure to read or canonicalize
+    #   leaves the index as merged
     try:
         text = path.read_bytes().decode('utf-8')
-    except UnicodeDecodeError:
+        canonical = wiki.canonicalize_index(text)
+    except Exception:
         return
-    canonical = cls(root).canonicalize_index(text)
     if canonical != text:
         path.write_bytes(canonical.encode('utf-8'))

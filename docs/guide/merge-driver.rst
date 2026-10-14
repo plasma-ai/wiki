@@ -92,10 +92,12 @@ Link block
    the merged ``title:`` (else ``name:``) and puts the rows in the order
    ``wiki update`` writes them, sorting with the wiki's own class — a
    trusted ``.wiki/wiki.py`` hook's ``category_order`` included — and
-   rendering them as update does, so a clean merge of two current indexes is
-   current as merged. An untrusted hook leaves the index as merged — the H1
-   the current branch's, the other side's rows below its own — for the
-   ``wiki update`` that waits on ``wiki trust``.
+   rendering them as update does. It does so only when that class leaves
+   the current branch's own index as written: an index another class wrote
+   (an embedder's update with its own category order) stays as merged, as
+   does one whose hook cannot load or run — the H1 the current branch's, the
+   other side's rows below its own. A clean merge in which each side only
+   added, deleted, or retitled entries is then current as merged.
 
 Below ``***``
    Authored index prose gets a normal three-way merge that can conflict, like
@@ -174,12 +176,17 @@ files, silently, at its first merge. ``wiki lint`` notes the gap
 (soft, and a typed row in ``lint --json``) until ``wiki config`` registers
 the driver.
 
-Run ``wiki update`` after a merge that conflicted. A clean merge needs none —
-the driver already set its H1 and row order and kept each side's deletions —
-but resolving conflicts by hand can leave the H1 or rows to regenerate. The
-update regenerates the link blocks from the merged filesystem: the H1
-follows the title, rows sort into place, any whose target is gone are
-pruned, and labels and descriptions refresh.
+Run ``wiki update --check`` after a merge, and ``wiki update`` when it
+reports changes. A clean merge in which each side only added, deleted, or
+retitled entries checks clean — the driver already set its H1 and row order
+and kept each side's deletions — but some clean merges still leave rows to
+regenerate: a row one side changed and the other deleted is kept, pointing
+at nothing; when both sides change the same row, the current branch's text
+wins; and a merge that changes the hook's ``category_order`` sorts by the
+order the current branch had. Resolving conflicts by hand can leave the H1
+or rows to regenerate too. The update regenerates the link blocks from the
+merged filesystem: the H1 follows the title, rows sort into place, any
+whose target is gone are pruned, and labels and descriptions refresh.
 
 Plumbing: the hidden ``_merge`` command
 ---------------------------------------
@@ -194,9 +201,9 @@ above, and every other file — including an ``_index.md`` outside any wiki,
 such as a static-site generator's content page — gets git's default three-way
 text merge. The exit code passes through to git: nonzero means conflicts were
 left in the file. After a clean index merge the command sets the H1 and the
-row order, loading the wiki's class as every command does — except that a
-hook it may not run (untrusted, or failing to load) skips that step rather
-than failing the merge.
+row order with the wiki's class, loaded as every command loads it — except
+that a hook it cannot load or run, or an index that class did not write,
+skips that step rather than failing the merge.
 
 The dispatch is per-file and policy-free — it never reads
 ``exclude.patterns`` (a malformed ``exclude`` block must not fail a git

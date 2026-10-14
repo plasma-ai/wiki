@@ -14,7 +14,7 @@ set -euo pipefail
 # as base had it: ours' layout wins and rows present only in theirs
 # (with their desc continuations) are appended above the closing ***, so
 # a merge never silently drops one side's additions, and `wiki _merge`
-# then brings a clean merge's H1 and rows to the form wiki update
+# then brings a clean merge's H1 and row order to the form wiki update
 # writes. title is authored (update never invents a value), so it must
 # stay out of REGENERATED_KEYS -- normalizing it to ours would silently
 # discard theirs' titles; the H1 rides ours' link-block layout here, and
@@ -316,8 +316,8 @@ if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
     # row base had that one side dropped while the other left base's text
     # alone is a deletion and stays out, as a three-way merge would leave
     # it -- unless the dropping side's block carries formatter escape
-    # damage (a \[ line, mirroring Python escaped_wikilink_lines), whose
-    # unread rows say nothing of what it deleted
+    # damage (a \[\[ or \[[ line, mirroring Python escaped_wikilink_lines),
+    # whose unread rows say nothing of what it deleted
     awk '
         # a row block without its trailing blank lines (CRLF and
         # whitespace-only ones included): the text a side edited, whatever
@@ -351,7 +351,7 @@ if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
         FNR == 1 { key = "" }
         part < 3 {
             if ($0 ~ /^\*\*\*[[:space:]]*$/) { key = ""; next }
-            if ($0 ~ /^\\\[/) damaged[part] = 1
+            if ($0 ~ /^[[:blank:]]*\\\[\\?\[/) damaged[part] = 1
             if ($0 ~ /^\[\[.*\|/) {
                 key = $0
                 sub(/\|.*$/, "", key)
@@ -360,7 +360,7 @@ if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
             if (key != "") text[part, key] = text[part, key] $0 "\n"
             next
         }
-        !done && /^\\\[/ { damaged[3] = 1 }
+        !done && /^[[:blank:]]*\\\[\\?\[/ { damaged[3] = 1 }
         /^\*\*\*[[:space:]]*$/ && !done {
             flush()
             for (i = 1; i <= count; i++) {
