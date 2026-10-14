@@ -114,7 +114,8 @@ class Wiki:
     """Base class for structured wikis.
 
     Provides ``init``, ``update_config``, ``read``, ``search``,
-    ``match``, ``update``, ``new``, ``lint``, and ``map`` operations
+    ``match``, ``update``, ``new``, ``lint``, ``map``, and
+    ``canonicalize_index`` operations
     for a folder-based wiki with ``_index.md`` files.
 
     Instances are one-shot: policy (settings, naming, timestamps) and
@@ -788,28 +789,32 @@ class Wiki:
         """
         return self._name_violation(name) is None
 
-    def order_index(self: Wiki, text: str) -> str:
-        """Reorder an ``_index.md``'s link rows into the order update writes.
+    @format.run_scoped
+    def canonicalize_index(self: Wiki, text: str) -> str:
+        """Bring an ``_index.md``'s H1 and link rows to the form update writes.
 
-        The index merge driver resolves the link block to both sides' rows,
-        appending each row only the other side carries above the ``***``
-        delimiter; this moves every row to its :meth:`_sort_links` place and
-        renders the rows as ``update`` does, so a clean merge of two current
-        indexes is itself current. Rows already in order, and a text with no
-        delimiter or no rows, come back unchanged byte for byte; the lines
-        around the rows never change.
+        The index merge driver resolves the region above the ``***``
+        delimiter without the engine: the H1 rides the current branch's
+        layout, and each row only the other side carries is appended below
+        the current branch's rows. This rewrites the H1 from the text's own
+        frontmatter -- the authored ``title``, else the ``name`` -- and
+        moves every row to its :meth:`_sort_links` place, rendered as
+        ``update`` renders it, so a clean merge of two current indexes is
+        itself current. An H1 or a row order already in form keeps its
+        bytes, a text with no delimiter comes back unchanged, and the
+        frontmatter and the content below the delimiter never change.
 
         Args:
             text: Raw index content.
 
         Returns:
-            The index content with its rows in order.
+            The index content with its H1 and rows in form.
 
         """
         lines = text.split('\n')
-        _, start = format.extract_frontmatter(lines)
-        # find the first delimiter after the frontmatter, where the rows
-        # format.parse_index reads end
+        frontmatter, start = format.extract_frontmatter(lines)
+        # find the first delimiter after the frontmatter, where the region
+        # format.parse_index reads ends
         end = None
         for i in range(start, len(lines)):
             if lines[i].rstrip() == self.index_delimiter:
@@ -817,25 +822,32 @@ class Wiki:
                 break
         if end is None:
             return text
-        # find the first link row above it
-        first = None
+        # find the first link row above it; the H1 sits before that
+        first = end
         for i in range(start, end):
             if format.match_link_row(lines[i]) is not None:
                 first = i
                 break
-        if first is None:
-            return text
-        # sort the parsed rows, keeping the bytes when the order holds
+        # rewrite the H1 from the title, else the name, as update resolves it
+        title = format.read_frontmatter_title(frontmatter)
+        heading = title or format.read_frontmatter_name(frontmatter)
+        if heading:
+            for i in range(start, first):
+                if re.match(r'^#\s', lines[i]):
+                    if lines[i].rstrip() != f'# {heading}':
+                        lines[i] = f'# {heading}'
+                    break
+        # sort the parsed rows; a changed order renders each row and a blank
+        # line after it, as format.render_index does
         _, links, _ = format.parse_index(text, delimiter=self.index_delimiter)
         ordered = self._sort_links(links)
-        if ordered == links:
-            return text
-        # render each row and a blank line after it, as format.render_index does
-        rows = []
-        for target, label, desc in ordered:
-            rows.append(format.format_link(target, label, desc))
-            rows.append('')
-        return '\n'.join([*lines[:first], *rows, *lines[end:]])
+        if ordered != links:
+            rows = []
+            for target, label, desc in ordered:
+                rows.append(format.format_link(target, label, desc))
+                rows.append('')
+            lines[first:end] = rows
+        return '\n'.join(lines)
 
     @format.run_scoped
     def init(

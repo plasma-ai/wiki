@@ -277,18 +277,17 @@ rather than authoring or auditing page by page yourself:
   ours wins) — and three-way merges everything authored — the remaining
   frontmatter fields (`title`/`desc`/`created`/`category`/`tags`/`sources`) and
   the user content below `***` — which can still conflict for hand-resolution. A
-  clean merge then sorts the rows into the order `wiki update` writes, with the
-  wiki's own class (a trusted hook's `category_order` included), so a clean
-  merge of two current indexes passes `update --check` and `lint` as merged. A
-  side missing its `***` entirely (formatter damage) can't be split into
-  regions, so it conflicts whole-file with a hint comment naming the repair —
-  restore the `***` on that branch (`wiki update` does it), then redo the merge.
-  Run `wiki update` after a merge that conflicted or merged in an index `title:`
-  — the H1 rides ours' link-block layout, so a merged-in `title:` shows in its
-  H1 only after an update. `init`/`config` register the driver in local git
-  config and write the `**/_index.md` glob to `.gitattributes` in the working
-  tree only — you stage and commit it yourself, and each clone runs
-  `wiki config` once to register the driver.
+  clean merge then writes the H1 from the merged `title:` (else `name:`) and
+  sorts the rows into the order `wiki update` writes, with the wiki's own class
+  (a trusted hook's `category_order` included), so a clean merge of two current
+  indexes passes `update --check` and `lint` as merged. A side missing its `***`
+  entirely (formatter damage) can't be split into regions, so it conflicts
+  whole-file with a hint comment naming the repair — restore the `***` on that
+  branch (`wiki update` does it), then redo the merge. Run `wiki update` after a
+  merge that conflicted. `init`/`config` register the driver in local git config
+  and write the `**/_index.md` glob to `.gitattributes` in the working tree only
+  — you stage and commit it yourself, and each clone runs `wiki config` once to
+  register the driver.
 - **Leave new-directory index bodies empty during concurrent work.** When
   sibling branches both create the same new directory, its two `_index.md`s
   merge add/add with no common ancestor: the generated region resolves

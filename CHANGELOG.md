@@ -10,17 +10,19 @@ may include breaking changes, each listed under a Breaking heading.
 ### Changed
 
 - A clean `_index.md` merge is current as merged: after the merge driver
-  resolves the link block, `wiki _merge` puts its rows in the order
-  `wiki update` writes them, sorting with the wiki's own class (a trusted
-  `.wiki/wiki.py` hook's `category_order` included; an untrusted hook leaves the
-  rows as merged), and a row the base had that one side deleted while the other
-  left it alone stays deleted rather than riding back in — unless the deleting
-  side's rows carry formatter escape damage, whose unread rows say nothing of a
-  deletion. Two branches that each add or delete pages in one folder and run
-  `wiki update` now merge to an index that passes `wiki update --check` and
-  `wiki lint`; the other side's new rows no longer sit below ours' and a deleted
-  page's row no longer returns, each failing both until a post-merge update.
-  `Wiki.order_index` exposes the reordering.
+  resolves the region above `***`, `wiki _merge` rewrites its H1 from the merged
+  `title:` (else `name:`) and puts its rows in the order `wiki update` writes
+  them, sorting with the wiki's own class (a trusted `.wiki/wiki.py` hook's
+  `category_order` included; an untrusted hook leaves the index as merged), and
+  a row the base had that one side deleted while the other left it alone stays
+  deleted rather than riding back in — unless the deleting side's rows carry
+  formatter escape damage, whose unread rows say nothing of a deletion. Two
+  branches that each add or delete pages in one folder and run `wiki update`, or
+  retitle the index, now merge to an index that passes `wiki update --check` and
+  `wiki lint`; the other side's new rows no longer sit below ours', a deleted
+  page's row no longer returns, and a merged-in title no longer waits for an
+  update to reach the H1, each failing both until a post-merge update.
+  `Wiki.canonicalize_index` exposes the rewrite.
 
 ## [1.6.0] - 2026-09-22
 

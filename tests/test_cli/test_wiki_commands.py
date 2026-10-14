@@ -109,6 +109,7 @@ __all__ = [
     'test_merge_driver_replaces_a_block_body_whole',
     'test_merge_orders_rows_as_update_writes_them',
     'test_merge_keeps_each_sides_deletions',
+    'test_merge_carries_a_merged_title_into_the_h1',
     'test_merge_orders_rows_by_the_wikis_hook',
     'test_merge_deletes_nothing_a_damaged_side_hides',
     'test_merge_keeps_frontmatter_when_side_is_mangled',
@@ -2979,6 +2980,57 @@ def test_merge_keeps_each_sides_deletions(tmp_path: pathlib.Path) -> None:
     assert check.returncode == 0, check.stdout + check.stderr
     lint = _wiki(root, 'lint', '--path', str(root))
     assert lint.returncode == 0, lint.stdout + lint.stderr
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
+    argnames=('title', 'heading'),
+    argvalues=[('Core Concepts', 'Core Concepts'), ('null', 'core')],
+    ids=['retitled', 'untitled'],
+)
+def test_merge_carries_a_merged_title_into_the_h1(
+    tmp_path: pathlib.Path,
+    title: str,
+    heading: str,
+) -> None:
+    """A clean merge's H1 follows the merged title, else the name.
+
+    The H1 rides the current branch's layout through the driver, so when
+    the other side retitles an index -- or unsets its title -- while this
+    side changes its rows, a merged H1 left as it was would fail
+    ``update --check`` on a tree that each side had passed.
+    """
+    root = tmp_path / 'wiki'
+    index = root / 'core' / '_index.md'
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(index, '---\ntitle: Core Things\ndesc: Core concepts.\n---\n\n***\n')
+    _add_entry(root / 'core', 'design', None)
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # theirs sets the index's title; ours adds a page
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    base = index.read_text(encoding='utf-8')
+    _write(index, base.replace('title: Core Things', f'title: {title}'))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    _add_entry(root / 'core', 'extra', None)
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'ours')
+
+    # the merge is clean, its H1 follows the merged frontmatter, and the
+    # merged tree is current as merged
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    assert f'\n# {heading}\n' in index.read_text(encoding='utf-8')
+    check = _wiki(root, 'update', '--path', str(root), '--check')
+    assert check.returncode == 0, check.stdout + check.stderr
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')

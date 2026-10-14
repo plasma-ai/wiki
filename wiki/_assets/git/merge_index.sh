@@ -14,11 +14,11 @@ set -euo pipefail
 # as base had it: ours' layout wins and rows present only in theirs
 # (with their desc continuations) are appended above the closing ***, so
 # a merge never silently drops one side's additions, and `wiki _merge`
-# then moves a clean merge's rows into the order wiki update writes. title
-# is authored (update never invents a value), so it must stay out of
-# REGENERATED_KEYS -- normalizing it to ours would silently discard
-# theirs' titles; the H1 rides ours' link-block layout, so a merged-in
-# title shows in the H1 only after the post-merge wiki update. When the
+# then brings a clean merge's H1 and rows to the form wiki update
+# writes. title is authored (update never invents a value), so it must
+# stay out of REGENERATED_KEYS -- normalizing it to ours would silently
+# discard theirs' titles; the H1 rides ours' link-block layout here, and
+# `wiki _merge` rewrites it from the merged title. When the
 # base carries no created: stamp (an add/add merge's empty base, a
 # hand-written index) created joins the regenerated keys: both sides
 # seed it from independent wiki update runs, so the stamps are churn,
@@ -301,7 +301,7 @@ git merge-file --marker-size="$MARKER_SIZE" -p -L ours -L base -L theirs \
 # link block: union both sides' rows -- ours' layout wins, and each row
 # present only in theirs rides over with its desc continuations, so the
 # merge never silently drops one side's additions -- less the rows one
-# side deleted (`wiki _merge` then orders the rows of a clean merge)
+# side deleted (`wiki _merge` then sets a clean merge's H1 and row order)
 if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
     # rows key on their [[target| prefix (mirrors Python _LINK_ROW);
     # continuation and blank lines ride with the row that precedes them,

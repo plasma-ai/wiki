@@ -1073,7 +1073,7 @@ def merge(app: typer.Typer) -> typer.Typer:
         (%P) dispatches internally, so the registration string never changes:
         an ``_index.md`` below a declared wiki root gets the field-aware
         index merge, everything else git's default text merge. A clean
-        index merge leaves its link rows in the order ``wiki update``
+        index merge leaves its H1 and link rows as ``wiki update``
         writes them.
         """
         # dispatch on the real pathname: an _index.md below a declared wiki
@@ -1099,11 +1099,11 @@ def merge(app: typer.Typer) -> typer.Typer:
             cmd = ['git', 'merge-file', size, ours, base, theirs]
         # pass the exit code through (nonzero tells git the merge left conflicts)
         result = subprocess.run(cmd)
-        # order a clean index merge's rows as update writes them -- the script
-        # appends each row only theirs carries below ours' (a conflicted
-        # merge is resolved by hand, then updated)
+        # bring a clean index merge's H1 and rows to update's form -- the
+        # script keeps ours' H1 and appends each row only theirs carries
+        # below ours' (a conflicted merge is resolved by hand, then updated)
         if index and (root is not None) and (result.returncode == 0):
-            _order_index(root, pathlib.Path(ours))
+            _canonicalize_index(root, pathlib.Path(ours))
         raise SystemExit(result.returncode)
 
     return app
@@ -1219,14 +1219,14 @@ def _echo_notice(event: Event, **kwargs: Any) -> Event:
     return event
 
 
-def _order_index(root: pathlib.Path, path: pathlib.Path) -> None:
-    """Put a merged ``_index.md``'s link rows in ``wiki update``'s order.
+def _canonicalize_index(root: pathlib.Path, path: pathlib.Path) -> None:
+    """Bring a merged ``_index.md``'s H1 and link rows to ``wiki update``'s form.
 
-    The order is the wiki's own (a ``.wiki/wiki.py`` hook may set it), so
-    a hook that cannot load -- untrusted, or failing on import -- leaves
-    the rows as merged, for the ``wiki update`` that reports the hook; so
+    The row order is the wiki's own (a ``.wiki/wiki.py`` hook may set it),
+    so a hook that cannot load -- untrusted, or failing on import -- leaves
+    the index as merged, for the ``wiki update`` that reports the hook; so
     does a merged file that is not UTF-8. The file is read and written as
-    bytes, so the lines around the rows keep their endings.
+    bytes, so the lines it leaves alone keep their endings.
 
     Args:
         root: Wiki root the index sits under.
@@ -1241,6 +1241,6 @@ def _order_index(root: pathlib.Path, path: pathlib.Path) -> None:
         text = path.read_bytes().decode('utf-8')
     except UnicodeDecodeError:
         return
-    ordered = cls(root).order_index(text)
-    if ordered != text:
-        path.write_bytes(ordered.encode('utf-8'))
+    canonical = cls(root).canonicalize_index(text)
+    if canonical != text:
+        path.write_bytes(canonical.encode('utf-8'))
