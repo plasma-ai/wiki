@@ -187,7 +187,9 @@ rather than authoring or auditing page by page yourself:
   (code samples included; the `wiki lint` findings are the authoritative list).
 - **Lint's output contract.** `wiki lint` prints issues to stdout and soft notes
   to stderr; exit 1 means exactly "issues found" (0 clean, 2 a command error) —
-  notes never gate. A script must branch on the exit code or read
+  notes never gate. Every issue prints, but a note kind that repeats prints as
+  one count line (`12 indexes have empty content`); run `wiki lint --full` to
+  see each note's path. A script must branch on the exit code or read
   `wiki lint --json` (one JSON document on stdout carrying every finding typed:
   an explicit `issue`/`note` severity, a machine `kind`, and per-kind payload
   fields beside the prose `text`), never classify findings by scraping the prose

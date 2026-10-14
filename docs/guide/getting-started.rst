@@ -223,16 +223,15 @@ options are required; blanks and the ``...`` placeholder are refused. See
 :doc:`/cli/index`.
 
 ``wiki lint`` checks wiki health. With every description still a placeholder,
-it reports them as notes:
+it reports them as notes, one count line per repeated kind (``wiki lint
+--full`` lists each note with its path):
 
 .. code-block:: console
 
    $ wiki lint
-   _index.md: Needs desc
-   _index.md: Empty content
-   topics/_index.md: Needs desc
-   topics/_index.md: Empty content
-   topics/example.md: Needs desc
+   3 pages need a desc
+   2 indexes have empty content
+   Run with --full to list each note.
    No issues found (5 notes).
 
 Lint distinguishes **issues** from **notes**. Issues are hard problems — files
@@ -255,8 +254,8 @@ again:
    $ wiki update
    Updated 2 files.
    $ wiki lint
-   _index.md: Empty content
-   topics/_index.md: Empty content
+   2 indexes have empty content
+   Run with --full to list each note.
    No issues found (2 notes).
 
 Update propagated each description into the parent index's link row, and lint
@@ -305,7 +304,8 @@ rhythm of working with a wiki: add or move markdown files, run
    * - ``--path``
      - Wiki root directory (default: the enclosing wiki root).
    * - ``--full``
-     - Print every issue and note line — the default.
+     - Print every note line instead of one count line per repeated note kind
+       (default: off).
    * - ``--count``
      - Print only the closing summary, e.g. ``2 issues, 1 note.`` (default:
        off; mutually exclusive with ``--full``).

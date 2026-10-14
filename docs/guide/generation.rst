@@ -251,7 +251,9 @@ reports two kinds of problem — without writing anything:
 - **Notes** (stderr): soft advisories — unauthored descriptions, stale prose
   links, a ``links.external`` entry naming no folder on this machine,
   pending CRLF normalization, an unconfigured merge driver in a fresh clone.
-  Notes **never affect the exit code**.
+  Notes **never affect the exit code**. A note kind that repeats condenses to
+  one count line (``12 indexes have empty content``) unless you pass
+  ``--full``.
 
 .. code-block:: console
 
@@ -266,8 +268,9 @@ reports two kinds of problem — without writing anything:
 
    2 issues, 1 note.
 
-Notes stream to stderr as the walk encounters them; issues print to stdout
-once the walk completes.
+With ``--full``, notes stream to stderr as the walk encounters them; by
+default, the condensed note lines print once the walk completes. Issues print
+to stdout once the walk completes.
 
 Every issue line begins with the root-relative path. The output is prose for
 humans; a script must branch on the exit code (0 clean, 1 issues found,
@@ -290,8 +293,9 @@ scraping the streams: a stderr note is not a blocking issue.
      - resolved root
      - Wiki root directory (resolved as for update).
    * - ``--full``
-     - on (the effective default)
-     - Print every issue and note line.
+     - off
+     - Print every note line instead of one count line per repeated note
+       kind.
    * - ``--count``
      - off
      - Print only the closing summary (``N issue(s), M note(s).``). Mutually
@@ -301,9 +305,9 @@ scraping the streams: a stderr note is not a blocking issue.
      - Emit one machine-readable JSON document on stdout instead of the prose
        report; same exit codes. Mutually exclusive with ``--full``/``--count``.
 
-Note the opposite defaults: update condenses its narration unless you pass
-``--full``, while lint prints every line unless you pass ``--count`` — issues
-are lint's product.
+Both commands condense by default and list every line under ``--full``, but
+lint condenses only its notes: every issue prints unless you pass
+``--count`` — issues are lint's product.
 
 Out-of-date files
 ~~~~~~~~~~~~~~~~~

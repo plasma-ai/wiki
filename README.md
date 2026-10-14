@@ -172,13 +172,14 @@ never affect the exit code — a stale wikilink in prose is a note, while a brok
 link in a generated index block, a prose link naming a folder rather than its
 `_index` page, a `./`, `../`, or absolute prose link that lands inside the wiki,
 a `./` or `../` prose link outside every allowlisted folder, or frontmatter a
-strict YAML reader rejects, is an issue). Scripts should read `wiki lint --json`
-— one JSON document on stdout listing every issue and note with a `severity` and
-`kind` — rather than parse the prose; the exit code is unchanged. A page that
-must display otherwise-flagged content — sample conflict markers, stale link
-examples — wraps those lines in a `<!-- start: no-lint -->` ...
-`<!-- end: no-lint -->` region, which suppresses the positional rules, notes
-included, for just that span.
+strict YAML reader rejects, is an issue). A note kind that repeats prints as one
+count line, such as `12 indexes have empty content`; `wiki lint --full` lists
+each note. Scripts should read `wiki lint --json` — one JSON document on stdout
+listing every issue and note with a `severity` and `kind` — rather than parse
+the prose; the exit code is unchanged. A page that must display
+otherwise-flagged content — sample conflict markers, stale link examples — wraps
+those lines in a `<!-- start: no-lint -->` ... `<!-- end: no-lint -->` region,
+which suppresses the positional rules, notes included, for just that span.
 
 Browse structure, search across content, and read entries:
 
