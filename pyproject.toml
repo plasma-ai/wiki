@@ -248,7 +248,7 @@ markers = [
 
 [tool.coverage.run]
 # https://coverage.readthedocs.io/en/latest/config.html#run
-source = ["wiki"]
+source_pkgs = ["wiki"]
 parallel = true
 patch = ["_exit"]
 disable_warnings = ["no-data-collected"]
