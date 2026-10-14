@@ -37,15 +37,22 @@ from wiki.constants import (
 )
 from wiki.core.event import Event
 from wiki.core.wiki import (
+    ContentEmptyEvent,
+    CrlfNoticeEvent,
+    DescLongEvent,
+    DescMissingEvent,
     DescOverwriteEvent,
     FrontmatterMalformedEvent,
     IndexCreateEvent,
     IndexTruncatedEvent,
     Issue,
     LinkAddEvent,
+    LinkFolderMissingEvent,
     LinkPruneEvent,
+    LinkStaleEvent,
     NameSkipEvent,
     PageAdoptEvent,
+    PathUntrackableEvent,
     Wiki,
     WriteSkipEvent,
 )
@@ -143,6 +150,27 @@ _UPDATE_CATEGORIES = [
         '{n} empty or truncated indexes (restore from git or delete to rebuild)',
         '1 empty or truncated index (restore from git or delete to rebuild)',
         '{n} empty or truncated indexes (restore from git or delete to rebuild)',
+    ),
+]
+
+# lint note kinds that repeat per path, as (event class, many): two or more
+# notes of the class collapse into its count line by default, while a lone
+# note and a kind with no row print verbatim, so no kind is ever hidden
+_LINT_NOTE_CATEGORIES = [
+    (DescMissingEvent, '{n} pages need a desc'),
+    (DescLongEvent, '{n} long descs'),
+    (ContentEmptyEvent, '{n} indexes have empty content'),
+    (CrlfNoticeEvent, '{n} files have CRLF line endings; update will normalize'),
+    (LinkStaleEvent, '{n} stale links'),
+    (
+        LinkFolderMissingEvent,
+        '{n} links.external entries name no folder on this machine; links into'
+        ' them are not checked',
+    ),
+    (
+        PathUntrackableEvent,
+        "{n} indexed paths this machine's git ignores; their rows ship where"
+        ' the files cannot',
     ),
 ]
 
@@ -833,7 +861,7 @@ def lint(
     )
     path = typer.Option(None, '--path', help=path_help)
     # full flag
-    full_help = 'Print every issue and note line (the default).'
+    full_help = 'Print every note line instead of one count line per repeated kind.'
     full = typer.Option(False, '--full', help=full_help)
     # count flag
     count_help = 'Print only the closing issue/note summary.'
@@ -859,8 +887,10 @@ def lint(
         the exit code (1 when any are found, 0 when the wiki is clean,
         2 on a command error -- an unresolvable wiki, a bad subtree, a
         refused hook); notes print to stderr and never affect the exit
-        code. Issues are lint's product, so every line prints by
-        default; --count condenses the run to the closing summary. The
+        code. Issues are lint's product, so every issue prints by
+        default; notes are advisory, so a note kind that repeats
+        condenses to one count line (--full lists every note), and
+        --count condenses the run to the closing summary. The
         prose report is for humans -- a script must branch on the exit
         code or read --json (one document on stdout carrying every
         finding typed, with an explicit severity and kind), never parse
@@ -875,9 +905,9 @@ def lint(
         notices: list[Event] = []
 
         def _capture(event: Event, **kwargs: Any) -> Event:
-            """Capture a notice; stream it unless --count/--json condense."""
+            """Capture a notice; stream it in --full mode (order preserved)."""
             notices.append(event)
-            if not (count or as_json):
+            if full:
                 typer.echo(event.description, err=True)
             return event
 
@@ -886,7 +916,14 @@ def lint(
         # wrapper exits 2 on, leaving 1 to mean exactly "issues found"
         wiki = resolve(path)
         wiki.on_notice = _capture
-        issues = wiki.lint(name=name)
+        # flush the condensed notes even when lint raises, as --full would
+        # have streamed them before the error
+        try:
+            issues = wiki.lint(name=name)
+        finally:
+            if not (full or count or as_json):
+                for line in _condense_notes(notices):
+                    typer.echo(line, err=True)
         # resolver diagnostics ride the report as typed notes too -- the
         # resolution already streamed their prose to stderr, so they join
         # the count and the document, never a second print
@@ -1200,6 +1237,46 @@ def _condense(notices: list[Event], check: bool) -> list[str]:
         n = counts[index]
         line = one if n == 1 else many.format(n=n)
         lines.append((position, line))
+    return [line for _position, line in sorted(lines)]
+
+
+def _condense_notes(notices: list[Event]) -> list[str]:
+    """Collapse captured lint notes to one count line per repeated kind.
+
+    Each kind in ``_LINT_NOTE_CATEGORIES`` with two or more notes
+    aggregates into a single count line standing at its first
+    occurrence, and a closing line names ``--full`` for the detail; a
+    kind's lone note, and every note of a kind with no row, prints its
+    description verbatim in place.
+
+    Args:
+        notices: Captured lint notes, in emission order.
+
+    Returns:
+        Condensed note lines, in first-occurrence order.
+
+    """
+    # tally each category, remembering its first note and where it appeared
+    counts: dict[int, int] = {}
+    first_seen: dict[int, tuple[int, Event]] = {}
+    lines: list[tuple[int, str]] = []
+    for position, event in enumerate(notices):
+        for index, (event_class, _many) in enumerate(_LINT_NOTE_CATEGORIES):
+            if type(event) is event_class:
+                counts[index] = counts.get(index, 0) + 1
+                first_seen.setdefault(index, (position, event))
+                break
+        else:
+            lines.append((position, event.description))
+    # a lone note keeps its line; a repeated kind becomes one count line
+    for index, (position, event) in first_seen.items():
+        _event_class, many = _LINT_NOTE_CATEGORIES[index]
+        n = counts[index]
+        line = event.description if n == 1 else many.format(n=n)
+        lines.append((position, line))
+    # name the flag that lists what the count lines stand for
+    if any(n > 1 for n in counts.values()):
+        lines.append((len(notices), 'Run with --full to list each note.'))
     return [line for _position, line in sorted(lines)]
 
 

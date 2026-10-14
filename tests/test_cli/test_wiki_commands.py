@@ -1342,7 +1342,7 @@ def test_links_external_end_to_end(tmp_path: pathlib.Path) -> None:
     _write(root / 'core' / 'page.md', page)
     _write(root / 'g2.md', _page('G2', 'G2.', 'See [[../math/g2/_index]].'))
     assert _wiki(root, 'update', '--path', str(root)).returncode == 0
-    lint = _wiki(root, 'lint', '--path', str(root))
+    lint = _wiki(root, 'lint', '--path', str(root), '--full')
     assert lint.returncode == 0, lint.stdout + lint.stderr
     assert 'links.md: Stale link [[../src/gone.py]]' in lint.stderr
     assert 'links.md: Stale link [[../docs/x]]' in lint.stderr
@@ -1448,6 +1448,51 @@ def test_lint_summary_counts_notes(tmp_path: pathlib.Path) -> None:
     dirty = _wiki(root, 'lint', '--path', str(root))
     assert dirty.returncode == 1
     assert '2 issues, 2 notes.' in dirty.stdout
+
+
+def test_lint_condenses_repeated_notes(tmp_path: pathlib.Path) -> None:
+    """A repeated note kind prints one count line; ``--full`` lists each note.
+
+    Notes are advisory, so a corpus with many of one kind must not bury
+    the report under them: the default prints one count line per
+    repeated kind, a lone note verbatim, and a hint naming ``--full``,
+    while the summary and ``--json`` still count every note.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # the root index's placeholder desc plus three placeholder pages make
+    # four missing-desc notes; the root's empty content stays a lone note
+    for page in ('alpha', 'beta', 'gamma'):
+        _write(root / f'{page}.md', _page(page, '...', 'Body.'))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    note_count = 5
+
+    # the default condenses the repeated kind and keeps the lone note
+    default = _wiki(root, 'lint', '--path', str(root))
+    assert default.returncode == 0, default.stdout + default.stderr
+    assert default.stderr.splitlines() == [
+        '4 pages need a desc',
+        '_index.md: Empty content',
+        'Run with --full to list each note.',
+    ]
+    assert f'No issues found ({note_count} notes).' in default.stdout
+
+    # --full lists every note in place of the count line and the hint
+    full = _wiki(root, 'lint', '--path', str(root), '--full')
+    assert full.returncode == 0
+    assert full.stderr.count(': Needs desc') == 4
+    assert '_index.md: Empty content' in full.stderr
+    assert '--full' not in full.stderr
+    assert full.stdout == default.stdout
+
+    # --count and --json print no note lines but still count every note
+    count = _wiki(root, 'lint', '--path', str(root), '--count')
+    assert count.stderr == ''
+    assert f'No issues found ({note_count} notes).' in count.stdout
+    as_json = _wiki(root, 'lint', '--path', str(root), '--json')
+    assert as_json.stderr == ''
+    document = json.loads(as_json.stdout)
+    assert document['summary'] == {'issues': 0, 'notes': note_count}
 
 
 def test_lint_json_reports_typed_findings(tmp_path: pathlib.Path) -> None:
@@ -1582,7 +1627,7 @@ def test_lint_details_issues_and_count_condenses(
     assert f'{page_count + 1} issues' in count.stdout
     assert 'Needs desc' not in count.stderr
 
-    # --full is the explicit default; combining the modes is a usage error
+    # --full changes only the note lines; combining the modes is a usage error
     full = _wiki(root, 'lint', '--path', str(root), '--full')
     assert full.stdout == default.stdout
     both = _wiki(root, 'lint', '--path', str(root), '--full', '--count')

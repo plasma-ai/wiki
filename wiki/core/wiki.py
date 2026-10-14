@@ -6322,7 +6322,8 @@ class LinkFolderMissingEvent(Event):
 
 
 # plan-phase dispatch: event class -> per-kind hook name (kept in lockstep
-# with the events above; the CLI's _UPDATE_CATEGORIES keys on the same classes)
+# with the events above; the CLI's _UPDATE_CATEGORIES and
+# _LINT_NOTE_CATEGORIES key on the same classes)
 _NOTICE_HOOKS = {
     IndexCreateEvent: 'on_index_create',
     PageAdoptEvent: 'on_page_adopt',

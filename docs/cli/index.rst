@@ -618,7 +618,11 @@ Checks wiki health. Two severities ride two streams:
   any are found, 0 when the wiki is clean, and 2 on a command error (an
   unresolvable wiki, a bad subtree, a refused hook) — exit 1 always means
   exactly "issues found".
-- **Notes print to stderr** and never affect the exit code.
+- **Notes print to stderr** and never affect the exit code. Every issue
+  prints, but a note kind that repeats condenses by default to one count line
+  (e.g. ``12 indexes have empty content``) followed by
+  ``Run with --full to list each note.``; a kind's lone note prints in full,
+  and ``--full`` prints every note line instead.
 
 The prose report is for humans — a script must branch on the exit code or
 read ``--json``, never classify findings by scraping either stream (a
@@ -698,8 +702,9 @@ issue and suppresses nothing.
      - the enclosing wiki root
      - Wiki root directory (see `Wiki root resolution`_).
    * - ``--full``
-     - on (the default behavior)
-     - Print every issue and note line.
+     - off
+     - Print every note line in emission order instead of one count line per
+       repeated note kind.
    * - ``--count``
      - off
      - Print only the closing summary (mutually exclusive with ``--full``).

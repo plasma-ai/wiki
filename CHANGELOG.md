@@ -25,6 +25,13 @@ may include breaking changes, each listed under a Breaking heading.
   below ours', a deleted page's row no longer returns, and a merged-in title no
   longer waits for an update to reach the H1, each failing both until a
   post-merge update. `Wiki.canonicalize_index` exposes the rewrite.
+- `wiki lint` condenses its notes by default: a note kind that repeats prints
+  one count line, such as `12 indexes have empty content`, where its first note
+  would print, and a closing `Run with --full to list each note.`; a kind's lone
+  note and every issue still print in full. A wiki with hundreds of notes of one
+  kind no longer buries its issues and summary under them. `--full` lists every
+  note, and `--count`, `--json`, the summary counts and the exit code are
+  unchanged.
 
 ## [1.6.0] - 2026-09-22
 
