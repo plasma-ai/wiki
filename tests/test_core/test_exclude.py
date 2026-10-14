@@ -45,6 +45,7 @@ __all__ = [
     'test_unavailable_fence_is_narrated_inside_a_repository',
     'test_personally_ignored_row_draws_a_note',
     'test_gitignore_fence_reaches_a_nested_wiki_root',
+    'test_gitignore_fence_honors_a_discovery_ceiling',
     'test_ignored_wiki_root_stays_unfenced',
     'test_new_refuses_a_fenced_target',
     'test_gitignored_link_target_names_the_cause',
@@ -727,6 +728,42 @@ def test_gitignore_fence_reaches_a_nested_wiki_root(tmp_path: pathlib.Path) -> N
     assert not (out / '_index.md').exists()
     index = (root / 'core' / '_index.md').read_text(encoding='utf-8')
     assert '[[core/out' not in index
+
+
+@_needs_git
+@pytest.mark.parametrize(
+    argnames='ceiling',
+    argvalues=[False, True],
+    ids=['no-ceiling', 'ceiling'],
+)
+def test_gitignore_fence_honors_a_discovery_ceiling(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ceiling: bool,
+) -> None:
+    """A caller's ``GIT_CEILING_DIRECTORIES`` bounds the fence's repo search.
+
+    A ceiling only restricts git, so unlike ``GIT_DIR`` it reaches the
+    wiki's git calls: a fixture wiki that a test fences off from the
+    repository around it reads as outside any repository, and that
+    repository's rules no longer decide what the wiki indexes.
+    """
+    _git_repo(tmp_path, 'out/')
+    root = tmp_path / 'math'
+    _make_wiki(root, folders={'core': ['design']})
+    out = root / 'core' / 'out'
+    out.mkdir()
+    (out / 'dump.md').write_text('# dump\n\nraw\n', encoding='utf-8')
+    if ceiling:
+        monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path))
+    else:
+        monkeypatch.delenv('GIT_CEILING_DIRECTORIES', raising=False)
+
+    # the fenced folder is indexed exactly when the ceiling hides the repo
+    # (fresh instance -- the fence is cached)
+    Wiki(root).update()
+    index = (root / 'core' / '_index.md').read_text(encoding='utf-8')
+    assert ('[[core/out' in index) is ceiling
 
 
 @_needs_git

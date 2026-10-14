@@ -314,7 +314,10 @@ root is ignored is exempt, so a deliberately unindexed wiki inside a repo
 keeps working. The repository is always the one enclosing the wiki root: the
 probe drops the caller's ``GIT_*`` environment, so a command run from a git
 hook (which exports ``GIT_DIR``) fences exactly as the same command run from
-a shell. Outside a git repository — or with git unavailable — no fence
+a shell. The two variables that only restrict git pass through:
+``GIT_CEILING_DIRECTORIES`` stops the search for the enclosing repository,
+and ``GIT_OPTIONAL_LOCKS=0`` keeps the wiki's git reads off the index lock.
+Outside a git repository — or with git unavailable — no fence
 applies; inside one, an unreadable fence (git off ``PATH``, a broken install)
 is narrated as a note, since the sweep is about to adopt what the repository
 ignores.
