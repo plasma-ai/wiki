@@ -756,6 +756,8 @@ def test_gitignore_fence_honors_a_discovery_ceiling(
     (out / 'dump.md').write_text('# dump\n\nraw\n', encoding='utf-8')
     if ceiling:
         monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path))
+    else:
+        monkeypatch.delenv('GIT_CEILING_DIRECTORIES', raising=False)
 
     # the fenced folder is indexed exactly when the ceiling hides the repo
     # (fresh instance -- the fence is cached)
