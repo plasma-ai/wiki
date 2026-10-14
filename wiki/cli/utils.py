@@ -566,8 +566,10 @@ def configure_git_merge_driver(path: pathlib.Path) -> None:
         return
     # don't entangle with the user's pending work: if .gitattributes already has
     # uncommitted changes, leave it untouched (the merge.wiki config above
-    # still applies; the attribute map is written on the next clean run)
-    cmd = ['status', '--porcelain', '--', '.gitattributes']
+    # still applies; the attribute map is written on the next clean run),
+    # reading without the optional index lock a plain status takes, which
+    # would fail a concurrent git add or commit in the same repository
+    cmd = ['--no-optional-locks', 'status', '--porcelain', '--', '.gitattributes']
     if _git(cmd, cwd=repo, check=False):
         return
     if not current:

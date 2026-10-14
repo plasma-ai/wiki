@@ -33,6 +33,13 @@ may include breaking changes, each listed under a Breaking heading.
   note, and `--count`, `--json`, the summary counts and the exit code are
   unchanged.
 
+### Fixed
+
+- `wiki init` and `wiki config` check `.gitattributes` for uncommitted changes
+  without taking git's optional index lock. A plain `git status` briefly locks
+  the index to save refreshed file data, so a `git add` or commit run in the
+  same repository at that moment otherwise fails on the existing `index.lock`.
+
 ## [1.6.0] - 2026-09-22
 
 ### Breaking
