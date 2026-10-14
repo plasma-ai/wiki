@@ -10,6 +10,10 @@ from typing import Literal, Optional, Union
 
 __all__ = []
 
+# the GIT_* variables that only restrict git -- a discovery ceiling, a
+# lock-free read -- and so pass the environment scrub in _git
+_GIT_RESTRICTING = frozenset({'GIT_CEILING_DIRECTORIES', 'GIT_OPTIONAL_LOCKS'})
+
 
 @typing.overload
 def _git(
@@ -78,9 +82,12 @@ def _git(
     # one the caller's environment names: a git hook exports GIT_DIR
     # (relative, resolving against this cwd) and a caller may export one
     # pointing at another repo -- either would answer with, or mutate, a
-    # foreign repository's state
+    # foreign repository's state; a variable that only restricts git
+    # passes, so a caller's ceiling or lock-free setting still holds
     env = {
-        name: value for name, value in os.environ.items() if not name.startswith('GIT_')
+        name: value
+        for name, value in os.environ.items()
+        if (not name.startswith('GIT_')) or (name in _GIT_RESTRICTING)
     }
     # a missing git binary is treated like a failed command, so callers that
     # pass check=False (or read the raw result) degrade to a clean no-op;
