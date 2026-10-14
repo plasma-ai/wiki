@@ -269,22 +269,28 @@ rather than authoring or auditing page by page yourself:
   `created` whenever the base index carries no real stamp — an add/add merge, a
   hand-written or imported index), resolves the link block to the union of both
   sides' rows — ours' layout wins, rows present only in theirs ride over with
-  their desc continuations, appended above the closing `***`, and a row both
-  sides carry keeps ours' text unless only theirs changed it against the base,
-  so a merge never drops one side's additions, and an edit only one side made is
-  never lost (when both sides edit the same row, ours wins) — and three-way
-  merges everything authored — the remaining frontmatter fields
-  (`title`/`desc`/`created`/`category`/`tags`/`sources`) and the user content
-  below `***` — which can still conflict for hand-resolution. A side missing its
-  `***` entirely (formatter damage) can't be split into regions, so it conflicts
+  their desc continuations, a row both sides carry keeps ours' text unless only
+  theirs changed it against the base, and a row the base had that one side
+  deleted and the other left alone stays deleted (unless the deleting side's
+  rows are formatter-escaped), so a merge never drops one side's additions, and
+  an edit only one side made is never lost (when both sides edit the same row,
+  ours wins) — and three-way merges everything authored — the remaining
+  frontmatter fields (`title`/`desc`/`created`/`category`/`tags`/`sources`) and
+  the user content below `***` — which can still conflict for hand-resolution. A
+  clean merge then writes the H1 from the merged `title:` (else `name:`) and
+  sorts the rows into the order `wiki update` writes, with the wiki's own class
+  (a trusted hook's `category_order` included) when that class wrote ours'
+  index, so a clean merge in which each side only added, deleted or retitled
+  entries passes `update --check` and `lint` as merged. A side missing its `***`
+  entirely (formatter damage) can't be split into regions, so it conflicts
   whole-file with a hint comment naming the repair — restore the `***` on that
-  branch (`wiki update` does it), then redo the merge. Run `wiki update` after a
-  merge to re-sort the link rows and prune any carried row whose target is gone
-  from the merged filesystem — the H1 rides ours' link-block layout, so a
-  merged-in `title:` shows in its H1 only after that update. `init`/`config`
-  register the driver in local git config and write the `**/_index.md` glob to
-  `.gitattributes` in the working tree only — you stage and commit it yourself,
-  and each clone runs `wiki config` once to register the driver.
+  branch (`wiki update` does it), then redo the merge. Run `wiki update --check`
+  after a merge and `wiki update` when it reports changes — a row one side
+  changed and the other deleted, both sides changing one row, or a conflict
+  resolved by hand. `init`/`config` register the driver in local git config and
+  write the `**/_index.md` glob to `.gitattributes` in the working tree only —
+  you stage and commit it yourself, and each clone runs `wiki config` once to
+  register the driver.
 - **Leave new-directory index bodies empty during concurrent work.** When
   sibling branches both create the same new directory, its two `_index.md`s
   merge add/add with no common ancestor: the generated region resolves
