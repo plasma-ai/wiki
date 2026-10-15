@@ -114,6 +114,7 @@ __all__ = [
     'test_merge_leaves_an_index_another_class_wrote',
     'test_merge_keeps_a_row_one_side_changed_and_the_other_deleted',
     'test_merge_leaves_a_non_utf8_index_as_merged',
+    'test_merge_leaves_a_conflicted_index_as_merged',
     'test_merge_deletes_nothing_a_damaged_side_hides',
     'test_merge_keeps_frontmatter_when_side_is_mangled',
     'test_merge_dispatches_on_pathname',
@@ -134,6 +135,18 @@ _ORDERED_HOOK = (
     "__all__ = ['Ordered']\n\n\n"
     'class Ordered(Wiki):\n'
     "    category_order = ['ref', 'guide']\n"
+)
+
+# a hook that sorts the current branch's rows, then raises on the merged
+# ones, where the other side's api row has joined them
+_LATE_RAISING_HOOK = (
+    'from wiki.core.wiki import Wiki\n\n'
+    "__all__ = ['Late']\n\n\n"
+    'class Late(Wiki):\n'
+    '    def _sort_links(self, links):\n'
+    "        if any(target == 'core/api' for target, _, _ in links):\n"
+    "            raise RuntimeError('broken hook')\n"
+    '        return super()._sort_links(links)\n'
 )
 
 # a hook that loads, then raises when it sorts rows
@@ -3117,8 +3130,9 @@ def test_merge_carries_a_merged_title_into_the_h1(
         (_ORDERED_HOOK, False, ['[guide] extra', 'design', '[ref] api']),
         ('import nonexistent_module\n', True, ['[guide] extra', 'design', '[ref] api']),
         (_RAISING_HOOK, True, ['[guide] extra', 'design', '[ref] api']),
+        (_LATE_RAISING_HOOK, True, ['[guide] extra', 'design', '[ref] api']),
     ],
-    ids=['trusted', 'untrusted', 'import-fails', 'sort-raises'],
+    ids=['trusted', 'untrusted', 'import-fails', 'sort-raises', 'merge-raises'],
 )
 def test_merge_orders_rows_by_the_wikis_hook(
     tmp_path: pathlib.Path,
@@ -3130,9 +3144,10 @@ def test_merge_orders_rows_by_the_wikis_hook(
 
     A ``.wiki/wiki.py`` hook may reorder categories, so the driver sorts
     with the class the hook names. A hook that does not run -- untrusted,
-    failing on import, or raising once loaded -- leaves the rows as merged,
-    the other side's below ours, for the update that reports it, and the
-    merge itself stays clean: the driver's exit code is the merge's.
+    failing on import, or raising once loaded, on ours' rows or only on the
+    merged ones -- leaves the rows as merged, the other side's below ours,
+    for the update that reports it, and the merge itself stays clean: the
+    driver's exit code is the merge's.
     """
     root = tmp_path / 'wiki'
     assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
@@ -3274,12 +3289,17 @@ def test_merge_keeps_a_row_one_side_changed_and_the_other_deleted(
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
-def test_merge_leaves_a_non_utf8_index_as_merged(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize('carrier', ['base', 'theirs'])
+def test_merge_leaves_a_non_utf8_index_as_merged(
+    tmp_path: pathlib.Path,
+    carrier: str,
+) -> None:
     """An index no UTF-8 reader parses merges clean, its bytes and rows as merged.
 
     The driver's script merges bytes; the ordering step reads text, so a
     byte that does not decode leaves the result as the script wrote it
-    rather than failing the merge.
+    rather than failing the merge, whether the current branch's index
+    already carries the byte or only the other side brings it in.
     """
     root = tmp_path / 'wiki'
     index = root / 'core' / '_index.md'
@@ -3290,17 +3310,24 @@ def test_merge_leaves_a_non_utf8_index_as_merged(tmp_path: pathlib.Path) -> None
     _write(index, _index('Core', 'Core concepts.', 'Text.'))
     _add_entry(root / 'core', 'design', None)
     assert _wiki(root, 'update', '--path', str(root)).returncode == 0
-    base = index.read_bytes() + b'\nCaf\xe9 notes.\n'
+    note = b'\nCaf\xe9 notes.\n'
+    base = index.read_bytes()
+    if carrier == 'base':
+        base += note
     index.write_bytes(base)
     _git(tmp_path, 'add', '-A')
     _git(tmp_path, 'commit', '-q', '-m', 'base')
 
-    # each side adds a row by hand, theirs one that sorts first
+    # each side adds a row by hand, theirs one that sorts first, and
+    # theirs brings in the byte when base does not carry it
     design = b'[[core/design|design]]'
     alpha = b'[[core/alpha|alpha]]: Alpha.\n\n'
     zeta = b'[[core/zeta|zeta]]: Zeta.\n\n'
+    theirs = base.replace(design, alpha + design)
+    if carrier == 'theirs':
+        theirs += note
     _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
-    index.write_bytes(base.replace(design, alpha + design))
+    index.write_bytes(theirs)
     _git(tmp_path, 'commit', '-q', '-am', 'theirs')
     _git(tmp_path, 'checkout', '-q', 'main')
     index.write_bytes(base.replace(b'\n\n***', b'\n\n' + zeta + b'***'))
@@ -3312,6 +3339,48 @@ def test_merge_leaves_a_non_utf8_index_as_merged(tmp_path: pathlib.Path) -> None
     merged = index.read_bytes()
     assert b'Caf\xe9 notes.' in merged
     assert _row_labels(merged.decode('latin-1')) == ['..', 'design', 'zeta', 'alpha']
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_merge_leaves_a_conflicted_index_as_merged(tmp_path: pathlib.Path) -> None:
+    """A merge that conflicts keeps its rows where the driver's script put them.
+
+    A conflicted index is resolved by hand and then updated, so the
+    driver sets no H1 or row order on it: the other side's row stays
+    below ours', beside the markers.
+    """
+    root = tmp_path / 'wiki'
+    index = root / 'core' / '_index.md'
+    # a real repo whose wiki has the driver registered by init
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(index, _index('Core', 'Core concepts.', 'Text.'))
+    _add_entry(root / 'core', 'design', None)
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    base = index.read_text(encoding='utf-8') + '\nShared notes.\n'
+    _write(index, base)
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # both sides reword one body line; theirs also adds a row that sorts first
+    design = '[[core/design|design]]'
+    alpha = '[[core/alpha|alpha]]: Alpha.\n\n'
+    theirs = base.replace(design, alpha + design)
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    _write(index, theirs.replace('Shared notes.', 'Their notes.'))
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    _write(index, base.replace('Shared notes.', 'Our notes.'))
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
+
+    # the merge conflicts, and the rows stay as the script wrote them
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode != 0, merge.stdout + merge.stderr
+    merged = index.read_text(encoding='utf-8')
+    assert '<<<<<<< ours' in merged
+    assert _row_labels(merged) == ['..', 'design', 'alpha']
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
