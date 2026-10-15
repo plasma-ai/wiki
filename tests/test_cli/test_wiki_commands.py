@@ -3015,6 +3015,7 @@ def test_merge_orders_rows_as_update_writes_them(
     passed. Desc continuations travel with their rows.
     """
     root = tmp_path / 'wiki'
+    # a real repo whose wiki has the driver registered by init
     assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
     _git(tmp_path, 'config', 'user.email', 't@t')
     _git(tmp_path, 'config', 'user.name', 't')
@@ -3063,6 +3064,7 @@ def test_merge_keeps_each_sides_deletions(tmp_path: pathlib.Path) -> None:
     on a link to the deleted page is no row of it.
     """
     root = tmp_path / 'wiki'
+    # a real repo whose wiki has the driver registered by init
     assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
     _git(tmp_path, 'config', 'user.email', 't@t')
     _git(tmp_path, 'config', 'user.name', 't')
@@ -3127,6 +3129,7 @@ def test_merge_carries_a_merged_title_into_the_h1(
     """
     root = tmp_path / 'wiki'
     index = root / 'core' / '_index.md'
+    # a real repo whose wiki has the driver registered by init
     assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
     _git(tmp_path, 'config', 'user.email', 't@t')
     _git(tmp_path, 'config', 'user.name', 't')
@@ -3186,6 +3189,7 @@ def test_merge_orders_rows_by_the_wikis_hook(
     driver's exit code is the merge's.
     """
     root = tmp_path / 'wiki'
+    # a real repo whose wiki has the driver registered by init
     assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
     _git(tmp_path, 'config', 'user.email', 't@t')
     _git(tmp_path, 'config', 'user.name', 't')
@@ -3195,6 +3199,8 @@ def test_merge_orders_rows_by_the_wikis_hook(
     assert _wiki(root, 'update', '--path', str(root)).returncode == 0
     _git(tmp_path, 'add', '-A')
     _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # each side adds its own categorized entry under core/ and updates
     _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
     _add_entry(root / 'core', 'api', 'ref')
     assert _wiki(root, 'update', '--path', str(root)).returncode == 0
@@ -3232,6 +3238,7 @@ def test_merge_leaves_an_index_another_class_wrote(tmp_path: pathlib.Path) -> No
     """
     root = tmp_path / 'wiki'
     index = root / 'core' / '_index.md'
+    # a real repo whose wiki has the driver registered by init
     assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
     _git(tmp_path, 'config', 'user.email', 't@t')
     _git(tmp_path, 'config', 'user.name', 't')
@@ -3291,6 +3298,7 @@ def test_merge_keeps_a_row_one_side_changed_and_the_other_deleted(
     """
     root = tmp_path / 'wiki'
     index = root / 'core' / '_index.md'
+    # a real repo whose wiki has the driver registered by init
     assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
     _git(tmp_path, 'config', 'user.email', 't@t')
     _git(tmp_path, 'config', 'user.name', 't')
@@ -3339,6 +3347,7 @@ def test_merge_leaves_a_non_utf8_index_as_merged(
     """
     root = tmp_path / 'wiki'
     index = root / 'core' / '_index.md'
+    # a real repo whose wiki has the driver registered by init
     assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
     _git(tmp_path, 'config', 'user.email', 't@t')
     _git(tmp_path, 'config', 'user.name', 't')
@@ -3439,6 +3448,7 @@ def test_merge_deletes_nothing_a_damaged_side_hides(
     entry, so the merge writes neither out twice as a plain row.
     """
     root = tmp_path / 'wiki'
+    # a real repo whose wiki has the driver registered by init
     assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
     _git(tmp_path, 'config', 'user.email', 't@t')
     _git(tmp_path, 'config', 'user.name', 't')
