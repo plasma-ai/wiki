@@ -281,18 +281,21 @@ rather than authoring or auditing page by page yourself:
   the user content below `***` — which can still conflict for hand-resolution. A
   clean merge then writes the H1 from the merged `title:` (else `name:`) and
   sorts the rows into the order `wiki update` writes, with the wiki's own class
-  (a trusted hook's `category_order` included) when that class wrote ours'
-  index, so a clean merge in which each side only added, deleted or retitled
-  entries passes `update --check` and `lint` as merged. A side missing its `***`
-  entirely (formatter damage) can't be split into regions, so it conflicts
-  whole-file with a hint comment naming the repair — restore the `***` on that
-  branch (`wiki update` does it), then redo the merge. Run `wiki update --check`
-  after a merge and `wiki update` when it reports changes — a row one side
-  changed and the other deleted, both sides changing one row, or a conflict
-  resolved by hand. `init`/`config` register the driver in local git config and
-  write the `**/_index.md` glob to `.gitattributes` in the working tree only —
-  you stage and commit it yourself, and each clone runs `wiki config` once to
-  register the driver.
+  (a trusted hook's `category_order` included) when that class leaves ours'
+  index as written — a check that sees a category order only where ours' rows
+  span two or more categories, so an embedder's own order can still be re-sorted
+  into this class's — so a clean merge in which each side only added, deleted or
+  retitled entries passes `update --check` and `lint` as merged. A side missing
+  its `***` entirely (formatter damage) can't be split into regions, so it
+  conflicts whole-file with a hint comment naming the repair — restore the `***`
+  on that branch (`wiki update` does it), then redo the merge. Run
+  `wiki update --check` after a merge and `wiki update` when it reports changes
+  — a row one side changed and the other deleted, both sides changing one row, a
+  merge that changes the hook's `category_order`, or a conflict resolved by
+  hand. `init`/`config` register the driver in local git config and write the
+  `**/_index.md` glob to `.gitattributes` in the working tree only — you stage
+  and commit it yourself, and each clone runs `wiki config` once to register the
+  driver.
 - **Leave new-directory index bodies empty during concurrent work.** When
   sibling branches both create the same new directory, its two `_index.md`s
   merge add/add with no common ancestor: the generated region resolves
