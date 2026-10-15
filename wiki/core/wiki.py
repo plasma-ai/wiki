@@ -844,8 +844,8 @@ class Wiki:
         """
         lines = text.split('\n')
         frontmatter, start = format.extract_frontmatter(lines)
-        # find the first delimiter after the frontmatter, where the region
-        # format.parse_index reads ends
+        # find the first delimiter after the frontmatter, where
+        # the region format.parse_index reads ends
         end = None
         for i in range(start, len(lines)):
             if lines[i].rstrip() == self.index_delimiter:
