@@ -19,7 +19,7 @@ from typing import Optional
 
 import pytest
 
-from wiki.util.git import _git
+from wiki.util import git
 
 __all__ = ['test_optional_lock_setting_reaches_git']
 
@@ -57,5 +57,5 @@ def test_optional_lock_setting_reaches_git(
         monkeypatch.delenv('GIT_OPTIONAL_LOCKS', raising=False)
     else:
         monkeypatch.setenv('GIT_OPTIONAL_LOCKS', optional_locks)
-    _git(['status', '--porcelain'], cwd=tmp_path)
+    git._git(['status', '--porcelain'], cwd=tmp_path)
     assert (index.read_bytes() == before) is (optional_locks == '0')
