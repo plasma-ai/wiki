@@ -3330,7 +3330,8 @@ def test_merge_deletes_nothing_a_damaged_side_hides(
     nothing about what that side deleted. An asset row's desc is
     authored in the index alone, so a row dropped on that evidence
     would lose it for good: the update that re-adds the row seeds
-    ``...``.
+    ``...``. An escaped row and the other side's copy of it are one
+    entry, so the merge writes neither out twice as a plain row.
     """
     root = tmp_path / 'wiki'
     assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
@@ -3361,10 +3362,15 @@ def test_merge_deletes_nothing_a_damaged_side_hides(
         _git(tmp_path, 'add', '-A')
         _git(tmp_path, 'commit', '-q', '-m', branch)
 
-    # the merge is clean, and the update after it repairs the escapes
-    # with the asset's authored desc intact
+    # the merge is clean and repeats no row
     merge = _git(tmp_path, 'merge', 'theirs')
     assert merge.returncode == 0, merge.stdout + merge.stderr
+    merged = index.read_text(encoding='utf-8')
+    labels = _row_labels(merged)
+    assert len(labels) == len(set(labels)), merged
+
+    # the update after it repairs the escapes with the asset's authored
+    # desc intact
     update = _wiki(root, 'update', '--path', str(root))
     assert update.returncode == 0, update.stdout + update.stderr
     converged = index.read_text(encoding='utf-8')

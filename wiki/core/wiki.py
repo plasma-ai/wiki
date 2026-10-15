@@ -802,7 +802,10 @@ class Wiki:
         ``update`` renders it, so a clean merge's H1 and row order match
         what update writes. An H1 or a row order already in form keeps
         its bytes, a text with no delimiter comes back unchanged, and the
-        frontmatter and the content below the delimiter never change.
+        frontmatter and the content below the delimiter never change. A
+        text with two rows for one target also comes back unchanged: the
+        rows are one entry, and only ``update``, which reads the
+        filesystem, can choose between them.
 
         Args:
             text: Raw index content.
@@ -840,6 +843,11 @@ class Wiki:
         # sort the parsed rows; a changed order renders each row and a blank
         # line after it, as format.render_index does
         _, links, _ = format.parse_index(text, delimiter=self.index_delimiter)
+        # rows that share a target are one entry, which only update can
+        # choose a row for from the filesystem: leave the text as it is
+        targets = [unicodedata.normalize('NFC', target) for target, _, _ in links]
+        if len(set(targets)) != len(targets):
+            return text
         ordered = self._sort_links(links)
         if ordered != links:
             rows = []

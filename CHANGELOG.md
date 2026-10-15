@@ -16,6 +16,11 @@ may include breaking changes, each listed under a Breaking heading.
   the new line, rather than dropped with the line moved into the row above, and
   a row the other side deleted stays deleted when another row's desc line opens
   on a link to it.
+- A clean `_index.md` merge whose current branch's link rows carry formatter
+  escape damage no longer writes each row out twice as a plain row.
+  `Wiki.canonicalize_index` returns an index with two rows for one target
+  unchanged, so `wiki _merge` leaves such a merge as the driver wrote it, escape
+  damage and all, for `wiki lint` to report and `wiki update` to repair.
 
 ## [1.7.0] - 2026-10-14
 

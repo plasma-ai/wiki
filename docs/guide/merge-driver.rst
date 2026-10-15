@@ -96,12 +96,14 @@ Link block
    the current branch's own index as written: an index another class wrote
    (an embedder's update with its own category order) stays as merged, as
    does one whose hook cannot load or run — the H1 the current branch's, the
-   other side's rows below its own. The check sees a class's category order
-   only where the current branch's rows span two or more categories, so a
-   merge that brings a second category into an index with fewer is sorted
-   in this class's order even when an embedder's update orders categories
-   its own way. A clean merge in which each side only added, deleted, or
-   retitled entries is then current as merged.
+   other side's rows below its own. A merge with two rows for one target —
+   the other side's copy of each row a formatter escaped on the current
+   branch — stays as merged too, for ``wiki update`` to repair. The check
+   sees a class's category order only where the current branch's rows span
+   two or more categories, so a merge that brings a second category into an
+   index with fewer is sorted in this class's order even when an embedder's
+   update orders categories its own way. A clean merge in which each side
+   only added, deleted, or retitled entries is then current as merged.
 
 Below ``***``
    Authored index prose gets a normal three-way merge that can conflict, like
