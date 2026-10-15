@@ -3216,7 +3216,7 @@ def test_merge_orders_rows_by_the_wikis_hook(
     assert merge.returncode == 0, merge.stdout + merge.stderr
     merged = (root / 'core' / '_index.md').read_text(encoding='utf-8')
     assert _row_labels(merged) == ['..', *labels]
-    if hook == _ORDERED_HOOK and trusted:
+    if (hook == _ORDERED_HOOK) and trusted:
         check = _wiki(root, 'update', '--path', str(root), '--check')
         assert check.returncode == 0, check.stdout + check.stderr
 
