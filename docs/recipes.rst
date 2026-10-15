@@ -63,15 +63,15 @@ tree the way ``wiki update`` does: every folder gains an ``_index.md``, every
 bare page is adopted with fresh frontmatter (an authored H1 is preserved by
 seeding ``title:`` from it), and every entry is linked into its parent index.
 The sweep itself announces nothing — ``wiki init`` prints only its closing
-line — so review what it did with ``wiki lint``, which names every seeded
-placeholder and empty index (pass the same ``--path`` when running from
-outside the wiki):
+line — so review what it did with ``wiki lint --full``, which names every
+seeded placeholder and empty index (pass the same ``--path`` when running
+from outside the wiki):
 
 .. code-block:: console
 
    $ wiki init --path docs/notes
    Initialized wiki at: /home/user/myproject/docs/notes
-   $ wiki lint --path docs/notes
+   $ wiki lint --full --path docs/notes
    _index.md: Needs desc
    _index.md: Empty content
    guides/_index.md: Needs desc
