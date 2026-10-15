@@ -209,7 +209,8 @@ text merge. The exit code passes through to git: nonzero means conflicts were
 left in the file. After a clean index merge the command sets the H1 and the
 row order with the wiki's class, loaded as every command loads it — except
 that a hook it cannot load or run, or an index that class did not write,
-skips that step rather than failing the merge.
+skips that step rather than failing the merge. The rewrite replaces the
+file whole: a write that fails leaves it as merged, its exit code intact.
 
 The dispatch is per-file and policy-free — it never reads
 ``exclude.patterns`` (a malformed ``exclude`` block must not fail a git

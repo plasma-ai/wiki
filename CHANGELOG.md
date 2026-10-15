@@ -25,6 +25,11 @@ may include breaking changes, each listed under a Breaking heading.
   reads as outside a repository, as its git calls already read it, so
   `wiki update` and `wiki lint` no longer note on every run that the gitignore
   fence is unavailable and ask whether git is installed.
+- `wiki _merge` replaces a clean `_index.md` merge whole when it sets the H1 and
+  row order, so a write that fails leaves the file as the driver merged it and
+  the driver's exit code stands: `wiki _merge` no longer exits 2, which git
+  reads as a conflict, over a file the failed write left in part. A read-only
+  merged file is rewritten too.
 
 ## [1.7.0] - 2026-10-14
 
