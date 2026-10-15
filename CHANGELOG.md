@@ -7,6 +7,16 @@ may include breaking changes, each listed under a Breaking heading.
 
 ## [Unreleased]
 
+### Fixed
+
+- The `_index.md` merge driver reads a link row as `wiki update` does, as a
+  whole line, so a desc line that opens on a wikilink, such as
+  `[[core/design|design]] explains each stage.`, stays with its row. A row one
+  side edited by adding such a line while the other side deleted it is kept with
+  the new line, rather than dropped with the line moved into the row above, and
+  a row the other side deleted stays deleted when another row's desc line opens
+  on a link to it.
+
 ## [1.7.0] - 2026-10-14
 
 ### Changed

@@ -3010,7 +3010,8 @@ def test_merge_keeps_each_sides_deletions(tmp_path: pathlib.Path) -> None:
     page the merged tree no longer has, failing ``lint`` and
     ``update --check`` until an update pruned it. A desc carrying display
     math puts a ``\[`` line in the link block, which is no formatter's
-    escape damage and so suspends no deletion.
+    escape damage and so suspends no deletion, and a desc line that opens
+    on a link to the deleted page is no row of it.
     """
     root = tmp_path / 'wiki'
     assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
@@ -3018,8 +3019,12 @@ def test_merge_keeps_each_sides_deletions(tmp_path: pathlib.Path) -> None:
     _git(tmp_path, 'config', 'user.name', 't')
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     _write(root / 'core' / '_index.md', _index('Core', 'Core concepts.', 'Text.'))
-    for name in ('design', 'shared', 'zeta'):
+    for name in ('shared', 'zeta'):
         _add_entry(root / 'core', name, None)
+    _write(
+        root / 'core' / 'design.md',
+        '---\ndesc: |\n  The design page draws on\n  [[core/zeta|zeta]] for its notes.\n---\n\nBody.\n',
+    )
     _write(
         root / 'core' / 'math.md',
         '---\ndesc: |\n  The math page shows\n  \\[ x^2 \\]\n  is never negative.\n---\n\nBody.\n',
@@ -3212,15 +3217,26 @@ def test_merge_leaves_an_index_another_class_wrote(tmp_path: pathlib.Path) -> No
     argvalues=['theirs', 'main'],
     ids=['theirs-deletes', 'ours-deletes'],
 )
+@pytest.mark.parametrize(
+    argnames='edited',
+    argvalues=[
+        '[[core/diagram.png|diagram.png]]: The flow diagram.',
+        '[[core/diagram.png|diagram.png]]: ...\n[[core/design|design]] renders it.',
+    ],
+    ids=['first-line', 'continuation'],
+)
 def test_merge_keeps_a_row_one_side_changed_and_the_other_deleted(
     tmp_path: pathlib.Path,
     deleting: str,
+    edited: str,
 ) -> None:
     """A row one side changed and the other deleted stays, never silently dropped.
 
     Only a row left as base had it is the deleting side's to remove: an
     asset row's desc is authored in the index alone, so dropping the
-    edited row would lose the edit for good.
+    edited row would lose the edit for good. A desc line that opens on
+    a wikilink belongs to its row, as the index parser reads it, so an
+    edit that adds one keeps the row and never moves to the row above.
     """
     root = tmp_path / 'wiki'
     index = root / 'core' / '_index.md'
@@ -3236,7 +3252,6 @@ def test_merge_keeps_a_row_one_side_changed_and_the_other_deleted(
     _git(tmp_path, 'commit', '-q', '-m', 'base')
 
     # one side deletes the asset; the other authors its row's desc
-    edited = '[[core/diagram.png|diagram.png]]: The flow diagram.'
     _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
     for branch in ('theirs', 'main'):
         _git(tmp_path, 'checkout', '-q', branch)
@@ -3249,10 +3264,13 @@ def test_merge_keeps_a_row_one_side_changed_and_the_other_deleted(
         _git(tmp_path, 'add', '-A')
         _git(tmp_path, 'commit', '-q', '-m', branch)
 
-    # the merge is clean and keeps the edited row
+    # the merge is clean and keeps the edited row whole, right below the
+    # design row as base had it
     merge = _git(tmp_path, 'merge', 'theirs')
     assert merge.returncode == 0, merge.stdout + merge.stderr
-    assert edited in index.read_text(encoding='utf-8')
+    design = '[[core/design|design]]: The design page.\nSecond continuation line.\n\n'
+    merged = index.read_text(encoding='utf-8')
+    assert f'{design}{edited}\n' in merged, merged
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
@@ -3835,5 +3853,14 @@ def _add_entry(folder: pathlib.Path, name: str, category: Optional[str]) -> None
 
 
 def _row_labels(index: str) -> list[str]:
-    """Return the labels of an index's link rows, top to bottom."""
-    return re.findall(r'^\[\[.+?\|(.+?)\]\]', index, flags=re.MULTILINE)
+    """Return the labels of an index's link rows, top to bottom.
+
+    A row is a whole line, as the index parser reads it, so a desc
+    continuation that opens on a wikilink is no row.
+    """
+    labels = []
+    for line in index.split('\n'):
+        match = re.match(r'^\[\[(.+?)\|(.+?)\]\](?::\s*(.*))?$', line.strip())
+        if match is not None:
+            labels.append(match.group(2))
+    return labels

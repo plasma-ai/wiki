@@ -303,7 +303,9 @@ git merge-file --marker-size="$MARKER_SIZE" -p -L ours -L base -L theirs \
 # merge never silently drops one side's additions -- less the rows one
 # side deleted (`wiki _merge` then sets a clean merge's H1 and row order)
 if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
-    # rows key on their [[target| prefix (mirrors Python _LINK_ROW);
+    # a row is a line that is one link row whole once stripped (mirrors
+    # Python format._LINK_ROW, so a desc continuation opening on a
+    # wikilink stays with its row) and keys on its [[target prefix;
     # continuation and blank lines ride with the row that precedes them,
     # and a side's heading/preamble (before its first row) is never
     # collected -- ours' rows stream through in ours' layout; a row both
@@ -319,6 +321,14 @@ if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
     # damage (a \[\[ or \[[ line, mirroring Python escaped_wikilink_lines),
     # whose unread rows say nothing of what it deleted
     awk '
+        # the [[target key of a line that is one link row whole, else ""
+        function rowkey(s) {
+            sub(/^[[:space:]]+/, "", s)
+            sub(/[[:space:]]+$/, "", s)
+            if (s !~ /^\[\[.+\|.+\]\](:.*)?$/) return ""
+            sub(/\|.*$/, "", s)
+            return s
+        }
         # a row block without its trailing blank lines (CRLF and
         # whitespace-only ones included): the text a side edited, whatever
         # separated the rows on that side
@@ -352,9 +362,8 @@ if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
         part < 3 {
             if ($0 ~ /^\*\*\*[[:space:]]*$/) { key = ""; next }
             if ($0 ~ /^[[:blank:]]*\\\[\\?\[/) damaged[part] = 1
-            if ($0 ~ /^\[\[.*\|/) {
-                key = $0
-                sub(/\|.*$/, "", key)
+            if (rowkey($0) != "") {
+                key = rowkey($0)
                 if (part == 2 && !((2, key) in text)) order[++count] = key
             }
             if (key != "") text[part, key] = text[part, key] $0 "\n"
@@ -376,10 +385,9 @@ if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
             next
         }
         done { print; next }
-        /^\[\[.*\|/ {
+        rowkey($0) != "" {
             flush()
-            row = $0
-            sub(/\|.*$/, "", row)
+            row = rowkey($0)
             ours[row] = 1
             held = $0 "\n"
             next
