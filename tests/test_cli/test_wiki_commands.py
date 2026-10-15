@@ -64,6 +64,7 @@ __all__ = [
     'test_update_cli_refuses_conflict_markers',
     'test_lint_reports_issue_taxonomy_and_exits_nonzero',
     'test_lint_summary_counts_notes',
+    'test_lint_condenses_repeated_notes',
     'test_lint_json_reports_typed_findings',
     'test_lint_types_resolver_diagnostics',
     'test_lint_error_exits_two',
