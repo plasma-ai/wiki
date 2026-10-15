@@ -68,7 +68,7 @@ may include breaking changes, each listed under a Breaking heading.
   the index to save refreshed file data, so a `git add` or commit run in the
   same repository at that moment otherwise fails on the existing `index.lock`.
 - The wiki's git calls keep the caller's `GIT_CEILING_DIRECTORIES` and
-  `GIT_OPTIONAL_LOCKS`, the two `GIT_*` variables that only restrict git, while
+  `GIT_OPTIONAL_LOCKS`, two `GIT_*` variables that only restrict git, while
   still dropping those that redirect it, such as the `GIT_DIR` a hook exports. A
   wiki below a ceiling the caller set otherwise still finds the repository above
   it and applies that repository's ignore rules, and a caller's lock-free

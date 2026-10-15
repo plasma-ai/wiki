@@ -1,10 +1,11 @@
 """Test the ``wiki.util.git`` module.
 
 The helper's own contract is which caller environment reaches git: the
-variables that only restrict git pass, while those that redirect it are
-dropped. The fence probes and merge-driver wiring it backs are covered
-end-to-end by the gitignore-fence tests in ``test_core.test_exclude``
-and ``test_core.test_lint`` against real repositories.
+two variables callers set to restrict git pass, while those that
+redirect it are dropped. The fence probes and merge-driver wiring it
+backs are covered end-to-end by the gitignore-fence tests in
+``test_core.test_exclude`` and ``test_core.test_lint`` against real
+repositories.
 """
 
 from __future__ import annotations

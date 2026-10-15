@@ -314,7 +314,7 @@ root is ignored is exempt, so a deliberately unindexed wiki inside a repo
 keeps working. The repository is always the one enclosing the wiki root: the
 probe drops the caller's ``GIT_*`` environment, so a command run from a git
 hook (which exports ``GIT_DIR``) fences exactly as the same command run from
-a shell. The two variables that only restrict git pass through:
+a shell. Two variables that only restrict git pass through:
 ``GIT_CEILING_DIRECTORIES`` stops the search for the enclosing repository,
 so a wiki whose repository a ceiling hides reads as outside one, and
 ``GIT_OPTIONAL_LOCKS=0`` keeps the wiki's git reads off the index lock.
