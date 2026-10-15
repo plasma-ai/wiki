@@ -1322,8 +1322,12 @@ def _index_canonicalizer(root: pathlib.Path, path: pathlib.Path) -> Optional[Wik
     #   not load, construct or run, bytes that are not UTF-8 -- leaves the
     #   index as merged rather than failing a clean merge
     try:
-        wiki = load_wiki_class(root)(root)
         text = path.read_bytes().decode('utf-8')
+    except (OSError, UnicodeDecodeError):
+        return None
+    # the wiki's class may be hook code, which can raise anything
+    try:
+        wiki = load_wiki_class(root)(root)
         if wiki.canonicalize_index(text) != text:
             return None
     except Exception:
@@ -1347,6 +1351,10 @@ def _canonicalize_index(engine: Wiki, path: pathlib.Path) -> None:
     #   canonicalize or write leaves the index as merged
     try:
         text = path.read_bytes().decode('utf-8')
+    except (OSError, UnicodeDecodeError):
+        return
+    # the engine may run hook code, which can raise anything
+    try:
         canonical = engine.canonicalize_index(text)
     except Exception:
         return
