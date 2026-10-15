@@ -67,6 +67,7 @@ __all__ = [
     'test_lint_json_reports_typed_findings',
     'test_lint_types_resolver_diagnostics',
     'test_lint_error_exits_two',
+    'test_lint_error_keeps_the_notes_before_it',
     'test_lint_details_issues_and_count_condenses',
     'test_map_respects_view_options',
     'test_map_filters_by_category',
@@ -156,6 +157,17 @@ _RAISING_HOOK = (
     'class Broken(Wiki):\n'
     '    def _sort_links(self, links):\n'
     "        raise RuntimeError('broken hook')\n"
+)
+
+# a hook whose lint notes two placeholder descs, then raises
+_NOTING_HOOK = (
+    'from wiki.core.wiki import Wiki\n\n'
+    "__all__ = ['Noting']\n\n\n"
+    'class Noting(Wiki):\n'
+    '    def lint(self, name=None):\n'
+    "        self.on_desc_missing(path='a.md')\n"
+    "        self.on_desc_missing(path='b.md')\n"
+    "        raise RuntimeError('boom')\n"
 )
 
 pytestmark = pytest.mark.skipif(
@@ -1604,6 +1616,29 @@ def test_lint_error_exits_two(tmp_path: pathlib.Path) -> None:
     entry = _wiki(root, 'lint', 'nowhere', '--path', str(root))
     assert entry.returncode == 2
     assert 'Error:' in entry.stderr
+
+
+def test_lint_error_keeps_the_notes_before_it(tmp_path: pathlib.Path) -> None:
+    """Notes lint emitted before an error print, condensed, above the error.
+
+    ``--full`` streams each note as it fires, so the condensed default
+    flushes the notes it holds when lint raises, ahead of the wrapper's
+    ``Error:`` line, rather than dropping them with the run.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # a trusted hook whose lint notes two placeholder descs, then raises
+    _write(root / '.wiki' / 'wiki.py', _NOTING_HOOK)
+    assert _wiki(tmp_path, 'trust', '--path', str(root)).returncode == 0
+
+    # the notes print condensed, then the error, and the run exits 2
+    lint = _wiki(root, 'lint', '--path', str(root))
+    assert lint.returncode == 2, lint.stdout + lint.stderr
+    assert lint.stderr.splitlines() == [
+        '2 pages need a desc',
+        'Run with --full to list each note.',
+        'Error: boom',
+    ]
 
 
 def test_lint_details_issues_and_count_condenses(
