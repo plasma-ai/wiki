@@ -21,6 +21,10 @@ may include breaking changes, each listed under a Breaking heading.
   `Wiki.canonicalize_index` returns an index with two rows for one target
   unchanged, so `wiki _merge` leaves such a merge as the driver wrote it, escape
   damage and all, for `wiki lint` to report and `wiki update` to repair.
+- A wiki whose enclosing repository a caller's `GIT_CEILING_DIRECTORIES` hides
+  reads as outside a repository, as its git calls already read it, so
+  `wiki update` and `wiki lint` no longer note on every run that the gitignore
+  fence is unavailable and ask whether git is installed.
 
 ## [1.7.0] - 2026-10-14
 

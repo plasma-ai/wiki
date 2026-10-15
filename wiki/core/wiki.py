@@ -643,9 +643,37 @@ class Wiki:
         return bool(matched)
 
     def _in_repository(self: Wiki) -> bool:
-        """Return ``True`` if a git repository encloses the wiki root."""
-        enclosing = (self._root, *self._root.parents)
-        return any((ancestor / '.git').exists() for ancestor in enclosing)
+        """Return ``True`` if a git repository encloses the wiki root.
+
+        The search stops where git's own discovery stops, below the
+        nearest ``GIT_CEILING_DIRECTORIES`` entry above the root, so a
+        repository a caller's ceiling hides from the wiki's git calls
+        reads as none here too.
+        """
+        # git checks the root itself whatever the ceiling
+        if (self._root / '.git').exists():
+            return True
+        # the ceilings git honors: absolute entries, each
+        # resolved unless an empty entry precedes it
+        ceilings = set()
+        resolve = True
+        for entry in os.environ.get('GIT_CEILING_DIRECTORIES', '').split(os.pathsep):
+            if not entry:
+                resolve = False
+                continue
+            ceiling = pathlib.Path(entry)
+            if not ceiling.is_absolute():
+                continue
+            if resolve:
+                ceiling = ceiling.resolve()
+            ceilings.add(ceiling)
+        # walk up to the nearest ceiling, which git never checks
+        for ancestor in self._root.parents:
+            if ancestor in ceilings:
+                return False
+            if (ancestor / '.git').exists():
+                return True
+        return False
 
     def _warn_untrackable_rows(self: Wiki, walk: Iterable[_WalkStep]) -> None:
         """Note indexed paths the caller's full ignore stack excludes.
