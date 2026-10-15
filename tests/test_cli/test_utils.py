@@ -10,6 +10,7 @@ import pathlib
 import subprocess
 import sys
 import threading
+import time
 from typing import Optional
 
 import pytest
@@ -61,6 +62,7 @@ __all__ = [
     'test_merge_driver_wiring_ignores_ambient_git_dir',
     'test_configure_git_merge_driver',
     'test_merge_driver_skips_dirty_gitattributes',
+    'test_merge_driver_reads_gitattributes_without_the_index_lock',
     'test_merge_driver_tolerates_undecodable_git_output',
 ]
 
@@ -1078,6 +1080,48 @@ def test_merge_driver_skips_dirty_gitattributes(tmp_path: pathlib.Path) -> None:
     _git(tmp_path, 'commit', '-m', 'edit')
     configure_git_merge_driver(wiki_dir)
     assert '**/_index.md merge=wiki' in attributes.read_text(encoding='utf-8')
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_merge_driver_reads_gitattributes_without_the_index_lock(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The wiring's ``.gitattributes`` check never rewrites the git index.
+
+    A plain status refreshes stale stat data into the index under
+    ``index.lock``, so a ``git add`` or commit run in the same repository
+    at that moment fails on the lock. The check reads without optional
+    locks, whatever the caller's environment says.
+    """
+    # a repo whose tracked .gitattributes lacks the map, read with the
+    # optional locks git takes by default
+    _git(tmp_path, 'init', '-b', 'main')
+    _git(tmp_path, 'config', 'user.email', 'test@test.com')
+    _git(tmp_path, 'config', 'user.name', 'Test')
+    attributes = tmp_path / '.gitattributes'
+    attributes.write_text('*.txt text\n', encoding='utf-8')
+    _git(tmp_path, 'add', '.gitattributes')
+    _git(tmp_path, 'commit', '-m', 'init')
+    wiki_dir = tmp_path / 'wiki'
+    wiki_dir.mkdir()
+    index = tmp_path / '.git' / 'index'
+    monkeypatch.delenv('GIT_OPTIONAL_LOCKS', raising=False)
+
+    # a plain status rewrites the index once the file's stat data is stale
+    stale = time.time() - 3600
+    os.utime(attributes, (stale, stale))
+    before = index.read_bytes()
+    _git(tmp_path, 'status', '--porcelain', '--', '.gitattributes')
+    assert index.read_bytes() != before
+
+    # the wiring writes the map over stale stat data, the index untouched
+    stale -= 3600
+    os.utime(attributes, (stale, stale))
+    before = index.read_bytes()
+    configure_git_merge_driver(wiki_dir)
+    assert '**/_index.md merge=wiki' in attributes.read_text(encoding='utf-8')
+    assert index.read_bytes() == before
 
 
 def test_merge_driver_tolerates_undecodable_git_output(
