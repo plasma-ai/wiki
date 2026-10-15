@@ -1488,16 +1488,18 @@ def test_lint_condenses_repeated_notes(tmp_path: pathlib.Path) -> None:
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     # the root index's placeholder desc plus three placeholder pages make
     # four missing-desc notes; the root's empty content stays a lone note
-    for page in ('alpha', 'beta', 'gamma'):
+    pages = ('alpha', 'beta', 'gamma')
+    desc_count = len(pages) + 1
+    note_count = desc_count + 1
+    for page in pages:
         _write(root / f'{page}.md', _page(page, '...', 'Body.'))
     assert _wiki(root, 'update', '--path', str(root)).returncode == 0
-    note_count = 5
 
     # the default condenses the repeated kind and keeps the lone note
     default = _wiki(root, 'lint', '--path', str(root))
     assert default.returncode == 0, default.stdout + default.stderr
     assert default.stderr.splitlines() == [
-        '4 pages need a desc',
+        f'{desc_count} pages need a desc',
         '_index.md: Empty content',
         'Run with --full to list each note.',
     ]
@@ -1505,8 +1507,8 @@ def test_lint_condenses_repeated_notes(tmp_path: pathlib.Path) -> None:
 
     # --full lists every note in place of the count line and the hint
     full = _wiki(root, 'lint', '--path', str(root), '--full')
-    assert full.returncode == 0
-    assert full.stderr.count(': Needs desc') == 4
+    assert full.returncode == 0, full.stdout + full.stderr
+    assert full.stderr.count(': Needs desc') == desc_count
     assert '_index.md: Empty content' in full.stderr
     assert '--full' not in full.stderr
     assert full.stdout == default.stdout
