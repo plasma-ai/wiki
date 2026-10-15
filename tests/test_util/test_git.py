@@ -23,8 +23,9 @@ from wiki.util import git
 
 __all__ = ['test_optional_lock_setting_reaches_git']
 
+pytestmark = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
 
-@pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
+
 @pytest.mark.parametrize(
     argnames='optional_locks',
     argvalues=[None, '0'],
@@ -46,7 +47,12 @@ def test_optional_lock_setting_reaches_git(
     page = tmp_path / 'page.md'
     page.write_text('# Page\n', encoding='utf-8')
     for args in (['init', '-q'], ['add', 'page.md']):
-        subprocess.run(['git', '-C', f'{tmp_path}', *args], check=True)
+        subprocess.run(
+            ['git', '-C', f'{tmp_path}', *args],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
     stale = time.time() - 3600
     os.utime(page, (stale, stale))
     index = tmp_path / '.git' / 'index'
