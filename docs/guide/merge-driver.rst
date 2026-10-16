@@ -84,9 +84,14 @@ Link block
    had that one side deleted and the other left as it was stays deleted, as
    a three-way merge would leave it — unless the deleting side's rows carry
    formatter escape damage (``\[\[``): rows the driver cannot read say
-   nothing about what that side deleted. No row only one side added is
-   dropped, and an edit only one side made is never lost; when both sides
-   edit the same row, the current branch's text wins.
+   nothing about what that side deleted. A row only one side added rides
+   over, and an edit only one side made lands; when both sides edit the
+   same row, the current branch's text wins. Both hold only while neither
+   side's link rows carry that escape damage, since the driver cannot read
+   escaped rows: the other side's escaped rows never enter the merge, so
+   the rows it added and the edits it made are lost, and the current
+   branch's escaped rows end up beside the other side's plain copies. Repair
+   a damaged side with ``wiki update`` on that branch before merging.
 
    When the whole file merges cleanly, the driver then rewrites the H1 from
    the merged ``title:`` (else ``name:``) and puts the rows in the order
@@ -98,7 +103,9 @@ Link block
    does one whose hook cannot load or run — the H1 the current branch's, the
    other side's rows below its own. A merge with two rows for one target —
    the other side's copy of each row a formatter escaped on the current
-   branch — stays as merged too, for ``wiki update`` to repair. The check
+   branch — stays as merged too, and the next ``wiki update`` keeps the
+   other side's copy of each such row, so an edit the current branch made
+   to an escaped row reverts; repair the escapes before merging. The check
    sees a class's category order only where the current branch's rows span
    two or more categories, so a merge that brings a second category into an
    index with fewer is sorted in this class's order even when an embedder's

@@ -20,7 +20,11 @@ may include breaking changes, each listed under a Breaking heading.
   escape damage no longer writes each row out twice as a plain row.
   `Wiki.canonicalize_index` returns an index with two rows for one target
   unchanged, so `wiki _merge` leaves such a merge as the driver wrote it, escape
-  damage and all, for `wiki lint` to report and `wiki update` to repair.
+  damage and all, for `wiki lint` to report. The driver cannot read escaped
+  rows, so a side whose link rows carry this damage must be repaired with
+  `wiki update` before the merge: otherwise the other side's escaped additions
+  and edits are lost, and the update after the merge keeps the other side's copy
+  of each of the current branch's escaped rows.
 - A wiki whose enclosing repository a caller's `GIT_CEILING_DIRECTORIES` hides
   reads as outside a repository, as its git calls already read it, so
   `wiki update` and `wiki lint` no longer note on every run that the gitignore

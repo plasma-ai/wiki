@@ -13,7 +13,9 @@ set -euo pipefail
 # of both sides' rows less each row one side deleted and the other left
 # as base had it: ours' layout wins and rows present only in theirs
 # (with their desc continuations) are appended above the closing ***, so
-# a merge never silently drops one side's additions, and `wiki _merge`
+# a merge drops neither side's additions -- unless a side's rows carry
+# formatter escape damage, which this script cannot read, so that side
+# needs a wiki update repair before the merge -- and `wiki _merge`
 # then brings a clean merge's H1 and row order to the form wiki update
 # writes. title is authored (update never invents a value), so it must
 # stay out of REGENERATED_KEYS -- normalizing it to ours would silently
@@ -300,7 +302,7 @@ git merge-file --marker-size="$MARKER_SIZE" -p -L ours -L base -L theirs \
 
 # link block: union both sides' rows -- ours' layout wins, and each row
 # present only in theirs rides over with its desc continuations, so the
-# merge never silently drops one side's additions -- less the rows one
+# merge drops neither side's readable additions -- less the rows one
 # side deleted (`wiki _merge` then sets a clean merge's H1 and row order)
 if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
     # a row is a line that is one link row whole once stripped (mirrors
