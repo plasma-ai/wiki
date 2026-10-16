@@ -1136,7 +1136,8 @@ def merge(app: typer.Typer) -> typer.Typer:
             size = f'--marker-size={marker_size}'
             cmd = ['git', 'merge-file', size, ours, base, theirs]
             wiki = None
-        # pass the exit code through (nonzero tells git the merge left conflicts)
+        # pass the exit code through (nonzero tells git the merge left
+        # conflicts); the best-effort rewrite below never changes it
         result = subprocess.run(cmd)
         # bring a clean index merge's H1 and row order to update's form --
         # the script keeps ours' H1 and appends each row only theirs carries
@@ -1321,8 +1322,12 @@ def _index_canonicalizer(root: pathlib.Path, path: pathlib.Path) -> Optional[Wik
     #   not load, construct or run, bytes that are not UTF-8 -- leaves the
     #   index as merged rather than failing a clean merge
     try:
-        wiki = load_wiki_class(root)(root)
         text = path.read_bytes().decode('utf-8')
+    except (OSError, UnicodeDecodeError):
+        return None
+    # the wiki's class may be hook code, which can raise anything
+    try:
+        wiki = load_wiki_class(root)(root)
         if wiki.canonicalize_index(text) != text:
             return None
     except Exception:
@@ -1330,24 +1335,31 @@ def _index_canonicalizer(root: pathlib.Path, path: pathlib.Path) -> Optional[Wik
     return wiki
 
 
-def _canonicalize_index(wiki: Wiki, path: pathlib.Path) -> None:
+def _canonicalize_index(engine: Wiki, path: pathlib.Path) -> None:
     """Bring a merged ``_index.md``'s H1 and row order to ``wiki update``'s form.
 
-    The file is read and written as bytes, so the lines it leaves alone
-    keep their endings. A failed write fails the merge: a file written in
-    part cannot stand as merged.
+    The text is written back verbatim, so the lines it leaves alone keep
+    their endings, and atomically: the file is replaced whole or, when
+    the write fails, left as merged.
 
     Args:
-        wiki: The engine :func:`_index_canonicalizer` returned.
+        engine: The engine :func:`_index_canonicalizer` returned.
         path: The merged index git hands the driver (%A).
 
     """
-    # NOTE: as in _index_canonicalizer, a failure to read or canonicalize
-    #   leaves the index as merged
+    # NOTE: as in _index_canonicalizer, a failure to read,
+    #   canonicalize or write leaves the index as merged
     try:
         text = path.read_bytes().decode('utf-8')
-        canonical = wiki.canonicalize_index(text)
+    except (OSError, UnicodeDecodeError):
+        return
+    # the engine may run hook code, which can raise anything
+    try:
+        canonical = engine.canonicalize_index(text)
     except Exception:
         return
     if canonical != text:
-        path.write_bytes(canonical.encode('utf-8'))
+        try:
+            wiki.util.fs.write_atomic(path, canonical)
+        except OSError:
+            return

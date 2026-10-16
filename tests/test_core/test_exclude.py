@@ -18,6 +18,7 @@ import pathlib
 import pytest
 
 from wiki.core.wiki import Wiki
+from wiki.util import git
 
 from ._helpers import (
     _capture_notices,
@@ -46,6 +47,7 @@ __all__ = [
     'test_personally_ignored_row_draws_a_note',
     'test_gitignore_fence_reaches_a_nested_wiki_root',
     'test_gitignore_fence_honors_a_discovery_ceiling',
+    'test_unavailable_fence_note_honors_a_discovery_ceiling',
     'test_ignored_wiki_root_stays_unfenced',
     'test_new_refuses_a_fenced_target',
     'test_gitignored_link_target_names_the_cause',
@@ -746,7 +748,9 @@ def test_gitignore_fence_honors_a_discovery_ceiling(
     A ceiling only restricts git, so unlike ``GIT_DIR`` it reaches the
     wiki's git calls: a fixture wiki that a test fences off from the
     repository around it reads as outside any repository, and that
-    repository's rules no longer decide what the wiki indexes.
+    repository's rules no longer decide what the wiki indexes. Outside
+    a repository there is no fence to lose, so no note says the fence
+    is unavailable.
     """
     _git_repo(tmp_path, 'out/')
     root = tmp_path / 'math'
@@ -760,10 +764,77 @@ def test_gitignore_fence_honors_a_discovery_ceiling(
         monkeypatch.delenv('GIT_CEILING_DIRECTORIES', raising=False)
 
     # the fenced folder is indexed exactly when the ceiling hides the repo
-    # (fresh instance -- the fence is cached)
-    Wiki(root).update()
+    # (fresh instance -- the fence is cached), and the hidden repo draws no
+    # unavailable-fence note
+    wiki = Wiki(root)
+    notices = _capture_notices(wiki)
+    wiki.update()
     index = (root / 'core' / '_index.md').read_text(encoding='utf-8')
     assert ('[[core/out' in index) is ceiling
+    assert not [n for n in notices if 'fence unavailable' in n.description]
+
+
+@_needs_git
+@pytest.mark.parametrize(
+    argnames=('ceiling', 'hidden'),
+    argvalues=[
+        # the repository's own folder hides it, however it is spelled
+        ('{repo}', True),
+        ('{repo}/', True),
+        ('{link}', True),
+        # an entry after an empty one is read as written, unresolved
+        (':{link}', False),
+        # a relative entry, the wiki root itself and a folder above the
+        # repository hide nothing
+        ('repo', False),
+        ('{root}', False),
+        ('{above}', False),
+    ],
+    ids=[
+        'repo',
+        'trailing-slash',
+        'symlink',
+        'unresolved',
+        'relative',
+        'root',
+        'above',
+    ],
+)
+def test_unavailable_fence_note_honors_a_discovery_ceiling(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ceiling: str,
+    hidden: bool,
+) -> None:
+    """The unavailable-fence note reads a ceiling as git's discovery does.
+
+    A repository the caller's ``GIT_CEILING_DIRECTORIES`` hides from the
+    wiki's git calls is no fence to lose, so a failed probe says nothing;
+    a ceiling git does not honor hides nothing, and the note stands.
+    """
+    # a wiki inside a repository and a symlink to it; the ceiling is set
+    # from beside the repository, where the relative entry would name it
+    repo = tmp_path / 'repo'
+    root = repo / 'math'
+    _make_wiki(root, folders={'core': ['design']})
+    _git_repo(repo)
+    link = tmp_path / 'link'
+    link.symlink_to(repo)
+    spelled = ceiling.format(repo=repo, link=link, root=root, above=tmp_path)
+    monkeypatch.setenv('GIT_CEILING_DIRECTORIES', spelled)
+    monkeypatch.chdir(tmp_path)
+
+    # the wiki's git calls find the repository exactly when it is not hidden
+    found = git._git(['rev-parse', '--git-dir'], cwd=root, check=False)
+    assert (found is None) is hidden
+
+    # with git off PATH the failed probe is narrated where git finds the repo
+    monkeypatch.setenv('PATH', '')
+    wiki = Wiki(root)
+    notices = _capture_notices(wiki)
+    wiki.lint()
+    unavailable = [n for n in notices if 'fence unavailable' in n.description]
+    assert bool(unavailable) is not hidden
 
 
 @_needs_git

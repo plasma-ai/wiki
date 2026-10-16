@@ -7,6 +7,34 @@ may include breaking changes, each listed under a Breaking heading.
 
 ## [Unreleased]
 
+### Fixed
+
+- The `_index.md` merge driver reads a link row as `wiki update` does, as a
+  whole line, so a desc line that opens on a wikilink, such as
+  `[[core/design|design]] explains each stage.`, stays with its row. A row one
+  side edited by adding such a line while the other side deleted it is kept with
+  the new line, rather than dropped with the line moved into the row above, and
+  a row the other side deleted stays deleted when another row's desc line opens
+  on a link to it.
+- A clean `_index.md` merge whose current branch's link rows carry formatter
+  escape damage no longer writes each row out twice as a plain row.
+  `Wiki.canonicalize_index` returns an index with two rows for one target
+  unchanged, so `wiki _merge` leaves such a merge as the driver wrote it, escape
+  damage and all, for `wiki lint` to report. The driver cannot read escaped
+  rows, so a side whose link rows carry this damage must be repaired with
+  `wiki update` before the merge: otherwise the other side's escaped additions
+  and edits are lost, and the update after the merge keeps the other side's copy
+  of each of the current branch's escaped rows.
+- A wiki whose enclosing repository a caller's `GIT_CEILING_DIRECTORIES` hides
+  reads as outside a repository, as its git calls already read it, so
+  `wiki update` and `wiki lint` no longer note on every run that the gitignore
+  fence is unavailable and ask whether git is installed.
+- `wiki _merge` replaces a clean `_index.md` merge whole when it sets the H1 and
+  row order, so a write that fails leaves the file as the driver merged it and
+  the driver's exit code stands: `wiki _merge` no longer exits 2, which git
+  reads as a conflict, over a file the failed write left in part. A read-only
+  merged file is rewritten too.
+
 ## [1.7.0] - 2026-10-14
 
 ### Changed
@@ -17,13 +45,15 @@ may include breaking changes, each listed under a Breaking heading.
   and puts its rows in the order `wiki update` writes them, sorting with the
   wiki's own class (a trusted `.wiki/wiki.py` hook's `category_order` included)
   when that class leaves the current branch's index as written — an index
-  another class wrote, or one whose hook cannot load or run, stays as merged —
-  and a row the base had that one side deleted while the other left it alone
-  stays deleted rather than riding back in — unless the deleting side's rows
-  carry formatter escape damage, whose unread rows say nothing of a deletion.
-  Two branches that each add or delete pages in one folder and run
-  `wiki update`, or retitle the index, now merge to an index that passes
-  `wiki update --check` and `wiki lint`; the other side's new rows no longer sit
+  another class wrote, or one whose hook cannot load or run, stays as merged,
+  though the check sees another class's category order only where the current
+  branch's rows span two or more categories — and a row the base had that one
+  side deleted while the other left it alone stays deleted rather than riding
+  back in — unless the deleting side's rows carry formatter escape damage, whose
+  unread rows say nothing of a deletion. Two branches that each add or delete
+  pages in one folder and run `wiki update`, or retitle the index, now merge to
+  an index that passes `wiki update --check` and `wiki lint`, unless the merge
+  changes the hook's `category_order`; the other side's new rows no longer sit
   below ours', a deleted page's row no longer returns, and a merged-in title no
   longer waits for an update to reach the H1, each failing both until a
   post-merge update. `Wiki.canonicalize_index` exposes the rewrite.
@@ -42,7 +72,7 @@ may include breaking changes, each listed under a Breaking heading.
   the index to save refreshed file data, so a `git add` or commit run in the
   same repository at that moment otherwise fails on the existing `index.lock`.
 - The wiki's git calls keep the caller's `GIT_CEILING_DIRECTORIES` and
-  `GIT_OPTIONAL_LOCKS`, the two `GIT_*` variables that only restrict git, while
+  `GIT_OPTIONAL_LOCKS`, two `GIT_*` variables that only restrict git, while
   still dropping those that redirect it, such as the `GIT_DIR` a hook exports. A
   wiki below a ceiling the caller set otherwise still finds the repository above
   it and applies that repository's ignore rules, and a caller's lock-free

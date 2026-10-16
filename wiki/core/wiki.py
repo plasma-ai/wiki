@@ -643,9 +643,37 @@ class Wiki:
         return bool(matched)
 
     def _in_repository(self: Wiki) -> bool:
-        """Return ``True`` if a git repository encloses the wiki root."""
-        enclosing = (self._root, *self._root.parents)
-        return any((ancestor / '.git').exists() for ancestor in enclosing)
+        """Return ``True`` if a git repository encloses the wiki root.
+
+        The search stops where git's own discovery stops, below the
+        nearest ``GIT_CEILING_DIRECTORIES`` entry above the root, so a
+        repository a caller's ceiling hides from the wiki's git calls
+        reads as none here too.
+        """
+        # git checks the root itself whatever the ceiling
+        if (self._root / '.git').exists():
+            return True
+        # the ceilings git honors: absolute entries, each
+        # resolved unless an empty entry precedes it
+        ceilings = set()
+        resolve = True
+        for entry in os.environ.get('GIT_CEILING_DIRECTORIES', '').split(os.pathsep):
+            if not entry:
+                resolve = False
+                continue
+            ceiling = pathlib.Path(entry)
+            if not ceiling.is_absolute():
+                continue
+            if resolve:
+                ceiling = ceiling.resolve()
+            ceilings.add(ceiling)
+        # walk up to the nearest ceiling, which git never checks
+        for ancestor in self._root.parents:
+            if ancestor in ceilings:
+                return False
+            if (ancestor / '.git').exists():
+                return True
+        return False
 
     def _warn_untrackable_rows(self: Wiki, walk: Iterable[_WalkStep]) -> None:
         """Note indexed paths the caller's full ignore stack excludes.
@@ -693,9 +721,11 @@ class Wiki:
     def _git_read(self: Wiki, cmd: list[str]) -> Optional[str]:
         """Run a read-only git command at the root; ``None`` on any failure.
 
-        The probe shares the fence's environment discipline: git's
-        repo-discovery variables are dropped, so the answering
-        repository is always the one enclosing the root.
+        The probe shares the fence's environment discipline: the
+        variables that redirect git (``GIT_DIR`` and the like) are
+        dropped, so the answering repository is the one enclosing the
+        root -- unless the caller's ``GIT_CEILING_DIRECTORIES`` hides
+        it, and the read returns ``None``.
         """
         return wiki.util.git._git(cmd, cwd=self._root, check=False)
 
@@ -802,7 +832,10 @@ class Wiki:
         ``update`` renders it, so a clean merge's H1 and row order match
         what update writes. An H1 or a row order already in form keeps
         its bytes, a text with no delimiter comes back unchanged, and the
-        frontmatter and the content below the delimiter never change.
+        frontmatter and the content below the delimiter never change. A
+        text with two rows for one target also comes back unchanged: the
+        rows are one entry, and only ``update``, which reads the
+        filesystem, can choose between them.
 
         Args:
             text: Raw index content.
@@ -813,8 +846,8 @@ class Wiki:
         """
         lines = text.split('\n')
         frontmatter, start = format.extract_frontmatter(lines)
-        # find the first delimiter after the frontmatter, where the region
-        # format.parse_index reads ends
+        # find the first delimiter after the frontmatter, where
+        # the region format.parse_index reads ends
         end = None
         for i in range(start, len(lines)):
             if lines[i].rstrip() == self.index_delimiter:
@@ -840,6 +873,11 @@ class Wiki:
         # sort the parsed rows; a changed order renders each row and a blank
         # line after it, as format.render_index does
         _, links, _ = format.parse_index(text, delimiter=self.index_delimiter)
+        # rows that share a target are one entry, which only update can
+        # choose a row for from the filesystem: leave the text as it is
+        targets = [unicodedata.normalize('NFC', target) for target, _, _ in links]
+        if len(set(targets)) != len(targets):
+            return text
         ordered = self._sort_links(links)
         if ordered != links:
             rows = []

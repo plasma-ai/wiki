@@ -13,7 +13,9 @@ set -euo pipefail
 # of both sides' rows less each row one side deleted and the other left
 # as base had it: ours' layout wins and rows present only in theirs
 # (with their desc continuations) are appended above the closing ***, so
-# a merge never silently drops one side's additions, and `wiki _merge`
+# a merge drops neither side's additions -- unless a side's rows carry
+# formatter escape damage, which this script cannot read, so that side
+# needs a wiki update repair before the merge -- and `wiki _merge`
 # then brings a clean merge's H1 and row order to the form wiki update
 # writes. title is authored (update never invents a value), so it must
 # stay out of REGENERATED_KEYS -- normalizing it to ours would silently
@@ -300,10 +302,12 @@ git merge-file --marker-size="$MARKER_SIZE" -p -L ours -L base -L theirs \
 
 # link block: union both sides' rows -- ours' layout wins, and each row
 # present only in theirs rides over with its desc continuations, so the
-# merge never silently drops one side's additions -- less the rows one
+# merge drops neither side's readable additions -- less the rows one
 # side deleted (`wiki _merge` then sets a clean merge's H1 and row order)
 if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
-    # rows key on their [[target| prefix (mirrors Python _LINK_ROW);
+    # a row is a line that is one link row whole once stripped (mirrors
+    # Python format._LINK_ROW, so a desc continuation opening on a
+    # wikilink stays with its row) and keys on its [[target prefix;
     # continuation and blank lines ride with the row that precedes them,
     # and a side's heading/preamble (before its first row) is never
     # collected -- ours' rows stream through in ours' layout; a row both
@@ -315,10 +319,18 @@ if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
     # (the region ends at its first ***, so the anchor is unambiguous); a
     # row base had that one side dropped while the other left base's text
     # alone is a deletion and stays out, as a three-way merge would leave
-    # it -- unless the dropping side's block carries formatter escape
-    # damage (a \[\[ or \[[ line, mirroring Python escaped_wikilink_lines),
-    # whose unread rows say nothing of what it deleted
+    # it -- unless the dropping side's block carries formatter escape damage
+    # (a line opening on \[\[ or \[[, the shape Python format.match_link_row
+    # repairs), whose unread rows say nothing of what it deleted
     awk '
+        # the [[target key of a line that is one link row whole, else ""
+        function rowkey(s) {
+            sub(/^[[:space:]]+/, "", s)
+            sub(/[[:space:]]+$/, "", s)
+            if (s !~ /^\[\[.+\|.+\]\](:.*)?$/) return ""
+            sub(/\|.*$/, "", s)
+            return s
+        }
         # a row block without its trailing blank lines (CRLF and
         # whitespace-only ones included): the text a side edited, whatever
         # separated the rows on that side
@@ -352,9 +364,8 @@ if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
         part < 3 {
             if ($0 ~ /^\*\*\*[[:space:]]*$/) { key = ""; next }
             if ($0 ~ /^[[:blank:]]*\\\[\\?\[/) damaged[part] = 1
-            if ($0 ~ /^\[\[.*\|/) {
-                key = $0
-                sub(/\|.*$/, "", key)
+            if (rowkey($0) != "") {
+                key = rowkey($0)
                 if (part == 2 && !((2, key) in text)) order[++count] = key
             }
             if (key != "") text[part, key] = text[part, key] $0 "\n"
@@ -376,10 +387,9 @@ if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
             next
         }
         done { print; next }
-        /^\[\[.*\|/ {
+        rowkey($0) != "" {
             flush()
-            row = $0
-            sub(/\|.*$/, "", row)
+            row = rowkey($0)
             ours[row] = 1
             held = $0 "\n"
             next

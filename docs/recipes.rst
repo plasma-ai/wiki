@@ -63,15 +63,15 @@ tree the way ``wiki update`` does: every folder gains an ``_index.md``, every
 bare page is adopted with fresh frontmatter (an authored H1 is preserved by
 seeding ``title:`` from it), and every entry is linked into its parent index.
 The sweep itself announces nothing — ``wiki init`` prints only its closing
-line — so review what it did with ``wiki lint``, which names every seeded
-placeholder and empty index (pass the same ``--path`` when running from
-outside the wiki):
+line — so review what it did with ``wiki lint --full``, which names every
+seeded placeholder and empty index (pass the same ``--path`` when running
+from outside the wiki):
 
 .. code-block:: console
 
    $ wiki init --path docs/notes
    Initialized wiki at: /home/user/myproject/docs/notes
-   $ wiki lint --path docs/notes
+   $ wiki lint --full --path docs/notes
    _index.md: Needs desc
    _index.md: Empty content
    guides/_index.md: Needs desc
@@ -170,9 +170,12 @@ normal three-way merge that can conflict: ``title:``, ``desc:``, ``category:``,
 ``tags:``, ``sources:``, and the content below the ``***`` delimiter. Any file
 that is not an ``_index.md`` under a wiki root merges as ordinary text.
 
-After every merge, run ``wiki update``: it regenerates the link rows from the
-merged filesystem, and a merged-in ``title:`` shows up in its H1 only after
-that run.
+After a merge, run ``wiki update --check``, and ``wiki update`` when it
+reports changes. The driver sets a clean merge's H1 from the merged
+``title:`` and puts its rows in update's order, but some merges still leave
+rows to regenerate: a row one side changed and the other deleted, both sides
+changing one row, a change to the hook's ``category_order``, and a conflict
+resolved by hand. The update regenerates them from the merged filesystem.
 
 Rename and restructure pages safely
 -----------------------------------
