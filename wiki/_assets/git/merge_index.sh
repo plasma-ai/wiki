@@ -317,9 +317,9 @@ if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
     # (the region ends at its first ***, so the anchor is unambiguous); a
     # row base had that one side dropped while the other left base's text
     # alone is a deletion and stays out, as a three-way merge would leave
-    # it -- unless the dropping side's block carries formatter escape
-    # damage (a \[\[ or \[[ line, mirroring Python escaped_wikilink_lines),
-    # whose unread rows say nothing of what it deleted
+    # it -- unless the dropping side's block carries formatter escape damage
+    # (a line opening on \[\[ or \[[, the shape Python format.match_link_row
+    # repairs), whose unread rows say nothing of what it deleted
     awk '
         # the [[target key of a line that is one link row whole, else ""
         function rowkey(s) {
