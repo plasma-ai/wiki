@@ -721,9 +721,11 @@ class Wiki:
     def _git_read(self: Wiki, cmd: list[str]) -> Optional[str]:
         """Run a read-only git command at the root; ``None`` on any failure.
 
-        The probe shares the fence's environment discipline: git's
-        repo-discovery variables are dropped, so the answering
-        repository is always the one enclosing the root.
+        The probe shares the fence's environment discipline: the
+        variables that redirect git (``GIT_DIR`` and the like) are
+        dropped, so the answering repository is the one enclosing the
+        root -- unless the caller's ``GIT_CEILING_DIRECTORIES`` hides
+        it, and the read returns ``None``.
         """
         return wiki.util.git._git(cmd, cwd=self._root, check=False)
 
