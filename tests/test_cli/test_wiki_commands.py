@@ -103,6 +103,8 @@ __all__ = [
     'test_merge_driver_moves_regenerated_keys_with_their_bodies',
     'test_merge_driver_takes_the_other_sides_row_edit',
     'test_merge_driver_normalizes_created_over_a_stampless_base',
+    'test_merge_driver_keeps_the_later_updated_stamp',
+    'test_merge_driver_keeps_the_earlier_created_over_a_stampless_base',
     'test_merge_driver_keeps_a_row_edit_on_a_crlf_index',
     'test_merge_driver_unions_rows_of_an_add_add_merge',
     'test_merge_driver_leaves_a_shared_blank_line_alone',
@@ -2647,6 +2649,195 @@ def test_merge_driver_normalizes_created_over_a_stampless_base(
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
 @pytest.mark.parametrize(
+    argnames=('timestamp', 'stamps', 'kept', 'conflict'),
+    argvalues=[
+        (
+            None,
+            ('2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-02T09:00:00Z'),
+            '2026-01-02T09:00:00Z',
+            False,
+        ),
+        (
+            None,
+            ('2026-01-01T00:00:00Z', '2026-01-02T09:00:00Z', '2026-01-03T12:00:00Z'),
+            '2026-01-03T12:00:00Z',
+            False,
+        ),
+        (
+            None,
+            ('2026-01-01T00:00:00Z', '2026-01-03T12:00:00Z', '2026-01-02T09:00:00Z'),
+            '2026-01-03T12:00:00Z',
+            False,
+        ),
+        (
+            {'format': '%Y-%m-%dT%H:%M:%S%z'},
+            (
+                '2026-01-01T00:00:00+0000',
+                '2026-01-02T10:00:00+0200',
+                '2026-01-02T09:00:00+0000',
+            ),
+            '2026-01-02T09:00:00+0000',
+            False,
+        ),
+        (
+            None,
+            ('2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'soon'),
+            '2026-01-01T00:00:00Z',
+            False,
+        ),
+        (
+            None,
+            ('2026-01-01T00:00:00Z', 'soon', '2026-01-02T09:00:00Z'),
+            'soon',
+            False,
+        ),
+        (
+            None,
+            ('2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-02T09:00:00Z'),
+            '2026-01-02T09:00:00Z',
+            True,
+        ),
+    ],
+    ids=[
+        'only-theirs-moved',
+        'theirs-later',
+        'ours-later',
+        'offsets',
+        'theirs-unparseable',
+        'ours-unparseable',
+        'conflicted',
+    ],
+)
+def test_merge_driver_keeps_the_later_updated_stamp(
+    tmp_path: pathlib.Path,
+    timestamp: Optional[dict],
+    stamps: tuple[str, str, str],
+    kept: str,
+    conflict: bool,
+) -> None:
+    """A merged index keeps the later of its two sides' ``updated`` stamps.
+
+    The stamps compare as instants under the wiki's timestamp policy, so
+    an offset stamp sorts by its moment rather than its text, and a
+    stamp either side spells in a form the policy does not parse leaves
+    ours. A merge that conflicts carries the later stamp beside its
+    markers.
+    """
+    root = tmp_path / 'wiki'
+    # a real repo whose wiki has the driver registered by init
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    if timestamp is not None:
+        settings_path = root / '.wiki' / 'settings.json'
+        settings = json.loads(settings_path.read_text(encoding='utf-8'))
+        settings['timestamp'] = timestamp
+        _write(settings_path, json.dumps(settings))
+    index = root / 'core' / '_index.md'
+    base_stamp, ours_stamp, theirs_stamp = stamps
+    base = (
+        '---\n'
+        'name: core\n'
+        'desc: Original section.\n'
+        f'updated: {base_stamp}\n'
+        '---\n'
+        '\n'
+        '# core\n'
+        '\n'
+        '***\n'
+        '\n'
+        'Body prose.\n'
+    )
+    _write(index, base)
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # theirs edits the desc and ours the body, each under its own stamp; for
+    # a conflict, theirs rewords the body too
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    theirs = base.replace(f'updated: {base_stamp}', f'updated: {theirs_stamp}')
+    theirs = theirs.replace('desc: Original section.', 'desc: Edited by theirs.')
+    if conflict:
+        theirs = theirs.replace('Body prose.', 'Their prose.')
+    _write(index, theirs)
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    ours = base.replace(f'updated: {base_stamp}', f'updated: {ours_stamp}')
+    _write(index, ours.replace('Body prose.', 'Our prose.'))
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
+
+    # the merge keeps one stamp, the later, and conflicts only on the body
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert (merge.returncode != 0) == conflict, merge.stdout + merge.stderr
+    merged = index.read_text(encoding='utf-8')
+    assert re.findall(r'^updated:.*$', merged, re.M) == [f'updated: {kept}']
+    assert 'desc: Edited by theirs.' in merged
+    assert ('<<<<<<< ours' in merged) == conflict
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
+    argnames=('ours_stamp', 'theirs_stamp'),
+    argvalues=[
+        ('2026-01-02T00:00:00Z', '2026-01-01T00:00:00Z'),
+        ('2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z'),
+    ],
+    ids=['theirs-earlier', 'ours-earlier'],
+)
+def test_merge_driver_keeps_the_earlier_created_over_a_stampless_base(
+    tmp_path: pathlib.Path,
+    ours_stamp: str,
+    theirs_stamp: str,
+) -> None:
+    """Sides that each stamped an unstamped base index keep the earlier ``created``.
+
+    Each side's ``wiki update`` seeds both stamps on its own clock, as
+    when sibling branches create one folder's index, so the earlier
+    ``created`` is when the index came to be, and the later ``updated``
+    is its last write.
+    """
+    root = tmp_path / 'wiki'
+    # a real repo whose wiki has the driver registered by init
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    index = root / 'core' / '_index.md'
+    base = '---\nname: core\ndesc: Original section.\n---\n\n# core\n\n***\n\nBody prose.\n'
+    _write(index, base)
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # each side stamps the block on its own clock beside an edit of its own
+    def stamped(text: str, clock: str) -> str:
+        stamps = f'created: {clock}\nupdated: {clock}\n'
+        return text.replace('---\n\n# core', f'{stamps}---\n\n# core')
+
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    theirs = base.replace('desc: Original section.', 'desc: Edited by theirs.')
+    _write(index, stamped(theirs, theirs_stamp))
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    _write(index, stamped(base.replace('Body prose.', 'Our prose.'), ours_stamp))
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
+
+    # the merge is clean, with the earlier created and the later updated
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    merged = index.read_text(encoding='utf-8')
+    assert re.findall(r'^created:.*$', merged, re.M) == [
+        'created: 2026-01-01T00:00:00Z'
+    ]
+    assert re.findall(r'^updated:.*$', merged, re.M) == [
+        'updated: 2026-01-02T00:00:00Z'
+    ]
+    assert 'desc: Edited by theirs.' in merged
+    assert 'Our prose.' in merged
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
     argnames=('endings', 'blank'),
     argvalues=[('\r\n', '\r\n'), ('\n', ' \n')],
     ids=['crlf', 'whitespace-separator'],
@@ -3594,33 +3785,30 @@ def test_merge_dispatches_on_pathname(tmp_path: pathlib.Path) -> None:
     theirs = tmp_path / 'theirs'
     base.write_text(fm, encoding='utf-8')
     ours.write_text(fm, encoding='utf-8')
-    theirs.write_text(
-        fm.replace('updated: 2026-01-01T00:00:00Z', 'updated: 2026-02-02T00:00:00Z'),
-        encoding='utf-8',
-    )
+    theirs.write_text(fm.replace('name: core', 'name: renamed'), encoding='utf-8')
     # declared roots for the wiki-owned pathnames below
     _write(tmp_path / 'wiki' / '.wiki' / 'settings.json', '{}\n')
     _write(tmp_path / '-notes' / '.wiki' / 'settings.json', '{}\n')
 
-    # an _index.md pathname: updated is a regenerated key, so ours wins
+    # an _index.md pathname: name is a regenerated key, so ours wins
     args = [str(base), str(ours), str(theirs), '7', 'wiki/core/_index.md']
     result = _wiki(tmp_path, '_merge', *args)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'updated: 2026-01-01T00:00:00Z' in ours.read_text(encoding='utf-8')
+    assert 'name: core' in ours.read_text(encoding='utf-8')
 
     # a dash-leading pathname still routes as a pathname, not an option
     ours.write_text(fm, encoding='utf-8')
     args = [str(base), str(ours), str(theirs), '7', '-notes/_index.md']
     result = _wiki(tmp_path, '_merge', *args)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'updated: 2026-01-01T00:00:00Z' in ours.read_text(encoding='utf-8')
+    assert 'name: core' in ours.read_text(encoding='utf-8')
 
     # any other pathname: a default text merge takes theirs' line edit
     ours.write_text(fm, encoding='utf-8')
     args = [str(base), str(ours), str(theirs), '7', 'wiki/core/notes.md']
     result = _wiki(tmp_path, '_merge', *args)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'updated: 2026-02-02T00:00:00Z' in ours.read_text(encoding='utf-8')
+    assert 'name: renamed' in ours.read_text(encoding='utf-8')
 
     # an _index.md outside every declared wiki (a site generator's content
     # page): the default text merge, so theirs' line edit still lands
@@ -3628,7 +3816,7 @@ def test_merge_dispatches_on_pathname(tmp_path: pathlib.Path) -> None:
     args = [str(base), str(ours), str(theirs), '7', 'content/_index.md']
     result = _wiki(tmp_path, '_merge', *args)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'updated: 2026-02-02T00:00:00Z' in ours.read_text(encoding='utf-8')
+    assert 'name: renamed' in ours.read_text(encoding='utf-8')
 
     # the marker size flows through to conflict markers on both routes
     ours.write_text(fm.replace('Body.', 'Ours body.'), encoding='utf-8')

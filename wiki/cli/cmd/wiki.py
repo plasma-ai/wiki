@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import functools
 import importlib.resources
 import json
+import operator
 import pathlib
 import shutil
 import subprocess
@@ -35,6 +37,7 @@ from wiki.constants import (
     WIKI_INDEX,
     WIKI_SETTINGS,
 )
+from wiki.core import format
 from wiki.core.event import Event
 from wiki.core.wiki import (
     ContentEmptyEvent,
@@ -1109,8 +1112,9 @@ def merge(app: typer.Typer) -> typer.Typer:
         moves an absolute script path silently breaks on. The real pathname
         (%P) dispatches internally, so the registration string never changes:
         an ``_index.md`` below a declared wiki root gets the field-aware
-        index merge, everything else git's default text merge. A clean
-        index merge gets the H1 and row order ``wiki update`` writes.
+        index merge, everything else git's default text merge. An index
+        merge keeps the later ``updated`` stamp, and a clean one gets the H1
+        and row order ``wiki update`` writes.
         """
         # dispatch on the real pathname: an _index.md below a declared wiki
         # root -> field-aware index merge (git runs merge drivers at the
@@ -1128,6 +1132,13 @@ def merge(app: typer.Typer) -> typer.Typer:
             cmd = ['bash', f'{script}', ours, base, theirs, marker_size]
             # judge ours' index before the script writes the merge over it
             wiki = _index_canonicalizer(root, pathlib.Path(ours))
+            # restamp ours first: the script resolves the stamps to ours'
+            _merge_stamps(
+                root=root,
+                base=pathlib.Path(base),
+                ours=pathlib.Path(ours),
+                theirs=pathlib.Path(theirs),
+            )
         # any other file class: git's default three-way text merge -- an
         # _index.md outside every declared wiki (a site generator's content
         # page) is not tool-owned, and the index merge would resolve its
@@ -1333,6 +1344,78 @@ def _index_canonicalizer(root: pathlib.Path, path: pathlib.Path) -> Optional[Wik
     except Exception:
         return None
     return wiki
+
+
+def _merge_stamps(
+    root: pathlib.Path,
+    base: pathlib.Path,
+    ours: pathlib.Path,
+    theirs: pathlib.Path,
+) -> None:
+    """Restamp the current branch's ``_index.md`` with the stamps its merge keeps.
+
+    The index merge resolves each regenerated stamp to the current
+    branch's, so this rewrites that one first: ``updated`` takes the
+    later of the two sides' stamps, and ``created``, when the base has
+    none and the sides' stamps are churn, the earlier. Stamps compare
+    as instants under the wiki's timestamp policy, and a stamp either
+    side spells in a form the policy does not parse leaves ours as it
+    is.
+
+    Args:
+        root: Wiki root the index sits under.
+        base: The common ancestor's index (%O).
+        ours: The current branch's index (%A), restamped in place.
+        theirs: The other branch's index (%B).
+
+    """
+    # NOTE: as in _index_canonicalizer, any failure here leaves ours as
+    #   it is, and the merge resolves the stamps to ours' as before
+    try:
+        base_text, ours_text, theirs_text = (
+            path.read_bytes().decode('utf-8') for path in (base, ours, theirs)
+        )
+    except (OSError, UnicodeDecodeError):
+        return
+    # the wiki's class may be hook code, which can raise anything
+    try:
+        policy = load_wiki_class(root)(root)._timestamp_policy
+    except Exception:
+        return
+
+    # read a stamp as an instant, a zoneless one in the policy's zone
+    def _instant(stamp: Optional[str]) -> Optional[dt.datetime]:
+        try:
+            moment = dt.datetime.strptime(stamp, policy['format'])
+        except (TypeError, ValueError):
+            return None
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=policy['zone'])
+        return moment
+
+    base_block, _ = format.extract_frontmatter(base_text.split('\n'))
+    ours_block, _ = format.extract_frontmatter(ours_text.split('\n'))
+    theirs_block, _ = format.extract_frontmatter(theirs_text.split('\n'))
+    # updated takes the later stamp; created, churn over a base without
+    # one, the earlier
+    keys = {'updated': operator.gt}
+    if not format.read_frontmatter_field(base_block, 'created'):
+        keys['created'] = operator.lt
+    block = ours_block
+    for key, wins in keys.items():
+        ours_stamp = format.read_frontmatter_field(ours_block, key)
+        theirs_stamp = format.read_frontmatter_field(theirs_block, key)
+        ours_instant = _instant(ours_stamp)
+        theirs_instant = _instant(theirs_stamp)
+        if (ours_instant is None) or (theirs_instant is None):
+            continue
+        if wins(theirs_instant, ours_instant):
+            block = format.restamp(block, key, theirs_stamp)
+    if block != ours_block:
+        try:
+            wiki.util.fs.write_atomic(ours, block + ours_text[len(ours_block) :])
+        except OSError:
+            return
 
 
 def _canonicalize_index(engine: Wiki, path: pathlib.Path) -> None:

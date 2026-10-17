@@ -269,10 +269,12 @@ rather than authoring or auditing page by page yourself:
 - **The git merge driver resolves only the generated region.** For `_index.md`
   files it normalizes the regenerated `name`/`updated` keys to *ours* (plus
   `created` whenever the base index carries no real stamp — an add/add merge, a
-  hand-written or imported index), resolves the link block to the union of both
-  sides' rows — ours' layout wins, rows present only in theirs ride over with
-  their desc continuations, a row both sides carry keeps ours' text unless only
-  theirs changed it against the base, and a row the base had that one side
+  hand-written or imported index), after giving ours the later of the two sides'
+  `updated` stamps and the earlier normalized `created`, compared as instants
+  (an unparseable stamp keeps ours'), resolves the link block to the union of
+  both sides' rows — ours' layout wins, rows present only in theirs ride over
+  with their desc continuations, a row both sides carry keeps ours' text unless
+  only theirs changed it against the base, and a row the base had that one side
   deleted and the other left alone stays deleted (unless the deleting side's
   rows are formatter-escaped), so a merge keeps one side's additions and an edit
   only one side made (when both sides edit the same row, ours wins), as long as
