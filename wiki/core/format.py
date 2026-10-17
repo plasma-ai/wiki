@@ -987,13 +987,21 @@ def restamp_updated(frontmatter: str, now: str) -> str:
     comment lines under it stay. A block without the field gains it
     before the closing delimiter.
     """
-    span = _field_span(frontmatter, 'updated')
+    return restamp(frontmatter, 'updated', now)
+
+
+def restamp(frontmatter: str, key: str, now: str) -> str:
+    """Rewrite the ``key`` stamp to ``now``, as :func:`restamp_updated` rewrites ``updated``.
+
+    A block without the field gains it before the closing delimiter.
+    """
+    span = _field_span(frontmatter, key)
     if span is None:
-        return _fill_stamp(frontmatter, 'updated', now, before=None)
+        return _fill_stamp(frontmatter, key, now, before=None)
     start, end = span
     indicator, _, body = frontmatter[start:end].partition('\n')
     tail, comments = _field_comments(indicator, body)
-    stamp = f'updated: {_properties(indicator)}{quote(now)}{tail}\n{comments}'
+    stamp = f'{key}: {_properties(indicator)}{quote(now)}{tail}\n{comments}'
     return frontmatter[:start] + stamp + frontmatter[end:]
 
 

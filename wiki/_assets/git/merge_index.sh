@@ -196,9 +196,11 @@ grep -Eq "^created[[:blank:]]*:[[:blank:]]+([^[:space:]#\"']|\"[^\"$CR]|'[^'$CR]
     "$WORK/base_fm" || REGENERATED_KEYS=(name created updated)
 
 # normalize the regenerated keys to ours' values on all three inputs, so the
-# frontmatter merge below only ever sees authored-field differences; a value
-# moves as its whole extent so a block-scalar or bare-key value never strands
-# its body under the other side's one-liner (the value travels through the
+# frontmatter merge below only ever sees authored-field differences, and
+# ours' stamps are the ones to keep: `wiki _merge` has already given ours the
+# later updated: and, as churn, the earlier created:; a value moves as its
+# whole extent so a block-scalar or bare-key value never strands its body
+# under the other side's one-liner (the value travels through the
 # environment so awk never mangles a backslash in a name)
 for KEY in "${REGENERATED_KEYS[@]}"; do
     # the extent is the key line plus the indented lines that continue its

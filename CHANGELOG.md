@@ -34,6 +34,13 @@ may include breaking changes, each listed under a Breaking heading.
   the driver's exit code stands: `wiki _merge` no longer exits 2, which git
   reads as a conflict, over a file the failed write left in part. A read-only
   merged file is rewritten too.
+- An `_index.md` merge keeps the later of the two sides' `updated:` stamps, so a
+  merge in which only the other branch re-stamped the index no longer leaves the
+  current branch's older stamp on the merged result. Over a base index with no
+  `created:` stamp, the merge keeps the earlier of the two sides' `created:`
+  stamps. Stamps compare as instants under the wiki's timestamp policy, and a
+  stamp either side spells in a form the policy does not parse keeps the current
+  branch's.
 
 ## [1.7.0] - 2026-10-14
 

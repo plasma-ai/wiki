@@ -58,7 +58,12 @@ Frontmatter
    ``created:`` — an add/add merge (both branches created the index
    independently), a hand-written or imported index — ``created:`` joins the
    normalized keys: both sides seeded the stamp from their own ``wiki update``
-   runs, so it is churn, not authorship. The remaining, authored keys —
+   runs, so it is churn, not authorship. The current branch's stamps are
+   chosen first: ``updated:`` takes the later of the two sides' stamps, and a
+   normalized ``created:`` the earlier, both compared as instants under the
+   wiki's timestamp policy (``timestamp.timezone``/``timestamp.format`` in
+   ``settings.json``). A stamp either side spells in a form the policy does
+   not parse leaves the current branch's. The remaining, authored keys —
    ``title:``, ``desc:``, ``category:``, ``tags:``, ``sources:``,
    ``created:`` (ordinarily), and any custom keys — get a normal three-way
    merge that can conflict.
