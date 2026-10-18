@@ -58,6 +58,11 @@ jobs:
         run: |
           export LC_ALL=C
           tracked=$(git ls-files wiki | sort)
+          # an empty listing would compare as nothing missing
+          if [[ -z "$tracked" ]]; then
+            echo "::error::no tracked files under wiki/"
+            exit 1
+          fi
           # the sdist nests every path under its top folder
           missing=$(
             comm -23 <(echo "$tracked") <(unzip -Z1 dist/plasma_wiki-*.whl | sort) | sed 's/^/::error::wheel lacks /'
