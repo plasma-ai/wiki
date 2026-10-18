@@ -119,7 +119,7 @@ __all__ = [
     'test_merge_keeps_a_row_one_side_changed_and_the_other_deleted',
     'test_merge_leaves_a_non_utf8_index_as_merged',
     'test_merge_leaves_a_conflicted_index_as_merged',
-    'test_merge_deletes_nothing_a_damaged_side_hides',
+    'test_merge_reads_an_escaped_sides_rows',
     'test_merge_keeps_frontmatter_when_side_is_mangled',
     'test_merge_dispatches_on_pathname',
     'test_merge_driver_skips_non_wiki_index_files',
@@ -3623,22 +3623,25 @@ def test_merge_leaves_a_conflicted_index_as_merged(tmp_path: pathlib.Path) -> No
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
 @pytest.mark.parametrize(
-    argnames='damaged',
-    argvalues=['theirs', 'main'],
-    ids=['theirs', 'ours'],
+    argnames=('damaged', 'unread'),
+    argvalues=[('theirs', False), ('main', False), ('theirs', True), ('main', True)],
+    ids=['theirs', 'ours', 'theirs-unread-line', 'ours-unread-line'],
 )
-def test_merge_deletes_nothing_a_damaged_side_hides(
+def test_merge_reads_an_escaped_sides_rows(
     tmp_path: pathlib.Path,
     damaged: str,
+    unread: bool,
 ) -> None:
-    """A side whose rows a formatter escaped deletes none of them.
+    r"""A side whose rows a formatter escaped merges them as ``wiki update`` reads them.
 
-    Escaped rows are invisible to the driver, so their absence says
-    nothing about what that side deleted. An asset row's desc is
-    authored in the index alone, so a row dropped on that evidence
-    would lose it for good: the update that re-adds the row seeds
-    ``...``. An escaped row and the other side's copy of it are one
-    entry, so the merge writes neither out twice as a plain row.
+    The driver reads a row in the escape-damage shape (``\[\[``) with the
+    formatter's escapes undone, so the escaped side's added row, its edit
+    to an asset row's authored desc -- which no update regenerates -- and
+    its deletion all land. An escaped row and the other side's copy of it
+    are one entry, so the merge writes neither out twice. A line in the
+    damage shape that still reads as no row -- a desc line opening on a
+    wikilink -- says nothing of what that side deleted, so its deletion
+    waits for the update after the merge.
     """
     root = tmp_path / 'wiki'
     # a real repo whose wiki has the driver registered by init
@@ -3647,22 +3650,36 @@ def test_merge_deletes_nothing_a_damaged_side_hides(
     _git(tmp_path, 'config', 'user.name', 't')
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     (root / 'core').mkdir()
-    (root / 'core' / 'diagram.png').write_bytes(b'\x89PNG\r\n')
+    for asset in ('diagram.png', 'old.png'):
+        (root / 'core' / asset).write_bytes(b'\x89PNG\r\n')
     _add_entry(root / 'core', 'design', None)
+    if unread:
+        _write(
+            root / 'core' / 'design.md',
+            '---\ndesc: |\n  The design page.\n  [[core/diagram.png|diagram.png]] draws it.\n'
+            '---\n\nBody.\n',
+        )
     assert _wiki(root, 'update', '--path', str(root)).returncode == 0
     index = root / 'core' / '_index.md'
+    diagram = '[[core/diagram.png|diagram.png]]: '
     base = index.read_text(encoding='utf-8')
-    row = '[[core/diagram.png|diagram.png]]: The diagram.'
-    _write(index, base.replace('[[core/diagram.png|diagram.png]]: ...', row))
+    _write(index, base.replace(f'{diagram}...', f'{diagram}The diagram.'))
     _git(tmp_path, 'add', '-A')
     _git(tmp_path, 'commit', '-q', '-m', 'base')
 
-    # the damaged side's formatter escapes its rows; the other side adds a page
+    # the damaged side adds an asset row, edits one and deletes one, then its
+    # formatter escapes every row; the other side adds a page
+    chart = '[[core/chart.png|chart.png]]: '
     _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
     for branch in ('theirs', 'main'):
         _git(tmp_path, 'checkout', '-q', branch)
         if branch == damaged:
+            (root / 'core' / 'chart.png').write_bytes(b'\x89PNG\r\n')
+            (root / 'core' / 'old.png').unlink()
+            assert _wiki(root, 'update', '--path', str(root)).returncode == 0
             text = index.read_text(encoding='utf-8')
+            text = text.replace(f'{chart}...', f'{chart}The chart.')
+            text = text.replace('The diagram.', 'The revised diagram.')
             _write(index, text.replace('[[', '\\[\\[').replace(']]', '\\]\\]'))
         else:
             _add_entry(root / 'core', 'extra', None)
@@ -3670,20 +3687,38 @@ def test_merge_deletes_nothing_a_damaged_side_hides(
         _git(tmp_path, 'add', '-A')
         _git(tmp_path, 'commit', '-q', '-m', branch)
 
-    # the merge is clean and repeats no row
+    # the merge is clean and carries each row once, the damaged side's
+    # addition, edit and (when it holds no unread line) deletion included
     merge = _git(tmp_path, 'merge', 'theirs')
     assert merge.returncode == 0, merge.stdout + merge.stderr
     merged = index.read_text(encoding='utf-8')
-    labels = _row_labels(merged)
-    assert len(labels) == len(set(labels)), merged
+    readable = merged.replace('\\[', '[').replace('\\]', ']')
+    labels = _row_labels(readable)
+    kept = ['old.png'] if unread else []
+    assert sorted(labels) == [
+        '..',
+        'chart.png',
+        'design',
+        'diagram.png',
+        'extra',
+        *kept,
+    ]
+    assert f'{diagram}The revised diagram.' in readable
+    assert f'{chart}The chart.' in readable
 
-    # the update after it repairs the escapes with the asset's authored
-    # desc intact
+    # the update after it repairs any escapes, keeping both authored descs
     update = _wiki(root, 'update', '--path', str(root))
     assert update.returncode == 0, update.stdout + update.stderr
     converged = index.read_text(encoding='utf-8')
-    assert _row_labels(converged) == ['..', 'design', 'diagram.png', 'extra']
-    assert row in converged
+    assert _row_labels(converged) == [
+        '..',
+        'chart.png',
+        'design',
+        'diagram.png',
+        'extra',
+    ]
+    assert f'{diagram}The revised diagram.' in converged
+    assert f'{chart}The chart.' in converged
     lint = _wiki(root, 'lint', '--path', str(root))
     assert lint.returncode == 0, lint.stdout + lint.stderr
 

@@ -16,15 +16,16 @@ may include breaking changes, each listed under a Breaking heading.
   the new line, rather than dropped with the line moved into the row above, and
   a row the other side deleted stays deleted when another row's desc line opens
   on a link to it.
-- A clean `_index.md` merge whose current branch's link rows carry formatter
-  escape damage no longer writes each row out twice as a plain row.
-  `Wiki.canonicalize_index` returns an index with two rows for one target
-  unchanged, so `wiki _merge` leaves such a merge as the driver wrote it, escape
-  damage and all, for `wiki lint` to report. The driver cannot read escaped
-  rows, so a side whose link rows carry this damage must be repaired with
-  `wiki update` before the merge: otherwise the other side's escaped additions
-  and edits are lost, and the update after the merge keeps the other side's copy
-  of each of the current branch's escaped rows.
+- The `_index.md` merge driver reads a link row a formatter escaped (`\[\[`) as
+  `wiki update` does, with the escapes undone, so a side whose link rows carry
+  this damage merges like any other: its added rows ride over, its edits land,
+  its deletions stay deleted, and an escaped row and the other side's copy of it
+  are one entry rather than two rows. A row brought over from the other side
+  lands with its row line repaired. A line in the damage shape that still reads
+  as no row, such as an escaped desc line opening on a wikilink, holds that
+  side's deletions until the next `wiki update`. `Wiki.canonicalize_index`
+  returns an index with two rows for one target unchanged, so `wiki _merge`
+  leaves such a merge for `wiki update` to resolve.
 - A wiki whose enclosing repository a caller's `GIT_CEILING_DIRECTORIES` hides
   reads as outside a repository, as its git calls already read it, so
   `wiki update` and `wiki lint` no longer note on every run that the gitignore

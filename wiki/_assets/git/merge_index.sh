@@ -13,9 +13,8 @@ set -euo pipefail
 # of both sides' rows less each row one side deleted and the other left
 # as base had it: ours' layout wins and rows present only in theirs
 # (with their desc continuations) are appended above the closing ***, so
-# a merge drops neither side's additions -- unless a side's rows carry
-# formatter escape damage, which this script cannot read, so that side
-# needs a wiki update repair before the merge -- and `wiki _merge`
+# a merge drops neither side's additions -- a row a formatter escaped
+# reads as wiki update reads it, its escapes undone -- and `wiki _merge`
 # then brings a clean merge's H1 and row order to the form wiki update
 # writes. title is authored (update never invents a value), so it must
 # stay out of REGENERATED_KEYS -- normalizing it to ours would silently
@@ -304,15 +303,18 @@ git merge-file --marker-size="$MARKER_SIZE" -p -L ours -L base -L theirs \
 
 # link block: union both sides' rows -- ours' layout wins, and each row
 # present only in theirs rides over with its desc continuations, so the
-# merge drops neither side's readable additions -- less the rows one
+# merge drops neither side's additions -- less the rows one
 # side deleted (`wiki _merge` then sets a clean merge's H1 and row order)
 if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
-    # a row is a line that is one link row whole once stripped (mirrors
-    # Python format._LINK_ROW, so a desc continuation opening on a
-    # wikilink stays with its row) and keys on its [[target prefix;
-    # continuation and blank lines ride with the row that precedes them,
-    # and a side's heading/preamble (before its first row) is never
-    # collected -- ours' rows stream through in ours' layout; a row both
+    # a row is a line that is one link row whole once stripped, read as
+    # Python format.match_link_row reads it (mirroring format._LINK_ROW and
+    # its repair): the line as written, else, when it opens on the
+    # formatter's escape-damage shape (\[), with the escapes \[ \] \_ undone,
+    # so a desc continuation opening on a wikilink stays with its row and an
+    # escaped side's rows read as wiki update reads them; a row keys on its
+    # [[target prefix; continuation and blank lines ride with the row that
+    # precedes them, and a side's heading/preamble (before its first row) is
+    # never collected -- ours' rows stream through in ours' layout; a row both
     # sides carry keeps ours' text unless ours left base's text alone while
     # theirs changed it -- an authored desc edit on a row wiki update does
     # not regenerate (an asset, a child still on the placeholder) -- and
@@ -321,17 +323,48 @@ if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
     # (the region ends at its first ***, so the anchor is unambiguous); a
     # row base had that one side dropped while the other left base's text
     # alone is a deletion and stays out, as a three-way merge would leave
-    # it -- unless the dropping side's block carries formatter escape damage
-    # (a line opening on \[\[ or \[[, the shape Python format.match_link_row
-    # repairs), whose unread rows say nothing of what it deleted
+    # it -- unless the dropping side's block holds a line in the damage
+    # shape (\[\[ or \[[) that still reads as no row, which says nothing of
+    # what that side deleted; a row line's escapes alone are no edit, and
+    # every row theirs brings in lands with its row line repaired, so the
+    # merge adds no escape damage
     awk '
-        # the [[target key of a line that is one link row whole, else ""
-        function rowkey(s) {
+        # the formatter escapes \[ \] \_ undone in one left-to-right pass,
+        # as Python format.match_link_row undoes them
+        function unescape(s,   out, c, i) {
+            out = ""
+            for (i = 1; i <= length(s); i++) {
+                c = substr(s, i, 1)
+                if (c == "\\" && i < length(s) && index("[]_", substr(s, i + 1, 1)))
+                    c = substr(s, ++i, 1)
+                out = out c
+            }
+            return out
+        }
+        # a line read as one link row whole once stripped -- its escapes
+        # undone when it opens on \[, as the damage shape does -- else ""
+        function rowline(s) {
             sub(/^[[:space:]]+/, "", s)
             sub(/[[:space:]]+$/, "", s)
-            if (s !~ /^\[\[.+\|.+\]\](:.*)?$/) return ""
+            if (s !~ /^\[\[.+\|.+\]\](:.*)?$/ && substr(s, 1, 2) == "\\[") s = unescape(s)
+            return (s ~ /^\[\[.+\|.+\]\](:.*)?$/) ? s : ""
+        }
+        # the [[target key of a line that is one link row whole, else ""
+        function rowkey(s) {
+            s = rowline(s)
             sub(/\|.*$/, "", s)
             return s
+        }
+        # a row block with a row line in the damage shape written back as
+        # rowline reads it, its leading and trailing bytes kept
+        function repair(s,   cut, line, bare) {
+            cut = index(s, "\n")
+            line = substr(s, 1, cut - 1)
+            bare = line
+            sub(/^[[:space:]]+/, "", bare)
+            sub(/[[:space:]]+$/, "", bare)
+            if (bare !~ /^\[\[.+\|.+\]\](:.*)?$/ && rowline(line) != "") line = unescape(line)
+            return line substr(s, cut)
         }
         # a row block without its trailing blank lines (CRLF and
         # whitespace-only ones included): the text a side edited, whatever
@@ -340,19 +373,22 @@ if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
             while (s ~ /\r?\n[[:blank:]]*\r?\n$/) sub(/[[:blank:]]*\r?\n$/, "", s)
             return s
         }
+        # two row blocks that say the same, escapes on a row line aside
+        function same(a, b) {
+            return body(repair(a)) == body(repair(b))
+        }
         function flush() {
             if (row == "") return
             # theirs deleted a row ours left alone: drop it
             if (((1, row) in text) && !((2, row) in text) && !damaged[2] \
-                && body(held) == body(text[1, row])) {
+                && same(held, text[1, row])) {
                 row = ""
                 held = ""
                 return
             }
             if (((2, row) in text) && ((1, row) in text) \
-                && body(held) == body(text[1, row]) \
-                && body(text[2, row]) != body(text[1, row]))
-                printf "%s%s", body(text[2, row]), substr(held, length(body(held)) + 1)
+                && same(held, text[1, row]) && !same(text[2, row], text[1, row]))
+                printf "%s%s", body(repair(text[2, row])), substr(held, length(body(held)) + 1)
             else
                 printf "%s", held
             row = ""
@@ -365,7 +401,7 @@ if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
         FNR == 1 { key = "" }
         part < 3 {
             if ($0 ~ /^\*\*\*[[:space:]]*$/) { key = ""; next }
-            if ($0 ~ /^[[:blank:]]*\\\[\\?\[/) damaged[part] = 1
+            if ($0 ~ /^[[:blank:]]*\\\[\\?\[/ && rowkey($0) == "") damaged[part] = 1
             if (rowkey($0) != "") {
                 key = rowkey($0)
                 if (part == 2 && !((2, key) in text)) order[++count] = key
@@ -373,16 +409,15 @@ if grep -q '^\*\*\*[[:space:]]*$' "$WORK/ours_links"; then
             if (key != "") text[part, key] = text[part, key] $0 "\n"
             next
         }
-        !done && /^[[:blank:]]*\\\[\\?\[/ { damaged[3] = 1 }
+        !done && /^[[:blank:]]*\\\[\\?\[/ && rowkey($0) == "" { damaged[3] = 1 }
         /^\*\*\*[[:space:]]*$/ && !done {
             flush()
             for (i = 1; i <= count; i++) {
                 k = order[i]
                 if (k in ours) continue
                 # ours deleted a row theirs left alone: keep it out
-                if (((1, k) in text) && !damaged[3] \
-                    && body(text[2, k]) == body(text[1, k])) continue
-                printf "%s", text[2, k]
+                if (((1, k) in text) && !damaged[3] && same(text[2, k], text[1, k])) continue
+                printf "%s", repair(text[2, k])
             }
             done = 1
             print

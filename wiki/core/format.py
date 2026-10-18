@@ -17,7 +17,7 @@ from wiki.typing import Link
 __all__ = []
 
 # index link row as [[target|label]] with an optional ': desc' tail; the
-# merge driver's awk rowkey (_assets/git/merge_index.sh) mirrors it on a
+# merge driver's awk rowline (_assets/git/merge_index.sh) mirrors it on a
 # stripped line, keyed on the target, so keep the two in sync
 _LINK_ROW = re.compile(r'^\[\[(.+?)\|(.+?)\]\](?::\s*(.*))?$')
 
@@ -245,8 +245,8 @@ def match_link_row(line: str, *, repair: bool = True) -> Optional[Link]:
     ``(target, label, desc)`` or ``None``.
 
     The ``_index.md`` merge driver (``_assets/git/merge_index.sh``)
-    mirrors this damage shape in awk to tell a side whose rows it
-    cannot read; keep the two in sync.
+    mirrors this repair in awk, so it reads a side's escaped rows as
+    update does; keep the two in sync.
     """
     stripped = line.strip()
     match = _LINK_ROW.match(stripped)
