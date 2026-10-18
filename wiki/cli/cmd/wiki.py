@@ -1369,8 +1369,11 @@ def _merge_stamps(
         theirs: The other branch's index (%B).
 
     """
-    # NOTE: as in _index_canonicalizer, any failure here leaves ours as
-    #   it is, and the merge resolves the stamps to ours' as before
+    # NOTE: a merge driver passes the merge's exit code through untouched
+    #   (patterns: conventions/cli/errors/exit-codes), and the merge stands
+    #   without this step, so any failure here -- a hook that will not load
+    #   or construct, bytes that are not UTF-8, a write that fails -- leaves
+    #   ours as it is, and the merge resolves the stamps to ours'
     try:
         base_text, ours_text, theirs_text = (
             path.read_bytes().decode('utf-8') for path in (base, ours, theirs)
@@ -1430,8 +1433,10 @@ def _canonicalize_index(engine: Wiki, path: pathlib.Path) -> None:
         path: The merged index git hands the driver (%A).
 
     """
-    # NOTE: as in _index_canonicalizer, a failure to read,
-    #   canonicalize or write leaves the index as merged
+    # NOTE: a merge driver passes the merge's exit code through untouched
+    #   (patterns: conventions/cli/errors/exit-codes), and the merge stands
+    #   without this step, so a failure to read, canonicalize or write
+    #   leaves the index as merged
     try:
         text = path.read_bytes().decode('utf-8')
     except (OSError, UnicodeDecodeError):
