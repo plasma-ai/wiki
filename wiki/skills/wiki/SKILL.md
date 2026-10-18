@@ -275,14 +275,12 @@ rather than authoring or auditing page by page yourself:
   both sides' rows — ours' layout wins, rows present only in theirs ride over
   with their desc continuations, a row both sides carry keeps ours' text unless
   only theirs changed it against the base, and a row the base had that one side
-  deleted and the other left alone stays deleted (unless the deleting side's
-  rows are formatter-escaped), so a merge keeps one side's additions and an edit
-  only one side made (when both sides edit the same row, ours wins), as long as
-  neither side's link rows carry formatter escape damage (`\[\[`). The driver
-  can't read escaped rows: an escaped theirs loses its additions and edits, and
-  an escaped ours has its edits reverted by the next update, so repair a damaged
-  side with `wiki update` on that branch before merging. It three-way merges
-  everything authored — the remaining frontmatter fields
+  deleted and the other left alone stays deleted, so a merge keeps one side's
+  additions and an edit only one side made (when both sides edit the same row,
+  ours wins). A formatter-escaped row (`\[\[`) reads as `wiki update` reads it,
+  so an escaped side merges like any other; only a line in the damage shape that
+  still reads as no row holds that side's deletions until the next update. It
+  three-way merges everything authored — the remaining frontmatter fields
   (`title`/`desc`/`created`/`category`/`tags`/`sources`) and the user content
   below `***` — which can still conflict for hand-resolution. A clean merge then
   writes the H1 from the merged `title:` (else `name:`) and sorts the rows into

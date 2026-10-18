@@ -87,16 +87,19 @@ Link block
    base — an authored desc on a row ``wiki update`` does not regenerate, such
    as an asset's — in which case the other side's text lands. A row the base
    had that one side deleted and the other left as it was stays deleted, as
-   a three-way merge would leave it — unless the deleting side's rows carry
-   formatter escape damage (``\[\[``): rows the driver cannot read say
-   nothing about what that side deleted. A row only one side added rides
-   over, and an edit only one side made lands; when both sides edit the
-   same row, the current branch's text wins. Both hold only while neither
-   side's link rows carry that escape damage, since the driver cannot read
-   escaped rows: the other side's escaped rows never enter the merge, so
-   the rows it added and the edits it made are lost, and the current
-   branch's escaped rows end up beside the other side's plain copies. Repair
-   a damaged side with ``wiki update`` on that branch before merging.
+   a three-way merge would leave it. A row only one side added rides over,
+   and an edit only one side made lands; when both sides edit the same row,
+   the current branch's text wins.
+
+   A row a formatter escaped (``\[\[``) reads as ``wiki update`` reads it,
+   with the escapes undone, so a side whose link rows carry that damage
+   merges like any other: an escaped row and the other side's copy of it
+   are one entry, an escape alone is no edit, and a row the driver brings
+   over from the other side lands with its row line repaired. A line in the
+   damage shape that still reads as no row — an escaped desc line that opens
+   on a wikilink — says nothing about what that side deleted, so the driver
+   keeps every row that side dropped, and the next ``wiki update`` prunes
+   any whose page or asset is gone.
 
    When the whole file merges cleanly, the driver then rewrites the H1 from
    the merged ``title:`` (else ``name:``) and puts the rows in the order
@@ -106,11 +109,9 @@ Link block
    the current branch's own index as written: an index another class wrote
    (an embedder's update with its own category order) stays as merged, as
    does one whose hook cannot load or run — the H1 the current branch's, the
-   other side's rows below its own. A merge with two rows for one target —
-   the other side's copy of each row a formatter escaped on the current
-   branch — stays as merged too, and the next ``wiki update`` keeps the
-   other side's copy of each such row, so an edit the current branch made
-   to an escaped row reverts; repair the escapes before merging. The check
+   other side's rows below its own. A merge with two rows for one target
+   stays as merged too, since only ``wiki update``, which reads the
+   filesystem, can choose between them. The check
    sees a class's category order only where the current branch's rows span
    two or more categories, so a merge that brings a second category into an
    index with fewer is sorted in this class's order even when an embedder's
