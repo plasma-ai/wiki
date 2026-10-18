@@ -411,6 +411,12 @@ See `pyproject.toml` for formatter/linter config.
 - Do not inline method calls in `typer.echo()` — assign to a variable first
 - When mixing positional and keyword args in multi-line calls, pass all as
   kwargs (unless the param is positional-only with `/`)
+- A command never catches `Exception` itself; the `@command` wrapper owns that.
+  The one sanctioned case is the `_merge` driver, which passes git's exit code
+  through, so its best-effort steps catch `Exception` around hook code
+  (patterns: `conventions/cli/errors/command-wrapper`): `_index_canonicalizer`,
+  `_merge_stamps` and `_canonicalize_index`, each under a `# NOTE:` citing
+  `conventions/cli/errors/exit-codes`
 
 ### Event Hooks
 
