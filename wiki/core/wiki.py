@@ -48,6 +48,10 @@ __all__ = ['Wiki']
 # release assets, small enough that a dead network fails the run fast
 _TIMEOUT_SECONDS = 10
 
+# how long after its stamp a file's last write still counts as the write that
+# stamped it: a run takes one stamp as it starts, and its writes land after
+_STAMP_GRACE = dt.timedelta(seconds=60)
+
 # soft ceiling for a folded frontmatter desc: past it lint notes the page,
 # since every map row and parent index link reproduces the whole desc
 _DESC_NOTE_CHARS = 500
@@ -769,8 +773,9 @@ class Wiki:
         names a period at the policy's resolution (a second, or a day
         under a date format), and a write within HEAD's stamp period
         leaves that stamp on new bytes, so a file last modified within
-        the period counts as stamped: only a later modification is an
-        edit. Only the plan's files are judged, so a path the walk skips
+        the period, or within a minute after the stamp (a run takes its
+        stamp as it starts, and its writes land after), counts as
+        stamped: only a later modification is an edit. Only the plan's files are judged, so a path the walk skips
         (excluded, gitignored, under a dot folder) never is, nor is a
         file HEAD does not hold or one with no ``updated:`` on either
         side. Outside a repository, or before its first commit, nothing
@@ -841,9 +846,15 @@ class Wiki:
                 mtime = path.stat().st_mtime
             except OSError:
                 continue
+            # a file last modified within its stamp's period, or within the
+            # grace after the stamp, is the write that stamped it
             modified = dt.datetime.fromtimestamp(mtime, policy['zone'])
-            if modified.strftime(policy['format']) != stamp:
-                result.append(path)
+            if modified.strftime(policy['format']) == stamp:
+                continue
+            start = _stamp_instant(stamp, policy)
+            if (start is not None) and (start <= modified < start + _STAMP_GRACE):
+                continue
+            result.append(path)
         return result
 
     def _head_texts(self: Wiki, names: list[str]) -> dict[str, str]:
@@ -6658,6 +6669,20 @@ def _as_written(frontmatter: str, now: str) -> str:
     """
     stamped = format.restamp_updated(frontmatter, now)
     return frontmatter if format.frontmatter_issues(stamped) else stamped
+
+
+def _stamp_instant(stamp: str, policy: dict) -> Optional[dt.datetime]:
+    """Return the instant ``stamp`` names under the timestamp ``policy``, if it parses.
+
+    A zoneless stamp reads in the policy's zone.
+    """
+    try:
+        moment = dt.datetime.strptime(stamp, policy['format'])
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=policy['zone'])
+    return moment
 
 
 def _updated_stamp(text: Optional[str]) -> Optional[str]:

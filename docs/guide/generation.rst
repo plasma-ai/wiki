@@ -705,8 +705,10 @@ Both commands are safe to run at any time, as often as you like:
   and ``update --check`` lists it; lint does not. A difference in line
   endings or file mode alone is no edit. A stamp names a period at the
   configured format's resolution — a second by default, a day under a
-  date-only format — and a file last modified within its stamp's period
-  counts as stamped, since a write in that period leaves the same stamp. A
+  date-only format — and a file last modified within its stamp's period, or
+  within a minute after the stamp, counts as stamped: a write in that period
+  leaves the same stamp, and a run takes its stamp as it starts, its writes
+  landing moments later. A
   stamp that already moved stands, so the first run after an edit sets it
   and later runs leave it until the next commit. Untracked files and files
   the wiki does not index are never judged, and a file with no ``updated:``

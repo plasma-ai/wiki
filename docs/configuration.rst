@@ -144,8 +144,9 @@ A name is checked as a link carries it: a Markdown page by its stem
 included (``data.json``), as is a page whose stem a sibling file claims. The
 dot of an extension is checked like any other character, so ``alpha``,
 ``alphanum``, and ``identifier`` reject every non-Markdown file with an
-extension (``data.json``, ``main.py``) unless ``allow`` contains ``.``. A wiki that keeps data files or scripts beside its
-pages under one of these predicates sets ``"allow": "."``.
+extension (``data.json``, ``main.py``) unless ``allow`` contains ``.``. A
+wiki that keeps data files or scripts beside its pages under one of these
+predicates sets ``"allow": "."``.
 
 ``naming.deny``
    String of characters, default ``""``. Extra characters rejected anywhere
