@@ -3586,6 +3586,7 @@ _HAND_EDIT_CASES = [
     ('mode-only', 'notes/edited.md', 'kept'),
     ('edited-within-stamp-period', 'notes/edited.md', 'kept'),
     ('edited-within-the-grace', 'notes/edited.md', 'kept'),
+    ('unparseable-stamp', 'notes/edited.md', 'now'),
     ('already-restamped', 'notes/edited.md', 'kept'),
     ('untracked', 'notes/fresh.md', 'kept'),
     ('staged-new', 'notes/fresh.md', 'kept'),
@@ -3619,7 +3620,8 @@ def test_update_restamps_a_page_edited_since_its_stamp(
     and ``update --check`` lists it -- staged or not, in a wiki at the
     repository root or below it -- unless the file was last modified
     within the stamp's own period or the minute after the stamp, where a
-    tool write leaves HEAD's stamp too. A name git spells precomposed
+    tool write leaves HEAD's stamp too; a stamp the policy cannot parse
+    names no minute, so its period rule stands alone. A name git spells precomposed
     matches a page the walk read decomposed. A difference in line endings
     or file mode alone is no edit. A stamp already moved stands, as does
     every file the wiki does not manage or HEAD does not hold (untracked
@@ -3650,6 +3652,13 @@ def test_update_restamps_a_page_edited_since_its_stamp(
         _git_repo(tmp_path, 'scratch/')
         _git(tmp_path, 'config', 'user.email', 't@t')
         _git(tmp_path, 'config', 'user.name', 't')
+    # a stamp the timestamp policy cannot parse, committed as the stamp
+    if case == 'unparseable-stamp':
+        edited = root / path
+        text = edited.read_text(encoding='utf-8')
+        edited.write_text(
+            text.replace(f'updated: {old}', 'updated: soon'), encoding='utf-8'
+        )
     if case not in ('outside-git', 'no-commits'):
         draft = root / 'scratch' / 'draft.md'
         _git(tmp_path, 'add', '-A')
@@ -3685,6 +3694,7 @@ def test_update_restamps_a_page_edited_since_its_stamp(
     offsets = {
         'edited-within-stamp-period': 0.5,
         'edited-within-the-grace': 30,
+        'unparseable-stamp': 30,
         'edited-after-the-grace': 120,
     }
     if case in offsets:

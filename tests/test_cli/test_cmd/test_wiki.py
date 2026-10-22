@@ -25,7 +25,18 @@ _MERGED = (
 )
 
 
-@pytest.mark.parametrize('case', ['read-only', 'failing-write'])
+@pytest.mark.parametrize(
+    argnames='case',
+    argvalues=[
+        # as root, a write to a read-only file succeeds either way, so the case
+        # tells the whole-file replacement from an in-place write only without
+        pytest.param(
+            'read-only',
+            marks=pytest.mark.skipif(os.geteuid() == 0, reason='needs a non-root user'),
+        ),
+        'failing-write',
+    ],
+)
 def test_merge_rewrite_replaces_the_index_whole_or_not_at_all(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -3646,25 +3646,41 @@ def test_merge_leaves_a_conflicted_index_as_merged(tmp_path: pathlib.Path) -> No
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
 @pytest.mark.parametrize(
-    argnames=('damaged', 'unread'),
-    argvalues=[('theirs', False), ('main', False), ('theirs', True), ('main', True)],
-    ids=['theirs', 'ours', 'theirs-unread-line', 'ours-unread-line'],
+    argnames=('damaged', 'unread', 'added'),
+    argvalues=[
+        ('theirs', False, 'chart.png'),
+        ('main', False, 'chart.png'),
+        ('theirs', True, 'chart.png'),
+        ('main', True, 'chart.png'),
+        ('theirs', False, 'plot.png'),
+    ],
+    ids=[
+        'theirs',
+        'ours',
+        'theirs-unread-line',
+        'ours-unread-line',
+        'theirs-in-order',
+    ],
 )
 def test_merge_reads_an_escaped_sides_rows(
     tmp_path: pathlib.Path,
     damaged: str,
     unread: bool,
+    added: str,
 ) -> None:
     r"""A side whose rows a formatter escaped merges them as ``wiki update`` reads them.
 
     The driver reads a row in the escape-damage shape (``\[\[``) with the
     formatter's escapes undone, so the escaped side's added row, its edit
     to an asset row's authored desc -- which no update regenerates -- and
-    its deletion all land. An escaped row and the other side's copy of it
-    are one entry, so the merge writes neither out twice. A line in the
-    damage shape that still reads as no row -- a desc line opening on a
-    wikilink -- says nothing of what that side deleted, so its deletion
-    waits for the update after the merge.
+    its deletion all land, as does the other side's deletion of a row the
+    escaped side left alone. An escaped row and the other side's copy of
+    it are one entry, so the merge writes neither out twice, and every row
+    theirs brings in lands repaired, so the merge adds no escapes even
+    when its rows keep update's order and nothing re-renders them. A line
+    in the damage shape that still reads as no row -- a desc line opening
+    on a wikilink -- says nothing of what that side deleted, so its
+    deletion waits for the update after the merge.
     """
     root = tmp_path / 'wiki'
     # a real repo whose wiki has the driver registered by init
@@ -3673,7 +3689,7 @@ def test_merge_reads_an_escaped_sides_rows(
     _git(tmp_path, 'config', 'user.name', 't')
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     (root / 'core').mkdir()
-    for asset in ('diagram.png', 'old.png'):
+    for asset in ('diagram.png', 'old.png', 'retired.png'):
         (root / 'core' / asset).write_bytes(b'\x89PNG\r\n')
     _add_entry(root / 'core', 'design', None)
     if unread:
@@ -3691,13 +3707,14 @@ def test_merge_reads_an_escaped_sides_rows(
     _git(tmp_path, 'commit', '-q', '-m', 'base')
 
     # the damaged side adds an asset row, edits one and deletes one, then its
-    # formatter escapes every row; the other side adds a page
-    chart = '[[core/chart.png|chart.png]]: '
+    # formatter escapes every row; the other side adds a page and deletes an
+    # asset
+    chart = f'[[core/{added}|{added}]]: '
     _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
     for branch in ('theirs', 'main'):
         _git(tmp_path, 'checkout', '-q', branch)
         if branch == damaged:
-            (root / 'core' / 'chart.png').write_bytes(b'\x89PNG\r\n')
+            (root / 'core' / added).write_bytes(b'\x89PNG\r\n')
             (root / 'core' / 'old.png').unlink()
             assert _wiki(root, 'update', '--path', str(root)).returncode == 0
             text = index.read_text(encoding='utf-8')
@@ -3705,41 +3722,39 @@ def test_merge_reads_an_escaped_sides_rows(
             text = text.replace('The diagram.', 'The revised diagram.')
             _write(index, text.replace('[[', '\\[\\[').replace(']]', '\\]\\]'))
         else:
+            (root / 'core' / 'retired.png').unlink()
             _add_entry(root / 'core', 'extra', None)
             assert _wiki(root, 'update', '--path', str(root)).returncode == 0
         _git(tmp_path, 'add', '-A')
         _git(tmp_path, 'commit', '-q', '-m', branch)
 
     # the merge is clean and carries each row once, the damaged side's
-    # addition, edit and (when it holds no unread line) deletion included
+    # addition, edit and (when it holds no unread line) deletion included,
+    # and the other side's deletion holds
     merge = _git(tmp_path, 'merge', 'theirs')
     assert merge.returncode == 0, merge.stdout + merge.stderr
     merged = index.read_text(encoding='utf-8')
     readable = merged.replace('\\[', '[').replace('\\]', ']')
     labels = _row_labels(readable)
     kept = ['old.png'] if unread else []
-    assert sorted(labels) == [
-        '..',
-        'chart.png',
-        'design',
-        'diagram.png',
-        'extra',
-        *kept,
-    ]
+    assert sorted(labels) == sorted(
+        ['..', added, 'design', 'diagram.png', 'extra', *kept]
+    )
     assert f'{diagram}The revised diagram.' in readable
     assert f'{chart}The chart.' in readable
+
+    # every row theirs brings in lands repaired; an unread line is no row,
+    # so it stays as written
+    if (damaged == 'theirs') and not unread:
+        assert '\\[' not in merged, merged
 
     # the update after it repairs any escapes, keeping both authored descs
     update = _wiki(root, 'update', '--path', str(root))
     assert update.returncode == 0, update.stdout + update.stderr
     converged = index.read_text(encoding='utf-8')
-    assert _row_labels(converged) == [
-        '..',
-        'chart.png',
-        'design',
-        'diagram.png',
-        'extra',
-    ]
+    assert _row_labels(converged) == sorted(
+        ['..', added, 'design', 'diagram.png', 'extra']
+    )
     assert f'{diagram}The revised diagram.' in converged
     assert f'{chart}The chart.' in converged
     lint = _wiki(root, 'lint', '--path', str(root))
@@ -3830,9 +3845,11 @@ def test_merge_keeps_frontmatter_when_side_is_mangled(tmp_path: pathlib.Path) ->
 def test_merge_dispatches_on_pathname(tmp_path: pathlib.Path) -> None:
     """The kindless ``_merge`` driver routes by the real pathname (%P).
 
-    An ``_index.md`` below a declared wiki root takes the index merge;
-    any other pathname -- including an ``_index.md`` outside every wiki
-    -- takes git's default text merge (%L honored on both routes).
+    An ``_index.md`` below a declared wiki root takes the index merge, a
+    page the wiki manages a text merge over settled stamps, and any other
+    pathname -- including an ``_index.md`` outside every wiki -- a plain
+    text merge. Every route honors %L and labels its conflicts ours, base
+    and theirs.
     """
     fm = (
         '---\nname: core\ndesc: Original.\nupdated: 2026-01-01T00:00:00Z\n---\n'
@@ -3861,9 +3878,10 @@ def test_merge_dispatches_on_pathname(tmp_path: pathlib.Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'name: core' in ours.read_text(encoding='utf-8')
 
-    # any other pathname: a default text merge takes theirs' line edit
+    # a page outside every declared wiki: a plain text merge takes theirs'
+    # line edit
     ours.write_text(fm, encoding='utf-8')
-    args = [str(base), str(ours), str(theirs), '7', 'wiki/core/notes.md']
+    args = [str(base), str(ours), str(theirs), '7', 'docs/notes.md']
     result = _wiki(tmp_path, '_merge', *args)
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'name: renamed' in ours.read_text(encoding='utf-8')
@@ -3876,13 +3894,16 @@ def test_merge_dispatches_on_pathname(tmp_path: pathlib.Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'name: renamed' in ours.read_text(encoding='utf-8')
 
-    # the marker size flows through to conflict markers on both routes
-    ours.write_text(fm.replace('Body.', 'Ours body.'), encoding='utf-8')
-    theirs.write_text(fm.replace('Body.', 'Theirs body.'), encoding='utf-8')
-    args = [str(base), str(ours), str(theirs), '15', 'wiki/core/_index.md']
-    result = _wiki(tmp_path, '_merge', *args)
-    assert result.returncode != 0
-    assert '<' * 15 in ours.read_text(encoding='utf-8')
+    # the marker size flows through to labeled conflict markers on every
+    # route: an index, a managed page, and a page outside every wiki
+    marker = '<' * 15
+    for pathname in ('wiki/core/_index.md', 'wiki/core/notes.md', 'docs/notes.md'):
+        ours.write_text(fm.replace('Body.', 'Ours body.'), encoding='utf-8')
+        theirs.write_text(fm.replace('Body.', 'Theirs body.'), encoding='utf-8')
+        args = [str(base), str(ours), str(theirs), '15', pathname]
+        result = _wiki(tmp_path, '_merge', *args)
+        assert result.returncode != 0
+        assert f'{marker} ours\n' in ours.read_text(encoding='utf-8')
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')

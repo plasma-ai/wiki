@@ -394,7 +394,7 @@ def test_update_symlink_precedence(tmp_path: pathlib.Path) -> None:
 
 
 def test_exclude_lifts_nested_wiki_refusal(tmp_path: pathlib.Path) -> None:
-    """An excluded nested declared wiki no longer refuses the sweep.
+    """An excluded nested declared wiki does not refuse the sweep.
 
     A vendored wiki (a directory carrying its own
     ``.wiki/settings.json``) inside the tree refuses every sweep;
@@ -825,7 +825,7 @@ def test_gitignore_fence_honors_a_discovery_ceiling(
     A ceiling only restricts git, so unlike ``GIT_DIR`` it reaches the
     wiki's git calls: a fixture wiki that a test fences off from the
     repository around it reads as outside any repository, and that
-    repository's rules no longer decide what the wiki indexes. Outside
+    repository's rules do not decide what the wiki indexes. Outside
     a repository there is no fence to lose, so no note says the fence
     is unavailable.
     """
