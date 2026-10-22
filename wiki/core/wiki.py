@@ -626,9 +626,11 @@ class Wiki:
         matched subset, or ``None`` when no fence applies (outside a
         repository, or git unavailable -- the latter narrated where a
         repository encloses the root, since indexing then adopts what
-        that repository fences).
+        that repository fences). Each candidate is probed as ``./<path>``,
+        which git reads literally -- a bare name opening on ``:`` reads as
+        pathspec magic -- and the prefix git echoes back is dropped.
         """
-        payload = b'\0'.join(os.fsencode(entry) for entry in candidates) + b'\0'
+        payload = b''.join(os.fsencode(f'./{entry}') + b'\0' for entry in candidates)
         cmd = [
             '-c',
             f'core.excludesFile={os.devnull}',
@@ -647,7 +649,11 @@ class Wiki:
             if self._in_repository():
                 self.on_git_fence_unavailable()
             return None
-        return {os.fsdecode(entry) for entry in result.stdout.split(b'\0') if entry}
+        return {
+            os.fsdecode(entry).removeprefix('./')
+            for entry in result.stdout.split(b'\0')
+            if entry
+        }
 
     def _probe_gitignore_fence(self: Wiki, relative: str) -> bool:
         """Return ``True`` if the repo's gitignore fences folder ``relative``.
@@ -729,8 +735,9 @@ class Wiki:
             return
         # index-aware and unpinned: the question is whether THIS machine's
         # git would refuse the file, so a tracked file reads as safe and
-        # the personal global counts
-        payload = b'\0'.join(os.fsencode(entry) for entry in candidates) + b'\0'
+        # the personal global counts; each path is probed as ./<path>, read
+        # literally, as the fence probes
+        payload = b''.join(os.fsencode(f'./{entry}') + b'\0' for entry in candidates)
         cmd = ['check-ignore', '-z', '-v', '--stdin']
         result = wiki.util.git._git(cmd, cwd=self._root, input=payload, raw=True)
         if (result is None) or (result.returncode not in (0, 1)):
@@ -743,7 +750,7 @@ class Wiki:
             if pattern.startswith('!'):
                 continue
             self.on_path_untrackable(
-                path=path,
+                path=path.removeprefix('./'),
                 source=source,
                 line=int(line),
                 pattern=pattern,
@@ -774,7 +781,8 @@ class Wiki:
         # one diff names the scope's tracked files that differ from HEAD,
         # staged or not, root-relative -- without the optional index lock its
         # stat refresh takes, which would fail a concurrent git add or commit
-        scope = self._relpath(folder) or '.'
+        # the scope is passed as ./<path>, which git reads literally
+        scope = f'./{self._relpath(folder)}'
         cmd = [
             '--no-optional-locks',
             'diff',
@@ -1604,7 +1612,10 @@ class Wiki:
         # paths only, and the target may not exist yet
         relative = folder.relative_to(self._root).as_posix()
         if self._probe_gitignore_fence(relative):
-            raise ValueError('Folder is gitignored; gitignored paths are not indexed.')
+            raise ValueError(
+                'Folder is gitignored, or its _index.md is;'
+                ' gitignored paths are not indexed.'
+            )
         if folder.is_file():
             raise ValueError(f'A file already stands at: {name!r}')
         # each level carries its own authored index, so the parent must

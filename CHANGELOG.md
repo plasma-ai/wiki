@@ -42,6 +42,10 @@ may include breaking changes, each listed under a Breaking heading.
   driver skips its hook steps, as it does for a hook that fails to load, and the
   merge runs; before, the driver exited with the hook's code, so an exit 0 left
   the current branch's file as the merge, the other side's edits lost.
+- A file or folder whose name starts with `:` is judged by the gitignore checks
+  as itself. Git read such a path as pathspec magic, so `:notes` was judged as
+  `notes`: an ignore rule for `notes` kept `:notes` out of the index and made
+  `wiki new` refuse it. Every git probe now names its path literally.
 - The `_index.md` merge driver reads a link row as `wiki update` does, as a
   whole line, so a desc line that opens on a wikilink, such as
   `[[core/design|design]] explains each stage.`, stays with its row. A row one
