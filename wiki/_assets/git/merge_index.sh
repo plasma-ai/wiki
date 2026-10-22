@@ -37,7 +37,7 @@ set -euo pipefail
 # Configure in .git/config or .gitconfig (wiki init/config do this):
 #   [merge "wiki"]
 #     name = wiki merge (auto-resolve generated sections)
-#     driver = wiki _merge %O %A %B %L %P
+#     driver = "if command -v wiki >/dev/null 2>&1; then wiki _merge %O %A %B %L %P; else git merge-file -L ours -L base -L theirs --marker-size=%L %A %O %B; fi"
 #
 # The `wiki _merge` command dispatches _index.md pathnames below a
 # declared wiki root here with the conflict-marker size as the fourth
