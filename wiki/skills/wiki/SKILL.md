@@ -277,45 +277,45 @@ rather than authoring or auditing page by page yourself:
   faces round-trip byte-identically; for formatters with no plugin lane (e.g.
   prettier) exclude the wiki root instead (`wiki/` in `.prettierignore`).
 - **The git merge driver resolves only the generated region.** For `_index.md`
-  files it normalizes the regenerated `name`/`updated` keys to *ours* (plus
-  `created` whenever the base index carries no real stamp — an add/add merge, a
-  hand-written or imported index), after giving ours the later of the two sides'
-  `updated` stamps and the earlier normalized `created`, compared as instants
-  (an unparseable stamp keeps ours'), resolves the link block to the union of
-  both sides' rows — ours' layout wins, rows present only in theirs ride over
-  with their desc continuations, a row both sides carry keeps ours' text unless
-  only theirs changed it against the base, and a row the base had that one side
-  deleted and the other left alone stays deleted, so a merge keeps one side's
-  additions and an edit only one side made (when both sides edit the same row,
-  ours wins). A formatter-escaped row (`\[\[`) reads as `wiki update` reads it,
-  so an escaped side merges like any other; only a line in the damage shape that
-  still reads as no row holds that side's deletions until the next update. It
-  three-way merges everything authored — the remaining frontmatter fields
-  (`title`/`desc`/`created`/`category`/`tags`/`sources`) and the user content
-  below `***` — which can still conflict for hand-resolution. A clean merge then
-  writes the H1 from the merged `title:` (else `name:`) and sorts the rows into
-  the order `wiki update` writes, with the wiki's own class (a trusted hook's
-  `category_order` included) when that class leaves ours' index as written — a
-  check that sees a category order only where ours' rows span two or more
-  categories, so an embedder's own order can still be re-sorted into this
-  class's — so a clean merge in which each side only added, deleted or retitled
-  entries passes `update --check` and `lint` as merged. A side missing its `***`
-  entirely (formatter damage) can't be split into regions, so it conflicts
-  whole-file with a hint comment naming the repair — restore the `***` on that
-  branch (`wiki update` does it), then redo the merge. Run `wiki update --check`
-  after a merge and `wiki update` when it reports changes — a row one side
-  changed and the other deleted, both sides changing one row, a merge that
-  changes the hook's `category_order`, or a conflict resolved by hand. Every
-  other page the wiki manages gets a plain three-way text merge after both sides
-  take the later `updated` stamp (and, over a base with no `created`, the
-  earlier `created`), so a page whose sides differ only in stamps merges clean;
-  an excluded or gitignored page gets a plain text merge, and Markdown outside
-  the wiki never reaches the driver. `init`/`config` register the driver in
-  local git config and write `**/_index.md merge=wiki` to the repository root's
-  `.gitattributes` and `*.md merge=wiki` to one in the wiki root, in the working
-  tree only — you stage and commit them yourself, and each clone runs
-  `wiki config` once to register the driver. Without `wiki` on PATH the driver
-  falls back to git's own text merge.
+  files it first gives ours the later of the two sides' `updated` stamps and the
+  earlier normalized `created`, compared as instants (an unparseable stamp keeps
+  ours'). It then normalizes the regenerated `name`/`updated` keys to *ours*
+  (plus `created` whenever the base index carries no real stamp — an add/add
+  merge, a hand-written or imported index), and resolves the link block to the
+  union of both sides' rows — ours' layout wins, rows present only in theirs
+  ride over with their desc continuations, a row both sides carry keeps ours'
+  text unless only theirs changed it against the base, and a row the base had
+  that one side deleted and the other left alone stays deleted, so a merge keeps
+  either side's additions and an edit only one side made (when both sides edit
+  the same row, ours wins). A formatter-escaped row (`\[\[`) reads as
+  `wiki update` reads it, so an escaped side merges like any other; only a line
+  in the damage shape that still reads as no row holds that side's deletions
+  until the next update. It three-way merges everything authored — the remaining
+  frontmatter fields (`title`/`desc`/`created`/`category`/`tags`/`sources`) and
+  the user content below `***` — which can still conflict for hand-resolution. A
+  clean merge then writes the H1 from the merged `title:` (else `name:`) and
+  sorts the rows into the order `wiki update` writes, with the wiki's own class
+  (a trusted hook's `category_order` included) when that class leaves ours'
+  index as written — a check that sees a category order only where ours' rows
+  span two or more categories, so an embedder's own order can still be re-sorted
+  into this class's — so a clean merge in which each side only added, deleted or
+  retitled entries passes `update --check` and `lint` as merged. A side missing
+  its `***` entirely (formatter damage) can't be split into regions, so it
+  conflicts whole-file with a hint comment naming the repair — restore the `***`
+  on that branch (`wiki update` does it), then redo the merge. Run
+  `wiki update --check` after a merge and `wiki update` when it reports changes
+  — a row one side changed and the other deleted, both sides changing one row, a
+  merge that changes the hook's `category_order`, or a conflict resolved by
+  hand. Every other page the wiki manages gets a plain three-way text merge
+  after both sides take the later `updated` stamp (and, over a base with no
+  `created`, the earlier `created`), so a page whose sides differ only in stamps
+  merges clean; an excluded or gitignored page gets a plain text merge, and
+  Markdown outside the wiki never reaches the driver. `init`/`config` register
+  the driver in local git config and write `**/_index.md merge=wiki` to the
+  repository root's `.gitattributes` and `*.md merge=wiki` to one in the wiki
+  root, in the working tree only — you stage and commit them yourself, and each
+  clone runs `wiki config` once to register the driver. Without `wiki` on PATH
+  the driver falls back to git's own text merge.
 - **Leave new-directory index bodies empty during concurrent work.** When
   sibling branches both create the same new directory, its two `_index.md`s
   merge add/add with no common ancestor: the generated region resolves
