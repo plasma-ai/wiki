@@ -3574,6 +3574,9 @@ def test_update_escapes_damage_shaped_child_desc(tmp_path: pathlib.Path) -> None
     argvalues=[
         ('hand-edit', 'notes/edited.md', 'now'),
         ('index-prose', 'notes/_index.md', 'now'),
+        ('decomposed-name', 'notes/cafe\u0301.md', 'now'),
+        ('line-endings-only', 'notes/edited.md', 'kept'),
+        ('mode-only', 'notes/edited.md', 'kept'),
         ('edited-within-stamp-period', 'notes/edited.md', 'kept'),
         ('already-restamped', 'notes/edited.md', 'kept'),
         ('untracked', 'notes/fresh.md', 'kept'),
@@ -3597,13 +3600,15 @@ def test_update_restamps_a_page_edited_since_its_stamp(
 
     Git is the reference: a tracked file that differs from HEAD while its
     ``updated:`` still reads as HEAD's changed after it was stamped, so
-    ``update`` restamps it as a tool write would, and ``update --check``
-    lists it -- unless the file was last modified within the stamp's own
-    period, where a tool write leaves HEAD's stamp too. A stamp already
-    moved stands, as does every file the wiki does not manage or HEAD
-    does not hold (untracked or newly staged), and a file with no stamp
-    gains none. A clean checkout, a repository with no commits yet, or a
-    wiki outside git restamps nothing.
+    ``update`` restamps it as a tool write would, names it in a notice,
+    and ``update --check`` lists it -- unless the file was last modified
+    within the stamp's own period, where a tool write leaves HEAD's stamp
+    too. A name git spells precomposed matches a page the walk read
+    decomposed. A difference in line endings or file mode alone is no
+    edit. A stamp already moved stands, as does every file the wiki does
+    not manage or HEAD does not hold (untracked or newly staged), and a
+    file with no stamp gains none. A clean checkout, a repository with
+    no commits yet, or a wiki outside git restamps nothing.
     """
     # every stamp the tree is settled and committed with is an old one
     old = '2020-01-01T00:00:00Z'
@@ -3615,6 +3620,9 @@ def test_update_restamps_a_page_edited_since_its_stamp(
     (tmp_path / 'notes' / 'broken.md').write_text(
         '---\nname: broken\ndesc: Unclosed.\n\n# broken\n\nBody.\n',
         encoding='utf-8',
+    )
+    (tmp_path / 'notes' / 'cafe\u0301.md').write_text(
+        '# cafe\u0301\n\nBody.\n', encoding='utf-8'
     )
     _set_exclude_patterns(tmp_path, ['frozen'])
     Wiki(tmp_path).update()
@@ -3637,8 +3645,15 @@ def test_update_restamps_a_page_edited_since_its_stamp(
         Wiki(tmp_path).update()
     if case == 'staged-new':
         _git(tmp_path, 'add', path)
-    # edit the target the way the case names, outside any wiki run
-    if case != 'fresh-clone':
+    # edit the target the way the case names, outside any wiki run: a CRLF
+    # copy committed, then normalized by a run; a mode change; or its text
+    if case == 'line-endings-only':
+        target.write_bytes(target.read_bytes().replace(b'\n', b'\r\n'))
+        _git(tmp_path, 'commit', '-q', '-am', 'crlf')
+        Wiki(tmp_path).update()
+    elif case == 'mode-only':
+        target.chmod(0o755)
+    elif case != 'fresh-clone':
         text = target.read_text(encoding='utf-8')
         if case == 'already-restamped':
             text = re.sub(
@@ -3654,8 +3669,14 @@ def test_update_restamps_a_page_edited_since_its_stamp(
     now = '2031-01-01T00:00:00Z'
     monkeypatch.setattr(Wiki, '_utc_now', lambda self: now)
     pending = Wiki(tmp_path).update(check=True)
-    Wiki(tmp_path).update()
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+    wiki.update()
     after = _stamp(target.read_text(encoding='utf-8'))
+    restamped = [
+        event.path for event in notices if type(event).__name__ == 'RestampEvent'
+    ]
+    assert (path in restamped) == (expected == 'now')
     if expected == 'now':
         assert path in pending
         assert after == now

@@ -494,7 +494,10 @@ keeps the tool-owned surfaces in sync with the filesystem (see
 - **Restores a missing** ``.wiki/settings.json`` as ``{}`` and recreates a
   deleted ``.wiki/cache/``.
 
-``updated:`` is re-stamped only on files whose content actually changed.
+``updated:`` is re-stamped only on files whose content actually changed —
+and, inside a git repository, on a tracked file edited since its last commit
+while its ``updated:`` still matches the committed one, each named in a
+``Restamped`` line (see :doc:`/guide/generation`).
 Files the sweep cannot safely fix are left alone with a notice: pages whose
 frontmatter never closes, is valid YAML but not ``key: value`` pairs, is a
 mapping with no column-0 ``key:`` lines, or would be left rejected by its own
@@ -640,7 +643,8 @@ on a broken link, ``line`` on a wrap mangle, or ``line``/``reason`` on
 invalid YAML frontmatter), the rendered prose under ``text``, and a
 ``summary`` with both counts; the exit-code contract is unchanged.
 
-**Issues** (hard, exit 1) cover everything ``wiki update`` would rewrite —
+**Issues** (hard, exit 1) cover everything ``wiki update`` would rewrite but
+the restamp of a hand-edited file, which only ``wiki update --check`` lists —
 each shown as ``<path>: Requires update`` with an indented unified diff — plus
 problems update cannot fix: missing indexes, invalid page/folder names, pages
 shadowed by same-named folders, merge conflict markers, leftover merge repair
