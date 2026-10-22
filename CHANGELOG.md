@@ -99,8 +99,9 @@ may include breaking changes, each listed under a Breaking heading.
 - The configuration reference and the skill say how a name is checked: a
   Markdown page by its stem, any other file by its full name, extension
   included. `alpha`, `alphanum`, and `identifier` therefore reject every
-  non-Markdown file unless `naming.allow` contains `.`, the remedy the docs now
-  name for a strict wiki that keeps data files or scripts beside its pages.
+  non-Markdown file with an extension unless `naming.allow` contains `.`, the
+  remedy the docs now name for a strict wiki that keeps data files or scripts
+  beside its pages.
 
 ## [1.7.0] - 2026-10-14
 

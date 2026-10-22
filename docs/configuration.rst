@@ -143,8 +143,8 @@ A name is checked as a link carries it: a Markdown page by its stem
 (``notes`` for ``notes.md``), and every other file by its full name, extension
 included (``data.json``), as is a page whose stem a sibling file claims. The
 dot of an extension is checked like any other character, so ``alpha``,
-``alphanum``, and ``identifier`` reject every non-Markdown file unless
-``allow`` contains ``.``. A wiki that keeps data files or scripts beside its
+``alphanum``, and ``identifier`` reject every non-Markdown file with an
+extension (``data.json``, ``main.py``) unless ``allow`` contains ``.``. A wiki that keeps data files or scripts beside its
 pages under one of these predicates sets ``"allow": "."``.
 
 ``naming.deny``
@@ -369,7 +369,8 @@ whose entry is the link's prefix. A sibling wiki's page is
 alike. ``wiki lint`` accepts such a link when its target lands under a
 listed folder and the file, its ``.md`` form, or the folder exists there;
 judges a target inside another wiki by that wiki's own page rules (below);
-notes a missing target under a listed folder as a ``Stale link``, unless
+notes a missing target under a listed folder as a ``Stale link`` (an issue
+under ``lint.strict``), unless
 the same text read from the page's folder names something in the wiki, in
 which case the author meant that in-wiki target and the link is the hard
 ``points inside the wiki through './' or '../'`` issue naming its

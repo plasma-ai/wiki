@@ -152,9 +152,8 @@ Residual conflicts
 
 Authored frontmatter keys, index prose, and page text still conflict when
 both branches change the same thing. A residual conflict looks like any other
-git conflict,
-except the markers are labeled ``ours``/``theirs`` rather than with branch
-names — here both branches reworded the index's ``desc:``:
+git conflict, except the markers are labeled ``ours``/``theirs`` rather than
+with branch names — here both branches reworded the index's ``desc:``:
 
 .. code-block:: text
 
