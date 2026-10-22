@@ -763,8 +763,6 @@ def test_a_leading_colon_reads_as_a_name_in_every_git_probe(
     monkeypatch.setattr(Wiki, '_utc_now', lambda self: old)
     _make_wiki(tmp_path, folders={':notes': ['page']})
     _git_repo(tmp_path, 'notes', 'fresh')
-    _git(tmp_path, 'config', 'user.email', 't@t')
-    _git(tmp_path, 'config', 'user.name', 't')
 
     # the walk indexes the folder its own name names
     Wiki(tmp_path).update()

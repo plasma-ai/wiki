@@ -21,7 +21,8 @@ import pytest
 
 from wiki.core.wiki import Wiki
 
-from ._helpers import _capture_notices, _make_wiki, _needs_unprivileged, page_index
+from .._helpers import _needs_unprivileged
+from ._helpers import _capture_notices, _make_wiki, page_index
 
 __all__ = [
     'test_noop_update_leaves_updated_alone',

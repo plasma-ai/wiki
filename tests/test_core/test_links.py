@@ -28,12 +28,12 @@ import pytest
 
 from wiki.core.wiki import Wiki
 
+from .._helpers import _needs_unprivileged
 from ._helpers import (
     _capture_notices,
     _git_repo,
     _make_wiki,
     _needs_git,
-    _needs_unprivileged,
     _set_exclude_patterns,
     bare_anchored,
     page_index,
