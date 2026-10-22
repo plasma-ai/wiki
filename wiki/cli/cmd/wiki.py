@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import datetime as dt
 import functools
 import importlib.resources
 import json
-import operator
 import pathlib
 import shutil
 import subprocess
@@ -37,7 +35,6 @@ from wiki.constants import (
     WIKI_INDEX,
     WIKI_SETTINGS,
 )
-from wiki.core import format
 from wiki.core.event import Event
 from wiki.core.wiki import (
     ContentEmptyEvent,
@@ -1382,15 +1379,11 @@ def _merge_stamps(
 ) -> None:
     """Restamp both sides of a wiki file's merge with the stamps it keeps.
 
-    Each side takes the settled stamps before the merge runs: ``updated``
-    the later of the two sides' stamps, and ``created``, when the base
-    has none and the sides' stamps are churn, the earlier. The index
-    merge resolves each regenerated stamp to the current branch's, and a
-    page's text merge then finds the stamp lines equal on both sides, so
-    one that differed in them alone comes out clean. Stamps compare as
-    instants under the wiki's timestamp policy, and a stamp either side
-    spells in a form the policy does not parse leaves both sides' as
-    they are.
+    The wiki's own class settles the stamps
+    (:meth:`~wiki.core.wiki.Wiki._settle_stamps`): ``updated`` the later of
+    the two sides', and ``created``, over a base without one, the earlier.
+    Each side the settlement changes is rewritten in place before the
+    merge runs.
 
     Args:
         root: Wiki root the file sits under.
@@ -1399,65 +1392,39 @@ def _merge_stamps(
         theirs: The other branch's copy (%B), restamped in place.
 
     """
-    # NOTE: a merge driver passes the merge's exit code through untouched
-    #   (patterns: conventions/cli/errors/exit-codes), and the merge stands
-    #   without this step, so any failure here -- a hook that will not load
-    #   or construct, bytes that are not UTF-8, a write that fails -- leaves
-    #   the sides as they are, and the merge resolves the stamps itself
+    # NOTE: a merge driver passes the merge's exit code through untouched,
+    #   and the merge stands without this step, so any failure here -- a
+    #   hook that will not load or construct, bytes that are not UTF-8, a
+    #   write that fails -- leaves the sides as they are, and the merge
+    #   resolves the stamps itself
     try:
         base_text, ours_text, theirs_text = (
             path.read_bytes().decode('utf-8') for path in (base, ours, theirs)
         )
     except (OSError, UnicodeDecodeError):
         return
-    # the wiki's class may be hook code, which can raise anything -- an exit
-    # included, which would end the driver before the merge runs
+    # the wiki's class may be hook code, loaded from outside the package,
+    # which can raise anything -- an exit included, which would end the
+    # driver before the merge runs
     try:
-        policy = load_wiki_class(root)(root)._timestamp_policy
+        engine = load_wiki_class(root)(root)
+        ours_settled, theirs_settled = engine._settle_stamps(
+            base_text,
+            ours_text,
+            theirs_text,
+        )
     except (Exception, SystemExit):
         return
-
-    # read a stamp as an instant, a zoneless one in the policy's zone
-    def _instant(stamp: Optional[str]) -> Optional[dt.datetime]:
-        try:
-            moment = dt.datetime.strptime(stamp, policy['format'])
-        except (TypeError, ValueError):
-            return None
-        if moment.tzinfo is None:
-            moment = moment.replace(tzinfo=policy['zone'])
-        return moment
-
-    base_block, _ = format.extract_frontmatter(base_text.split('\n'))
-    ours_block, _ = format.extract_frontmatter(ours_text.split('\n'))
-    theirs_block, _ = format.extract_frontmatter(theirs_text.split('\n'))
-    # updated takes the later stamp; created, churn over a base without
-    # one, the earlier
-    keys = {'updated': operator.gt}
-    if not format.read_frontmatter_field(base_block, 'created'):
-        keys['created'] = operator.lt
-    ours_settled, theirs_settled = ours_block, theirs_block
-    for key, wins in keys.items():
-        ours_stamp = format.read_frontmatter_field(ours_block, key)
-        theirs_stamp = format.read_frontmatter_field(theirs_block, key)
-        ours_instant = _instant(ours_stamp)
-        theirs_instant = _instant(theirs_stamp)
-        if (ours_instant is None) or (theirs_instant is None):
-            continue
-        # the winning stamp lands on the other side; a tie keeps ours'
-        if wins(theirs_instant, ours_instant):
-            ours_settled = format.restamp(ours_settled, key, theirs_stamp)
-        elif theirs_stamp != ours_stamp:
-            theirs_settled = format.restamp(theirs_settled, key, ours_stamp)
-    # write each side its settled block changed
+    # write each side its settled text changed
     sides = [
-        (ours, ours_text, ours_block, ours_settled),
-        (theirs, theirs_text, theirs_block, theirs_settled),
+        (ours, ours_text, ours_settled),
+        (theirs, theirs_text, theirs_settled),
     ]
-    for path, text, block, settled in sides:
-        if settled == block:
+    for path, text, settled in sides:
+        if settled == text:
             continue
         try:
-            wiki.util.fs.write_atomic(path, settled + text[len(block) :])
+            wiki.util.fs.write_atomic(path, settled)
         except OSError:
             return
 

@@ -9,6 +9,7 @@ import hashlib
 import http.client
 import json
 import logging
+import operator
 import os
 import pathlib
 import re
@@ -1056,6 +1057,61 @@ class Wiki:
                 rows.append('')
             lines[first:end] = rows
         return '\n'.join(lines)
+
+    def _settle_stamps(
+        self: Wiki,
+        base_text: str,
+        ours_text: str,
+        theirs_text: str,
+    ) -> tuple[str, str]:
+        """Restamp both sides of a wiki file's merge with the stamps it keeps.
+
+        Each side takes the settled stamps: ``updated`` the later of the
+        two sides' stamps, and ``created``, when the base has none and the
+        sides' stamps are churn, the earlier. The merge driver writes them
+        before the merge runs: the index merge resolves each regenerated
+        stamp to the current branch's, and a page's text merge then finds
+        the stamp lines equal on both sides, so one that differed in them
+        alone comes out clean. Stamps compare as instants under the
+        timestamp policy, and a stamp either side spells in a form the
+        policy does not parse leaves both sides' as they are.
+
+        Args:
+            base_text: The common ancestor's content.
+            ours_text: The current branch's content.
+            theirs_text: The other branch's content.
+
+        Returns:
+            The current and the other branch's content, each restamped.
+
+        """
+        policy = self._timestamp_policy
+        base_block, _ = format.extract_frontmatter(base_text.split('\n'))
+        ours_block, _ = format.extract_frontmatter(ours_text.split('\n'))
+        theirs_block, _ = format.extract_frontmatter(theirs_text.split('\n'))
+        # updated takes the later stamp; created, churn over a base without
+        # one, the earlier
+        keys = {'updated': operator.gt}
+        if not format.read_frontmatter_field(base_block, 'created'):
+            keys['created'] = operator.lt
+        ours_settled, theirs_settled = ours_block, theirs_block
+        for key, wins in keys.items():
+            ours_stamp = format.read_frontmatter_field(ours_block, key)
+            theirs_stamp = format.read_frontmatter_field(theirs_block, key)
+            if (ours_stamp is None) or (theirs_stamp is None):
+                continue
+            ours_instant = _stamp_instant(ours_stamp, policy)
+            theirs_instant = _stamp_instant(theirs_stamp, policy)
+            if (ours_instant is None) or (theirs_instant is None):
+                continue
+            # the winning stamp lands on the other side; a tie keeps ours'
+            if wins(theirs_instant, ours_instant):
+                ours_settled = format.restamp(ours_settled, key, theirs_stamp)
+            elif theirs_stamp != ours_stamp:
+                theirs_settled = format.restamp(theirs_settled, key, ours_stamp)
+        ours_text = ours_settled + ours_text[len(ours_block) :]
+        theirs_text = theirs_settled + theirs_text[len(theirs_block) :]
+        return ours_text, theirs_text
 
     @format.run_scoped
     def init(
