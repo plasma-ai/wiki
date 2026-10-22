@@ -46,12 +46,24 @@ _needs_unprivileged = pytest.mark.skipif(
 
 
 def _git(cwd: pathlib.Path, *args: str) -> subprocess.CompletedProcess[str]:
-    """Run a git command in ``cwd``, capturing text output and checking exit."""
+    """Run a git command in ``cwd``, capturing text output and checking exit.
+
+    Hermetic as the CLI suite's git: the developer's global and system
+    config (``commit.gpgsign``, ``core.hooksPath``, ...) and any inherited
+    variable that redirects git (``GIT_DIR``, ``GIT_WORK_TREE``, ...) never
+    reach the fixture repository.
+    """
+    env = {
+        name: value for name, value in os.environ.items() if not name.startswith('GIT_')
+    }
+    env['GIT_CONFIG_GLOBAL'] = os.devnull
+    env['GIT_CONFIG_SYSTEM'] = os.devnull
     return subprocess.run(
         ['git', '-C', f'{cwd}', *args],
         capture_output=True,
         text=True,
         check=True,
+        env=env,
     )
 
 

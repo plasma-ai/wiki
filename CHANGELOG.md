@@ -14,11 +14,12 @@ may include breaking changes, each listed under a Breaking heading.
   `updated:` still equals HEAD's is restamped as the tool's own writes are,
   named in a `Restamped` line, and listed by `wiki update --check` (not by
   `wiki lint`), unless the file was last modified within its stamp's own period
-  (a second by default, a day under a date-only format), where a write leaves
-  the same stamp. A stamp already moved stands, and untracked files, files the
-  wiki does not index, and files with no `updated:` are never judged. A clean
-  checkout, a fresh clone, or a wiki outside git restamps nothing, so `updated:`
-  no longer falls behind edits made outside a run.
+  (a second by default, a day under a date-only format) or within a minute after
+  the stamp, where a write leaves the same stamp. A stamp already moved stands,
+  and untracked files, files the wiki does not index, and files with no
+  `updated:` are never judged. A clean checkout, a fresh clone, or a wiki
+  outside git restamps nothing, so `updated:` no longer falls behind edits made
+  outside a run.
 - An opt-in `lint.strict` setting in `.wiki/settings.json`. When true,
   `wiki lint` reports each stale link in index or page prose as a hard issue
   that fails the run, rather than a soft note. The line and its `--json` kind,
