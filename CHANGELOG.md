@@ -7,6 +7,8 @@ may include breaking changes, each listed under a Breaking heading.
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-10-22
+
 ### Added
 
 - `wiki update` restamps a file edited by hand since its `updated:` stamp.
@@ -1014,4 +1016,5 @@ Initial release.
 [1.5.0]: https://github.com/plasma-ai/wiki/compare/v1.4.0...v1.5.0
 [1.6.0]: https://github.com/plasma-ai/wiki/compare/v1.5.0...v1.6.0
 [1.7.0]: https://github.com/plasma-ai/wiki/compare/v1.6.0...v1.7.0
-[unreleased]: https://github.com/plasma-ai/wiki/compare/v1.7.0...HEAD
+[1.8.0]: https://github.com/plasma-ai/wiki/compare/v1.7.0...v1.8.0
+[unreleased]: https://github.com/plasma-ai/wiki/compare/v1.8.0...HEAD
