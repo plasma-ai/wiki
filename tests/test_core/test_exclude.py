@@ -45,6 +45,7 @@ __all__ = [
     'test_gitignore_fence_ignores_an_inherited_git_dir',
     'test_unavailable_fence_is_narrated_inside_a_repository',
     'test_personally_ignored_row_draws_a_note',
+    'test_reincluded_row_draws_no_note',
     'test_gitignore_fence_reaches_a_nested_wiki_root',
     'test_gitignore_fence_honors_a_discovery_ceiling',
     'test_unavailable_fence_note_honors_a_discovery_ceiling',
@@ -707,6 +708,39 @@ def test_personally_ignored_row_draws_a_note(
 
     # a file the repository itself tracks draws nothing
     assert not any(getattr(event, 'path', None) == 'notes/keep.md' for event in notices)
+
+
+@_needs_git
+def test_reincluded_row_draws_no_note(tmp_path: pathlib.Path) -> None:
+    """A path a negated pattern re-includes draws no untrackable note.
+
+    An allowlist ignore file in the wiki root -- ignore everything,
+    re-include the page suffix -- keeps a corpus to the files it names.
+    Git tracks every page the negation re-includes, so neither the
+    sweep nor the lint may name one as a row the file cannot follow,
+    while the files the allowlist leaves out stay fenced.
+    """
+    _git_repo(tmp_path)
+    root = tmp_path / 'memory'
+    _make_wiki(root, folders={'notes': ['keep']})
+    (root / '.gitignore').write_text('*\n!*/\n!*.md\n', encoding='utf-8')
+    (root / 'notes' / 'dump.tar').write_bytes(b'raw')
+
+    # the sweep indexes the re-included page, fences the rest, and
+    # names nothing
+    wiki = Wiki(root)
+    notices = _capture_notices(wiki)
+    wiki.update()
+    index = (root / 'notes' / '_index.md').read_text(encoding='utf-8')
+    assert '[[notes/keep|keep]]' in index
+    assert 'dump.tar' not in index
+    assert not any(type(event).__name__ == 'PathUntrackableEvent' for event in notices)
+
+    # lint audits the same rows and names nothing either
+    wiki = Wiki(root)
+    notices = _capture_notices(wiki)
+    assert wiki.lint() == []
+    assert not any(type(event).__name__ == 'PathUntrackableEvent' for event in notices)
 
 
 @_needs_git
