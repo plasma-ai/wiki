@@ -183,8 +183,10 @@ Timestamps
 ~~~~~~~~~~
 
 ``created:`` and ``updated:`` are tool-owned. ``created`` is written once,
-when the file gains frontmatter; ``updated`` is re-stamped only on writes that
-actually change content, so timestamp churn never dirties a file on its own.
+when the file gains frontmatter; ``updated`` is re-stamped on writes that
+actually change content, so timestamp churn never dirties a file on its own,
+and, inside a git repository, on a tracked file edited by hand since HEAD
+stamped it (see :doc:`/guide/generation`).
 Stamps default to UTC in ``%Y-%m-%dT%H:%M:%SZ`` format; configure the zone and
 format through the ``timestamp`` block in ``.wiki/settings.json`` (see
 :doc:`/configuration`). Never hand-edit a stamp: an edit goes undetected

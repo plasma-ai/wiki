@@ -690,6 +690,17 @@ Both commands are safe to run at any time, as often as you like:
   write, and a rewrite forced solely to normalize CRLF endings does not
   re-stamp. Re-running update on a clean wiki changes nothing, including the
   stamps.
+- **Stamps follow hand edits.** Inside a git repository, a tracked file that
+  differs from HEAD while its ``updated:`` still reads as HEAD's was edited
+  after it was stamped, so update re-stamps it as it would its own write, and
+  ``update --check`` lists it. A stamp names a period at the configured
+  format's resolution — a second by default, a day under a date-only format —
+  and a file last modified within its stamp's period counts as stamped, since
+  a write in that period leaves the same stamp. A stamp that already moved
+  stands, so the first run after an edit sets it and later runs leave it
+  until the next commit. Untracked files and files the wiki does not index are never
+  judged, and a file with no ``updated:`` gains none this way. A clean
+  checkout, a fresh clone, or a wiki outside git restamps nothing.
 - **Authored content is never regenerated away.** User content below ``***``,
   authored frontmatter values, and unrecognized frontmatter keys are
   preserved; damaged files (unclosed frontmatter, truncated indexes) are

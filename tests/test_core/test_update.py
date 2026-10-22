@@ -8,7 +8,9 @@ prune, and escape stability. The plan/apply engine mechanics
 
 from __future__ import annotations
 
+import datetime as dt
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -24,8 +26,12 @@ from wiki.core.wiki import Wiki
 from ._helpers import (
     CategorizedWiki,
     _capture_notices,
+    _git,
+    _git_repo,
     _make_category_folder,
     _make_wiki,
+    _needs_git,
+    _set_exclude_patterns,
     page_index,
 )
 from ._oracle import field_lines, grammar
@@ -132,6 +138,7 @@ __all__ = [
     'test_update_names_symlinked_link_target',
     'test_update_skips_out_of_root_desc_propagation',
     'test_update_escapes_damage_shaped_child_desc',
+    'test_update_restamps_a_page_edited_since_its_stamp',
 ]
 
 
@@ -3559,3 +3566,109 @@ def test_update_escapes_damage_shaped_child_desc(tmp_path: pathlib.Path) -> None
     reparsed = (tmp_path / 'sub' / '_index.md').read_text(encoding='utf-8')
     assert '[[evil|../secret]]' not in reparsed
     assert wiki.update() == []
+
+
+@_needs_git
+@pytest.mark.parametrize(
+    argnames=('case', 'path', 'expected'),
+    argvalues=[
+        ('hand-edit', 'notes/edited.md', 'now'),
+        ('index-prose', 'notes/_index.md', 'now'),
+        ('edited-within-stamp-period', 'notes/edited.md', 'kept'),
+        ('already-restamped', 'notes/edited.md', 'kept'),
+        ('untracked', 'notes/fresh.md', 'kept'),
+        ('staged-new', 'notes/fresh.md', 'kept'),
+        ('excluded', 'frozen/copy.md', 'kept'),
+        ('gitignored', 'scratch/draft.md', 'kept'),
+        ('unclosed-frontmatter', 'notes/broken.md', 'none'),
+        ('fresh-clone', 'notes/edited.md', 'kept'),
+        ('no-commits', 'notes/edited.md', 'kept'),
+        ('outside-git', 'notes/edited.md', 'kept'),
+    ],
+)
+def test_update_restamps_a_page_edited_since_its_stamp(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+    path: str,
+    expected: str,
+) -> None:
+    """``updated:`` follows a hand edit the wiki has not stamped.
+
+    Git is the reference: a tracked file that differs from HEAD while its
+    ``updated:`` still reads as HEAD's changed after it was stamped, so
+    ``update`` restamps it as a tool write would, and ``update --check``
+    lists it -- unless the file was last modified within the stamp's own
+    period, where a tool write leaves HEAD's stamp too. A stamp already
+    moved stands, as does every file the wiki does not manage or HEAD
+    does not hold (untracked or newly staged), and a file with no stamp
+    gains none. A clean checkout, a repository with no commits yet, or a
+    wiki outside git restamps nothing.
+    """
+    # every stamp the tree is settled and committed with is an old one
+    old = '2020-01-01T00:00:00Z'
+    monkeypatch.setattr(Wiki, '_utc_now', lambda self: old)
+    _make_wiki(
+        tmp_path,
+        folders={'notes': ['keep', 'edited'], 'frozen': ['copy'], 'scratch': ['draft']},
+    )
+    (tmp_path / 'notes' / 'broken.md').write_text(
+        '---\nname: broken\ndesc: Unclosed.\n\n# broken\n\nBody.\n',
+        encoding='utf-8',
+    )
+    _set_exclude_patterns(tmp_path, ['frozen'])
+    Wiki(tmp_path).update()
+    # commit the settled tree, the ignored folder's page force-added
+    if case != 'outside-git':
+        _git_repo(tmp_path, 'scratch/')
+        _git(tmp_path, 'config', 'user.email', 't@t')
+        _git(tmp_path, 'config', 'user.name', 't')
+    if case not in ('outside-git', 'no-commits'):
+        _git(tmp_path, 'add', '-A')
+        _git(tmp_path, 'add', '-f', 'scratch/draft.md')
+        _git(tmp_path, 'commit', '-q', '-m', 'base')
+        Wiki(tmp_path).update()
+        _git(tmp_path, 'commit', '-q', '-am', 'settle')
+
+    # a page the wiki adopted and stamped, never committed (staged or not)
+    target = tmp_path / path
+    if case in ('untracked', 'staged-new'):
+        target.write_text('# fresh\n\nBody.\n', encoding='utf-8')
+        Wiki(tmp_path).update()
+    if case == 'staged-new':
+        _git(tmp_path, 'add', path)
+    # edit the target the way the case names, outside any wiki run
+    if case != 'fresh-clone':
+        text = target.read_text(encoding='utf-8')
+        if case == 'already-restamped':
+            text = re.sub(
+                r'^updated: .*$', 'updated: 2020-06-01T00:00:00Z', text, flags=re.M
+            )
+        target.write_text(text + '\nEdited by hand.\n', encoding='utf-8')
+    # a modification within the stamp's own second, as a tool write leaves it
+    if case == 'edited-within-stamp-period':
+        moment = dt.datetime(2020, 1, 1, tzinfo=dt.UTC).timestamp()
+        os.utime(target, (moment, moment))
+    before = _stamp(target.read_text(encoding='utf-8'))
+
+    now = '2031-01-01T00:00:00Z'
+    monkeypatch.setattr(Wiki, '_utc_now', lambda self: now)
+    pending = Wiki(tmp_path).update(check=True)
+    Wiki(tmp_path).update()
+    after = _stamp(target.read_text(encoding='utf-8'))
+    if expected == 'now':
+        assert path in pending
+        assert after == now
+    elif expected == 'kept':
+        assert path not in pending
+        assert after == before
+    else:
+        assert (before, after) == (None, None)
+
+
+def _stamp(text: str) -> Optional[str]:
+    """Return the ``updated:`` value of a closed frontmatter block, if any."""
+    block, _ = format.extract_frontmatter(text.split('\n'))
+    if not block:
+        return None
+    return format.read_frontmatter_field(block, 'updated')
