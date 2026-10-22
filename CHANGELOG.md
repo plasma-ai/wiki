@@ -37,6 +37,11 @@ may include breaking changes, each listed under a Breaking heading.
 
 ### Fixed
 
+- A `.wiki/wiki.py` hook that exits while the merge driver loads it (a
+  `sys.exit` in its constructor) no longer ends the driver before it merges. The
+  driver skips its hook steps, as it does for a hook that fails to load, and the
+  merge runs; before, the driver exited with the hook's code, so an exit 0 left
+  the current branch's file as the merge, the other side's edits lost.
 - The `_index.md` merge driver reads a link row as `wiki update` does, as a
   whole line, so a desc line that opens on a wikilink, such as
   `[[core/design|design]] explains each stage.`, stays with its row. A row one
