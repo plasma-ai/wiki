@@ -1351,17 +1351,17 @@ def _index_canonicalizer(root: pathlib.Path, path: pathlib.Path) -> Optional[Wik
         The engine, or ``None`` to leave the merged index as it is.
 
     """
-    # NOTE: a merge driver passes the merge's exit code through untouched
-    #   (patterns: conventions/cli/errors/exit-codes), and the index merge
-    #   stands without this step, so any failure here -- a hook that will
-    #   not load, construct or run, bytes that are not UTF-8 -- leaves the
-    #   index as merged rather than failing a clean merge
+    # NOTE: a merge driver passes the merge's exit code through untouched,
+    #   and the index merge stands without this step, so any failure here --
+    #   a hook that will not load, construct or run, bytes that are not
+    #   UTF-8 -- leaves the index as merged rather than failing a clean merge
     try:
         text = path.read_bytes().decode('utf-8')
     except (OSError, UnicodeDecodeError):
         return None
-    # the wiki's class may be hook code, which can raise anything -- an exit
-    # included, which would end the driver before the merge runs
+    # the wiki's class may be hook code, loaded from outside the package,
+    # which can raise anything -- an exit included, which would end the
+    # driver before the merge runs
     try:
         wiki = load_wiki_class(root)(root)
         if wiki.canonicalize_index(text) != text:
@@ -1444,11 +1444,10 @@ def _is_managed_page(root: pathlib.Path, path: pathlib.Path) -> bool:
         Whether the page takes the merge over settled stamps.
 
     """
-    # NOTE: a merge driver passes the merge's exit code through untouched
-    #   (patterns: conventions/cli/errors/exit-codes), and git's default
-    #   text merge stands without this step, so any failure here -- a hook
-    #   that will not load or construct, or exits -- reads the page as
-    #   unmanaged
+    # NOTE: a merge driver passes the merge's exit code through untouched,
+    #   and git's default text merge stands without this step, so any
+    #   failure here -- hook code from outside the package that will not
+    #   load or construct, or exits -- reads the page as unmanaged
     try:
         engine = load_wiki_class(root)(root)
         return engine._manages_page(engine._root / path.relative_to(root))
@@ -1468,16 +1467,16 @@ def _canonicalize_index(engine: Wiki, path: pathlib.Path) -> None:
         path: The merged index git hands the driver (%A).
 
     """
-    # NOTE: a merge driver passes the merge's exit code through untouched
-    #   (patterns: conventions/cli/errors/exit-codes), and the merge stands
-    #   without this step, so a failure to read, canonicalize or write
-    #   leaves the index as merged
+    # NOTE: a merge driver passes the merge's exit code through untouched,
+    #   and the merge stands without this step, so a failure to read,
+    #   canonicalize or write leaves the index as merged
     try:
         text = path.read_bytes().decode('utf-8')
     except (OSError, UnicodeDecodeError):
         return
-    # the engine may run hook code, which can raise anything -- an exit
-    # included, which would replace the merge's exit code with its own
+    # the engine may run hook code, loaded from outside the package, which
+    # can raise anything -- an exit included, which would replace the
+    # merge's exit code with its own
     try:
         canonical = engine.canonicalize_index(text)
     except (Exception, SystemExit):

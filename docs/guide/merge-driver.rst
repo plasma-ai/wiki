@@ -38,7 +38,7 @@ And the repository's *local* git config defines the driver:
 
    [merge "wiki"]
        name = wiki merge (auto-resolve generated sections)
-       driver = if command -v wiki >/dev/null 2>&1; then wiki _merge %O %A %B %L %P; else git merge-file -L ours -L base -L theirs --marker-size=%L %A %O %B; fi
+       driver = "if command -v wiki >/dev/null 2>&1; then wiki _merge %O %A %B %L %P; else git merge-file -L ours -L base -L theirs --marker-size=%L %A %O %B; fi"
 
 The ``.gitattributes`` lines are written to the working tree only — you
 stage and commit them yourself; the tool never touches the git index. Each
