@@ -660,14 +660,15 @@ wiki (the path spells one machine's layout; the issue names the prefix-free
 form, as the ``./``/``../`` issue does), prose wikilinks written with ``./``
 or ``../`` that land outside every ``links.external`` folder (whatever is on
 disk; the issue names the entry to add), dangling or nested region markers,
-and — when the ``titles.required`` setting is on — missing titles.
+missing titles when the ``titles.required`` setting is on, and stale
+``[[wikilinks]]`` in authored prose when the ``lint.strict`` setting is on.
 
 **Notes** (soft, stderr) flag placeholder (``...``) descriptions, descriptions
 over 500 characters, empty index content sections, CRLF line endings, stale
-``[[wikilinks]]`` in authored prose (inside the wiki, or under a
-``links.external`` folder present on this machine; the note suggests the
-root-relative form of the target, or the root-relative spelling of an
-allowlisted file, when one resolves), a ``links.external`` entry naming no
+``[[wikilinks]]`` in authored prose unless ``lint.strict`` is on (inside the
+wiki, or under a ``links.external`` folder present on this machine; the note
+suggests the root-relative form of the target, or the root-relative spelling
+of an allowlisted file, when one resolves), a ``links.external`` entry naming no
 folder on this machine (noted once per run; links into it go unchecked), an
 indexed path this machine's git ignores (a personal ``core.excludesFile`` rule
 — the row ships where the file cannot, so every other clone reds on a broken

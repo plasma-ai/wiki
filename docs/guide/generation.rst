@@ -507,6 +507,10 @@ its meaning:
    Only under ``titles.required`` (see :doc:`/configuration`): the file's
    ``title:`` is absent, blank, or the seeded ``null`` placeholder.
 
+``<path>: Stale link [[target]]``
+   Only under ``lint.strict`` (see :doc:`/configuration`): the stale-link
+   note below, reported as an issue with the same line and fix.
+
 Soft notes
 ~~~~~~~~~~
 
@@ -545,8 +549,9 @@ notes is clean — lint exits 0.
        ``links.external`` folder, that file's root-relative spelling —
        ``(use [[../src/main.py]])``.
        Prose links are soft because pages come and go — the generated link
-       block's broken-link check is the hard surface. A target notes once
-       per file, however often the prose repeats it.
+       block's broken-link check is the hard surface — unless the wiki sets
+       ``lint.strict``, which makes each one a hard issue (above). A target
+       notes once per file, however often the prose repeats it.
    * - ``<path>: indexed, but this machine's git ignores it (<source>:<line> '<pattern>'); its generated row ships where the file cannot, so every other clone reds on a broken link``
      - The gitignore fence reads only the repository's own rules (pinned, so
        indexing is identical on every clone), but the named ignore rule —
