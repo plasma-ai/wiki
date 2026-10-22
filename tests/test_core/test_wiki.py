@@ -221,6 +221,7 @@ def test_init_seeds_custom_settings(tmp_path: pathlib.Path) -> None:
         {'exclude': {'patterns': ['!vendor']}},
         {'links': {'external': ['src']}},
         {'lint': {'strict': 'yes'}},
+        {'lint': ['strict']},
     ],
     ids=[
         'bad-naming',
@@ -230,6 +231,7 @@ def test_init_seeds_custom_settings(tmp_path: pathlib.Path) -> None:
         'bad-exclude',
         'bad-links',
         'bad-lint',
+        'bad-lint-block',
     ],
 )
 def test_init_rejects_bad_settings_before_writing(
