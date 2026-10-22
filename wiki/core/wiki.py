@@ -775,11 +775,12 @@ class Wiki:
         leaves that stamp on new bytes, so a file last modified within
         the period, or within a minute after the stamp (a run takes its
         stamp as it starts, and its writes land after), counts as
-        stamped: only a later modification is an edit. Only the plan's files are judged, so a path the walk skips
-        (excluded, gitignored, under a dot folder) never is, nor is a
-        file HEAD does not hold or one with no ``updated:`` on either
-        side. Outside a repository, or before its first commit, nothing
-        is; a fresh clone matches HEAD, so nothing is there either.
+        stamped: only a later modification is an edit. Only the plan's
+        files are judged, so a path the walk skips (excluded, gitignored,
+        under a dot folder) never is, nor is a file HEAD does not hold or
+        one with no ``updated:`` on either side. Outside a repository, or
+        before its first commit, nothing is; a fresh clone matches HEAD,
+        so nothing is there either.
         """
         if not self._in_repository():
             return []

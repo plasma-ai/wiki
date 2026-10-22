@@ -2277,7 +2277,7 @@ def test_lint_strict_reports_stale_links_as_issues(
     settings.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
     Wiki(tmp_path).update()
     page = tmp_path / 'notes' / 'meeting.md'
-    body = 'See [[gone]], [[meeting]], and [[../absent/x]].'
+    body = 'See [[gone]], [[meeting]], [[[x]], and [[../absent/x]].'
     text = page.read_text(encoding='utf-8').replace('Content for meeting.', body)
     page.write_text(text, encoding='utf-8')
     wiki = Wiki(tmp_path)
@@ -2287,6 +2287,7 @@ def test_lint_strict_reports_stale_links_as_issues(
     stale = [
         'notes/meeting.md: Stale link [[gone]]',
         'notes/meeting.md: Stale link [[meeting]] (use [[notes/meeting]])',
+        'notes/meeting.md: Stale link [[[x]]',
     ]
     notes = [
         event.description for event in notices if 'Stale link' in event.description
@@ -2294,7 +2295,7 @@ def test_lint_strict_reports_stale_links_as_issues(
     if strict:
         # the stale links are issues, typed with the fix they name
         assert issues == stale
-        assert [issue.kind for issue in issues] == ['link_stale', 'link_stale']
+        assert [issue.kind for issue in issues] == ['link_stale'] * 3
         assert issues[1].fields == {
             'path': 'notes/meeting.md',
             'target': 'meeting',

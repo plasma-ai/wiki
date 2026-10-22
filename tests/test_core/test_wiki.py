@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import pathlib
 import re
+import unicodedata
 
 import pytest
 
@@ -50,6 +51,8 @@ _ALPHA = '[[core/alpha|alpha]]: The alpha page.\n\n'
 _ZETA = '[[core/zeta|zeta]]: The zeta page.\nIts second line.\n\n'
 _API = '[[core/api|[api] api]]: The api page.\n\n'
 _STORE = '[[core/db|[store] db]]: The db page.\n\n'
+_CAFE = '[[core/café|café]]: The café page.\n\n'
+_CAFE_NFD = unicodedata.normalize('NFD', _CAFE)
 _CONTENT = '***\n\nBody text.\n\n***\n\nMore text.\n'
 
 
@@ -506,6 +509,12 @@ def test_init_refuses_legacy_layout_before_writing(
             f'{_HEAD}{_PARENT}{_ZETA}{_ALPHA}{_ZETA}{_CONTENT}',
             f'{_HEAD}{_PARENT}{_ZETA}{_ALPHA}{_ZETA}{_CONTENT}',
         ),
+        # one target spelled composed on one row and decomposed on the other
+        (
+            Wiki,
+            f'{_HEAD}{_PARENT}{_ZETA}{_CAFE}{_CAFE_NFD}{_CONTENT}',
+            f'{_HEAD}{_PARENT}{_ZETA}{_CAFE}{_CAFE_NFD}{_CONTENT}',
+        ),
     ],
     ids=[
         'in-form',
@@ -514,6 +523,7 @@ def test_init_refuses_legacy_layout_before_writing(
         'category-order',
         'no-delimiter',
         'repeated-target',
+        'repeated-target-nfd',
     ],
 )
 def test_canonicalize_index_puts_the_h1_and_rows_in_form(
