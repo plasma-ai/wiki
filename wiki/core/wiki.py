@@ -865,9 +865,9 @@ class Wiki:
         ``.gitattributes`` map (committed, it travels with the
         repository) and the ``merge.wiki.driver`` config (local, per
         clone). A fresh clone carries the map alone, and git then falls
-        back to a plain text merge of ``_index.md`` files -- silently,
-        at the clone's first merge -- so lint notes the gap while it is
-        one ``wiki config`` away from wired.
+        back to a plain text merge of ``_index.md`` files and pages --
+        silently, at the clone's first merge -- so lint notes the gap
+        while it is one ``wiki config`` away from wired.
         """
         attribute = self._git_read(['check-attr', 'merge', '--', WIKI_INDEX])
         if (attribute is None) or not attribute.endswith(': merge: wiki'):
@@ -6384,7 +6384,7 @@ class MergeDriverUnconfiguredEvent(Event):
         return (
             '.gitattributes maps merge=wiki but merge.wiki.driver is not'
             ' configured; run `wiki config` to register the driver (index'
-            ' merges fall back to a plain text merge until then)'
+            ' and page merges fall back to a plain text merge until then)'
         )
 
 

@@ -560,11 +560,11 @@ notes is clean — lint exits 0.
        would be committed without it. Drop the rule, or keep the path out of
        the index with ``exclude.patterns``. Only emitted inside a git
        repository.
-   * - ``.gitattributes maps merge=wiki but merge.wiki.driver is not configured; run `wiki config` to register the driver (index merges fall back to a plain text merge until then)``
+   * - ``.gitattributes maps merge=wiki but merge.wiki.driver is not configured; run `wiki config` to register the driver (index and page merges fall back to a plain text merge until then)``
      - A fresh clone carries the committed ``.gitattributes`` map but not the
        per-clone ``merge.wiki.driver`` config, so git text-merges
-       ``_index.md`` files until ``wiki config`` registers the driver (see
-       :doc:`/guide/merge-driver`).
+       ``_index.md`` files and pages until ``wiki config`` registers the
+       driver (see :doc:`/guide/merge-driver`).
    * - ``links.external entry '<folder>' names no folder on this machine; links into it are not checked``
      - A ``links.external`` entry names a folder absent from this clone (a
        sibling checkout missing from a partial clone) or names a file

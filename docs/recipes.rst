@@ -131,20 +131,25 @@ Wire it once and commit
 
 One team member runs ``wiki config`` (``wiki init`` does the same wiring) and
 commits the result. The command registers the driver in the clone's local git
-config and appends the attribute mapping to ``.gitattributes``:
+config, appends the index mapping to the repository root's
+``.gitattributes``:
 
 .. code-block:: text
 
    # Wiki index merge driver
    **/_index.md merge=wiki
-   # Wiki page merge driver
-   **/*.md merge=wiki
 
-A repository already mapping index files gains only the two page lines.
-``wiki config`` writes ``.gitattributes`` in the working tree only — you stage
-and commit it yourself — and skips the write entirely while the file has
-uncommitted changes (the lines land on the next run with a clean
-``.gitattributes``).
+and the page mapping to a ``.gitattributes`` in the wiki root, so Markdown
+outside the wiki keeps git's own merge:
+
+.. code-block:: text
+
+   # Wiki page merge driver
+   *.md merge=wiki
+
+``wiki config`` writes both files in the working tree only — you stage and
+commit them yourself — and skips a file entirely while it has uncommitted
+changes (its lines land on the next run with the file clean).
 
 Once per clone
 ~~~~~~~~~~~~~~
@@ -171,15 +176,18 @@ normalizes the tool-owned surfaces — the ``name:`` and ``updated:`` frontmatte
 keys (plus ``created:`` when both sides added the file independently) and the
 generated link block — so they never conflict. Everything authored still gets a
 normal three-way merge that can conflict: ``title:``, ``desc:``, ``category:``,
-``tags:``, ``sources:``, and the content below the ``***`` delimiter. Any file
-that is not an ``_index.md`` under a wiki root merges as ordinary text.
+``tags:``, ``sources:``, and the content below the ``***`` delimiter. A page
+the wiki manages merges as ordinary text after the driver settles both sides'
+``updated:`` stamps (and an add/add ``created:``), so a difference in stamps
+alone never conflicts. Any other file merges as ordinary text.
 
 After a merge, run ``wiki update --check``, and ``wiki update`` when it
 reports changes. The driver sets a clean merge's H1 from the merged
 ``title:`` and puts its rows in update's order, but some merges still leave
-rows to regenerate: a row one side changed and the other deleted, both sides
-changing one row, a change to the hook's ``category_order``, and a conflict
-resolved by hand. The update regenerates them from the merged filesystem.
+rows to regenerate, such as a row one side changed and the other deleted,
+both sides changing one row, a change to the hook's ``category_order``, and a
+conflict resolved by hand. The update regenerates them from the merged
+filesystem.
 
 Rename and restructure pages safely
 -----------------------------------

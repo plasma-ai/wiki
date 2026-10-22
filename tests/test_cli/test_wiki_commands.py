@@ -14,6 +14,7 @@ import json
 import pathlib
 import re
 import shutil
+import subprocess
 from typing import Optional
 
 import pytest
@@ -21,7 +22,7 @@ import pytest
 from wiki import __version__ as WIKI_VERSION
 from wiki.cli.utils import configure_git_merge_driver
 
-from .conftest import GIT, WIKI, _git, _wiki
+from .conftest import GIT, WIKI, _env, _git, _wiki
 
 __all__ = [
     'test_command_errors_exit_two',
@@ -124,6 +125,8 @@ __all__ = [
     'test_merge_dispatches_on_pathname',
     'test_merge_settles_the_stamps_of_a_managed_page',
     'test_merge_of_a_restamped_page_is_clean',
+    'test_markdown_outside_the_wiki_keeps_its_own_merge',
+    'test_merge_without_the_wiki_cli_falls_back_to_a_text_merge',
     'test_merge_driver_skips_non_wiki_index_files',
     'test_merge_conflicts_when_side_loses_separator',
     'test_merge_hints_add_add_body_conflicts',
@@ -2263,8 +2266,8 @@ def test_config_adopts_undeclared_tree(tmp_path: pathlib.Path) -> None:
     assert (bundled / 'main.js').is_file()
     assert (bundled / 'manifest.json').is_file()
     # the merge driver setup completes: repo config plus attribute map
-    driver = _git(tmp_path, 'config', 'merge.wiki.driver').stdout.strip()
-    assert driver == 'wiki _merge %O %A %B %L %P'
+    driver = _git(tmp_path, 'config', 'merge.wiki.driver').stdout
+    assert 'wiki _merge %O %A %B %L %P' in driver
     attributes = (tmp_path / '.gitattributes').read_text(encoding='utf-8')
     assert '**/_index.md merge=wiki' in attributes.splitlines()
 
@@ -3985,6 +3988,96 @@ def test_merge_of_a_restamped_page_is_clean(tmp_path: pathlib.Path) -> None:
     ]
     assert 'Our first line.' in merged
     assert 'Their last line.' in merged
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_markdown_outside_the_wiki_keeps_its_own_merge(tmp_path: pathlib.Path) -> None:
+    """Markdown outside the wiki merges by git's rules and its own, untouched.
+
+    ``wiki init`` maps pages in the wiki's own ``.gitattributes``, so a
+    file outside it keeps whatever the repository set for it -- a
+    ``merge=union`` changelog unions both sides' lines -- and any other
+    Markdown conflicts as git labels it, ``HEAD`` against the branch.
+    """
+    root = tmp_path / 'wiki'
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    # a committed attribute rule of the repository's own, then the wiki
+    _write(tmp_path / '.gitattributes', 'CHANGELOG.md merge=union\n')
+    _write(tmp_path / 'CHANGELOG.md', 'Base entry.\n')
+    _write(tmp_path / 'README.md', 'Base line.\n')
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'project')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    attributes = (tmp_path / '.gitattributes').read_text(encoding='utf-8')
+    assert '**/_index.md merge=wiki' in attributes.splitlines()
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # each branch adds its own changelog entry and rewords the readme line
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    _write(tmp_path / 'CHANGELOG.md', 'Base entry.\nTheir entry.\n')
+    _write(tmp_path / 'README.md', 'Their line.\n')
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    _write(tmp_path / 'CHANGELOG.md', 'Base entry.\nOur entry.\n')
+    _write(tmp_path / 'README.md', 'Our line.\n')
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
+
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode != 0
+    changelog = (tmp_path / 'CHANGELOG.md').read_text(encoding='utf-8')
+    assert changelog == 'Base entry.\nOur entry.\nTheir entry.\n'
+    readme = (tmp_path / 'README.md').read_text(encoding='utf-8')
+    assert '<<<<<<< HEAD' in readme
+    assert '>>>>>>> theirs' in readme
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_merge_without_the_wiki_cli_falls_back_to_a_text_merge(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A merge that cannot find ``wiki`` still merges, with conflict markers.
+
+    The registered driver runs git's own text merge when the CLI is not
+    on PATH, labeled as the wiki's merge labels its conflicts, so a
+    conflict shows both sides rather than leaving ours alone without
+    markers for a ``git add`` to settle silently.
+    """
+    root = tmp_path / 'wiki'
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    page = root / 'notes.md'
+    _write(page, _page('notes', 'Notes.', 'Base line.'))
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    _write(page, _page('notes', 'Notes.', 'Their line.'))
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    _write(page, _page('notes', 'Notes.', 'Our line.'))
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
+
+    # a PATH holding git alone: the driver cannot find the wiki CLI
+    bin_dir = tmp_path.parent / f'{tmp_path.name}_bin'
+    bin_dir.mkdir()
+    (bin_dir / 'git').symlink_to(GIT)
+    env = _env()
+    env['PATH'] = str(bin_dir)
+    merge = subprocess.run(
+        [GIT, '-C', str(tmp_path), 'merge', 'theirs'],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert merge.returncode != 0
+    merged = page.read_text(encoding='utf-8')
+    assert '<<<<<<< ours' in merged
+    assert 'Our line.' in merged
+    assert 'Their line.' in merged
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')

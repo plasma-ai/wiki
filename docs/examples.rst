@@ -142,7 +142,8 @@ stderr — a note that ``.gitattributes`` maps ``merge=wiki`` but
 ``merge.wiki.driver`` is not configured, naming ``wiki config`` as the fix —
 and the summary reads ``No issues found (1 note).`` The note is about the
 clone, not the sample tree: the repository's ``.gitattributes`` maps
-``**/_index.md merge=wiki`` and travels with every clone, while the
+``**/_index.md merge=wiki`` (and ``examples/hello/.gitattributes`` maps the
+sample's pages) and travels with every clone, while the
 ``merge.wiki.driver`` git config it pairs with is local and unset until
 ``wiki config`` runs inside the clone. The exit code is 0 either way. Run
 ``wiki config`` once from ``examples/hello`` (it also stages the local

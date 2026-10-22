@@ -13,42 +13,54 @@ Wiring
 ------
 
 ``wiki init`` and ``wiki config`` both wire the driver into the repository
-that holds the wiki. Two pieces work together. The repository's
-``.gitattributes`` maps index files, then every Markdown page, to the
-driver:
+that holds the wiki. Three pieces work together. The repository root's
+``.gitattributes`` maps index files to the driver:
 
 .. code-block:: text
 
    # Wiki index merge driver
    **/_index.md merge=wiki
-   # Wiki page merge driver
-   **/*.md merge=wiki
 
-And the repository's *local* git config defines it:
+A ``.gitattributes`` in the wiki root itself maps the wiki's pages, at any
+depth below it:
+
+.. code-block:: text
+
+   # Wiki page merge driver
+   *.md merge=wiki
+
+Markdown outside the wiki is never mapped, so it keeps git's own merge and
+any rule the repository sets for it (a ``merge=union`` changelog, say). A
+wiki at the repository root has one file for both, the index block first.
+And the repository's *local* git config defines the driver:
 
 .. code-block:: ini
 
    [merge "wiki"]
        name = wiki merge (auto-resolve generated sections)
-       driver = wiki _merge %O %A %B %L %P
+       driver = if command -v wiki >/dev/null 2>&1; then wiki _merge %O %A %B %L %P; else git merge-file -L ours -L base -L theirs --marker-size=%L %A %O %B; fi
 
 The ``.gitattributes`` lines are written to the working tree only — you
-stage and commit them yourself; the tool never touches the git index. The
-lines are written once per repository, however many wikis it holds, and a
-repository already mapping index files gains only the two page lines, right
-after its last line. The write is skipped while ``.gitattributes`` has
-uncommitted changes of your own (the driver config is still registered; the
-attribute lines land on the next clean run).
+stage and commit them yourself; the tool never touches the git index. Each
+block is appended once, after the file's last line and in the file's own
+line ending, when its mapping line is missing; existing lines are never
+rewritten. A file with uncommitted changes of your own — a new, untracked
+one included — is left alone (the driver config is still registered; the
+lines land on the next clean run).
 
 **The driver is per-clone.** The committed ``.gitattributes`` only names the
 driver; its definition lives in each clone's local git config. Every
 contributor therefore runs ``wiki config`` once after cloning — until then,
 that clone's ``_index.md`` and page merges silently fall back to git's
-default text merge. The driver string invokes the ``wiki`` command itself rather than an
-absolute path into a virtualenv (which would silently break when the
-environment is rebuilt or moved), so the CLI must be on ``PATH`` when git
-runs the merge — an isolated install via ``pipx`` or ``uv tool`` takes care
-of that.
+default text merge. The driver string invokes the ``wiki`` command itself
+rather than an absolute path into a virtualenv (which would silently break
+when the environment is rebuilt or moved), so the CLI must be on ``PATH``
+when git runs the merge — an isolated install via ``pipx`` or ``uv tool``
+takes care of that. When it is not, the driver runs git's own text merge
+instead, its conflicts marked as the wiki's are, so a merge without the CLI
+still shows both sides. An external driver never sees ``git merge -X``
+options, so ``-X ours`` and ``-X theirs`` do not apply to the files it
+merges.
 
 How a merge resolves
 --------------------
@@ -69,7 +81,8 @@ Frontmatter
    normalized ``created:`` the earlier, both compared as instants under the
    wiki's timestamp policy (``timestamp.timezone``/``timestamp.format`` in
    ``settings.json``). A stamp either side spells in a form the policy does
-   not parse leaves the current branch's. The remaining, authored keys —
+   not parse, or a wiki whose hook or settings cannot load, leaves the
+   current branch's. The remaining, authored keys —
    ``title:``, ``desc:``, ``category:``, ``tags:``, ``sources:``,
    ``created:`` (ordinarily), and any custom keys — get a normal three-way
    merge that can conflict.
@@ -136,10 +149,11 @@ so both sides carry the same stamp lines. A page whose sides differ only in
 their stamps — each branch edited its own part and ran ``wiki update`` —
 merges clean; one with a genuine conflict keeps it, with the stamps already
 settled. A stamp either side spells in a form the policy does not parse
-leaves both sides' stamps as they are. A Markdown file the wiki does not
-manage — one ``exclude.patterns`` or the repository's gitignore keeps out of
-the index, one under a dot folder, or one outside every wiki — gets git's
-default text merge, its stamps untouched.
+leaves both sides' stamps as they are. A Markdown file inside the wiki that
+the wiki does not manage — one ``exclude.patterns`` or the repository's
+gitignore keeps out of the index, or one under a dot folder — gets a plain
+text merge, its stamps untouched, as does every page when the wiki's hook or
+settings cannot load. Markdown outside the wiki never reaches the driver.
 
 A merge of two branches that each added or deleted pages, ran
 ``wiki update``, and edited different prose therefore resolves cleanly and
@@ -216,14 +230,20 @@ files and pages, silently, at its first merge. ``wiki lint`` notes the gap
 the driver.
 
 Run ``wiki update --check`` after a merge, and ``wiki update`` when it
-reports changes. A clean merge in which each side only added, deleted, or
-retitled entries checks clean — the driver already set its H1 and row order
-and kept each side's deletions — but some clean merges still leave rows to
-regenerate: a row one side changed and the other deleted is kept, pointing
-at nothing; when both sides change the same row, the current branch's text
-wins; and a merge that changes the hook's ``category_order`` sorts by the
-order the current branch had. Resolving conflicts by hand can leave the H1
-or rows to regenerate too. The update regenerates the link blocks from the
+reports changes. Once the merge is committed, a clean merge in which each
+side only added, deleted, or retitled entries checks clean — the driver
+already set its H1 and row order and kept each side's deletions — but some
+clean merges still leave rows to regenerate, such as: a row one side changed
+and the other deleted is kept, pointing at nothing; when both sides change
+the same row, the current branch's text wins; a merge that changes the
+hook's ``category_order`` sorts by the order the current branch had; a merge
+with two rows for one target, or a line in the escape-damage shape, is left
+for the update to resolve. Resolving conflicts by hand can leave the H1 or
+rows to regenerate too. Before the merge is committed — with
+``--no-commit``, ``--squash``, or a conflict elsewhere — a file the driver
+merged keeping the current branch's later ``updated:`` differs from HEAD
+under HEAD's stamp, so update restamps it as a hand edit (see
+:doc:`/guide/generation`). The update regenerates the link blocks from the
 merged filesystem: the H1 follows the title, rows sort into place, any
 whose target is gone are pruned, and labels and descriptions refresh.
 
@@ -236,18 +256,22 @@ Git hands it the base, ours, and theirs versions, the conflict-marker size,
 and the repo-relative pathname of the merging file. The command dispatches on
 the pathname: an ``_index.md`` below a declared wiki root (an ancestor
 holding ``.wiki/settings.json``) gets the region-aware index merge described
-above, and every other file — including an ``_index.md`` outside any wiki,
-such as a static-site generator's content page — gets git's default three-way
-text merge. The exit code passes through to git: nonzero means conflicts were
-left in the file. After a clean index merge the command sets the H1 and the
-row order with the wiki's class, loaded as every command loads it — except
-that a hook it cannot load or run, or an index that class did not write,
-skips that step rather than failing the merge. The rewrite replaces the
-file whole: a write that fails leaves it as merged, its exit code intact.
+above, a page the wiki manages gets its stamps settled and a three-way text
+merge, and every other file — including an ``_index.md`` outside any wiki,
+such as a static-site generator's content page — gets a plain three-way text
+merge, its conflicts labeled ``ours``/``theirs``. The exit code passes
+through to git: nonzero means conflicts were left in the file. After a clean
+index merge the command sets the H1 and the row order with the wiki's class,
+loaded as every command loads it — except that a hook it cannot load or run,
+or an index that class did not write, skips that step rather than failing
+the merge. The rewrite replaces the file whole: a write that fails leaves it
+as merged, its exit code intact.
 
-The dispatch is per-file and policy-free — it never reads
+The index dispatch is per-file and policy-free — it never reads
 ``exclude.patterns`` (a malformed ``exclude`` block must not fail a git
-merge). An orphaned ``_index.md`` left inside an excluded subtree is still
-index-structured bytes below a declared root, so it keeps getting the
-field-aware merge; delete orphaned indexes when excluding an already-indexed
-subtree (see the ``exclude`` section in :doc:`/configuration`).
+merge); a page's judgment reads the wiki's settings, and one it cannot read
+gives the plain text merge rather than failing. An orphaned ``_index.md``
+left inside an excluded subtree is still index-structured bytes below a
+declared root, so it keeps getting the field-aware merge; delete orphaned
+indexes when excluding an already-indexed subtree (see the ``exclude``
+section in :doc:`/configuration`).
