@@ -25,15 +25,21 @@ may include breaking changes, each listed under a Breaking heading.
   `link_stale`, are the same either way, so a gate that filtered the notes for
   that kind can read the issues instead. A `links.external` entry naming no
   folder on this machine stays a note.
-- The merge driver settles the `updated:` stamp of every page it merges, not
-  only `_index.md`: both sides take the later stamp, and over a base with no
-  `created:` the earlier `created:`, before git's text merge. A page whose two
+- The merge driver settles the `updated:` stamp of every wiki page it merges,
+  not only `_index.md`: both sides take the later stamp, and over a base with no
+  `created:` the earlier `created:`, before the text merge. A page whose two
   branches each edited their own part and ran `wiki update` now merges clean
-  instead of conflicting on the stamp line. Excluded, gitignored and non-wiki
-  Markdown keeps git's default merge. `wiki init` and `wiki config` add the page
-  lines `# Wiki page merge driver` and `**/*.md merge=wiki` to `.gitattributes`,
-  right after the index lines in a repository that already has them; run
-  `wiki config` and commit `.gitattributes` to adopt it.
+  instead of conflicting on the stamp line; an excluded or gitignored page, or
+  one whose wiki hook cannot load, gets a plain text merge. `wiki init` and
+  `wiki config` map the wiki's pages in a `.gitattributes` in the wiki root
+  (`# Wiki page merge driver`, `*.md merge=wiki`), so Markdown outside the wiki
+  keeps git's own merge and any rule set for it; the repository root keeps the
+  index lines alone. Run `wiki config` and commit the new file to adopt it.
+- The registered merge driver falls back to git's own text merge, its conflicts
+  labeled `ours`/`theirs`, when `wiki` is not on PATH, so a merge without the
+  CLI shows both sides of a conflict rather than leaving the current branch's
+  file alone without markers. Each clone picks up the new driver on its next
+  `wiki config`.
 
 ### Fixed
 

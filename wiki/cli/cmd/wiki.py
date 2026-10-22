@@ -383,9 +383,9 @@ def config(
         absolute in .obsidian/app.json) when the vault has none (a value
         you have chosen stands), restores a missing .wiki/settings.json
         ({}), registers the git merge driver in the repo's local config,
-        and writes the **/_index.md and **/*.md globs to .gitattributes
-        when that file has no pending edits (you commit it yourself). Run
-        once per clone.
+        and maps it in .gitattributes -- **/_index.md at the repo root,
+        *.md in the wiki root -- skipping a file with pending edits (you
+        commit both yourself). Run once per clone.
         Exits 0 even when a plugin download fails -- download failures are
         stderr warnings (re-run online to finish setup), never the exit
         code.
@@ -1116,15 +1116,17 @@ def merge(app: typer.Typer) -> typer.Typer:
     ) -> None:
         """Run the wiki merge driver (invoked by git).
 
-        init/config register ``wiki _merge %O %A %B %L %P`` as the merge.wiki
-        driver -- a stable entry point that survives the venv rebuilds and
-        moves an absolute script path silently breaks on. The real pathname
+        init/config register a merge.wiki driver that runs ``wiki _merge %O
+        %A %B %L %P`` -- a stable entry point that survives the venv rebuilds
+        and moves an absolute script path silently breaks on -- and falls back
+        to git's own text merge when the CLI is not on PATH. The real pathname
         (%P) dispatches internally, so the registration string never changes:
         an ``_index.md`` below a declared wiki root gets the field-aware
         index merge, a page the wiki manages a text merge over settled
-        stamps, and everything else git's default text merge. Both wiki
-        merges keep the later ``updated`` stamp, and a clean index merge
-        gets the H1 and row order ``wiki update`` writes.
+        stamps, and everything else a plain text merge. Both wiki merges keep
+        the later ``updated`` stamp, and a clean index merge gets the H1 and
+        row order ``wiki update`` writes; every conflict is labeled ours,
+        base and theirs.
         """
         # dispatch on the real pathname: an _index.md below a declared wiki
         # root -> field-aware index merge (git runs merge drivers at the
@@ -1163,13 +1165,14 @@ def merge(app: typer.Typer) -> typer.Typer:
             labels = ['-L', 'ours', '-L', 'base', '-L', 'theirs']
             cmd = ['git', 'merge-file', size, *labels, ours, base, theirs]
             wiki = None
-        # any other file class: git's default three-way text merge -- an
-        # _index.md outside every declared wiki (a site generator's content
-        # page) is not tool-owned, and the index merge would resolve its
-        # pre-*** region to ours, silently dropping theirs' edits
+        # any other file class: a three-way text merge, labeled the same way
+        # -- an _index.md outside every declared wiki (a site generator's
+        # content page) is not tool-owned, and the index merge would resolve
+        # its pre-*** region to ours, silently dropping theirs' edits
         else:
             size = f'--marker-size={marker_size}'
-            cmd = ['git', 'merge-file', size, ours, base, theirs]
+            labels = ['-L', 'ours', '-L', 'base', '-L', 'theirs']
+            cmd = ['git', 'merge-file', size, *labels, ours, base, theirs]
             wiki = None
         # pass the exit code through (nonzero tells git the merge left
         # conflicts); the best-effort rewrite below never changes it

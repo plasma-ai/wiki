@@ -61,7 +61,7 @@ __all__ = [
     'test_interrupt_reports_and_exits_130',
     'test_merge_driver_wiring_ignores_ambient_git_dir',
     'test_configure_git_merge_driver',
-    'test_merge_driver_appends_the_missing_attribute_lines',
+    'test_merge_driver_maps_indexes_at_the_root_and_pages_in_the_wiki',
     'test_merge_driver_skips_dirty_gitattributes',
     'test_merge_driver_reads_gitattributes_without_the_index_lock',
     'test_merge_driver_tolerates_undecodable_git_output',
@@ -995,14 +995,16 @@ def test_merge_driver_wiring_ignores_ambient_git_dir(
     monkeypatch.delenv('GIT_DIR')
     # the enclosing repo got both halves of the wiring
     driver = _git(repo, 'config', '--get', 'merge.wiki.driver')
-    assert driver.stdout.strip() == 'wiki _merge %O %A %B %L %P'
+    assert 'wiki _merge %O %A %B %L %P' in driver.stdout
     attributes = (repo / '.gitattributes').read_text(encoding='utf-8')
     assert '**/_index.md merge=wiki' in attributes.splitlines()
-    # the foreign repo got neither, and none landed inside the wiki
+    # the foreign repo got neither, and the root's index mapping did not land
+    # inside the wiki, whose own file maps its pages alone
     foreign_driver = _git(foreign, 'config', '--get', 'merge.wiki.driver')
     assert foreign_driver.returncode != 0
     assert not (foreign / '.gitattributes').exists()
-    assert not (repo / 'wiki' / '.gitattributes').exists()
+    own = (repo / 'wiki' / '.gitattributes').read_text(encoding='utf-8')
+    assert own.splitlines() == ['# Wiki page merge driver', '*.md merge=wiki']
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
@@ -1032,10 +1034,9 @@ def test_configure_git_merge_driver(tmp_path: pathlib.Path) -> None:
 
     configure_git_merge_driver(wiki_dir)
 
-    # driver is the stable CLI command and the glob is written to the worktree
-    assert _git(tmp_path, 'config', 'merge.wiki.driver').stdout.strip() == (
-        'wiki _merge %O %A %B %L %P'
-    )
+    # driver runs the stable CLI command and the glob is written to the worktree
+    driver = _git(tmp_path, 'config', 'merge.wiki.driver').stdout
+    assert 'wiki _merge %O %A %B %L %P' in driver
     attributes = (tmp_path / '.gitattributes').read_text(encoding='utf-8')
     assert '**/_index.md merge=wiki' in attributes.splitlines()
     # nothing is committed (no new HEAD) and nothing is staged (the rule)
@@ -1051,71 +1052,101 @@ def test_configure_git_merge_driver(tmp_path: pathlib.Path) -> None:
     assert final.splitlines().count('**/_index.md merge=wiki') == 1
 
 
-# the canonical attribute block: today's index lines, then the page lines
-_ATTRIBUTE_BLOCK = (
-    '# Wiki index merge driver\n'
-    '**/_index.md merge=wiki\n'
-    '# Wiki page merge driver\n'
-    '**/*.md merge=wiki\n'
-)
+# the attribute blocks: index files at the repository root, pages in the
+# wiki root's own file
+_INDEX_BLOCK = '# Wiki index merge driver\n**/_index.md merge=wiki\n'
+_PAGE_BLOCK = '# Wiki page merge driver\n*.md merge=wiki\n'
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
 @pytest.mark.parametrize(
-    argnames=('current', 'expected'),
+    argnames=('folder', 'current', 'expected'),
     argvalues=[
-        (None, _ATTRIBUTE_BLOCK),
-        ('*.png binary\n', '*.png binary\n\n' + _ATTRIBUTE_BLOCK),
-        ('*.png binary', '*.png binary\n\n' + _ATTRIBUTE_BLOCK),
         (
-            '# Wiki index merge driver\n**/_index.md merge=wiki\n',
-            _ATTRIBUTE_BLOCK,
+            'wiki',
+            {},
+            {'.gitattributes': _INDEX_BLOCK, 'wiki/.gitattributes': _PAGE_BLOCK},
         ),
         (
-            '# Wiki index merge driver\n**/_index.md merge=wiki\n\n*.png binary',
-            '# Wiki index merge driver\n**/_index.md merge=wiki\n\n*.png binary\n'
-            '# Wiki page merge driver\n**/*.md merge=wiki\n',
+            'wiki',
+            {'.gitattributes': '*.png binary\n'},
+            {
+                '.gitattributes': '*.png binary\n\n' + _INDEX_BLOCK,
+                'wiki/.gitattributes': _PAGE_BLOCK,
+            },
         ),
-        (_ATTRIBUTE_BLOCK, _ATTRIBUTE_BLOCK),
+        (
+            'wiki',
+            {'.gitattributes': _INDEX_BLOCK, 'wiki/.gitattributes': '*.svg binary'},
+            {
+                '.gitattributes': _INDEX_BLOCK,
+                'wiki/.gitattributes': '*.svg binary\n\n' + _PAGE_BLOCK,
+            },
+        ),
+        (
+            'wiki',
+            {'.gitattributes': _INDEX_BLOCK, 'wiki/.gitattributes': _PAGE_BLOCK},
+            {'.gitattributes': _INDEX_BLOCK, 'wiki/.gitattributes': _PAGE_BLOCK},
+        ),
+        (
+            'wiki',
+            {'.gitattributes': '*.png binary\r\n'},
+            {
+                '.gitattributes': '*.png binary\r\n\r\n'
+                + _INDEX_BLOCK.replace('\n', '\r\n'),
+                'wiki/.gitattributes': _PAGE_BLOCK,
+            },
+        ),
+        ('', {}, {'.gitattributes': _INDEX_BLOCK + '\n' + _PAGE_BLOCK}),
+        (
+            '',
+            {'.gitattributes': _INDEX_BLOCK},
+            {'.gitattributes': _INDEX_BLOCK + '\n' + _PAGE_BLOCK},
+        ),
     ],
     ids=[
-        'no-file',
-        'other-rules',
-        'other-rules-no-newline',
-        'index-lines',
-        'index-lines-then-other-rules',
-        'both-lines',
+        'no-files',
+        'root-rules',
+        'wiki-rules-no-newline',
+        'both-mapped',
+        'root-crlf',
+        'repo-root-wiki',
+        'repo-root-wiki-indexes-mapped',
     ],
 )
-def test_merge_driver_appends_the_missing_attribute_lines(
+def test_merge_driver_maps_indexes_at_the_root_and_pages_in_the_wiki(
     tmp_path: pathlib.Path,
-    current: Optional[str],
-    expected: str,
+    folder: str,
+    current: dict[str, str],
+    expected: dict[str, str],
 ) -> None:
-    """The wiring appends whatever suffix of the attribute block is missing.
+    """The wiring maps index files at the root and pages in the wiki's own file.
 
-    The block is today's two index lines followed by the page lines, so a
-    repository holding the index lines gains only the page lines, right
-    after its last line -- the committed file plus that suffix, the shape
-    an embedder's commit check accepts -- and one holding both is left
-    alone. With neither present, the whole block follows the usual
-    separator, and a re-run writes nothing more.
+    Markdown outside the wiki keeps git's own merge and the rules set for
+    it, since only the wiki's file maps pages. Each file gains the block
+    whose mapping line it lacks, after its last line and set off by a
+    blank line, in the file's own line ending; its existing bytes stay
+    as they are, the shape an embedder's commit check accepts. A wiki at
+    the repository root carries both blocks in its one file, and a
+    re-run writes nothing more.
     """
     _git(tmp_path, 'init', '-b', 'main')
     _git(tmp_path, 'config', 'user.email', 'test@test.com')
     _git(tmp_path, 'config', 'user.name', 'Test')
-    attributes = tmp_path / '.gitattributes'
-    if current is not None:
-        attributes.write_text(current, encoding='utf-8')
-        _git(tmp_path, 'add', '.gitattributes')
+    wiki_dir = tmp_path / folder
+    wiki_dir.mkdir(exist_ok=True)
+    if current:
+        for name, text in current.items():
+            (tmp_path / name).write_bytes(text.encode('utf-8'))
+        _git(tmp_path, 'add', '-A')
         _git(tmp_path, 'commit', '-m', 'attributes')
-    wiki_dir = tmp_path / 'wiki'
-    wiki_dir.mkdir()
 
-    configure_git_merge_driver(wiki_dir)
-    assert attributes.read_text(encoding='utf-8') == expected
-    configure_git_merge_driver(wiki_dir)
-    assert attributes.read_text(encoding='utf-8') == expected
+    for _ in range(2):
+        configure_git_merge_driver(wiki_dir)
+        written = {
+            name: (tmp_path / name).read_bytes().decode('utf-8') for name in expected
+        }
+        assert written == expected
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')

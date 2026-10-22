@@ -89,7 +89,8 @@ The command sets up:
 - ``wiki/.wiki/cache/`` — a derived word-counts cache; it ignores itself via
   its own ``.gitignore`` and can be deleted at any time.
 - The git merge driver for ``_index.md`` files and pages, registered in the
-  repository's local git config and named in ``.gitattributes``. See
+  repository's local git config and named in ``.gitattributes`` — the
+  repository root's for indexes, ``wiki/.gitattributes`` for pages. See
   :doc:`/guide/merge-driver`.
 
 .. list-table::

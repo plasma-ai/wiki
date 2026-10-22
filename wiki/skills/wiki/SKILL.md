@@ -309,11 +309,13 @@ rather than authoring or auditing page by page yourself:
   other page the wiki manages gets a plain three-way text merge after both sides
   take the later `updated` stamp (and, over a base with no `created`, the
   earlier `created`), so a page whose sides differ only in stamps merges clean;
-  excluded, gitignored and non-wiki Markdown gets git's default merge.
-  `init`/`config` register the driver in local git config and write the
-  `**/_index.md` and `**/*.md` globs to `.gitattributes` (once per repository)
-  in the working tree only — you stage and commit it yourself, and each clone
-  runs `wiki config` once to register the driver.
+  an excluded or gitignored page gets a plain text merge, and Markdown outside
+  the wiki never reaches the driver. `init`/`config` register the driver in
+  local git config and write `**/_index.md merge=wiki` to the repository root's
+  `.gitattributes` and `*.md merge=wiki` to one in the wiki root, in the working
+  tree only — you stage and commit them yourself, and each clone runs
+  `wiki config` once to register the driver. Without `wiki` on PATH the driver
+  falls back to git's own text merge.
 - **Leave new-directory index bodies empty during concurrent work.** When
   sibling branches both create the same new directory, its two `_index.md`s
   merge add/add with no common ancestor: the generated region resolves
