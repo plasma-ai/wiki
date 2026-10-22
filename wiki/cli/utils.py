@@ -575,13 +575,18 @@ def configure_git_merge_driver(path: pathlib.Path) -> None:
     # map index files at the root and pages in the wiki's own file; git names
     # the wiki's place in the repo (an empty prefix at the top level), so no
     # path comparison can misjudge a case-folded or symlinked spelling
-    prefix = _git(['rev-parse', '--show-prefix'], cwd=path, check=False)
-    if not prefix:
-        blocks = [_INDEX_ATTRIBUTES, _PAGE_ATTRIBUTES]
-        _append_attributes(repo / '.gitattributes', blocks)
-    else:
+    cmd = ['rev-parse', '--show-prefix']
+    prefix = _git(cmd, cwd=path, check=False)
+    # a failed query names no place: map nothing rather than take it for the
+    # top level, which would map every page in the repo
+    if prefix is None:
+        return
+    if prefix:
         _append_attributes(repo / '.gitattributes', [_INDEX_ATTRIBUTES])
         _append_attributes(pathlib.Path(path) / '.gitattributes', [_PAGE_ATTRIBUTES])
+    else:
+        blocks = [_INDEX_ATTRIBUTES, _PAGE_ATTRIBUTES]
+        _append_attributes(repo / '.gitattributes', blocks)
 
 
 # ------ helper functions

@@ -65,6 +65,7 @@ __all__ = [
     'test_merge_driver_skips_dirty_gitattributes',
     'test_merge_driver_reads_gitattributes_without_the_index_lock',
     'test_merge_driver_tolerates_undecodable_git_output',
+    'test_merge_driver_maps_nothing_when_git_cannot_place_the_wiki',
 ]
 
 
@@ -1248,6 +1249,41 @@ def test_merge_driver_tolerates_undecodable_git_output(
     path = os.environ['PATH']
     monkeypatch.setenv('PATH', f'{stub_dir}{os.pathsep}{path}')
     configure_git_merge_driver(tmp_path)
+
+
+def test_merge_driver_maps_nothing_when_git_cannot_place_the_wiki(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed query for the wiki's place in the repo writes no map.
+
+    Only a wiki at the repository root maps every page from the root
+    ``.gitattributes``, so a query that fails must not read as that top
+    level. The stub git finds the repo but fails the place query, and
+    reports every file clean so the wiring would write if it chose to.
+    """
+    # a stub git that finds the repo at tmp_path but cannot place the wiki
+    stub_dir = tmp_path / 'bin'
+    stub_dir.mkdir()
+    stub = stub_dir / 'git'
+    stub.write_text(
+        '#!/bin/sh\n'
+        'case "$*" in\n'
+        f"*--show-toplevel*) printf '%s\\n' '{tmp_path}' ;;\n"
+        '*--show-prefix*) exit 128 ;;\n'
+        'esac\n',
+        encoding='utf-8',
+    )
+    stub.chmod(0o755)
+    path = os.environ['PATH']
+    monkeypatch.setenv('PATH', f'{stub_dir}{os.pathsep}{path}')
+    wiki_dir = tmp_path / 'wiki'
+    wiki_dir.mkdir()
+
+    # neither the root nor the wiki gains a .gitattributes
+    configure_git_merge_driver(wiki_dir)
+    assert not (tmp_path / '.gitattributes').exists()
+    assert not (wiki_dir / '.gitattributes').exists()
 
 
 # ------ helpers

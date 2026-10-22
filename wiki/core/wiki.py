@@ -608,7 +608,7 @@ class Wiki:
         if matched is None:
             return frozenset()
         # a fenced root would fence the whole wiki out of itself: leave a
-        # deliberately ignored wiki unfenced instead. Its index must read
+        # deliberately ignored wiki unfenced instead; its index must read
         # ignored too, since at a repository's top level git reads '.' as
         # ignored under any '*' line, whatever re-includes follow it
         if {'.', WIKI_INDEX} <= matched:
@@ -690,8 +690,8 @@ class Wiki:
         # git checks the root itself whatever the ceiling
         if (self._root / '.git').exists():
             return True
-        # the ceilings git honors: absolute entries, each
-        # resolved unless an empty entry precedes it
+        # the ceilings git honors: absolute entries, each resolved unless an
+        # empty entry precedes it
         ceilings = set()
         resolve = True
         for entry in os.environ.get('GIT_CEILING_DIRECTORIES', '').split(os.pathsep):
@@ -773,21 +773,21 @@ class Wiki:
         names a period at the policy's resolution (a second, or a day
         under a date format), and a write within HEAD's stamp period
         leaves that stamp on new bytes, so a file last modified within
-        the period, or within a minute after the stamp (a run takes its
-        stamp as it starts, and its writes land after), counts as
-        stamped: only a later modification is an edit. Only the plan's
-        files are judged, so a path the walk skips (excluded, gitignored,
-        under a dot folder) never is, nor is a file HEAD does not hold or
-        one with no ``updated:`` on either side. Outside a repository, or
-        before its first commit, nothing is; a fresh clone matches HEAD,
-        so nothing is there either.
+        the period, or within the stamp grace (``_STAMP_GRACE``) after
+        the stamp (a run takes its stamp as it starts, and its writes
+        land after), counts as stamped: only a later modification is an
+        edit. Only the plan's files are judged, so a path the walk skips
+        (excluded, gitignored, under a dot folder) never is, nor is a
+        file HEAD does not hold or one with no ``updated:`` on either
+        side. Outside a repository, or before its first commit, nothing
+        is; a fresh clone matches HEAD, so nothing is there either.
         """
         if not self._in_repository():
             return []
         # one diff names the scope's tracked files that differ from HEAD,
         # staged or not, root-relative -- without the optional index lock its
         # stat refresh takes, which would fail a concurrent git add or commit
-        # the scope is passed as ./<path>, which git reads literally
+        # the scope goes as ./<path>, which git reads literally
         scope = f'./{self._relpath(folder)}'
         cmd = [
             '--no-optional-locks',
@@ -834,9 +834,10 @@ class Wiki:
             # git lists a change of line endings or file mode alone, which is
             # no edit: the plan reads text with its newlines normalized, so
             # HEAD's copy is read alike before the two compare
-            if (head is None) or (
-                head.replace('\r\n', '\n').replace('\r', '\n') == text
-            ):
+            if head is None:
+                continue
+            normalized = head.replace('\r\n', '\n').replace('\r', '\n')
+            if normalized == text:
                 continue
             stamp = _updated_stamp(text)
             if (stamp is None) or (stamp != _updated_stamp(head)):
@@ -1016,8 +1017,8 @@ class Wiki:
         """
         lines = text.split('\n')
         frontmatter, start = format.extract_frontmatter(lines)
-        # find the first delimiter after the frontmatter, where
-        # the region format.parse_index reads ends
+        # find the first delimiter after the frontmatter, where the region
+        # format.parse_index reads ends
         end = None
         for i in range(start, len(lines)):
             if lines[i].rstrip() == self.index_delimiter:
@@ -1105,8 +1106,8 @@ class Wiki:
             raise ValueError(f'Invalid wiki name {name!r}: {violation}')
         # the titles, map, exclude, links, and lint policies are read lazily
         # (first inside the plan, the map render, the walk, lint's folder
-        # check, and lint's link scan), so touch them here to reject a bad
-        # seed early
+        # check, and lint's link scan), so touch them here to reject
+        # a bad seed early
         self._titles_required  # noqa: B018
         self._map_policy  # noqa: B018
         self._exclude_policy  # noqa: B018
@@ -1720,9 +1721,10 @@ class Wiki:
           what ``update`` changes but the restamp of a file edited by
           hand since its last commit (:meth:`_edited_since_stamp`),
           which lint does not judge. (A file with merge conflict
-          markers is reported only as such, with its diff suppressed.) A bare page (no frontmatter) is
-          additionally named as one, so the pending adoption is
-          legible without reading its diff.
+          markers is reported only as such, with its diff
+          suppressed.) A bare page (no frontmatter) is additionally
+          named as one, so the pending adoption is legible without
+          reading its diff.
         - **Needs attention:** problems ``update`` cannot fix --
           invalid names, merge conflict markers (``update`` refuses
           the sweep until they are resolved), unclosed page
@@ -6024,7 +6026,9 @@ class Wiki:
                     continue
                 reported.add(target)
                 self._report_stale_link(
-                    result, path=str(relpath), target=target + alias
+                    result,
+                    path=str(relpath),
+                    target=target + alias,
                 )
                 continue
             # every target is read from the wiki root: a target carrying a
@@ -6233,11 +6237,13 @@ class Wiki:
                 )
             else:
                 self._report_stale_link(
-                    result, path=str(relpath), target=target + alias
+                    result,
+                    path=str(relpath),
+                    target=target + alias,
                 )
         return result
 
-    def _report_stale_link(self: Wiki, result: list[Issue], **fields: Any) -> None:
+    def _report_stale_link(self: Wiki, issues: list[Issue], **fields: Any) -> None:
         """Report a stale link: a soft note, or under ``lint.strict`` an issue.
 
         The issue carries the note's line and payload, typed ``link_stale``
@@ -6246,7 +6252,7 @@ class Wiki:
         """
         if self._lint_strict:
             event = LinkStaleEvent(**fields)
-            result.append(Issue(event.description, kind='link_stale', **fields))
+            issues.append(Issue(event.description, kind='link_stale', **fields))
         else:
             self.on_link_stale(**fields)
 
