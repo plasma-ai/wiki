@@ -90,7 +90,7 @@ Commit the scaffold
 
 ``wiki`` never commits anything. Commit the wiki root — the ``_index.md``
 files, ``.wiki/settings.json``, and the staged ``.wiki/obsidian/`` template —
-plus the ``.gitattributes`` line the merge-driver wiring wrote. Two artifacts
+plus the ``.gitattributes`` lines the merge-driver wiring wrote. Two artifacts
 need no attention: ``.wiki/cache/`` ships its own ``.gitignore`` and ignores
 itself, and ``.obsidian/`` is materialized per machine — any clone rebuilds it
 with ``wiki config``.
@@ -231,7 +231,7 @@ them by hand:
    notes/related.md:10: See [[topics/example]] for the walkthrough.
 
 Any you miss show up as ``Stale link [[topics/example]]`` notes the next time
-``wiki lint`` runs.
+``wiki lint`` runs (issues, if the wiki sets ``lint.strict``).
 
 Link to files outside the wiki
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

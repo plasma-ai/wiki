@@ -79,8 +79,8 @@ rather than authoring or auditing page by page yourself:
   repository's ignore rules fence the same way, with no configuration: what the
   repo ignores is not wiki content, so a stray driver output beside tracked
   pages is never adopted, minted an `_index.md`, or linked — delete or fence
-  residue rather than letting update sweep it in. A wiki whose own root is
-  gitignored is exempt.
+  residue rather than letting update sweep it in. A wiki whose own root and root
+  `_index.md` are both gitignored is exempt.
 - **Name validation is configurable.** By default the wiki rejects only
   structural characters (`/`, `\`, `*`, `[`, `]`, `|`, `#`), a leading dot,
   non-printable names, and the reserved `_index` stem — spaces, dashes, and
@@ -89,9 +89,9 @@ rather than authoring or auditing page by page yourself:
   `wiki init --settings`); `wiki init` and `wiki lint` enforce whatever policy
   is set. A name is checked as a link carries it: a page by its stem, any other
   file by its full name, extension included. So `identifier` rejects every
-  non-Markdown file (`data.json`, `main.py`) unless `naming.allow` contains `.`,
-  and a strict wiki that keeps data files or scripts beside its pages sets
-  `"allow": "."`.
+  non-Markdown file with an extension (`data.json`, `main.py`) unless
+  `naming.allow` contains `.`, and a strict wiki that keeps data files or
+  scripts beside its pages sets `"allow": "."`.
 - **Timestamps are tool-owned and configurable.** `wiki update` writes both
   stamps when a file gains frontmatter, keeps `created:` from then on, and
   rewrites `updated:` on every actual write — and, inside a git repository, on a
@@ -201,15 +201,16 @@ rather than authoring or auditing page by page yourself:
   an explicit `issue`/`note` severity, a machine `kind`, and per-kind payload
   fields beside the prose `text`), never classify findings by scraping the prose
   streams: a stderr note is not a blocking issue.
-- **Stale wikilinks are soft notes.** A `[[...]]` in index or page prose whose
-  target no longer exists — inside the wiki or under a `links.external` folder —
-  draws a stderr note from `wiki lint` without failing the run; the note
-  suggests the root-relative form the author likely meant when one resolves (an
-  absolute spelling of an allowlisted file draws its `../` spelling, and a
-  target missing only by a trailing slash the same path without it). Setting
-  `lint.strict` to true in `.wiki/settings.json` makes each one a hard issue
-  instead, with the same line and the same `link_stale` kind in `--json`. A
-  `links.external` entry naming no folder on this machine draws one note per run
+- **Stale wikilinks are soft notes (issues under `lint.strict`).** A `[[...]]`
+  in index or page prose whose target no longer exists — inside the wiki or
+  under a `links.external` folder — draws a stderr note from `wiki lint` without
+  failing the run; the note suggests the root-relative form the author likely
+  meant when one resolves (an absolute spelling of an allowlisted file draws its
+  `../` spelling, and a target missing only by a trailing slash the same path
+  without it). Setting `lint.strict` to true in `.wiki/settings.json` makes each
+  one a hard issue instead, with the same line and the same `link_stale` kind in
+  `--json`. A `links.external` entry naming no folder on this machine draws one
+  note per run
   (`links.external entry '../src' names no folder on this machine; links into it are not checked`)
   and the links into it draw no notes — an environment condition, so leave them
   alone. Broken links in the generated index link block — the rows `wiki update`

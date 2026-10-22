@@ -661,11 +661,11 @@ class Wiki:
         The direct probe for a folder that may not exist yet -- the
         cached fence set (:attr:`_gitignore_fence`) enumerates existing
         paths only -- with the same exemptions: no repository, no git,
-        and an ignored root all read as unfenced. It probes the index
-        the folder would carry: git has no inode to read a missing
-        folder as one, so a pattern naming folders only (``scratch/``,
-        ``!*/``) never applies to the bare path, but a leading
-        directory of a probed path always reads as a folder. A
+        and an ignored root and root index all read as unfenced. It
+        probes the index the folder would carry: git has no inode to
+        read a missing folder as one, so a pattern naming folders only
+        (``scratch/``, ``!*/``) never applies to the bare path, but a
+        leading directory of a probed path always reads as a folder. A
         repository ignoring the index itself fences the folder too,
         since that index could never be committed.
         """

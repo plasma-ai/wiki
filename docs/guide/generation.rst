@@ -214,8 +214,8 @@ would destroy authored content or race a concurrent editor:
   the same way ``exclude.patterns`` paths are: what the repo fences out of
   version control is not wiki content, so a driver's stray output is never
   adopted, never gains a minted ``_index.md``, and never draws a parent link
-  row. A wiki that is itself gitignored is exempt — the fence never empties
-  a deliberately unindexed wiki.
+  row. A wiki whose root and root ``_index.md`` both read as gitignored is
+  exempt — the fence never empties a deliberately unindexed wiki.
 - **Files edited between plan and write** are skipped — writing the staged
   content would silently revert the concurrent edit. The next run converges.
 
@@ -249,7 +249,8 @@ reports two kinds of problem — without writing anything:
   *cannot* fix. Any issue makes lint **exit 1** — and nothing else does: a
   command error exits 2, so 1 always means exactly "issues found".
 - **Notes** (stderr): soft advisories — unauthored descriptions, stale prose
-  links, a ``links.external`` entry naming no folder on this machine,
+  links (issues under ``lint.strict``), a ``links.external`` entry naming no
+  folder on this machine,
   pending CRLF normalization, an unconfigured merge driver in a fresh clone.
   Notes **never affect the exit code**. A note kind that repeats condenses to
   one count line (``12 indexes have empty content``) unless you pass
@@ -510,7 +511,7 @@ its meaning:
    Only under ``titles.required`` (see :doc:`/configuration`): the file's
    ``title:`` is absent, blank, or the seeded ``null`` placeholder.
 
-``<path>: Stale link [[target]]``
+``Stale link [[target]]``
    Only under ``lint.strict`` (see :doc:`/configuration`): the stale-link
    note below, reported as an issue with the same line and fix.
 
