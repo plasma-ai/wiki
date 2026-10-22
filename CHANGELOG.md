@@ -34,6 +34,12 @@ may include breaking changes, each listed under a Breaking heading.
   pattern re-includes as one this machine's git ignores. Git tracks such a path,
   so its row ships with it, and a wiki whose `.gitignore` ignores `*` and
   re-includes `!*.md` no longer draws the note for every page and index.
+- `wiki new` judges a folder that does not exist yet by the `_index.md` it would
+  write, so a `.gitignore` that ignores `*` and re-includes `!*/` and `!*.md`
+  admits the new folder. Git cannot tell that a missing path is a folder, so
+  `!*/` never re-included it, and `wiki new` refused every new folder under such
+  an allowlist. A repository that ignores `_index.md` files now refuses every
+  new folder, since the index could never be committed.
 - A wiki at its repository's top level keeps its gitignore fence under a
   `.gitignore` that ignores `*` and re-includes what it tracks (`!*/`, `!*.md`).
   Git reads the top level as ignored under any `*` line, and the wiki took that

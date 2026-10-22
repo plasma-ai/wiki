@@ -52,6 +52,7 @@ __all__ = [
     'test_ignored_wiki_root_stays_unfenced',
     'test_allowlist_fence_holds_at_the_repository_root',
     'test_new_refuses_a_fenced_target',
+    'test_new_judges_the_index_it_creates',
     'test_gitignored_link_target_names_the_cause',
 ]
 
@@ -951,6 +952,53 @@ def test_new_refuses_a_fenced_target(tmp_path: pathlib.Path) -> None:
     assert not (tmp_path / 'scratch').exists()
     root_index = (tmp_path / '_index.md').read_text(encoding='utf-8')
     assert 'scratch' not in root_index
+
+
+@_needs_git
+@pytest.mark.parametrize(
+    argnames=('folder', 'ignores', 'target', 'refused'),
+    argvalues=[
+        ('memory', ('*', '!*/', '!*.md'), 'plans', False),
+        ('', ('*', '!*/', '!*.md'), 'plans', False),
+        ('', ('*', '!*/', '!*.md', 'scratch/'), 'scratch', True),
+        ('', ('_index.md',), 'plans', True),
+    ],
+    ids=[
+        'allowlist-in-subfolder',
+        'allowlist-at-repo-root',
+        'allowlist-ignored-folder',
+        'ignored-indexes',
+    ],
+)
+def test_new_judges_the_index_it_creates(
+    tmp_path: pathlib.Path,
+    folder: str,
+    ignores: tuple[str, ...],
+    target: str,
+    refused: bool,
+) -> None:
+    """``wiki new`` refuses a folder exactly when git ignores its new index.
+
+    The target does not exist yet, so git cannot apply a re-include that
+    names folders only (``!*/``) to the bare folder path; the index path
+    carries the folder as a leading directory, which git reads as one.
+    An allowlist that re-includes folders and pages admits the new
+    folder; a rule ignoring the folder, or the index files themselves,
+    refuses it, since that index could never be committed.
+    """
+    _git_repo(tmp_path)
+    root = tmp_path / folder
+    _make_wiki(root, folders={'core': ['design']})
+    (root / '.gitignore').write_text('\n'.join(ignores) + '\n', encoding='utf-8')
+
+    wiki = Wiki(root)
+    if refused:
+        with pytest.raises(ValueError, match='gitignored'):
+            wiki.new(target, desc='A real desc.', content='Real content.')
+        assert not (root / target).exists()
+    else:
+        created = wiki.new(target, desc='A real desc.', content='Real content.')
+        assert created == f'{target}/_index.md'
 
 
 @_needs_git
