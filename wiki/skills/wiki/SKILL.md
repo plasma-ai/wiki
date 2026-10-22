@@ -95,8 +95,9 @@ rather than authoring or auditing page by page yourself:
 - **Timestamps are tool-owned and configurable.** `wiki update` writes both
   stamps when a file gains frontmatter, keeps `created:` from then on, and
   rewrites `updated:` on every actual write — and, inside a git repository, on a
-  tracked file edited since HEAD stamped it, so run `wiki update` after a hand
-  edit rather than restamping by hand. Never hand-edit a stamp; an edit goes
+  tracked file edited since its last commit, so run `wiki update` after a hand
+  edit rather than restamping by hand (`wiki lint` does not flag the pending
+  restamp; `wiki update --check` does). Never hand-edit a stamp; an edit goes
   undetected unless the value stops parsing under the configured format, which
   `wiki lint` fails. `created`/`updated` default to UTC in `%Y-%m-%dT%H:%M:%SZ`;
   set `timestamp.timezone` (an IANA name) and `timestamp.format` (a strftime

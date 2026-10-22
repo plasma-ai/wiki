@@ -10,15 +10,15 @@ may include breaking changes, each listed under a Breaking heading.
 ### Added
 
 - `wiki update` restamps a file edited by hand since its `updated:` stamp.
-  Inside a git repository, a tracked file that differs from HEAD while its
-  `updated:` still equals HEAD's is restamped as the tool's own writes are, and
-  `wiki update --check` lists it, unless the file was last modified within its
-  stamp's own period (a second by default, a day under a date-only format),
-  where a write leaves the same stamp. A stamp already moved stands, and
-  untracked files, files the wiki does not index, and files with no `updated:`
-  are never judged. A clean checkout, a fresh clone, or a wiki outside git
-  restamps nothing, so `updated:` no longer falls behind edits made outside a
-  run.
+  Inside a git repository, a tracked file whose text differs from HEAD while its
+  `updated:` still equals HEAD's is restamped as the tool's own writes are,
+  named in a `Restamped` line, and listed by `wiki update --check` (not by
+  `wiki lint`), unless the file was last modified within its stamp's own period
+  (a second by default, a day under a date-only format), where a write leaves
+  the same stamp. A stamp already moved stands, and untracked files, files the
+  wiki does not index, and files with no `updated:` are never judged. A clean
+  checkout, a fresh clone, or a wiki outside git restamps nothing, so `updated:`
+  no longer falls behind edits made outside a run.
 - An opt-in `lint.strict` setting in `.wiki/settings.json`. When true,
   `wiki lint` reports each stale link in index or page prose as a hard issue
   that fails the run, rather than a soft note. The line and its `--json` kind,
@@ -37,6 +37,11 @@ may include breaking changes, each listed under a Breaking heading.
 
 ### Fixed
 
+- A `.wiki/wiki.py` hook that exits while the merge driver loads it (a
+  `sys.exit` in its constructor) no longer ends the driver before it merges. The
+  driver skips its hook steps, as it does for a hook that fails to load, and the
+  merge runs; before, the driver exited with the hook's code, so an exit 0 left
+  the current branch's file as the merge, the other side's edits lost.
 - A file or folder whose name starts with `:` is judged by the gitignore checks
   as itself. Git read such a path as pathspec magic, so `:notes` was judged as
   `notes`: an ignore rule for `notes` kept `:notes` out of the index and made

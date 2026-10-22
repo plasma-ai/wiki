@@ -56,6 +56,7 @@ from wiki.core.wiki import (
     NameSkipEvent,
     PageAdoptEvent,
     PathUntrackableEvent,
+    RestampEvent,
     Wiki,
     WriteSkipEvent,
 )
@@ -104,6 +105,13 @@ _UPDATE_CATEGORIES = [
         'Adopted {n} bare pages (frontmatter added)',
         'Would adopt 1 bare page',
         'Would adopt {n} bare pages',
+    ),
+    (
+        RestampEvent,
+        'Restamped 1 file edited since its stamp',
+        'Restamped {n} files edited since their stamps',
+        'Would restamp 1 file edited since its stamp',
+        'Would restamp {n} files edited since their stamps',
     ),
     (
         LinkAddEvent,
@@ -1352,12 +1360,13 @@ def _index_canonicalizer(root: pathlib.Path, path: pathlib.Path) -> Optional[Wik
         text = path.read_bytes().decode('utf-8')
     except (OSError, UnicodeDecodeError):
         return None
-    # the wiki's class may be hook code, which can raise anything
+    # the wiki's class may be hook code, which can raise anything -- an exit
+    # included, which would end the driver before the merge runs
     try:
         wiki = load_wiki_class(root)(root)
         if wiki.canonicalize_index(text) != text:
             return None
-    except Exception:
+    except (Exception, SystemExit):
         return None
     return wiki
 
@@ -1398,10 +1407,11 @@ def _merge_stamps(
         )
     except (OSError, UnicodeDecodeError):
         return
-    # the wiki's class may be hook code, which can raise anything
+    # the wiki's class may be hook code, which can raise anything -- an exit
+    # included, which would end the driver before the merge runs
     try:
         policy = load_wiki_class(root)(root)._timestamp_policy
-    except Exception:
+    except (Exception, SystemExit):
         return
 
     # read a stamp as an instant, a zoneless one in the policy's zone
@@ -1467,11 +1477,12 @@ def _is_managed_page(root: pathlib.Path, path: pathlib.Path) -> bool:
     # NOTE: a merge driver passes the merge's exit code through untouched
     #   (patterns: conventions/cli/errors/exit-codes), and git's default
     #   text merge stands without this step, so any failure here -- a hook
-    #   that will not load or construct -- reads the page as unmanaged
+    #   that will not load or construct, or exits -- reads the page as
+    #   unmanaged
     try:
         engine = load_wiki_class(root)(root)
         return engine._manages_page(engine._root / path.relative_to(root))
-    except Exception:
+    except (Exception, SystemExit):
         return False
 
 
@@ -1495,10 +1506,11 @@ def _canonicalize_index(engine: Wiki, path: pathlib.Path) -> None:
         text = path.read_bytes().decode('utf-8')
     except (OSError, UnicodeDecodeError):
         return
-    # the engine may run hook code, which can raise anything
+    # the engine may run hook code, which can raise anything -- an exit
+    # included, which would replace the merge's exit code with its own
     try:
         canonical = engine.canonicalize_index(text)
-    except Exception:
+    except (Exception, SystemExit):
         return
     if canonical != text:
         try:

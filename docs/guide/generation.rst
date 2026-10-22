@@ -314,8 +314,11 @@ Out-of-date files
 
 Any file update would rewrite is reported as ``<path>: Requires update``
 followed by an indented unified diff of exactly the change update would make —
-the comparison is byte-exact against update's plan, so lint and update can
-never disagree about what is pending. A change only to the file's final
+the comparison is byte-exact against update's plan, so lint and update agree
+about what is pending, with one exception: lint does not judge hand edits, so
+a file update restamps only because it was edited since its last commit
+(below) is listed by ``update --check`` and not by lint. A change only to the
+file's final
 newline reports as ``Requires update (final newline differs)``. A bare page
 (no frontmatter) is additionally named — ``Bare page (no frontmatter); update
 will adopt it`` — so the pending adoption is legible without reading its diff.
@@ -637,6 +640,10 @@ topics/_index.md``). The condensed lines and what they mean:
    * - ``Adopted N bare pages (frontmatter added)``
      - Frontmatterless pages gained a fresh block; an authored H1 is
        preserved as a seeded ``title:``.
+   * - ``Restamped N files edited since their stamps``
+     - Tracked files edited by hand since their last commit, their
+       ``updated:`` still the committed one, were restamped (see
+       *Stamps follow hand edits* below).
    * - ``Added N new links``
      - New entries were linked into their parent indexes with ``...``
        placeholder descriptions.
@@ -686,21 +693,25 @@ Both commands are safe to run at any time, as often as you like:
   update.`` The only exception is a concurrently-edited file, which is
   skipped with a notice — the next run picks it up.
 - **Timestamps never churn.** ``updated:`` is re-stamped only on a real
-  content change; a would-be timestamp-only difference never triggers a
-  write, and a rewrite forced solely to normalize CRLF endings does not
-  re-stamp. Re-running update on a clean wiki changes nothing, including the
+  content change — a write update makes, or a hand edit (below); a would-be
+  timestamp-only difference never triggers a write, and a rewrite forced
+  solely to normalize CRLF endings does not re-stamp. Re-running update on a clean wiki changes nothing, including the
   stamps.
-- **Stamps follow hand edits.** Inside a git repository, a tracked file that
-  differs from HEAD while its ``updated:`` still reads as HEAD's was edited
-  after it was stamped, so update re-stamps it as it would its own write, and
-  ``update --check`` lists it. A stamp names a period at the configured
-  format's resolution — a second by default, a day under a date-only format —
-  and a file last modified within its stamp's period counts as stamped, since
-  a write in that period leaves the same stamp. A stamp that already moved
-  stands, so the first run after an edit sets it and later runs leave it
-  until the next commit. Untracked files and files the wiki does not index are never
-  judged, and a file with no ``updated:`` gains none this way. A clean
-  checkout, a fresh clone, or a wiki outside git restamps nothing.
+- **Stamps follow hand edits.** Inside a git repository, a tracked file whose
+  text differs from HEAD while its ``updated:`` still reads as HEAD's was
+  edited after it was stamped, so update re-stamps it as it would its own
+  write, names it (``Restamped <path>: edited since its updated: stamp``),
+  and ``update --check`` lists it; lint does not. A difference in line
+  endings or file mode alone is no edit. A stamp names a period at the
+  configured format's resolution — a second by default, a day under a
+  date-only format — and a file last modified within its stamp's period
+  counts as stamped, since a write in that period leaves the same stamp. A
+  stamp that already moved stands, so the first run after an edit sets it
+  and later runs leave it until the next commit. Untracked files and files
+  the wiki does not index are never judged, and a file with no ``updated:``
+  gains none this way. A clean checkout, a fresh clone, or a wiki outside git
+  restamps nothing. Before a merge is committed, a file the merge changed
+  whose ``updated:`` is still HEAD's reads as edited too, and is restamped.
 - **Authored content is never regenerated away.** User content below ``***``,
   authored frontmatter values, and unrecognized frontmatter keys are
   preserved; damaged files (unclosed frontmatter, truncated indexes) are

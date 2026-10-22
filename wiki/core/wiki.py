@@ -798,20 +798,42 @@ class Wiki:
         if (result is None) or (result.returncode != 0):
             return []
         # the batch read below is line-framed, so a name carrying a newline
-        # is left unjudged
-        candidates = []
+        # is left unjudged; a name git spells precomposed (macOS's
+        # core.precomposeUnicode) where the walk read it decomposed matches
+        # by its NFC form
+        candidates: dict[pathlib.Path, str] = {}
+        composed = None
         for entry in result.stdout.split(b'\0'):
-            path = self._root / os.fsdecode(entry)
-            if entry and (b'\n' not in entry) and (baseline.get(path) is not None):
-                candidates.append(path)
+            if (not entry) or (b'\n' in entry):
+                continue
+            name = os.fsdecode(entry)
+            path = self._root / name
+            if path not in baseline:
+                if composed is None:
+                    composed = {
+                        unicodedata.normalize('NFC', self._relpath(planned)): planned
+                        for planned in baseline
+                    }
+                path = composed.get(unicodedata.normalize('NFC', name))
+            if (path is not None) and (baseline[path] is not None):
+                candidates[path] = name
         if not candidates:
             return []
-        heads = self._head_texts(candidates)
+        heads = self._head_texts(list(candidates.values()))
         policy = self._timestamp_policy
         result = []
-        for path in candidates:
-            stamp = _updated_stamp(baseline[path])
-            if (stamp is None) or (stamp != _updated_stamp(heads.get(path))):
+        for path, name in candidates.items():
+            text = baseline[path]
+            head = heads.get(name)
+            # git lists a change of line endings or file mode alone, which is
+            # no edit: the plan reads text with its newlines normalized, so
+            # HEAD's copy is read alike before the two compare
+            if (head is None) or (
+                head.replace('\r\n', '\n').replace('\r', '\n') == text
+            ):
+                continue
+            stamp = _updated_stamp(text)
+            if (stamp is None) or (stamp != _updated_stamp(head)):
                 continue
             # a file vanishing under the probe (a concurrent delete) is the
             # writer's to skip, as it skips any file changed since the plan
@@ -824,16 +846,15 @@ class Wiki:
                 result.append(path)
         return result
 
-    def _head_texts(self: Wiki, paths: list[pathlib.Path]) -> dict[pathlib.Path, str]:
-        """Return HEAD's text of each of ``paths`` that HEAD holds.
+    def _head_texts(self: Wiki, names: list[str]) -> dict[str, str]:
+        """Return HEAD's text of each of ``names`` that HEAD holds.
 
-        One ``git cat-file --batch`` call reads them all, each named
-        relative to the root; a path HEAD does not hold is left out.
-        Bytes that are not UTF-8 read as replacement characters, which
-        leaves an ASCII stamp readable.
+        One ``git cat-file --batch`` call reads them all, each a path
+        relative to the root as git spells it; a path HEAD does not hold
+        is left out. Bytes that are not UTF-8 read as replacement
+        characters, which leaves an ASCII stamp readable.
         """
-        names = (f'HEAD:./{self._relpath(path)}\n' for path in paths)
-        payload = b''.join(os.fsencode(name) for name in names)
+        payload = b''.join(os.fsencode(f'HEAD:./{name}\n') for name in names)
         cmd = ['cat-file', '--batch']
         result = wiki.util.git._git(cmd, cwd=self._root, input=payload, raw=True)
         if (result is None) or (result.returncode != 0):
@@ -841,7 +862,7 @@ class Wiki:
         output = result.stdout
         texts = {}
         offset = 0
-        for path in paths:
+        for name in names:
             # a found object answers '<oid> <type> <size>', then its bytes and
             # a newline; any other answer ('<name> missing') carries no bytes
             end = output.index(b'\n', offset)
@@ -851,7 +872,7 @@ class Wiki:
                 size = int(parts[2])
                 if parts[1] == b'blob':
                     data = output[offset : offset + size]
-                    texts[path] = data.decode('utf-8', errors='replace')
+                    texts[name] = data.decode('utf-8', errors='replace')
                 offset += size + 1
         return texts
 
@@ -1461,6 +1482,7 @@ class Wiki:
             content = overlay[path]
             block, _ = format.extract_frontmatter(content.split('\n'))
             overlay[path] = format.restamp_updated(block, now) + content[len(block) :]
+            notices.append(RestampEvent(path=str(path.relative_to(self._root))))
         # report every broken/new link (pruned or added during the run)
         # individually and statelessly; the CLI condenses by default
         for event in notices:
@@ -1683,9 +1705,10 @@ class Wiki:
         - **Out of date:** any file ``update`` would rewrite, shown as
           a unified diff of the change it would make -- a byte
           comparison against the plan (:meth:`_plan`), so lint flags
-          exactly what ``update`` changes. (A file with merge conflict
-          markers is the one exception: it is reported only as such,
-          with its diff suppressed.) A bare page (no frontmatter) is
+          what ``update`` changes but the restamp of a file edited by
+          hand since its last commit (:meth:`_edited_since_stamp`),
+          which lint does not judge. (A file with merge conflict
+          markers is reported only as such, with its diff suppressed.) A bare page (no frontmatter) is
           additionally named as one, so the pending adoption is
           legible without reading its diff.
         - **Needs attention:** problems ``update`` cannot fix --
@@ -2572,6 +2595,26 @@ class Wiki:
         """
         if event is None:
             event = PageAdoptEvent(message, **kwargs)
+        return self.on_notice(event, logging_level=logging_level)
+
+    def on_restamp(
+        self: Wiki,
+        message: Optional[str] = None,
+        *,
+        logging_level: int = logging.INFO,
+        event: Optional[RestampEvent] = None,
+        **kwargs: Any,
+    ) -> Event:
+        """Handle a restamped-edit notice event.
+
+        Constructs a ``RestampEvent`` from ``message`` and the payload
+        kwargs unless a pre-built ``event`` is passed through, then
+        delegates to ``on_notice``. Override in subclasses to intercept
+        this notice kind alone; override ``on_notice`` to intercept
+        every notice.
+        """
+        if event is None:
+            event = RestampEvent(message, **kwargs)
         return self.on_notice(event, logging_level=logging_level)
 
     def on_link_add(
@@ -6250,6 +6293,17 @@ class PageAdoptEvent(Event):
         return result + ')'
 
 
+class RestampEvent(Event):
+    """Emitted when update restamps a file edited since its stamp."""
+
+    path: str
+
+    @property
+    def description(self: RestampEvent) -> str:
+        """Return the restamped-edit notice line."""
+        return f'Restamped {self.path}: edited since its updated: stamp'
+
+
 class LinkAddEvent(Event):
     """Emitted when update adds a new index link."""
 
@@ -6564,6 +6618,7 @@ class LinkFolderMissingEvent(Event):
 _NOTICE_HOOKS = {
     IndexCreateEvent: 'on_index_create',
     PageAdoptEvent: 'on_page_adopt',
+    RestampEvent: 'on_restamp',
     LinkAddEvent: 'on_link_add',
     LinkPruneEvent: 'on_link_prune',
     DescOverwriteEvent: 'on_desc_overwrite',
