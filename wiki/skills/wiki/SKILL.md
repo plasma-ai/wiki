@@ -87,7 +87,11 @@ rather than authoring or auditing page by page yourself:
   unicode all pass. Stricter rules (e.g. ASCII identifiers) are opt-in per wiki
   via `naming.validate` in `.wiki/settings.json` (seed it at creation with
   `wiki init --settings`); `wiki init` and `wiki lint` enforce whatever policy
-  is set.
+  is set. A name is checked as a link carries it: a page by its stem, any other
+  file by its full name, extension included. So `identifier` rejects every
+  non-Markdown file (`data.json`, `main.py`) unless `naming.allow` contains `.`,
+  and a strict wiki that keeps data files or scripts beside its pages sets
+  `"allow": "."`.
 - **Timestamps are tool-owned and configurable.** `wiki update` writes both
   stamps when a file gains frontmatter, keeps `created:` from then on, and
   rewrites `updated:` on every actual write — never hand-edit them; an edit goes

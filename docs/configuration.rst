@@ -139,6 +139,14 @@ rules are opt-in. An entry whose name breaks the policy is skipped by
    before the ``validate`` predicates run — for example, allow ``-`` so
    dashed names pass ``identifier``.
 
+A name is checked as a link carries it: a Markdown page by its stem
+(``notes`` for ``notes.md``), and every other file by its full name, extension
+included (``data.json``), as is a page whose stem a sibling file claims. The
+dot of an extension is checked like any other character, so ``alpha``,
+``alphanum``, and ``identifier`` reject every non-Markdown file unless
+``allow`` contains ``.``. A wiki that keeps data files or scripts beside its
+pages under one of these predicates sets ``"allow": "."``.
+
 ``naming.deny``
    String of characters, default ``""``. Extra characters rejected anywhere
    in a name.
