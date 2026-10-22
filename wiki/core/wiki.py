@@ -711,6 +711,10 @@ class Wiki:
         # -v -z frames each hit as source, line, pattern, pathname
         fields = [os.fsdecode(entry) for entry in result.stdout.split(b'\0') if entry]
         for source, line, pattern, path in zip(*[iter(fields)] * 4, strict=False):
+            # -v also reports a path whose last match is a negation, which
+            # re-includes it: git tracks that file
+            if pattern.startswith('!'):
+                continue
             self.on_path_untrackable(
                 path=path,
                 source=source,

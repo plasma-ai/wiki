@@ -30,6 +30,10 @@ may include breaking changes, each listed under a Breaking heading.
   reads as outside a repository, as its git calls already read it, so
   `wiki update` and `wiki lint` no longer note on every run that the gitignore
   fence is unavailable and ask whether git is installed.
+- `wiki update` and `wiki lint` no longer note a path that a negated ignore
+  pattern re-includes as one this machine's git ignores. Git tracks such a path,
+  so its row ships with it, and a wiki whose `.gitignore` ignores `*` and
+  re-includes `!*.md` no longer draws the note for every page and index.
 - `wiki _merge` replaces a clean `_index.md` merge whole when it sets the H1 and
   row order, so a write that fails leaves the file as the driver merged it and
   the driver's exit code stands: `wiki _merge` no longer exits 2, which git
