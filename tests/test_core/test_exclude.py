@@ -46,6 +46,7 @@ __all__ = [
     'test_unavailable_fence_is_narrated_inside_a_repository',
     'test_personally_ignored_row_draws_a_note',
     'test_reincluded_row_draws_no_note',
+    'test_a_leading_colon_reads_as_a_name_in_every_git_probe',
     'test_gitignore_fence_reaches_a_nested_wiki_root',
     'test_gitignore_fence_honors_a_discovery_ceiling',
     'test_unavailable_fence_note_honors_a_discovery_ceiling',
@@ -743,6 +744,46 @@ def test_reincluded_row_draws_no_note(tmp_path: pathlib.Path) -> None:
     notices = _capture_notices(wiki)
     assert wiki.lint() == []
     assert not any(type(event).__name__ == 'PathUntrackableEvent' for event in notices)
+
+
+@_needs_git
+def test_a_leading_colon_reads_as_a_name_in_every_git_probe(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A folder named ``:notes`` is judged as itself, never as ``notes``.
+
+    Git reads a path opening on ``:`` as pathspec magic, so a bare
+    ``:notes`` would answer for ``notes``. Every probe names its path
+    literally: the walk indexes ``:notes`` though ``notes`` is ignored,
+    the generator creates ``:fresh`` though ``fresh`` is, and a scoped
+    update of ``:notes`` restamps the hand edit inside it.
+    """
+    old = '2020-01-01T00:00:00Z'
+    monkeypatch.setattr(Wiki, '_utc_now', lambda self: old)
+    _make_wiki(tmp_path, folders={':notes': ['page']})
+    _git_repo(tmp_path, 'notes', 'fresh')
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+
+    # the walk indexes the folder its own name names
+    Wiki(tmp_path).update()
+    root_index = (tmp_path / '_index.md').read_text(encoding='utf-8')
+    assert '[[:notes/_index|:notes/]]' in root_index
+
+    # the generator creates a folder whose bare name an ignore rule names
+    created = Wiki(tmp_path).new(':fresh', desc='A real desc.', content='Real content.')
+    assert created == ':fresh/_index.md'
+
+    # a scoped update restamps a hand edit inside the folder
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+    page = tmp_path / ':notes' / 'page.md'
+    page.write_text(page.read_text(encoding='utf-8') + '\nEdited.\n', encoding='utf-8')
+    now = '2031-01-01T00:00:00Z'
+    monkeypatch.setattr(Wiki, '_utc_now', lambda self: now)
+    assert Wiki(tmp_path).update(':notes') == [':notes/page.md']
+    assert f'updated: {now}' in page.read_text(encoding='utf-8')
 
 
 @_needs_git
