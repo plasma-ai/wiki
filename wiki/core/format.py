@@ -1000,8 +1000,11 @@ def restamp(frontmatter: str, key: str, now: str) -> str:
         return _fill_stamp(frontmatter, key, now, before=None)
     start, end = span
     indicator, _, body = frontmatter[start:end].partition('\n')
+    # a CRLF block (a merge driver reads bytes as written) keeps its ending
+    eol = '\r\n' if indicator.endswith('\r') else '\n'
+    indicator = indicator.removesuffix('\r')
     tail, comments = _field_comments(indicator, body)
-    stamp = f'{key}: {_properties(indicator)}{quote(now)}{tail}\n{comments}'
+    stamp = f'{key}: {_properties(indicator)}{quote(now)}{tail}{eol}{comments}'
     return frontmatter[:start] + stamp + frontmatter[end:]
 
 

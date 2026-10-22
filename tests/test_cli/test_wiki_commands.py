@@ -155,6 +155,15 @@ _LATE_RAISING_HOOK = (
     '        return super()._sort_links(links)\n'
 )
 
+# a hook whose construction exits the process, as one calling sys.exit does
+_EXITING_HOOK = (
+    'from wiki.core.wiki import Wiki\n\n'
+    "__all__ = ['Exiting']\n\n\n"
+    'class Exiting(Wiki):\n'
+    '    def __init__(self, *args, **kwargs):\n'
+    '        raise SystemExit(0)\n'
+)
+
 # a hook that loads, then raises when it sorts rows
 _RAISING_HOOK = (
     'from wiki.core.wiki import Wiki\n\n'
@@ -3365,8 +3374,16 @@ def test_merge_carries_a_merged_title_into_the_h1(
         ('import nonexistent_module\n', True, ['[guide] extra', 'design', '[ref] api']),
         (_RAISING_HOOK, True, ['[guide] extra', 'design', '[ref] api']),
         (_LATE_RAISING_HOOK, True, ['[guide] extra', 'design', '[ref] api']),
+        (_EXITING_HOOK, True, ['[guide] extra', 'design', '[ref] api']),
     ],
-    ids=['trusted', 'untrusted', 'import-fails', 'sort-raises', 'merge-raises'],
+    ids=[
+        'trusted',
+        'untrusted',
+        'import-fails',
+        'sort-raises',
+        'merge-raises',
+        'hook-exits',
+    ],
 )
 def test_merge_orders_rows_by_the_wikis_hook(
     tmp_path: pathlib.Path,
@@ -3378,8 +3395,9 @@ def test_merge_orders_rows_by_the_wikis_hook(
 
     A ``.wiki/wiki.py`` hook may reorder categories, so the driver sorts
     with the class the hook names. A hook that does not run -- untrusted,
-    failing on import, or raising once loaded, on ours' rows or only on the
-    merged ones -- leaves the rows as merged, the other side's below ours,
+    failing on import, raising once loaded, on ours' rows or only on the
+    merged ones, or exiting as it constructs -- leaves the rows as merged,
+    the other side's below ours,
     for the update that reports it, and the merge itself stays clean: the
     driver's exit code is the merge's.
     """
@@ -3866,33 +3884,38 @@ def test_merge_dispatches_on_pathname(tmp_path: pathlib.Path) -> None:
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
 @pytest.mark.parametrize(
-    argnames=('pathname', 'later', 'hook', 'settled'),
+    argnames=('pathname', 'later', 'hook', 'eol', 'settled'),
     argvalues=[
-        ('wiki/core/notes.md', 'ours', False, True),
-        ('wiki/core/notes.md', 'theirs', False, True),
-        ('wiki/frozen/copy.md', 'ours', False, False),
-        ('wiki/scratch/draft.md', 'ours', False, False),
-        ('wiki/.drafts/note.md', 'ours', False, False),
-        ('wiki/core/notes.txt', 'ours', False, False),
-        ('docs/notes.md', 'ours', False, False),
-        ('wiki/core/notes.md', 'ours', True, False),
+        ('wiki/core/notes.md', 'ours', None, '\n', True),
+        ('wiki/core/notes.md', 'theirs', None, '\n', True),
+        ('wiki/core/notes.md', 'ours', None, '\r\n', True),
+        ('wiki/frozen/copy.md', 'ours', None, '\n', False),
+        ('wiki/scratch/draft.md', 'ours', None, '\n', False),
+        ('wiki/.drafts/note.md', 'ours', None, '\n', False),
+        ('wiki/core/notes.txt', 'ours', None, '\n', False),
+        ('docs/notes.md', 'ours', None, '\n', False),
+        ('wiki/core/notes.md', 'ours', 'untrusted', '\n', False),
+        ('wiki/core/notes.md', 'ours', 'exits', '\n', False),
     ],
     ids=[
         'page-ours-later',
         'page-theirs-later',
+        'crlf-page',
         'excluded',
         'gitignored',
         'dot-folder',
         'not-markdown',
         'outside-every-wiki',
         'untrusted-hook',
+        'hook-exits',
     ],
 )
 def test_merge_settles_the_stamps_of_a_managed_page(
     tmp_path: pathlib.Path,
     pathname: str,
     later: str,
-    hook: bool,
+    hook: Optional[str],
+    eol: str,
     settled: bool,
 ) -> None:
     """A page the wiki manages merges on the later of its sides' ``updated`` stamps.
@@ -3900,18 +3923,22 @@ def test_merge_settles_the_stamps_of_a_managed_page(
     Each side edits its own body line under its own stamp, so the stamp
     line is the merge's only conflict: the driver settles both sides on
     the later stamp before the text merge, which then comes out clean,
-    whichever side stamped later. A path the wiki does not manage --
-    excluded, gitignored, under a dot folder, not Markdown, or outside
-    every wiki -- takes git's default text merge with its stamps
-    untouched, so the stamp line conflicts as it always has, as does a
-    page whose wiki's hook will not load to judge it.
+    whichever side stamped later and whatever line ending the page
+    keeps. A path the wiki does not manage -- excluded, gitignored,
+    under a dot folder, not Markdown, or outside every wiki -- takes
+    git's default text merge with its stamps untouched, so the stamp
+    line conflicts as it always has, as does a page whose wiki's hook
+    will not load, or exits, when the driver judges it.
     """
     _git(tmp_path, 'init', '-q')
     settings = {'exclude': {'patterns': ['frozen']}}
     _write(tmp_path / 'wiki' / '.wiki' / 'settings.json', json.dumps(settings))
     _write(tmp_path / '.gitignore', 'scratch/\n')
-    if hook:
+    if hook == 'untrusted':
         _write(tmp_path / 'wiki' / '.wiki' / 'wiki.py', _ORDERED_HOOK)
+    if hook == 'exits':
+        _write(tmp_path / 'wiki' / '.wiki' / 'wiki.py', _EXITING_HOOK)
+        assert _wiki(tmp_path, 'trust', '--path', 'wiki').returncode == 0
     base_text = (
         '---\nname: notes\ndesc: Notes.\nupdated: 2026-01-01T00:00:00Z\n---\n'
         '\n# notes\n\nFirst line.\n\nMiddle line.\n\nLast line.\n'
@@ -3926,9 +3953,9 @@ def test_merge_settles_the_stamps_of_a_managed_page(
     base = tmp_path / 'base'
     ours = tmp_path / 'ours'
     theirs = tmp_path / 'theirs'
-    _write(base, base_text)
-    _write(ours, ours_text)
-    _write(theirs, theirs_text)
+    _write(base, base_text.replace('\n', eol))
+    _write(ours, ours_text.replace('\n', eol))
+    _write(theirs, theirs_text.replace('\n', eol))
 
     args = [str(base), str(ours), str(theirs), '7', pathname]
     result = _wiki(tmp_path, '_merge', *args)

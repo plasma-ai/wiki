@@ -416,7 +416,8 @@ See `pyproject.toml` for formatter/linter config.
   through, so its best-effort steps catch `Exception` around hook code
   (patterns: `conventions/cli/errors/command-wrapper`): `_index_canonicalizer`,
   `_merge_stamps`, `_is_managed_page` and `_canonicalize_index`, each under a
-  `# NOTE:` citing `conventions/cli/errors/exit-codes`
+  `# NOTE:` citing `conventions/cli/errors/exit-codes`. They catch `SystemExit`
+  too: a hook's exit would end the driver before the merge runs
 
 ### Event Hooks
 
