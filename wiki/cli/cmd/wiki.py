@@ -56,6 +56,7 @@ from wiki.core.wiki import (
     NameSkipEvent,
     PageAdoptEvent,
     PathUntrackableEvent,
+    RestampEvent,
     Wiki,
     WriteSkipEvent,
 )
@@ -104,6 +105,13 @@ _UPDATE_CATEGORIES = [
         'Adopted {n} bare pages (frontmatter added)',
         'Would adopt 1 bare page',
         'Would adopt {n} bare pages',
+    ),
+    (
+        RestampEvent,
+        'Restamped 1 file edited since its stamp',
+        'Restamped {n} files edited since their stamps',
+        'Would restamp 1 file edited since its stamp',
+        'Would restamp {n} files edited since their stamps',
     ),
     (
         LinkAddEvent,
