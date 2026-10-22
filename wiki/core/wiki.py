@@ -749,6 +749,104 @@ class Wiki:
                 pattern=pattern,
             )
 
+    def _edited_since_stamp(
+        self: Wiki,
+        folder: pathlib.Path,
+        baseline: dict[pathlib.Path, Optional[str]],
+    ) -> list[pathlib.Path]:
+        """Return the planned files edited since their ``updated:`` stamp.
+
+        Git is the reference: a tracked file whose working-tree bytes
+        differ from HEAD while its ``updated:`` still reads as HEAD's
+        changed after it was stamped -- an edit no run stamped. A stamp
+        names a period at the policy's resolution (a second, or a day
+        under a date format), and a write within HEAD's stamp period
+        leaves that stamp on new bytes, so a file last modified within
+        the period counts as stamped: only a later modification is an
+        edit. Only the plan's files are judged, so a path the walk skips
+        (excluded, gitignored, under a dot folder) never is, nor is a
+        file HEAD does not hold or one with no ``updated:`` on either
+        side. Outside a repository, or before its first commit, nothing
+        is; a fresh clone matches HEAD, so nothing is there either.
+        """
+        if not self._in_repository():
+            return []
+        # one diff names the scope's tracked files that differ from HEAD,
+        # staged or not, root-relative -- without the optional index lock its
+        # stat refresh takes, which would fail a concurrent git add or commit
+        scope = self._relpath(folder) or '.'
+        cmd = [
+            '--no-optional-locks',
+            'diff',
+            '--name-only',
+            '-z',
+            '--no-renames',
+            '--relative',
+            'HEAD',
+            '--',
+            scope,
+        ]
+        result = wiki.util.git._git(cmd, cwd=self._root, raw=True)
+        if (result is None) or (result.returncode != 0):
+            return []
+        # the batch read below is line-framed, so a name carrying a newline
+        # is left unjudged
+        candidates = []
+        for entry in result.stdout.split(b'\0'):
+            path = self._root / os.fsdecode(entry)
+            if entry and (b'\n' not in entry) and (baseline.get(path) is not None):
+                candidates.append(path)
+        if not candidates:
+            return []
+        heads = self._head_texts(candidates)
+        policy = self._timestamp_policy
+        result = []
+        for path in candidates:
+            stamp = _updated_stamp(baseline[path])
+            if (stamp is None) or (stamp != _updated_stamp(heads.get(path))):
+                continue
+            # a file vanishing under the probe (a concurrent delete) is the
+            # writer's to skip, as it skips any file changed since the plan
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            modified = dt.datetime.fromtimestamp(mtime, policy['zone'])
+            if modified.strftime(policy['format']) != stamp:
+                result.append(path)
+        return result
+
+    def _head_texts(self: Wiki, paths: list[pathlib.Path]) -> dict[pathlib.Path, str]:
+        """Return HEAD's text of each of ``paths`` that HEAD holds.
+
+        One ``git cat-file --batch`` call reads them all, each named
+        relative to the root; a path HEAD does not hold is left out.
+        Bytes that are not UTF-8 read as replacement characters, which
+        leaves an ASCII stamp readable.
+        """
+        names = (f'HEAD:./{self._relpath(path)}\n' for path in paths)
+        payload = b''.join(os.fsencode(name) for name in names)
+        cmd = ['cat-file', '--batch']
+        result = wiki.util.git._git(cmd, cwd=self._root, input=payload, raw=True)
+        if (result is None) or (result.returncode != 0):
+            return {}
+        output = result.stdout
+        texts = {}
+        offset = 0
+        for path in paths:
+            # a found object answers '<oid> <type> <size>', then its bytes and
+            # a newline; any other answer ('<name> missing') carries no bytes
+            end = output.index(b'\n', offset)
+            parts = output[offset:end].split(b' ')
+            offset = end + 1
+            if (len(parts) == 3) and parts[2].isdigit():
+                size = int(parts[2])
+                if parts[1] == b'blob':
+                    data = output[offset : offset + size]
+                    texts[path] = data.decode('utf-8', errors='replace')
+                offset += size + 1
+        return texts
+
     def _git_read(self: Wiki, cmd: list[str]) -> Optional[str]:
         """Run a read-only git command at the root; ``None`` on any failure.
 
@@ -1259,6 +1357,12 @@ class Wiki:
         individually -- output modes (the CLI's condensed default)
         are the caller's concern.
 
+        A file edited since its ``updated:`` stamp is restamped as a
+        tool write would be: inside a git repository, a tracked file
+        that differs from HEAD while its stamp still reads as HEAD's
+        changed after it was stamped (:meth:`_edited_since_stamp`). A
+        clean checkout, or a wiki outside git, restamps nothing.
+
         Emits a notice for each new link added with a placeholder
         ``...`` description and when a deleted ``.wiki/cache/`` is
         recreated, and a warning for each index-side link description
@@ -1342,6 +1446,13 @@ class Wiki:
         # refuse to write over merge conflict markers: the write and the
         # dry run refuse alike, naming every marked file
         self._refuse_conflicted(baseline)
+        # restamp a file edited since its stamp, as a tool write would: the
+        # overlay carries each file's original stamp, so the plan alone
+        # leaves a hand edit's stamp behind it
+        for path in self._edited_since_stamp(folder, baseline):
+            content = overlay[path]
+            block, _ = format.extract_frontmatter(content.split('\n'))
+            overlay[path] = format.restamp_updated(block, now) + content[len(block) :]
         # report every broken/new link (pruned or added during the run)
         # individually and statelessly; the CLI condenses by default
         for event in notices:
@@ -6459,6 +6570,16 @@ def _as_written(frontmatter: str, now: str) -> str:
     """
     stamped = format.restamp_updated(frontmatter, now)
     return frontmatter if format.frontmatter_issues(stamped) else stamped
+
+
+def _updated_stamp(text: Optional[str]) -> Optional[str]:
+    """Return the ``updated:`` value of ``text``'s closed frontmatter block, if any."""
+    if text is None:
+        return None
+    block, _ = format.extract_frontmatter(text.split('\n'))
+    if not block:
+        return None
+    return format.read_frontmatter_field(block, 'updated')
 
 
 def _conflict_marker_lines(text: str) -> list[int]:
