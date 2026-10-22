@@ -34,6 +34,13 @@ may include breaking changes, each listed under a Breaking heading.
   pattern re-includes as one this machine's git ignores. Git tracks such a path,
   so its row ships with it, and a wiki whose `.gitignore` ignores `*` and
   re-includes `!*.md` no longer draws the note for every page and index.
+- A wiki at its repository's top level keeps its gitignore fence under a
+  `.gitignore` that ignores `*` and re-includes what it tracks (`!*/`, `!*.md`).
+  Git reads the top level as ignored under any `*` line, and the wiki took that
+  for a wiki its repository keeps out, so it dropped the fence and indexed the
+  files the allowlist leaves out. The exemption now also needs the root
+  `_index.md` to read as ignored, so a top-level wiki whose `.gitignore` ignores
+  everything stays exempt.
 - `wiki _merge` replaces a clean `_index.md` merge whole when it sets the H1 and
   row order, so a write that fails leaves the file as the driver merged it and
   the driver's exit code stands: `wiki _merge` no longer exits 2, which git

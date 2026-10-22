@@ -318,14 +318,18 @@ from indexing exactly like a pattern match — never walked, adopted, or
 linked — so a driver's stray output beside tracked content cannot be swept
 into the corpus by the next update. Matching is pattern-pure (a
 force-tracked file matching a fence is still fenced), and a wiki whose own
-root is ignored is exempt, so a deliberately unindexed wiki inside a repo
-keeps working. The repository is always the one enclosing the wiki root: the
-probe drops the caller's ``GIT_*`` environment, so a command run from a git
-hook (which exports ``GIT_DIR``) fences exactly as the same command run from
-a shell. Two variables that only restrict git pass through:
-``GIT_CEILING_DIRECTORIES`` stops the search for the enclosing repository,
-so a wiki whose repository a ceiling hides reads as outside one, and
-``GIT_OPTIONAL_LOCKS=0`` keeps the wiki's git reads off the index lock.
+root and root ``_index.md`` are both ignored is exempt, so a deliberately
+unindexed wiki inside a repo keeps working. At a repository's top level git
+reads the root as ignored under any ``*`` line, so a ``.gitignore`` that
+ignores ``*`` and re-includes what it tracks (``!*/``, ``!*.md``) keeps its
+fence there as in any subfolder. The repository is always the one enclosing
+the wiki root: the probe drops the caller's ``GIT_*`` environment, so a
+command run from a git hook (which exports ``GIT_DIR``) fences exactly as
+the same command run from a shell. Two variables that only restrict git
+pass through: ``GIT_CEILING_DIRECTORIES`` stops the search for the
+enclosing repository, so a wiki whose repository a ceiling hides reads as
+outside one, and ``GIT_OPTIONAL_LOCKS=0`` keeps the wiki's git reads off
+the index lock.
 Outside a git repository — or with git unavailable — no fence
 applies; inside one, an unreadable fence (git off ``PATH``, a broken install)
 is narrated as a note, since the sweep is about to adopt what the repository

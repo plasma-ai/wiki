@@ -563,13 +563,13 @@ class Wiki:
         force-tracked reads as fenced all the same and the fence and the
         tool agree about what is content. Empty -- no fencing -- outside
         a git repository, when git is unavailable (narrated, inside a
-        repository), and when the root itself is ignored (a deliberately
-        unindexed wiki inside a repo must keep working).
+        repository), and when the root and its index are both ignored (a
+        deliberately unindexed wiki inside a repo must keep working).
         """
-        # enumerate the candidates one batch probe covers: the root itself
-        # ('.', probing the fence-disable case) and every non-dot entry
-        # below it (dot paths and symlinked dirs are excluded either way)
-        candidates = ['.']
+        # enumerate the candidates one batch probe covers: the root and its
+        # index (together probing the fence-disable case) and every non-dot
+        # entry below it (dot paths and symlinked dirs are excluded either way)
+        candidates = ['.', WIKI_INDEX]
         for dirpath, dirnames, filenames in os.walk(self._root):
             dirnames[:] = [d for d in dirnames if not d.startswith('.')]
             prefix = self._relpath(pathlib.Path(dirpath))
@@ -583,10 +583,12 @@ class Wiki:
         if matched is None:
             return frozenset()
         # a fenced root would fence the whole wiki out of itself: leave a
-        # deliberately ignored wiki unfenced instead
-        if '.' in matched:
+        # deliberately ignored wiki unfenced instead. Its index must read
+        # ignored too, since at a repository's top level git reads '.' as
+        # ignored under any '*' line, whatever re-includes follow it
+        if {'.', WIKI_INDEX} <= matched:
             return frozenset()
-        return frozenset(matched)
+        return frozenset(matched - {'.'})
 
     def _check_ignore(self: Wiki, candidates: list[str]) -> Optional[set[str]]:
         """Batch-probe ``candidates`` against the repo's gitignore fences.
@@ -637,10 +639,10 @@ class Wiki:
         (``scratch/``) cannot match a bare pathname git has no inode
         for.
         """
-        matched = self._check_ignore(['.', relative, relative + '/'])
-        if (matched is None) or ('.' in matched):
+        matched = self._check_ignore(['.', WIKI_INDEX, relative, relative + '/'])
+        if (matched is None) or ({'.', WIKI_INDEX} <= matched):
             return False
-        return bool(matched)
+        return bool(matched - {'.', WIKI_INDEX})
 
     def _in_repository(self: Wiki) -> bool:
         """Return ``True`` if a git repository encloses the wiki root.

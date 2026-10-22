@@ -44,8 +44,8 @@ excluded from the tree entirely:
   ``.git/info/exclude``, never a personal ``core.excludesFile``) fence out of
   version control is never walked, adopted, or linked, and a pruned row whose
   target is gitignored is announced as a gitignore skip. A force-tracked file
-  matching a rule is still fenced; a wiki whose own root is ignored is exempt
-  (see :doc:`/configuration`).
+  matching a rule is still fenced; a wiki whose own root and root
+  ``_index.md`` are both ignored is exempt (see :doc:`/configuration`).
 
 ``wiki map``, ``wiki search``, ``wiki match``, ``wiki update``, and
 ``wiki lint`` all accept an optional positional argument naming a subtree

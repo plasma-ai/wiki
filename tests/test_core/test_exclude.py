@@ -50,6 +50,7 @@ __all__ = [
     'test_gitignore_fence_honors_a_discovery_ceiling',
     'test_unavailable_fence_note_honors_a_discovery_ceiling',
     'test_ignored_wiki_root_stays_unfenced',
+    'test_allowlist_fence_holds_at_the_repository_root',
     'test_new_refuses_a_fenced_target',
     'test_gitignored_link_target_names_the_cause',
 ]
@@ -872,15 +873,26 @@ def test_unavailable_fence_note_honors_a_discovery_ceiling(
 
 
 @_needs_git
-def test_ignored_wiki_root_stays_unfenced(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize(
+    argnames=('ignore', 'folder'),
+    argvalues=[('notes/', 'notes'), ('*', '')],
+    ids=['ignored-folder', 'everything-ignored-at-repo-root'],
+)
+def test_ignored_wiki_root_stays_unfenced(
+    tmp_path: pathlib.Path,
+    ignore: str,
+    folder: str,
+) -> None:
     """A wiki that is itself gitignored keeps indexing normally.
 
     The fence keeps non-corpus out of a tracked wiki; a wiki
     deliberately fenced out of its repo (a scratch tree) has no corpus
-    boundary to defend, and fencing it would empty it of itself.
+    boundary to defend, and fencing it would empty it of itself. At a
+    repository's top level, which git never ignores, a ``*`` line that
+    ignores everything keeps the wiki out the same way.
     """
-    _git_repo(tmp_path, 'notes/')
-    root = tmp_path / 'notes'
+    _git_repo(tmp_path, ignore)
+    root = tmp_path / folder
     wiki = _make_wiki(root, folders={'core': ['design']})
     assert wiki.lint() == []
     # a bare page inside is adopted as usual
@@ -892,6 +904,34 @@ def test_ignored_wiki_root_stays_unfenced(tmp_path: pathlib.Path) -> None:
     # the generator stays exempt too: a fenced root never fences new work
     created = Wiki(root).new('plans', desc='A real desc.', content='Real content.')
     assert created == 'plans/_index.md'
+
+
+@_needs_git
+def test_allowlist_fence_holds_at_the_repository_root(tmp_path: pathlib.Path) -> None:
+    """An allowlist ignore file fences a wiki at its repository's top level.
+
+    At the top level git reads the root as ignored under any ``*`` line,
+    whatever re-includes follow it, so the root alone cannot say
+    whether the repository keeps the wiki out. An allowlist
+    that re-includes the pages tracks the wiki, and its fence holds as
+    in any subfolder: the walk leaves out what the allowlist leaves
+    out, and the generator refuses a folder the allowlist ignores.
+    """
+    _make_wiki(tmp_path, folders={'notes': ['keep']})
+    _git_repo(tmp_path, '*', '!*/', '!*.md', 'scratch/')
+    (tmp_path / 'notes' / 'dump.tar').write_bytes(b'raw')
+
+    # the walk indexes the re-included page and fences the rest
+    Wiki(tmp_path).update()
+    index = (tmp_path / 'notes' / '_index.md').read_text(encoding='utf-8')
+    assert '[[notes/keep|keep]]' in index
+    assert 'dump.tar' not in index
+    assert Wiki(tmp_path).lint() == []
+
+    # the generator refuses a folder the allowlist ignores
+    with pytest.raises(ValueError, match='gitignored'):
+        Wiki(tmp_path).new('scratch', desc='A real desc.', content='Real content.')
+    assert not (tmp_path / 'scratch').exists()
 
 
 @_needs_git
