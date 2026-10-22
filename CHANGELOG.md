@@ -25,6 +25,15 @@ may include breaking changes, each listed under a Breaking heading.
   `link_stale`, are the same either way, so a gate that filtered the notes for
   that kind can read the issues instead. A `links.external` entry naming no
   folder on this machine stays a note.
+- The merge driver settles the `updated:` stamp of every page it merges, not
+  only `_index.md`: both sides take the later stamp, and over a base with no
+  `created:` the earlier `created:`, before git's text merge. A page whose two
+  branches each edited their own part and ran `wiki update` now merges clean
+  instead of conflicting on the stamp line. Excluded, gitignored and non-wiki
+  Markdown keeps git's default merge. `wiki init` and `wiki config` add the page
+  lines `# Wiki page merge driver` and `**/*.md merge=wiki` to `.gitattributes`,
+  right after the index lines in a repository that already has them; run
+  `wiki config` and commit `.gitattributes` to adopt it.
 
 ### Fixed
 

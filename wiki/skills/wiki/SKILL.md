@@ -303,11 +303,15 @@ rather than authoring or auditing page by page yourself:
   branch (`wiki update` does it), then redo the merge. Run `wiki update --check`
   after a merge and `wiki update` when it reports changes — a row one side
   changed and the other deleted, both sides changing one row, a merge that
-  changes the hook's `category_order`, or a conflict resolved by hand.
+  changes the hook's `category_order`, or a conflict resolved by hand. Every
+  other page the wiki manages gets a plain three-way text merge after both sides
+  take the later `updated` stamp (and, over a base with no `created`, the
+  earlier `created`), so a page whose sides differ only in stamps merges clean;
+  excluded, gitignored and non-wiki Markdown gets git's default merge.
   `init`/`config` register the driver in local git config and write the
-  `**/_index.md` glob to `.gitattributes` in the working tree only — you stage
-  and commit it yourself, and each clone runs `wiki config` once to register the
-  driver.
+  `**/_index.md` and `**/*.md` globs to `.gitattributes` (once per repository)
+  in the working tree only — you stage and commit it yourself, and each clone
+  runs `wiki config` once to register the driver.
 - **Leave new-directory index bodies empty during concurrent work.** When
   sibling branches both create the same new directory, its two `_index.md`s
   merge add/add with no common ancestor: the generated region resolves

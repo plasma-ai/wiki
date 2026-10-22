@@ -3536,6 +3536,28 @@ class Wiki:
             return True
         return self._is_gitignored(path)
 
+    def _manages_page(self: Wiki, path: pathlib.Path) -> bool:
+        """Return ``True`` if ``path`` is a Markdown page the walk would index.
+
+        The single-path form of the walk's verdict, for a caller holding
+        one path and no walk (the merge driver): a dot segment anywhere
+        below the root, an ``exclude.patterns`` match, or the enclosing
+        repo's gitignore -- probed directly, with the fence's own
+        exemptions -- leaves the path unmanaged. An ``_index.md`` is its
+        folder's, not a page.
+        """
+        relative = self._relpath(path)
+        if (path.suffix != '.md') or (path.name == WIKI_INDEX):
+            return False
+        if any(part.startswith('.') for part in relative.split('/')):
+            return False
+        if self._excluded_by(path) is not None:
+            return False
+        matched = self._check_ignore(['.', WIKI_INDEX, relative])
+        if (matched is None) or ({'.', WIKI_INDEX} <= matched):
+            return True
+        return relative not in matched
+
     def _is_excluded_dir(self: Wiki, path: pathlib.Path) -> bool:
         """Return ``True`` if directory should be excluded from index links.
 

@@ -42,8 +42,9 @@ The ``wiki config`` command
    restored as ``{}`` (all defaults) with a notice on stderr — the file
    declares the wiki root; see :doc:`/configuration`.
 5. **Wires the git merge driver.** The ``merge.wiki`` driver is registered in
-   the enclosing repository's local git config and the ``**/_index.md`` glob
-   is written to ``.gitattributes``; see :doc:`/guide/merge-driver`.
+   the enclosing repository's local git config and the ``**/_index.md`` and
+   ``**/*.md`` globs are written to ``.gitattributes``; see
+   :doc:`/guide/merge-driver`.
 
 Options:
 

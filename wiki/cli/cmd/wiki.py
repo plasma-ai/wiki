@@ -375,8 +375,9 @@ def config(
         absolute in .obsidian/app.json) when the vault has none (a value
         you have chosen stands), restores a missing .wiki/settings.json
         ({}), registers the git merge driver in the repo's local config,
-        and writes the **/_index.md glob to .gitattributes when that file
-        has no pending edits (you commit it yourself). Run once per clone.
+        and writes the **/_index.md and **/*.md globs to .gitattributes
+        when that file has no pending edits (you commit it yourself). Run
+        once per clone.
         Exits 0 even when a plugin download fails -- download failures are
         stderr warnings (re-run online to finish setup), never the exit
         code.
@@ -1112,9 +1113,10 @@ def merge(app: typer.Typer) -> typer.Typer:
         moves an absolute script path silently breaks on. The real pathname
         (%P) dispatches internally, so the registration string never changes:
         an ``_index.md`` below a declared wiki root gets the field-aware
-        index merge, everything else git's default text merge. An index
-        merge keeps the later ``updated`` stamp, and a clean one gets the H1
-        and row order ``wiki update`` writes.
+        index merge, a page the wiki manages a text merge over settled
+        stamps, and everything else git's default text merge. Both wiki
+        merges keep the later ``updated`` stamp, and a clean index merge
+        gets the H1 and row order ``wiki update`` writes.
         """
         # dispatch on the real pathname: an _index.md below a declared wiki
         # root -> field-aware index merge (git runs merge drivers at the
@@ -1139,6 +1141,20 @@ def merge(app: typer.Typer) -> typer.Typer:
                 ours=pathlib.Path(ours),
                 theirs=pathlib.Path(theirs),
             )
+        # a page the wiki manages: settle both sides' stamps first, so a
+        # merge whose sides differ in them alone comes out clean, then the
+        # text merge, labeled as the index merge labels its conflicts
+        elif (root is not None) and _is_managed_page(root, pathlib.Path(pathname)):
+            _merge_stamps(
+                root=root,
+                base=pathlib.Path(base),
+                ours=pathlib.Path(ours),
+                theirs=pathlib.Path(theirs),
+            )
+            size = f'--marker-size={marker_size}'
+            labels = ['-L', 'ours', '-L', 'base', '-L', 'theirs']
+            cmd = ['git', 'merge-file', size, *labels, ours, base, theirs]
+            wiki = None
         # any other file class: git's default three-way text merge -- an
         # _index.md outside every declared wiki (a site generator's content
         # page) is not tool-owned, and the index merge would resolve its
@@ -1352,28 +1368,30 @@ def _merge_stamps(
     ours: pathlib.Path,
     theirs: pathlib.Path,
 ) -> None:
-    """Restamp the current branch's ``_index.md`` with the stamps its merge keeps.
+    """Restamp both sides of a wiki file's merge with the stamps it keeps.
 
-    The index merge resolves each regenerated stamp to the current
-    branch's, so this rewrites that one first: ``updated`` takes the
-    later of the two sides' stamps, and ``created``, when the base has
-    none and the sides' stamps are churn, the earlier. Stamps compare
-    as instants under the wiki's timestamp policy, and a stamp either
-    side spells in a form the policy does not parse leaves ours as it
-    is.
+    Each side takes the settled stamps before the merge runs: ``updated``
+    the later of the two sides' stamps, and ``created``, when the base
+    has none and the sides' stamps are churn, the earlier. The index
+    merge resolves each regenerated stamp to the current branch's, and a
+    page's text merge then finds the stamp lines equal on both sides, so
+    one that differed in them alone comes out clean. Stamps compare as
+    instants under the wiki's timestamp policy, and a stamp either side
+    spells in a form the policy does not parse leaves both sides' as
+    they are.
 
     Args:
-        root: Wiki root the index sits under.
-        base: The common ancestor's index (%O).
-        ours: The current branch's index (%A), restamped in place.
-        theirs: The other branch's index (%B).
+        root: Wiki root the file sits under.
+        base: The common ancestor's copy (%O).
+        ours: The current branch's copy (%A), restamped in place.
+        theirs: The other branch's copy (%B), restamped in place.
 
     """
     # NOTE: a merge driver passes the merge's exit code through untouched
     #   (patterns: conventions/cli/errors/exit-codes), and the merge stands
     #   without this step, so any failure here -- a hook that will not load
     #   or construct, bytes that are not UTF-8, a write that fails -- leaves
-    #   ours as it is, and the merge resolves the stamps to ours'
+    #   the sides as they are, and the merge resolves the stamps itself
     try:
         base_text, ours_text, theirs_text = (
             path.read_bytes().decode('utf-8') for path in (base, ours, theirs)
@@ -1404,7 +1422,7 @@ def _merge_stamps(
     keys = {'updated': operator.gt}
     if not format.read_frontmatter_field(base_block, 'created'):
         keys['created'] = operator.lt
-    block = ours_block
+    ours_settled, theirs_settled = ours_block, theirs_block
     for key, wins in keys.items():
         ours_stamp = format.read_frontmatter_field(ours_block, key)
         theirs_stamp = format.read_frontmatter_field(theirs_block, key)
@@ -1412,13 +1430,49 @@ def _merge_stamps(
         theirs_instant = _instant(theirs_stamp)
         if (ours_instant is None) or (theirs_instant is None):
             continue
+        # the winning stamp lands on the other side; a tie keeps ours'
         if wins(theirs_instant, ours_instant):
-            block = format.restamp(block, key, theirs_stamp)
-    if block != ours_block:
+            ours_settled = format.restamp(ours_settled, key, theirs_stamp)
+        elif theirs_stamp != ours_stamp:
+            theirs_settled = format.restamp(theirs_settled, key, ours_stamp)
+    # write each side its settled block changed
+    sides = [
+        (ours, ours_text, ours_block, ours_settled),
+        (theirs, theirs_text, theirs_block, theirs_settled),
+    ]
+    for path, text, block, settled in sides:
+        if settled == block:
+            continue
         try:
-            wiki.util.fs.write_atomic(ours, block + ours_text[len(ours_block) :])
+            wiki.util.fs.write_atomic(path, settled + text[len(block) :])
         except OSError:
             return
+
+
+def _is_managed_page(root: pathlib.Path, path: pathlib.Path) -> bool:
+    """Return ``True`` if the wiki at ``root`` manages the page at ``path``.
+
+    The wiki's own class judges it (:meth:`~wiki.core.wiki.Wiki._manages_page`):
+    a Markdown page its walk would index, not one excluded, gitignored, or
+    under a dot folder.
+
+    Args:
+        root: Wiki root the page sits under.
+        path: The page's repo-relative pathname (%P).
+
+    Returns:
+        Whether the page takes the merge over settled stamps.
+
+    """
+    # NOTE: a merge driver passes the merge's exit code through untouched
+    #   (patterns: conventions/cli/errors/exit-codes), and git's default
+    #   text merge stands without this step, so any failure here -- a hook
+    #   that will not load or construct -- reads the page as unmanaged
+    try:
+        engine = load_wiki_class(root)(root)
+        return engine._manages_page(engine._root / path.relative_to(root))
+    except Exception:
+        return False
 
 
 def _canonicalize_index(engine: Wiki, path: pathlib.Path) -> None:

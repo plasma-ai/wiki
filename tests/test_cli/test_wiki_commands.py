@@ -122,6 +122,8 @@ __all__ = [
     'test_merge_reads_an_escaped_sides_rows',
     'test_merge_keeps_frontmatter_when_side_is_mangled',
     'test_merge_dispatches_on_pathname',
+    'test_merge_settles_the_stamps_of_a_managed_page',
+    'test_merge_of_a_restamped_page_is_clean',
     'test_merge_driver_skips_non_wiki_index_files',
     'test_merge_conflicts_when_side_loses_separator',
     'test_merge_hints_add_add_body_conflicts',
@@ -3860,6 +3862,129 @@ def test_merge_dispatches_on_pathname(tmp_path: pathlib.Path) -> None:
     result = _wiki(tmp_path, '_merge', *args)
     assert result.returncode != 0
     assert '<' * 15 in ours.read_text(encoding='utf-8')
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
+    argnames=('pathname', 'later', 'hook', 'settled'),
+    argvalues=[
+        ('wiki/core/notes.md', 'ours', False, True),
+        ('wiki/core/notes.md', 'theirs', False, True),
+        ('wiki/frozen/copy.md', 'ours', False, False),
+        ('wiki/scratch/draft.md', 'ours', False, False),
+        ('wiki/.drafts/note.md', 'ours', False, False),
+        ('wiki/core/notes.txt', 'ours', False, False),
+        ('docs/notes.md', 'ours', False, False),
+        ('wiki/core/notes.md', 'ours', True, False),
+    ],
+    ids=[
+        'page-ours-later',
+        'page-theirs-later',
+        'excluded',
+        'gitignored',
+        'dot-folder',
+        'not-markdown',
+        'outside-every-wiki',
+        'untrusted-hook',
+    ],
+)
+def test_merge_settles_the_stamps_of_a_managed_page(
+    tmp_path: pathlib.Path,
+    pathname: str,
+    later: str,
+    hook: bool,
+    settled: bool,
+) -> None:
+    """A page the wiki manages merges on the later of its sides' ``updated`` stamps.
+
+    Each side edits its own body line under its own stamp, so the stamp
+    line is the merge's only conflict: the driver settles both sides on
+    the later stamp before the text merge, which then comes out clean,
+    whichever side stamped later. A path the wiki does not manage --
+    excluded, gitignored, under a dot folder, not Markdown, or outside
+    every wiki -- takes git's default text merge with its stamps
+    untouched, so the stamp line conflicts as it always has, as does a
+    page whose wiki's hook will not load to judge it.
+    """
+    _git(tmp_path, 'init', '-q')
+    settings = {'exclude': {'patterns': ['frozen']}}
+    _write(tmp_path / 'wiki' / '.wiki' / 'settings.json', json.dumps(settings))
+    _write(tmp_path / '.gitignore', 'scratch/\n')
+    if hook:
+        _write(tmp_path / 'wiki' / '.wiki' / 'wiki.py', _ORDERED_HOOK)
+    base_text = (
+        '---\nname: notes\ndesc: Notes.\nupdated: 2026-01-01T00:00:00Z\n---\n'
+        '\n# notes\n\nFirst line.\n\nMiddle line.\n\nLast line.\n'
+    )
+    stamps = {'ours': '2026-01-03T00:00:00Z', 'theirs': '2026-01-02T00:00:00Z'}
+    if later == 'theirs':
+        stamps = {'ours': stamps['theirs'], 'theirs': stamps['ours']}
+    ours_text = base_text.replace('2026-01-01T00:00:00Z', stamps['ours'])
+    ours_text = ours_text.replace('First line.', 'Our first line.')
+    theirs_text = base_text.replace('2026-01-01T00:00:00Z', stamps['theirs'])
+    theirs_text = theirs_text.replace('Last line.', 'Their last line.')
+    base = tmp_path / 'base'
+    ours = tmp_path / 'ours'
+    theirs = tmp_path / 'theirs'
+    _write(base, base_text)
+    _write(ours, ours_text)
+    _write(theirs, theirs_text)
+
+    args = [str(base), str(ours), str(theirs), '7', pathname]
+    result = _wiki(tmp_path, '_merge', *args)
+    merged = ours.read_text(encoding='utf-8')
+    if settled:
+        assert result.returncode == 0, result.stdout + result.stderr
+        stamp = re.findall(r'^updated:.*$', merged, re.M)
+        assert stamp == ['updated: 2026-01-03T00:00:00Z']
+        assert 'Our first line.' in merged
+        assert 'Their last line.' in merged
+    else:
+        assert result.returncode != 0
+        assert '<<<<<<<' in merged
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_merge_of_a_restamped_page_is_clean(tmp_path: pathlib.Path) -> None:
+    """Two branches that each edit and restamp a page merge without a conflict.
+
+    ``wiki init`` maps every Markdown file to the driver, so a real merge
+    routes the page through it: the later ``updated`` stamp stands, and
+    each branch's body edit lands.
+    """
+    root = tmp_path / 'wiki'
+    # a real repo whose wiki has the driver registered by init
+    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(tmp_path, 'config', 'user.email', 't@t')
+    _git(tmp_path, 'config', 'user.name', 't')
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    page = root / 'notes.md'
+    base = (
+        '---\nname: notes\ndesc: Notes.\nupdated: 2026-01-01T00:00:00Z\n---\n'
+        '\n# notes\n\nFirst line.\n\nMiddle line.\n\nLast line.\n'
+    )
+    _write(page, base)
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # each branch edits its own line and restamps the page
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    theirs = base.replace('2026-01-01T00:00:00Z', '2026-01-03T00:00:00Z')
+    _write(page, theirs.replace('Last line.', 'Their last line.'))
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    ours = base.replace('2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z')
+    _write(page, ours.replace('First line.', 'Our first line.'))
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
+
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    merged = page.read_text(encoding='utf-8')
+    assert re.findall(r'^updated:.*$', merged, re.M) == [
+        'updated: 2026-01-03T00:00:00Z'
+    ]
+    assert 'Our first line.' in merged
+    assert 'Their last line.' in merged
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')

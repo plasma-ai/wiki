@@ -121,9 +121,10 @@ Adopt the merge driver in a team repository
 -------------------------------------------
 
 Parallel edits to a wiki collide most often in ``_index.md`` files, where
-``wiki update`` regenerates the link block on every run. The bundled git merge
-driver auto-resolves that generated churn so index merges conflict only on
-authored content. See :doc:`/guide/merge-driver` for the full mechanics.
+``wiki update`` regenerates the link block on every run, and on the
+``updated:`` stamps of pages two branches both edited. The bundled git merge
+driver auto-resolves that generated churn so merges conflict only on authored
+content. See :doc:`/guide/merge-driver` for the full mechanics.
 
 Wire it once and commit
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -136,10 +137,13 @@ config and appends the attribute mapping to ``.gitattributes``:
 
    # Wiki index merge driver
    **/_index.md merge=wiki
+   # Wiki page merge driver
+   **/*.md merge=wiki
 
+A repository already mapping index files gains only the two page lines.
 ``wiki config`` writes ``.gitattributes`` in the working tree only — you stage
 and commit it yourself — and skips the write entirely while the file has
-uncommitted changes (the line lands on the next run with a clean
+uncommitted changes (the lines land on the next run with a clean
 ``.gitattributes``).
 
 Once per clone
