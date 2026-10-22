@@ -573,6 +573,10 @@ index, dangling from the root chain), or reached through a symlinked segment, a
 path segment violating the naming policy, a target excluded from indexing
 (``exclude.patterns`` or the enclosing repo's gitignore, naming the cause), and
 a folder whose ``_index.md`` already exists — the generator never overwrites.
+The gitignore is judged on the ``_index.md`` the command would write, so a
+re-include naming folders only (``!*/``) admits a folder that does not exist
+yet, and a repository that ignores ``_index.md`` files refuses every new
+folder, since that index could never be committed.
 The wiring sweep's own refusals (merge conflict markers or a nested wiki in the
 parent scope) are checked before the index is written — marker-shaped lines in
 the authored inputs are refused the same way — so a refused adoption leaves
