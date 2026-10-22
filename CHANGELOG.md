@@ -7,6 +7,15 @@ may include breaking changes, each listed under a Breaking heading.
 
 ## [Unreleased]
 
+### Added
+
+- An opt-in `lint.strict` setting in `.wiki/settings.json`. When true,
+  `wiki lint` reports each stale link in index or page prose as a hard issue
+  that fails the run, rather than a soft note. The line and its `--json` kind,
+  `link_stale`, are the same either way, so a gate that filtered the notes for
+  that kind can read the issues instead. A `links.external` entry naming no
+  folder on this machine stays a note.
+
 ### Fixed
 
 - The `_index.md` merge driver reads a link row as `wiki update` does, as a

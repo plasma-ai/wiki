@@ -203,7 +203,9 @@ rather than authoring or auditing page by page yourself:
   draws a stderr note from `wiki lint` without failing the run; the note
   suggests the root-relative form the author likely meant when one resolves (an
   absolute spelling of an allowlisted file draws its `../` spelling, and a
-  target missing only by a trailing slash the same path without it). A
+  target missing only by a trailing slash the same path without it). Setting
+  `lint.strict` to true in `.wiki/settings.json` makes each one a hard issue
+  instead, with the same line and the same `link_stale` kind in `--json`. A
   `links.external` entry naming no folder on this machine draws one note per run
   (`links.external entry '../src' names no folder on this machine; links into it are not checked`)
   and the links into it draw no notes — an environment condition, so leave them

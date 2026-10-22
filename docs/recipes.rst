@@ -376,15 +376,17 @@ wikilinks written with ``./`` or ``../`` that land inside the wiki (the
 prefix-free form is the fix) or outside every ``links.external`` folder (the
 entry to add is named), unparseable ``created:``/``updated:`` stamps, a
 nested ``.wiki/settings.json`` declaring a foreign wiki root, dangling or
-nested region markers, and — under ``titles.required`` — a missing or
-unfilled ``title:``.
+nested region markers, a missing or unfilled ``title:`` under
+``titles.required``, and stale ``[[wikilinks]]`` in prose under
+``lint.strict``.
 
 Notes flag soft hygiene: placeholder (``...``) and oversized descriptions,
 empty index content sections, CRLF line endings, and stale ``[[wikilinks]]``
-in prose. Every target is read from the wiki root, so a stale note suggests
-the root-relative form the author likely meant when one resolves: ``(use
-[[canonical]])`` for a prefix-free slip, or the root-relative spelling of an
-allowlisted file for a prefixed or absolute one.
+in prose (issues instead under ``lint.strict``). Every target is read from
+the wiki root, so a stale note suggests the root-relative form the author
+likely meant when one resolves: ``(use [[canonical]])`` for a prefix-free
+slip, or the root-relative spelling of an allowlisted file for a prefixed or
+absolute one.
 Five environment notes ride along and count in the closing summary: a
 ``.gitattributes`` ``merge=wiki`` mapping with no ``merge.wiki.driver``
 configured in the clone (the fresh-clone state — run ``wiki config``); an

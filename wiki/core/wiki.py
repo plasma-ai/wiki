@@ -409,6 +409,27 @@ class Wiki:
         return required
 
     @functools.cached_property
+    def _lint_strict(self: Wiki) -> bool:
+        """Return the effective ``lint.strict`` flag from ``settings.json``.
+
+        When true, lint reports each stale link in user content as a hard
+        issue rather than a soft note, so a wiki can gate on prose links
+        that reach nothing.
+        """
+        # overlay the settings.json lint block onto the default
+        override = self._settings.get('lint', {})
+        if not isinstance(override, dict):
+            raise ValueError(
+                f'The lint block must be a JSON object in {WIKI_SETTINGS}.'
+            )
+        strict = override.get('strict', False)
+        if not isinstance(strict, bool):
+            raise ValueError(
+                f'lint.strict must be a boolean, got {strict!r} in {WIKI_SETTINGS}.'
+            )
+        return strict
+
+    @functools.cached_property
     def _exclude_policy(self: Wiki) -> list[tuple[str, re.Pattern[str]]]:
         """Return the compiled ``exclude.patterns`` from ``settings.json``.
 
@@ -943,13 +964,15 @@ class Wiki:
         violation = self._name_violation(name)
         if violation is not None:
             raise ValueError(f'Invalid wiki name {name!r}: {violation}')
-        # the titles, map, exclude, and links policies are read lazily (first
-        # inside the plan, the map render, the walk, and lint's folder check),
-        # so touch them here to reject a bad seed early
+        # the titles, map, exclude, links, and lint policies are read lazily
+        # (first inside the plan, the map render, the walk, lint's folder
+        # check, and lint's link scan), so touch them here to reject a bad
+        # seed early
         self._titles_required  # noqa: B018
         self._map_policy  # noqa: B018
         self._exclude_policy  # noqa: B018
         self._links_policy  # noqa: B018
+        self._lint_strict  # noqa: B018
         # alias current timestamp
         now = self._utc_now()
         # initialize wiki root
@@ -1575,9 +1598,10 @@ class Wiki:
           target; flagged with the prefix-free form as the fix),
           outside links under no allowlisted folder (a ``./`` or
           ``../`` target that lands outside every ``links.external``
-          folder, whatever is on disk; flagged with the entry to add),
-          and -- under ``titles.required`` -- a missing or unfilled
-          ``title:``.
+          folder, whatever is on disk; flagged with the entry to add), a
+          missing or unfilled ``title:`` under ``titles.required``, and
+          stale links in user content under ``lint.strict`` (otherwise
+          soft notes, below).
 
         Every line begins with the relevant path; an out-of-date file's
         diff follows its ``Requires update`` header, indented.
@@ -1597,7 +1621,8 @@ class Wiki:
         naming no folder on this machine (noted once per run; links into
         it go unchecked), and CRLF line endings (which the next
         ``update`` normalizes) are soft notes (stderr)
-        and do not count as issues.
+        and do not count as issues; ``lint.strict`` makes the stale links
+        issues.
 
         Args:
             name: Restrict scope to named subtree (relative
@@ -1636,6 +1661,8 @@ class Wiki:
         # per run, not one per link; reading the policy here also fails a
         # malformed block before the plan, links or none
         self._warn_missing_link_folders()
+        # a malformed lint block fails here too, stale links or none
+        self._lint_strict  # noqa: B018
         # compute what update would write (the source of truth for drift); the
         # blocks the planners keep as written come back as notices, keyed here
         # by path like the overlay, so lint names the refusals update applies
@@ -5797,7 +5824,9 @@ class Wiki:
                 if target in reported:
                     continue
                 reported.add(target)
-                self.on_link_stale(path=str(relpath), target=target + alias)
+                self._report_stale_link(
+                    result, path=str(relpath), target=target + alias
+                )
                 continue
             # every target is read from the wiki root: a target carrying a
             # '.' or '..' segment (most often leading, as './' or '../')
@@ -5997,14 +6026,30 @@ class Wiki:
             else:
                 canonical = self._canonical_link_target(path, page_target)
             if (canonical is not None) and (canonical != page_target):
-                self.on_link_stale(
+                self._report_stale_link(
+                    result,
                     path=str(relpath),
                     target=target + alias,
                     canonical=canonical + anchor + alias,
                 )
             else:
-                self.on_link_stale(path=str(relpath), target=target + alias)
+                self._report_stale_link(
+                    result, path=str(relpath), target=target + alias
+                )
         return result
+
+    def _report_stale_link(self: Wiki, result: list[Issue], **fields: Any) -> None:
+        """Report a stale link: a soft note, or under ``lint.strict`` an issue.
+
+        The issue carries the note's line and payload, typed ``link_stale``
+        as the note is in ``lint --json``, so a consumer reads one kind
+        whichever severity the wiki chose.
+        """
+        if self._lint_strict:
+            event = LinkStaleEvent(**fields)
+            result.append(Issue(event.description, kind='link_stale', **fields))
+        else:
+            self.on_link_stale(**fields)
 
 
 # ------ issues

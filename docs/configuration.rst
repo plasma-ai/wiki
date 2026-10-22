@@ -80,9 +80,9 @@ The settings file: ``.wiki/settings.json``
 A JSON object at the wiki root. An absent file means all defaults; malformed
 JSON or a non-object top level fails every command that reads policy, with a
 message naming the file. The recognized blocks — ``naming``, ``timestamp``,
-``map``, ``titles``, ``exclude``, and ``links`` — are all optional, all
-objects. Unknown top-level keys are ignored, but a wrong-typed known block or
-key is an error naming the file and key.
+``map``, ``titles``, ``lint``, ``exclude``, and ``links`` — are all optional,
+all objects. Unknown top-level keys are ignored, but a wrong-typed known block
+or key is an error naming the file and key.
 
 Seeding and restoration are asymmetric:
 
@@ -229,6 +229,18 @@ Presentation defaults for ``wiki map``.
    on files missing the field, and ``wiki lint`` fails each placeholder
    until a value is authored. (When false, a ``null`` title is the transient
    unset idiom and update removes the line — see :doc:`/guide/pages`.)
+
+``lint`` — lint severity
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+``lint.strict``
+   Boolean, default ``false``. When true, ``wiki lint`` reports each stale
+   link in user content — a ``[[wikilink]]`` in index or page prose that
+   reaches nothing — as a hard issue that fails the run, rather than a soft
+   note (see :doc:`/guide/generation`). The line and its ``--json`` kind,
+   ``link_stale``, are the same either way. A ``links.external`` entry
+   naming no folder on this machine stays a note, and the links into it go
+   unchecked, since the folder's absence says nothing about the wiki.
 
 ``exclude`` — indexing exclusions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

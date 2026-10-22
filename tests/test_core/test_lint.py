@@ -92,6 +92,7 @@ __all__ = [
     'test_lint_relative_root_link_steers_to_index_before_update',
     'test_lint_link_text_ignores_padding_but_not_a_stray_bracket',
     'test_lint_stale_prefix_free_link_names_a_raw_file',
+    'test_lint_strict_reports_stale_links_as_issues',
     'test_lint_directory_link_is_issue_naming_index_form',
     'test_lint_link_rules_spare_samples_not_prose',
     'test_lint_directory_link_keeps_display_text',
@@ -2247,6 +2248,65 @@ def test_lint_stale_prefix_free_link_names_a_raw_file(tmp_path: pathlib.Path) ->
     assert notes == [
         'notes/meeting.md: Stale link [[data.csv]] (use [[notes/data.csv]])'
     ]
+
+
+@pytest.mark.parametrize(
+    argnames='strict',
+    argvalues=[False, True],
+    ids=['default', 'strict'],
+)
+def test_lint_strict_reports_stale_links_as_issues(
+    tmp_path: pathlib.Path,
+    strict: bool,
+) -> None:
+    """``lint.strict`` reports each stale prose link as a hard issue.
+
+    By default a stale link is a soft note, since pages come and go. A
+    wiki that sets ``lint.strict`` gates on it instead: the same line,
+    typed ``link_stale`` with the fix it names, fails the run. A
+    ``links.external`` entry naming no folder on this machine stays a
+    note either way -- an environment condition, not a fault in the
+    wiki.
+    """
+    _make_wiki(tmp_path, folders={'notes': ['meeting']})
+    settings = tmp_path / '.wiki' / 'settings.json'
+    data = json.loads(settings.read_text(encoding='utf-8'))
+    data['links'] = {'external': ['../absent']}
+    if strict:
+        data['lint'] = {'strict': True}
+    settings.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
+    Wiki(tmp_path).update()
+    page = tmp_path / 'notes' / 'meeting.md'
+    body = 'See [[gone]], [[meeting]], and [[../absent/x]].'
+    text = page.read_text(encoding='utf-8').replace('Content for meeting.', body)
+    page.write_text(text, encoding='utf-8')
+    wiki = Wiki(tmp_path)
+
+    notices = _capture_notices(wiki)
+    issues = wiki.lint()
+    stale = [
+        'notes/meeting.md: Stale link [[gone]]',
+        'notes/meeting.md: Stale link [[meeting]] (use [[notes/meeting]])',
+    ]
+    notes = [
+        event.description for event in notices if 'Stale link' in event.description
+    ]
+    if strict:
+        # the stale links are issues, typed with the fix they name
+        assert issues == stale
+        assert [issue.kind for issue in issues] == ['link_stale', 'link_stale']
+        assert issues[1].fields == {
+            'path': 'notes/meeting.md',
+            'target': 'meeting',
+            'canonical': 'notes/meeting',
+        }
+        assert notes == []
+    else:
+        assert issues == []
+        assert notes == stale
+    # the absent folder is noted, never gated
+    missing = [n for n in notices if type(n).__name__ == 'LinkFolderMissingEvent']
+    assert len(missing) == 1
 
 
 @page_index
