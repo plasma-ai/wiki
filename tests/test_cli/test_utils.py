@@ -29,7 +29,7 @@ from wiki.cli.utils import (
 )
 from wiki.core.wiki import Wiki
 
-from .conftest import GIT, _env, _git
+from .conftest import GIT, _env, _git, _git_repo
 
 __all__ = [
     'test_resolve_wiki_root',
@@ -1131,9 +1131,7 @@ def test_merge_driver_maps_indexes_at_the_root_and_pages_in_the_wiki(
     the repository root carries both blocks in its one file, and a
     re-run writes nothing more.
     """
-    _git(tmp_path, 'init', '-b', 'main')
-    _git(tmp_path, 'config', 'user.email', 'test@test.com')
-    _git(tmp_path, 'config', 'user.name', 'Test')
+    _git_repo(tmp_path)
     wiki_dir = tmp_path / folder
     wiki_dir.mkdir(exist_ok=True)
     if current:
@@ -1196,9 +1194,7 @@ def test_merge_driver_reads_gitattributes_without_the_index_lock(
     """
     # a repo whose tracked .gitattributes lacks the map, read with the
     # optional locks git takes by default
-    _git(tmp_path, 'init', '-b', 'main')
-    _git(tmp_path, 'config', 'user.email', 'test@test.com')
-    _git(tmp_path, 'config', 'user.name', 'Test')
+    _git_repo(tmp_path)
     attributes = tmp_path / '.gitattributes'
     attributes.write_text('*.txt text\n', encoding='utf-8')
     _git(tmp_path, 'add', '.gitattributes')

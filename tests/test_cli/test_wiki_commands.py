@@ -22,7 +22,7 @@ import pytest
 from wiki import __version__ as WIKI_VERSION
 from wiki.cli.utils import configure_git_merge_driver
 
-from .conftest import GIT, WIKI, _env, _git, _wiki
+from .conftest import GIT, WIKI, _env, _git, _git_repo, _wiki
 
 __all__ = [
     'test_command_errors_exit_two',
@@ -2739,9 +2739,7 @@ def test_merge_driver_keeps_the_later_updated_stamp(
     """
     root = tmp_path / 'wiki'
     # a real repo whose wiki has the driver registered by init
-    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
-    _git(tmp_path, 'config', 'user.email', 't@t')
-    _git(tmp_path, 'config', 'user.name', 't')
+    _git_repo(tmp_path)
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     if timestamp is not None:
         settings_path = root / '.wiki' / 'settings.json'
@@ -2813,9 +2811,7 @@ def test_merge_driver_keeps_the_earlier_created_over_a_stampless_base(
     """
     root = tmp_path / 'wiki'
     # a real repo whose wiki has the driver registered by init
-    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
-    _git(tmp_path, 'config', 'user.email', 't@t')
-    _git(tmp_path, 'config', 'user.name', 't')
+    _git_repo(tmp_path)
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     index = root / 'core' / '_index.md'
     base = '---\nname: core\ndesc: Original section.\n---\n\n# core\n\n***\n\nBody prose.\n'
@@ -3613,9 +3609,7 @@ def test_merge_leaves_a_conflicted_index_as_merged(tmp_path: pathlib.Path) -> No
     root = tmp_path / 'wiki'
     index = root / 'core' / '_index.md'
     # a real repo whose wiki has the driver registered by init
-    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
-    _git(tmp_path, 'config', 'user.email', 't@t')
-    _git(tmp_path, 'config', 'user.name', 't')
+    _git_repo(tmp_path)
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     _write(index, _index('Core', 'Core concepts.', 'Text.'))
     _add_entry(root / 'core', 'design', None)
@@ -3951,10 +3945,10 @@ def test_merge_settles_the_stamps_of_a_managed_page(
     keeps. A path the wiki does not manage -- excluded, gitignored,
     under a dot folder, not Markdown, or outside every wiki -- takes
     git's default text merge with its stamps untouched, so the stamp
-    line conflicts as it always has, as does a page whose wiki's hook
-    will not load, or exits, when the driver judges it.
+    line conflicts, as does a page whose wiki's hook will not load, or
+    exits, when the driver judges it.
     """
-    _git(tmp_path, 'init', '-q')
+    _git_repo(tmp_path)
     settings = {'exclude': {'patterns': ['frozen']}}
     _write(tmp_path / 'wiki' / '.wiki' / 'settings.json', json.dumps(settings))
     _write(tmp_path / '.gitignore', 'scratch/\n')
@@ -4005,9 +3999,7 @@ def test_merge_of_a_restamped_page_is_clean(tmp_path: pathlib.Path) -> None:
     """
     root = tmp_path / 'wiki'
     # a real repo whose wiki has the driver registered by init
-    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
-    _git(tmp_path, 'config', 'user.email', 't@t')
-    _git(tmp_path, 'config', 'user.name', 't')
+    _git_repo(tmp_path)
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     page = root / 'notes.md'
     base = (
@@ -4048,9 +4040,7 @@ def test_markdown_outside_the_wiki_keeps_its_own_merge(tmp_path: pathlib.Path) -
     Markdown conflicts as git labels it, ``HEAD`` against the branch.
     """
     root = tmp_path / 'wiki'
-    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
-    _git(tmp_path, 'config', 'user.email', 't@t')
-    _git(tmp_path, 'config', 'user.name', 't')
+    _git_repo(tmp_path)
     # a committed attribute rule of the repository's own, then the wiki
     _write(tmp_path / '.gitattributes', 'CHANGELOG.md merge=union\n')
     _write(tmp_path / 'CHANGELOG.md', 'Base entry.\n')
@@ -4094,9 +4084,7 @@ def test_merge_without_the_wiki_cli_falls_back_to_a_text_merge(
     markers for a ``git add`` to settle silently.
     """
     root = tmp_path / 'wiki'
-    assert _git(tmp_path, 'init', '-q', '-b', 'main').returncode == 0
-    _git(tmp_path, 'config', 'user.email', 't@t')
-    _git(tmp_path, 'config', 'user.name', 't')
+    _git_repo(tmp_path)
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     page = root / 'notes.md'
     _write(page, _page('notes', 'Notes.', 'Base line.'))

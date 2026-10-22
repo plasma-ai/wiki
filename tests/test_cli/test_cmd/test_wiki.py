@@ -15,6 +15,8 @@ import pytest
 from wiki.cli import cmd
 from wiki.core.wiki import Wiki
 
+from ..._helpers import _needs_unprivileged
+
 __all__ = ['test_merge_rewrite_replaces_the_index_whole_or_not_at_all']
 
 # a merged index as the driver's script leaves it: theirs' row below ours'
@@ -30,10 +32,7 @@ _MERGED = (
     argvalues=[
         # as root, a write to a read-only file succeeds either way, so the case
         # tells the whole-file replacement from an in-place write only without
-        pytest.param(
-            'read-only',
-            marks=pytest.mark.skipif(os.geteuid() == 0, reason='needs a non-root user'),
-        ),
+        pytest.param('read-only', marks=_needs_unprivileged),
         'failing-write',
     ],
 )

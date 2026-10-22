@@ -14,7 +14,6 @@ import os
 import pathlib
 import re
 import shutil
-import time
 import unicodedata
 import zoneinfo
 from typing import Optional
@@ -3573,6 +3572,9 @@ def test_update_escapes_damage_shaped_child_desc(tmp_path: pathlib.Path) -> None
     assert wiki.update() == []
 
 
+# ------ hand-edit restamps
+
+
 # the hand-edit restamp's cases: the edit, the file it lands on, and what
 # its updated: stamp reads after the next run
 _HAND_EDIT_CASES = [
@@ -3650,8 +3652,6 @@ def test_update_restamps_a_page_edited_since_its_stamp(
     # commit the settled tree, the ignored folder's page force-added
     if case != 'outside-git':
         _git_repo(tmp_path, 'scratch/')
-        _git(tmp_path, 'config', 'user.email', 't@t')
-        _git(tmp_path, 'config', 'user.name', 't')
     # a stamp the timestamp policy cannot parse, committed as the stamp
     if case == 'unparseable-stamp':
         edited = root / path
@@ -3735,13 +3735,14 @@ def test_a_tool_write_landing_after_its_stamp_is_no_hand_edit(
     write lands in the next second, the write still counts as the one
     that stamped the file, so the next check finds nothing to do.
     """
+    # freeze the clock, so the second run takes the stamp the first commits
+    stamp = '2020-01-01T00:00:00Z'
+    stamped = dt.datetime(2020, 1, 1, tzinfo=dt.UTC).timestamp()
+    monkeypatch.setattr(Wiki, '_utc_now', lambda self: stamp)
     _make_wiki(tmp_path, folders={'notes': ['keep']})
     _git_repo(tmp_path)
-    _git(tmp_path, 'config', 'user.email', 't@t')
-    _git(tmp_path, 'config', 'user.name', 't')
 
-    # start at the top of a wall-clock second, so the next steps share it
-    time.sleep(1 - (time.time() % 1) + 0.005)
+    # the first run stamps the index a new page joins, and HEAD carries it
     (tmp_path / 'notes' / 'one.md').write_text('# one\n\nBody.\n', encoding='utf-8')
     Wiki(tmp_path).update()
     _git(tmp_path, 'add', '-A')
@@ -3752,11 +3753,12 @@ def test_a_tool_write_landing_after_its_stamp_is_no_hand_edit(
     # the next run's write lands past the second its stamp names, as a slow
     # disk or a loaded machine can make it
     real = filesystem.write_atomic
+    moment = stamped + 1.5
 
     def _late(path: pathlib.Path, text: str) -> None:
-        """Write after the current second ends."""
-        time.sleep(1 - (time.time() % 1) + 0.005)
+        """Write, then date the file past the second its stamp names."""
         real(path, text)
+        os.utime(path, (moment, moment))
 
     (tmp_path / 'notes' / 'two.md').write_text('# two\n\nBody.\n', encoding='utf-8')
     monkeypatch.setattr(filesystem, 'write_atomic', _late)
@@ -3765,7 +3767,9 @@ def test_a_tool_write_landing_after_its_stamp_is_no_hand_edit(
     # the run stamped the index within HEAD's second
     assert _stamp(index.read_text(encoding='utf-8')) == head_stamp
 
-    # nothing was edited by hand, so the check finds nothing to do
+    # nothing was edited by hand, so a later run's check finds nothing to do
+    now = '2031-01-01T00:00:00Z'
+    monkeypatch.setattr(Wiki, '_utc_now', lambda self: now)
     assert Wiki(tmp_path).update(check=True) == []
 
 
@@ -3796,8 +3800,6 @@ def test_update_reads_a_stamp_period_in_the_policy_zone(
     settings.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
     Wiki(tmp_path).update()
     _git_repo(tmp_path)
-    _git(tmp_path, 'config', 'user.email', 't@t')
-    _git(tmp_path, 'config', 'user.name', 't')
     _git(tmp_path, 'add', '-A')
     _git(tmp_path, 'commit', '-q', '-m', 'base')
 
@@ -3812,6 +3814,9 @@ def test_update_reads_a_stamp_period_in_the_policy_zone(
     Wiki(tmp_path).update()
     stamp = _stamp(page.read_text(encoding='utf-8'))
     assert stamp == ('2031-01-01' if restamped else '2020-01-01')
+
+
+# ------ helpers
 
 
 def _stamp(text: str) -> Optional[str]:

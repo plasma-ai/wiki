@@ -21,13 +21,13 @@ from wiki.core import format
 from wiki.core.wiki import Issue, Wiki
 from wiki.util import markdown
 
+from .._helpers import _needs_unprivileged
 from ._helpers import (
     _capture_notices,
     _git,
     _git_repo,
     _make_wiki,
     _needs_git,
-    _needs_unprivileged,
     _set_exclude_patterns,
     bare_anchored,
     page_index,

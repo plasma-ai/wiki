@@ -18,7 +18,6 @@ __all__ = [
     'page_index',
     'bare_anchored',
     '_needs_git',
-    '_needs_unprivileged',
     '_git',
     '_git_repo',
     '_capture_notices',
@@ -37,12 +36,6 @@ bare_anchored = pytest.mark.parametrize(
 
 # gates the tests that drive a real git repository
 _needs_git = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
-
-# gates the tests that rely on a permission denial
-_needs_unprivileged = pytest.mark.skipif(
-    os.geteuid() == 0,
-    reason='needs a non-root user',
-)
 
 
 def _git(cwd: pathlib.Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -68,8 +61,14 @@ def _git(cwd: pathlib.Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 def _git_repo(path: pathlib.Path, *ignores: str) -> None:
-    """Initialize a git repository at ``path`` with ``ignores`` fence lines."""
-    _git(path, 'init', '-q')
+    """Initialize a git repository at ``path`` with ``ignores`` fence lines.
+
+    The repository starts on ``main`` and carries a local commit identity:
+    ``_git`` reads no global config, so a commit finds no other.
+    """
+    _git(path, 'init', '-q', '-b', 'main')
+    _git(path, 'config', 'user.email', 't@t')
+    _git(path, 'config', 'user.name', 't')
     if ignores:
         (path / '.gitignore').write_text('\n'.join(ignores) + '\n', encoding='utf-8')
 
