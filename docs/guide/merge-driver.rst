@@ -5,20 +5,24 @@ Every branch that touches a wiki runs ``wiki update``, and every run rewrites
 generated surfaces in ``_index.md`` files — link rows, ``updated:`` stamps,
 frontmatter ordering (see :doc:`/guide/generation`). Under git's default
 text merge, two branches would conflict on that churn constantly. The wiki
-merge driver auto-resolves the generated region of ``_index.md`` merges, so
-parallel edits conflict only on authored content.
+merge driver auto-resolves the generated region of ``_index.md`` merges and
+settles the stamps of every page it merges, so parallel edits conflict only
+on authored content.
 
 Wiring
 ------
 
 ``wiki init`` and ``wiki config`` both wire the driver into the repository
 that holds the wiki. Two pieces work together. The repository's
-``.gitattributes`` maps index files to the driver:
+``.gitattributes`` maps index files, then every Markdown page, to the
+driver:
 
 .. code-block:: text
 
    # Wiki index merge driver
    **/_index.md merge=wiki
+   # Wiki page merge driver
+   **/*.md merge=wiki
 
 And the repository's *local* git config defines it:
 
@@ -28,17 +32,19 @@ And the repository's *local* git config defines it:
        name = wiki merge (auto-resolve generated sections)
        driver = wiki _merge %O %A %B %L %P
 
-The ``.gitattributes`` line is written to the working tree only — you stage
-and commit it yourself; the tool never touches the git index. The write is
-skipped while ``.gitattributes`` has uncommitted changes of your own (the
-driver config is still registered; the attribute line lands on the next clean
-run).
+The ``.gitattributes`` lines are written to the working tree only — you
+stage and commit them yourself; the tool never touches the git index. The
+lines are written once per repository, however many wikis it holds, and a
+repository already mapping index files gains only the two page lines, right
+after its last line. The write is skipped while ``.gitattributes`` has
+uncommitted changes of your own (the driver config is still registered; the
+attribute lines land on the next clean run).
 
 **The driver is per-clone.** The committed ``.gitattributes`` only names the
 driver; its definition lives in each clone's local git config. Every
 contributor therefore runs ``wiki config`` once after cloning — until then,
-that clone's ``_index.md`` merges silently fall back to git's default text
-merge. The driver string invokes the ``wiki`` command itself rather than an
+that clone's ``_index.md`` and page merges silently fall back to git's
+default text merge. The driver string invokes the ``wiki`` command itself rather than an
 absolute path into a virtualenv (which would silently break when the
 environment is rebuilt or moved), so the CLI must be on ``PATH`` when git
 runs the merge — an isolated install via ``pipx`` or ``uv tool`` takes care
@@ -122,6 +128,19 @@ Below ``***``
    Authored index prose gets a normal three-way merge that can conflict, like
    any other file.
 
+Every other page the wiki manages gets a normal three-way text merge, after
+the driver settles its stamps on both sides: ``updated:`` takes the later of
+the two sides' stamps, and over a base with no ``created:`` (an add/add
+merge) ``created:`` the earlier, compared as instants under the same policy,
+so both sides carry the same stamp lines. A page whose sides differ only in
+their stamps — each branch edited its own part and ran ``wiki update`` —
+merges clean; one with a genuine conflict keeps it, with the stamps already
+settled. A stamp either side spells in a form the policy does not parse
+leaves both sides' stamps as they are. A Markdown file the wiki does not
+manage — one ``exclude.patterns`` or the repository's gitignore keeps out of
+the index, one under a dot folder, or one outside every wiki — gets git's
+default text merge, its stamps untouched.
+
 A merge of two branches that each added or deleted pages, ran
 ``wiki update``, and edited different prose therefore resolves cleanly and
 checks clean as merged — the competing link rows and timestamps that git's
@@ -131,8 +150,9 @@ concurrent edits to the same authored content surface as conflicts.
 Residual conflicts
 ------------------
 
-Authored frontmatter keys and index prose still conflict when both branches
-change the same thing. A residual conflict looks like any other git conflict,
+Authored frontmatter keys, index prose, and page text still conflict when
+both branches change the same thing. A residual conflict looks like any other
+git conflict,
 except the markers are labeled ``ours``/``theirs`` rather than with branch
 names — here both branches reworded the index's ``desc:``:
 
@@ -191,7 +211,7 @@ After the merge
 Only the ``.gitattributes`` map travels with the repository — the
 ``merge.wiki.driver`` config is local, per clone — so a fresh clone carries
 the map alone and git falls back to a plain text merge of ``_index.md``
-files, silently, at its first merge. ``wiki lint`` notes the gap
+files and pages, silently, at its first merge. ``wiki lint`` notes the gap
 (soft, and a typed row in ``lint --json``) until ``wiki config`` registers
 the driver.
 

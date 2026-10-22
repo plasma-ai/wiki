@@ -593,8 +593,9 @@ it holds:
    exactly one `wiki.core.wiki.Wiki` subclass.
 
 The settings marker also drives the git merge driver: ``wiki _merge``
-dispatches an ``_index.md`` to the index-aware merge only when the file sits
-below a declared root — see :doc:`/guide/merge-driver`.
+dispatches an ``_index.md`` to the index-aware merge, and settles a page's
+stamps before its text merge, only when the file sits below a declared root
+— see :doc:`/guide/merge-driver`.
 
 Legacy layout
 ~~~~~~~~~~~~~

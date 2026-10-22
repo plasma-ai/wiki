@@ -61,6 +61,7 @@ __all__ = [
     'test_interrupt_reports_and_exits_130',
     'test_merge_driver_wiring_ignores_ambient_git_dir',
     'test_configure_git_merge_driver',
+    'test_merge_driver_appends_the_missing_attribute_lines',
     'test_merge_driver_skips_dirty_gitattributes',
     'test_merge_driver_reads_gitattributes_without_the_index_lock',
     'test_merge_driver_tolerates_undecodable_git_output',
@@ -1048,6 +1049,73 @@ def test_configure_git_merge_driver(tmp_path: pathlib.Path) -> None:
     configure_git_merge_driver(wiki_dir)
     final = (tmp_path / '.gitattributes').read_text(encoding='utf-8')
     assert final.splitlines().count('**/_index.md merge=wiki') == 1
+
+
+# the canonical attribute block: today's index lines, then the page lines
+_ATTRIBUTE_BLOCK = (
+    '# Wiki index merge driver\n'
+    '**/_index.md merge=wiki\n'
+    '# Wiki page merge driver\n'
+    '**/*.md merge=wiki\n'
+)
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
+    argnames=('current', 'expected'),
+    argvalues=[
+        (None, _ATTRIBUTE_BLOCK),
+        ('*.png binary\n', '*.png binary\n\n' + _ATTRIBUTE_BLOCK),
+        ('*.png binary', '*.png binary\n\n' + _ATTRIBUTE_BLOCK),
+        (
+            '# Wiki index merge driver\n**/_index.md merge=wiki\n',
+            _ATTRIBUTE_BLOCK,
+        ),
+        (
+            '# Wiki index merge driver\n**/_index.md merge=wiki\n\n*.png binary',
+            '# Wiki index merge driver\n**/_index.md merge=wiki\n\n*.png binary\n'
+            '# Wiki page merge driver\n**/*.md merge=wiki\n',
+        ),
+        (_ATTRIBUTE_BLOCK, _ATTRIBUTE_BLOCK),
+    ],
+    ids=[
+        'no-file',
+        'other-rules',
+        'other-rules-no-newline',
+        'index-lines',
+        'index-lines-then-other-rules',
+        'both-lines',
+    ],
+)
+def test_merge_driver_appends_the_missing_attribute_lines(
+    tmp_path: pathlib.Path,
+    current: Optional[str],
+    expected: str,
+) -> None:
+    """The wiring appends whatever suffix of the attribute block is missing.
+
+    The block is today's two index lines followed by the page lines, so a
+    repository holding the index lines gains only the page lines, right
+    after its last line -- the committed file plus that suffix, the shape
+    an embedder's commit check accepts -- and one holding both is left
+    alone. With neither present, the whole block follows the usual
+    separator, and a re-run writes nothing more.
+    """
+    _git(tmp_path, 'init', '-b', 'main')
+    _git(tmp_path, 'config', 'user.email', 'test@test.com')
+    _git(tmp_path, 'config', 'user.name', 'Test')
+    attributes = tmp_path / '.gitattributes'
+    if current is not None:
+        attributes.write_text(current, encoding='utf-8')
+        _git(tmp_path, 'add', '.gitattributes')
+        _git(tmp_path, 'commit', '-m', 'attributes')
+    wiki_dir = tmp_path / 'wiki'
+    wiki_dir.mkdir()
+
+    configure_git_merge_driver(wiki_dir)
+    assert attributes.read_text(encoding='utf-8') == expected
+    configure_git_merge_driver(wiki_dir)
+    assert attributes.read_text(encoding='utf-8') == expected
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')

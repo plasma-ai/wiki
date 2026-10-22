@@ -88,8 +88,8 @@ The command sets up:
   is the one manual action Obsidian requires. See :doc:`/guide/obsidian`.
 - ``wiki/.wiki/cache/`` — a derived word-counts cache; it ignores itself via
   its own ``.gitignore`` and can be deleted at any time.
-- The git merge driver for ``_index.md`` files, registered in the repository's
-  local git config and named in ``.gitattributes``. See
+- The git merge driver for ``_index.md`` files and pages, registered in the
+  repository's local git config and named in ``.gitattributes``. See
   :doc:`/guide/merge-driver`.
 
 .. list-table::

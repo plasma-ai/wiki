@@ -185,9 +185,9 @@ new-link format is seeded when the vault has none, and top-level
 ``.json`` files are created when absent or merged when present (arrays
 union-merged, dicts deep-merged with the source winning). It restores a missing
 ``.wiki/settings.json`` as ``{}``, registers the ``merge.wiki`` driver in the
-repository's local git config, and writes the ``**/_index.md merge=wiki`` line
-to ``.gitattributes`` when that file has no uncommitted changes — it never
-stages or commits. See :doc:`/guide/obsidian` and :doc:`/guide/merge-driver`.
+repository's local git config, and writes the ``**/_index.md merge=wiki`` and
+``**/*.md merge=wiki`` lines to ``.gitattributes``, once per repository, when
+that file has no uncommitted changes — it never stages or commits. See :doc:`/guide/obsidian` and :doc:`/guide/merge-driver`.
 
 Because the merge driver lives in each clone's local git config while
 ``.gitattributes`` only names it, every contributor runs ``wiki config`` once

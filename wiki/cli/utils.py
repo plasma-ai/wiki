@@ -53,6 +53,12 @@ _LOCK_TIMEOUT = 10.0
 # how often the bounded wait retries the non-blocking lock acquisition
 _LOCK_POLL = 0.05
 
+# the .gitattributes block mapping files to the merge driver, in order: the
+# index lines older wikis wrote, then the page lines (embedders match these
+# bytes, so a change here is a change to their commit checks)
+_INDEX_ATTRIBUTES = '# Wiki index merge driver\n**/_index.md merge=wiki\n'
+_PAGE_ATTRIBUTES = '# Wiki page merge driver\n**/*.md merge=wiki\n'
+
 
 def command(
     app: typer.Typer,
@@ -525,11 +531,14 @@ def refuse_nested_init(path: pathlib.Path) -> None:
 def configure_git_merge_driver(path: pathlib.Path) -> None:
     """Wire git's wiki merge driver for the repo holding the wiki.
 
-    Sets the ``merge.wiki`` config and writes the ``**/_index.md`` glob to
-    ``.gitattributes`` (working tree only -- the user commits it). A no-op
-    outside a git repo. The ``.gitattributes`` write is skipped while it has
-    uncommitted changes (the config still applies; it writes on the next clean
-    run), so the command never disturbs the user's pending work.
+    Sets the ``merge.wiki`` config and maps the ``**/_index.md`` and
+    ``**/*.md`` globs to it in ``.gitattributes`` (working tree only -- the
+    user commits it), appending whatever suffix of the attribute block is
+    missing: a repository wired for indexes alone gains only the page
+    lines, right after its last line. A no-op outside a git repo. The
+    ``.gitattributes`` write is skipped while it has uncommitted changes
+    (the config still applies; it writes on the next clean run), so the
+    command never disturbs the user's pending work.
 
     Args:
         path: A path inside the wiki (used to find the enclosing repo).
@@ -556,13 +565,15 @@ def configure_git_merge_driver(path: pathlib.Path) -> None:
         'wiki _merge %O %A %B %L %P',
     ]
     _git(cmd, cwd=repo)
-    # map _index.md files to the driver
+    # map _index.md files, then every page, to the driver: the block opens
+    # with the index lines older wikis wrote, so a repository wired by one
+    # gains the page lines alone
     gitattributes = repo / '.gitattributes'
     current = ''
     if gitattributes.exists():
         current = gitattributes.read_text(encoding='utf-8')
     lines = current.split('\n')
-    if '**/_index.md merge=wiki' in lines:
+    if '**/*.md merge=wiki' in lines:
         return
     # don't entangle with the user's pending work: if .gitattributes already has
     # uncommitted changes, leave it untouched (the merge.wiki config above
@@ -572,18 +583,22 @@ def configure_git_merge_driver(path: pathlib.Path) -> None:
     cmd = ['--no-optional-locks', 'status', '--porcelain', '--', '.gitattributes']
     if _git(cmd, cwd=repo, check=False):
         return
-    if not current:
-        prefix = ''
-    elif current.endswith('\n'):
-        prefix = '\n'
+    # the index lines present: the page lines follow the last line directly;
+    # otherwise the whole block, set off from any rules above it
+    if '**/_index.md merge=wiki' in lines:
+        block = _PAGE_ATTRIBUTES
+        prefix = '' if current.endswith('\n') else '\n'
     else:
-        prefix = '\n\n'
+        block = _INDEX_ATTRIBUTES + _PAGE_ATTRIBUTES
+        if not current:
+            prefix = ''
+        elif current.endswith('\n'):
+            prefix = '\n'
+        else:
+            prefix = '\n\n'
     # write the attribute map into the working tree only; the user stages and
     # commits .gitattributes themselves (this command never touches the index)
-    wiki.util.fs.write_atomic(
-        gitattributes,
-        f'{current}{prefix}# Wiki index merge driver\n**/_index.md merge=wiki\n',
-    )
+    wiki.util.fs.write_atomic(gitattributes, f'{current}{prefix}{block}')
 
 
 # ------ helper functions
