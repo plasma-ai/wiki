@@ -637,6 +637,7 @@ class Wiki:
         """
         payload = b''.join(os.fsencode(f'./{entry}') + b'\0' for entry in candidates)
         cmd = [
+            '--no-optional-locks',
             '-c',
             f'core.excludesFile={os.devnull}',
             'check-ignore',
@@ -743,7 +744,7 @@ class Wiki:
         # the personal global counts; each path is probed as ./<path>, read
         # literally, as the fence probes
         payload = b''.join(os.fsencode(f'./{entry}') + b'\0' for entry in candidates)
-        cmd = ['check-ignore', '-z', '-v', '--stdin']
+        cmd = ['--no-optional-locks', 'check-ignore', '-z', '-v', '--stdin']
         result = wiki.util.git._git(cmd, cwd=self._root, input=payload, raw=True)
         if (result is None) or (result.returncode not in (0, 1)):
             return
@@ -912,7 +913,8 @@ class Wiki:
         silently, at the clone's first merge -- so lint notes the gap
         while it is one ``wiki config`` away from wired.
         """
-        attribute = self._git_read(['check-attr', 'merge', '--', WIKI_INDEX])
+        cmd = ['--no-optional-locks', 'check-attr', 'merge', '--', WIKI_INDEX]
+        attribute = self._git_read(cmd)
         if (attribute is None) or not attribute.endswith(': merge: wiki'):
             return
         if self._git_read(['config', '--get', 'merge.wiki.driver']):
