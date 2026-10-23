@@ -63,15 +63,15 @@ tree the way ``wiki update`` does: every folder gains an ``_index.md``, every
 bare page is adopted with fresh frontmatter (an authored H1 is preserved by
 seeding ``title:`` from it), and every entry is linked into its parent index.
 The sweep itself announces nothing — ``wiki init`` prints only its closing
-line — so review what it did with ``wiki lint``, which names every seeded
-placeholder and empty index (pass the same ``--path`` when running from
-outside the wiki):
+line — so review what it did with ``wiki lint --full``, which names every
+seeded placeholder and empty index (pass the same ``--path`` when running
+from outside the wiki):
 
 .. code-block:: console
 
    $ wiki init --path docs/notes
    Initialized wiki at: /home/user/myproject/docs/notes
-   $ wiki lint --path docs/notes
+   $ wiki lint --full --path docs/notes
    _index.md: Needs desc
    _index.md: Empty content
    guides/_index.md: Needs desc
@@ -90,7 +90,7 @@ Commit the scaffold
 
 ``wiki`` never commits anything. Commit the wiki root — the ``_index.md``
 files, ``.wiki/settings.json``, and the staged ``.wiki/obsidian/`` template —
-plus the ``.gitattributes`` line the merge-driver wiring wrote. Two artifacts
+plus the ``.gitattributes`` lines the merge-driver wiring wrote. Two artifacts
 need no attention: ``.wiki/cache/`` ships its own ``.gitignore`` and ignores
 itself, and ``.obsidian/`` is materialized per machine — any clone rebuilds it
 with ``wiki config``.
@@ -121,26 +121,35 @@ Adopt the merge driver in a team repository
 -------------------------------------------
 
 Parallel edits to a wiki collide most often in ``_index.md`` files, where
-``wiki update`` regenerates the link block on every run. The bundled git merge
-driver auto-resolves that generated churn so index merges conflict only on
-authored content. See :doc:`/guide/merge-driver` for the full mechanics.
+``wiki update`` regenerates the link block on every run, and on the
+``updated:`` stamps of pages two branches both edited. The bundled git merge
+driver auto-resolves that generated churn so merges conflict only on authored
+content. See :doc:`/guide/merge-driver` for the full mechanics.
 
 Wire it once and commit
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 One team member runs ``wiki config`` (``wiki init`` does the same wiring) and
 commits the result. The command registers the driver in the clone's local git
-config and appends the attribute mapping to ``.gitattributes``:
+config, appends the index mapping to the repository root's
+``.gitattributes``:
 
 .. code-block:: text
 
    # Wiki index merge driver
    **/_index.md merge=wiki
 
-``wiki config`` writes ``.gitattributes`` in the working tree only — you stage
-and commit it yourself — and skips the write entirely while the file has
-uncommitted changes (the line lands on the next run with a clean
-``.gitattributes``).
+and the page mapping to a ``.gitattributes`` in the wiki root, so Markdown
+outside the wiki keeps git's own merge:
+
+.. code-block:: text
+
+   # Wiki page merge driver
+   *.md merge=wiki
+
+``wiki config`` writes both files in the working tree only — you stage and
+commit them yourself — and skips a file entirely while it has uncommitted
+changes (its lines land on the next run with the file clean).
 
 Once per clone
 ~~~~~~~~~~~~~~
@@ -167,12 +176,18 @@ normalizes the tool-owned surfaces — the ``name:`` and ``updated:`` frontmatte
 keys (plus ``created:`` when both sides added the file independently) and the
 generated link block — so they never conflict. Everything authored still gets a
 normal three-way merge that can conflict: ``title:``, ``desc:``, ``category:``,
-``tags:``, ``sources:``, and the content below the ``***`` delimiter. Any file
-that is not an ``_index.md`` under a wiki root merges as ordinary text.
+``tags:``, ``sources:``, and the content below the ``***`` delimiter. A page
+the wiki manages merges as ordinary text after the driver settles both sides'
+``updated:`` stamps (and an add/add ``created:``), so a difference in stamps
+alone never conflicts. Any other file merges as ordinary text.
 
-After every merge, run ``wiki update``: it regenerates the link rows from the
-merged filesystem, and a merged-in ``title:`` shows up in its H1 only after
-that run.
+After a merge, run ``wiki update --check``, and ``wiki update`` when it
+reports changes. The driver sets a clean merge's H1 from the merged
+``title:`` and puts its rows in update's order, but some merges still leave
+rows to regenerate, such as a row one side changed and the other deleted,
+both sides changing one row, a change to the hook's ``category_order``, and a
+conflict resolved by hand. The update regenerates them from the merged
+filesystem.
 
 Rename and restructure pages safely
 -----------------------------------
@@ -224,7 +239,7 @@ them by hand:
    notes/related.md:10: See [[topics/example]] for the walkthrough.
 
 Any you miss show up as ``Stale link [[topics/example]]`` notes the next time
-``wiki lint`` runs.
+``wiki lint`` runs (issues, if the wiki sets ``lint.strict``).
 
 Link to files outside the wiki
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -373,15 +388,17 @@ wikilinks written with ``./`` or ``../`` that land inside the wiki (the
 prefix-free form is the fix) or outside every ``links.external`` folder (the
 entry to add is named), unparseable ``created:``/``updated:`` stamps, a
 nested ``.wiki/settings.json`` declaring a foreign wiki root, dangling or
-nested region markers, and — under ``titles.required`` — a missing or
-unfilled ``title:``.
+nested region markers, a missing or unfilled ``title:`` under
+``titles.required``, and stale ``[[wikilinks]]`` in prose under
+``lint.strict``.
 
 Notes flag soft hygiene: placeholder (``...``) and oversized descriptions,
 empty index content sections, CRLF line endings, and stale ``[[wikilinks]]``
-in prose. Every target is read from the wiki root, so a stale note suggests
-the root-relative form the author likely meant when one resolves: ``(use
-[[canonical]])`` for a prefix-free slip, or the root-relative spelling of an
-allowlisted file for a prefixed or absolute one.
+in prose (issues instead under ``lint.strict``). Every target is read from
+the wiki root, so a stale note suggests the root-relative form the author
+likely meant when one resolves: ``(use [[canonical]])`` for a prefix-free
+slip, or the root-relative spelling of an allowlisted file for a prefixed or
+absolute one.
 Five environment notes ride along and count in the closing summary: a
 ``.gitattributes`` ``merge=wiki`` mapping with no ``merge.wiki.driver``
 configured in the clone (the fresh-clone state — run ``wiki config``); an

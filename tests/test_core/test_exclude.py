@@ -18,6 +18,7 @@ import pathlib
 import pytest
 
 from wiki.core.wiki import Wiki
+from wiki.util import git
 
 from ._helpers import (
     _capture_notices,
@@ -44,10 +45,15 @@ __all__ = [
     'test_gitignore_fence_ignores_an_inherited_git_dir',
     'test_unavailable_fence_is_narrated_inside_a_repository',
     'test_personally_ignored_row_draws_a_note',
+    'test_reincluded_row_draws_no_note',
+    'test_a_leading_colon_reads_as_a_name_in_every_git_probe',
     'test_gitignore_fence_reaches_a_nested_wiki_root',
     'test_gitignore_fence_honors_a_discovery_ceiling',
+    'test_unavailable_fence_note_honors_a_discovery_ceiling',
     'test_ignored_wiki_root_stays_unfenced',
+    'test_allowlist_fence_holds_at_the_repository_root',
     'test_new_refuses_a_fenced_target',
+    'test_new_judges_the_index_it_creates',
     'test_gitignored_link_target_names_the_cause',
 ]
 
@@ -388,7 +394,7 @@ def test_update_symlink_precedence(tmp_path: pathlib.Path) -> None:
 
 
 def test_exclude_lifts_nested_wiki_refusal(tmp_path: pathlib.Path) -> None:
-    """An excluded nested declared wiki no longer refuses the sweep.
+    """An excluded nested declared wiki does not refuse the sweep.
 
     A vendored wiki (a directory carrying its own
     ``.wiki/settings.json``) inside the tree refuses every sweep;
@@ -708,6 +714,77 @@ def test_personally_ignored_row_draws_a_note(
 
 
 @_needs_git
+def test_reincluded_row_draws_no_note(tmp_path: pathlib.Path) -> None:
+    """A path a negated pattern re-includes draws no untrackable note.
+
+    An allowlist ignore file in the wiki root -- ignore everything,
+    re-include the page suffix -- keeps a corpus to the files it names.
+    Git tracks every page the negation re-includes, so neither the
+    sweep nor the lint may name one as a row the file cannot follow,
+    while the files the allowlist leaves out stay fenced.
+    """
+    _git_repo(tmp_path)
+    root = tmp_path / 'memory'
+    _make_wiki(root, folders={'notes': ['keep']})
+    (root / '.gitignore').write_text('*\n!*/\n!*.md\n', encoding='utf-8')
+    (root / 'notes' / 'dump.tar').write_bytes(b'raw')
+
+    # the sweep indexes the re-included page, fences the rest, and
+    # names nothing
+    wiki = Wiki(root)
+    notices = _capture_notices(wiki)
+    wiki.update()
+    index = (root / 'notes' / '_index.md').read_text(encoding='utf-8')
+    assert '[[notes/keep|keep]]' in index
+    assert 'dump.tar' not in index
+    assert not any(type(event).__name__ == 'PathUntrackableEvent' for event in notices)
+
+    # lint audits the same rows and names nothing either
+    wiki = Wiki(root)
+    notices = _capture_notices(wiki)
+    assert wiki.lint() == []
+    assert not any(type(event).__name__ == 'PathUntrackableEvent' for event in notices)
+
+
+@_needs_git
+def test_a_leading_colon_reads_as_a_name_in_every_git_probe(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A folder named ``:notes`` is judged as itself, never as ``notes``.
+
+    Git reads a path opening on ``:`` as pathspec magic, so a bare
+    ``:notes`` would answer for ``notes``. Every probe names its path
+    literally: the walk indexes ``:notes`` though ``notes`` is ignored,
+    the generator creates ``:fresh`` though ``fresh`` is, and a scoped
+    update of ``:notes`` restamps the hand edit inside it.
+    """
+    old = '2020-01-01T00:00:00Z'
+    monkeypatch.setattr(Wiki, '_utc_now', lambda self: old)
+    _make_wiki(tmp_path, folders={':notes': ['page']})
+    _git_repo(tmp_path, 'notes', 'fresh')
+
+    # the walk indexes the folder its own name names
+    Wiki(tmp_path).update()
+    root_index = (tmp_path / '_index.md').read_text(encoding='utf-8')
+    assert '[[:notes/_index|:notes/]]' in root_index
+
+    # the generator creates a folder whose bare name an ignore rule names
+    created = Wiki(tmp_path).new(':fresh', desc='A real desc.', content='Real content.')
+    assert created == ':fresh/_index.md'
+
+    # a scoped update restamps a hand edit inside the folder
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+    page = tmp_path / ':notes' / 'page.md'
+    page.write_text(page.read_text(encoding='utf-8') + '\nEdited.\n', encoding='utf-8')
+    now = '2031-01-01T00:00:00Z'
+    monkeypatch.setattr(Wiki, '_utc_now', lambda self: now)
+    assert Wiki(tmp_path).update(':notes') == [':notes/page.md']
+    assert f'updated: {now}' in page.read_text(encoding='utf-8')
+
+
+@_needs_git
 def test_gitignore_fence_reaches_a_nested_wiki_root(tmp_path: pathlib.Path) -> None:
     """Repo-root fences apply inside a wiki nested below the repo root.
 
@@ -746,7 +823,9 @@ def test_gitignore_fence_honors_a_discovery_ceiling(
     A ceiling only restricts git, so unlike ``GIT_DIR`` it reaches the
     wiki's git calls: a fixture wiki that a test fences off from the
     repository around it reads as outside any repository, and that
-    repository's rules no longer decide what the wiki indexes.
+    repository's rules do not decide what the wiki indexes. Outside
+    a repository there is no fence to lose, so no note says the fence
+    is unavailable.
     """
     _git_repo(tmp_path, 'out/')
     root = tmp_path / 'math'
@@ -760,22 +839,100 @@ def test_gitignore_fence_honors_a_discovery_ceiling(
         monkeypatch.delenv('GIT_CEILING_DIRECTORIES', raising=False)
 
     # the fenced folder is indexed exactly when the ceiling hides the repo
-    # (fresh instance -- the fence is cached)
-    Wiki(root).update()
+    # (fresh instance -- the fence is cached), and the hidden repo draws no
+    # unavailable-fence note
+    wiki = Wiki(root)
+    notices = _capture_notices(wiki)
+    wiki.update()
     index = (root / 'core' / '_index.md').read_text(encoding='utf-8')
     assert ('[[core/out' in index) is ceiling
+    assert not [n for n in notices if 'fence unavailable' in n.description]
 
 
 @_needs_git
-def test_ignored_wiki_root_stays_unfenced(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize(
+    argnames=('ceiling', 'hidden'),
+    argvalues=[
+        # the repository's own folder hides it, however it is spelled
+        ('{repo}', True),
+        ('{repo}/', True),
+        ('{link}', True),
+        # an entry after an empty one is read as written, unresolved
+        (':{link}', False),
+        # a relative entry, the wiki root itself and a folder above the
+        # repository hide nothing
+        ('repo', False),
+        ('{root}', False),
+        ('{above}', False),
+    ],
+    ids=[
+        'repo',
+        'trailing-slash',
+        'symlink',
+        'unresolved',
+        'relative',
+        'root',
+        'above',
+    ],
+)
+def test_unavailable_fence_note_honors_a_discovery_ceiling(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ceiling: str,
+    hidden: bool,
+) -> None:
+    """The unavailable-fence note reads a ceiling as git's discovery does.
+
+    A repository the caller's ``GIT_CEILING_DIRECTORIES`` hides from the
+    wiki's git calls is no fence to lose, so a failed probe says nothing;
+    a ceiling git does not honor hides nothing, and the note stands.
+    """
+    # a wiki inside a repository and a symlink to it; the ceiling is set
+    # from beside the repository, where the relative entry would name it
+    repo = tmp_path / 'repo'
+    root = repo / 'math'
+    _make_wiki(root, folders={'core': ['design']})
+    _git_repo(repo)
+    link = tmp_path / 'link'
+    link.symlink_to(repo)
+    spelled = ceiling.format(repo=repo, link=link, root=root, above=tmp_path)
+    monkeypatch.setenv('GIT_CEILING_DIRECTORIES', spelled)
+    monkeypatch.chdir(tmp_path)
+
+    # the wiki's git calls find the repository exactly when it is not hidden
+    found = git._git(['rev-parse', '--git-dir'], cwd=root, check=False)
+    assert (found is None) is hidden
+
+    # with git off PATH the failed probe is narrated where git finds the repo
+    monkeypatch.setenv('PATH', '')
+    wiki = Wiki(root)
+    notices = _capture_notices(wiki)
+    wiki.lint()
+    unavailable = [n for n in notices if 'fence unavailable' in n.description]
+    assert bool(unavailable) is not hidden
+
+
+@_needs_git
+@pytest.mark.parametrize(
+    argnames=('ignore', 'folder'),
+    argvalues=[('notes/', 'notes'), ('*', '')],
+    ids=['ignored-folder', 'everything-ignored-at-repo-root'],
+)
+def test_ignored_wiki_root_stays_unfenced(
+    tmp_path: pathlib.Path,
+    ignore: str,
+    folder: str,
+) -> None:
     """A wiki that is itself gitignored keeps indexing normally.
 
     The fence keeps non-corpus out of a tracked wiki; a wiki
     deliberately fenced out of its repo (a scratch tree) has no corpus
-    boundary to defend, and fencing it would empty it of itself.
+    boundary to defend, and fencing it would empty it of itself. At a
+    repository's top level, which git never ignores, a ``*`` line that
+    ignores everything keeps the wiki out the same way.
     """
-    _git_repo(tmp_path, 'notes/')
-    root = tmp_path / 'notes'
+    _git_repo(tmp_path, ignore)
+    root = tmp_path / folder
     wiki = _make_wiki(root, folders={'core': ['design']})
     assert wiki.lint() == []
     # a bare page inside is adopted as usual
@@ -787,6 +944,34 @@ def test_ignored_wiki_root_stays_unfenced(tmp_path: pathlib.Path) -> None:
     # the generator stays exempt too: a fenced root never fences new work
     created = Wiki(root).new('plans', desc='A real desc.', content='Real content.')
     assert created == 'plans/_index.md'
+
+
+@_needs_git
+def test_allowlist_fence_holds_at_the_repository_root(tmp_path: pathlib.Path) -> None:
+    """An allowlist ignore file fences a wiki at its repository's top level.
+
+    At the top level git reads the root as ignored under any ``*`` line,
+    whatever re-includes follow it, so the root alone cannot say
+    whether the repository keeps the wiki out. An allowlist
+    that re-includes the pages tracks the wiki, and its fence holds as
+    in any subfolder: the walk leaves out what the allowlist leaves
+    out, and the generator refuses a folder the allowlist ignores.
+    """
+    _make_wiki(tmp_path, folders={'notes': ['keep']})
+    _git_repo(tmp_path, '*', '!*/', '!*.md', 'scratch/')
+    (tmp_path / 'notes' / 'dump.tar').write_bytes(b'raw')
+
+    # the walk indexes the re-included page and fences the rest
+    Wiki(tmp_path).update()
+    index = (tmp_path / 'notes' / '_index.md').read_text(encoding='utf-8')
+    assert '[[notes/keep|keep]]' in index
+    assert 'dump.tar' not in index
+    assert Wiki(tmp_path).lint() == []
+
+    # the generator refuses a folder the allowlist ignores
+    with pytest.raises(ValueError, match='gitignored'):
+        Wiki(tmp_path).new('scratch', desc='A real desc.', content='Real content.')
+    assert not (tmp_path / 'scratch').exists()
 
 
 @_needs_git
@@ -806,6 +991,53 @@ def test_new_refuses_a_fenced_target(tmp_path: pathlib.Path) -> None:
     assert not (tmp_path / 'scratch').exists()
     root_index = (tmp_path / '_index.md').read_text(encoding='utf-8')
     assert 'scratch' not in root_index
+
+
+@_needs_git
+@pytest.mark.parametrize(
+    argnames=('folder', 'ignores', 'target', 'refused'),
+    argvalues=[
+        ('memory', ('*', '!*/', '!*.md'), 'plans', False),
+        ('', ('*', '!*/', '!*.md'), 'plans', False),
+        ('', ('*', '!*/', '!*.md', 'scratch/'), 'scratch', True),
+        ('', ('_index.md',), 'plans', True),
+    ],
+    ids=[
+        'allowlist-in-subfolder',
+        'allowlist-at-repo-root',
+        'allowlist-ignored-folder',
+        'ignored-indexes',
+    ],
+)
+def test_new_judges_the_index_it_creates(
+    tmp_path: pathlib.Path,
+    folder: str,
+    ignores: tuple[str, ...],
+    target: str,
+    refused: bool,
+) -> None:
+    """``wiki new`` refuses a folder exactly when git ignores its new index.
+
+    The target does not exist yet, so git cannot apply a re-include that
+    names folders only (``!*/``) to the bare folder path; the index path
+    carries the folder as a leading directory, which git reads as one.
+    An allowlist that re-includes folders and pages admits the new
+    folder; a rule ignoring the folder, or the index files themselves,
+    refuses it, since that index could never be committed.
+    """
+    _git_repo(tmp_path)
+    root = tmp_path / folder
+    _make_wiki(root, folders={'core': ['design']})
+    (root / '.gitignore').write_text('\n'.join(ignores) + '\n', encoding='utf-8')
+
+    wiki = Wiki(root)
+    if refused:
+        with pytest.raises(ValueError, match='gitignored'):
+            wiki.new(target, desc='A real desc.', content='Real content.')
+        assert not (root / target).exists()
+    else:
+        created = wiki.new(target, desc='A real desc.', content='Real content.')
+        assert created == f'{target}/_index.md'
 
 
 @_needs_git

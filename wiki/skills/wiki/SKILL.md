@@ -79,18 +79,25 @@ rather than authoring or auditing page by page yourself:
   repository's ignore rules fence the same way, with no configuration: what the
   repo ignores is not wiki content, so a stray driver output beside tracked
   pages is never adopted, minted an `_index.md`, or linked — delete or fence
-  residue rather than letting update sweep it in. A wiki whose own root is
-  gitignored is exempt.
+  residue rather than letting update sweep it in. A wiki whose own root and root
+  `_index.md` are both gitignored is exempt.
 - **Name validation is configurable.** By default the wiki rejects only
   structural characters (`/`, `\`, `*`, `[`, `]`, `|`, `#`), a leading dot,
   non-printable names, and the reserved `_index` stem — spaces, dashes, and
   unicode all pass. Stricter rules (e.g. ASCII identifiers) are opt-in per wiki
   via `naming.validate` in `.wiki/settings.json` (seed it at creation with
   `wiki init --settings`); `wiki init` and `wiki lint` enforce whatever policy
-  is set.
+  is set. A name is checked as a link carries it: a page by its stem, any other
+  file by its full name, extension included. So `identifier` rejects every
+  non-Markdown file with an extension (`data.json`, `main.py`) unless
+  `naming.allow` contains `.`, and a strict wiki that keeps data files or
+  scripts beside its pages sets `"allow": "."`.
 - **Timestamps are tool-owned and configurable.** `wiki update` writes both
   stamps when a file gains frontmatter, keeps `created:` from then on, and
-  rewrites `updated:` on every actual write — never hand-edit them; an edit goes
+  rewrites `updated:` on every actual write — and, inside a git repository, on a
+  tracked file edited since its last commit, so run `wiki update` after a hand
+  edit rather than restamping by hand (`wiki lint` does not flag the pending
+  restamp; `wiki update --check` does). Never hand-edit a stamp; an edit goes
   undetected unless the value stops parsing under the configured format, which
   `wiki lint` fails. `created`/`updated` default to UTC in `%Y-%m-%dT%H:%M:%SZ`;
   set `timestamp.timezone` (an IANA name) and `timestamp.format` (a strftime
@@ -194,13 +201,16 @@ rather than authoring or auditing page by page yourself:
   an explicit `issue`/`note` severity, a machine `kind`, and per-kind payload
   fields beside the prose `text`), never classify findings by scraping the prose
   streams: a stderr note is not a blocking issue.
-- **Stale wikilinks are soft notes.** A `[[...]]` in index or page prose whose
-  target no longer exists — inside the wiki or under a `links.external` folder —
-  draws a stderr note from `wiki lint` without failing the run; the note
-  suggests the root-relative form the author likely meant when one resolves (an
-  absolute spelling of an allowlisted file draws its `../` spelling, and a
-  target missing only by a trailing slash the same path without it). A
-  `links.external` entry naming no folder on this machine draws one note per run
+- **Stale wikilinks are soft notes (issues under `lint.strict`).** A `[[...]]`
+  in index or page prose whose target no longer exists — inside the wiki or
+  under a `links.external` folder — draws a stderr note from `wiki lint` without
+  failing the run; the note suggests the root-relative form the author likely
+  meant when one resolves (an absolute spelling of an allowlisted file draws its
+  `../` spelling, and a target missing only by a trailing slash the same path
+  without it). Setting `lint.strict` to true in `.wiki/settings.json` makes each
+  one a hard issue instead, with the same line and the same `link_stale` kind in
+  `--json`. A `links.external` entry naming no folder on this machine draws one
+  note per run
   (`links.external entry '../src' names no folder on this machine; links into it are not checked`)
   and the links into it draw no notes — an environment condition, so leave them
   alone. Broken links in the generated index link block — the rows `wiki update`
@@ -267,32 +277,45 @@ rather than authoring or auditing page by page yourself:
   faces round-trip byte-identically; for formatters with no plugin lane (e.g.
   prettier) exclude the wiki root instead (`wiki/` in `.prettierignore`).
 - **The git merge driver resolves only the generated region.** For `_index.md`
-  files it normalizes the regenerated `name`/`updated` keys to *ours* (plus
-  `created` whenever the base index carries no real stamp — an add/add merge, a
-  hand-written or imported index), resolves the link block to the union of both
-  sides' rows — ours' layout wins, rows present only in theirs ride over with
-  their desc continuations, a row both sides carry keeps ours' text unless only
-  theirs changed it against the base, and a row the base had that one side
-  deleted and the other left alone stays deleted (unless the deleting side's
-  rows are formatter-escaped), so a merge never drops one side's additions, and
-  an edit only one side made is never lost (when both sides edit the same row,
-  ours wins) — and three-way merges everything authored — the remaining
+  files it first gives ours the later of the two sides' `updated` stamps and the
+  earlier normalized `created`, compared as instants (an unparseable stamp keeps
+  ours'). It then normalizes the regenerated `name`/`updated` keys to *ours*
+  (plus `created` whenever the base index carries no real stamp — an add/add
+  merge, a hand-written or imported index), and resolves the link block to the
+  union of both sides' rows — ours' layout wins, rows present only in theirs
+  ride over with their desc continuations, a row both sides carry keeps ours'
+  text unless only theirs changed it against the base, and a row the base had
+  that one side deleted and the other left alone stays deleted, so a merge keeps
+  either side's additions and an edit only one side made (when both sides edit
+  the same row, ours wins). A formatter-escaped row (`\[\[`) reads as
+  `wiki update` reads it, so an escaped side merges like any other; only a line
+  in the damage shape that still reads as no row holds that side's deletions
+  until the next update. It three-way merges everything authored — the remaining
   frontmatter fields (`title`/`desc`/`created`/`category`/`tags`/`sources`) and
   the user content below `***` — which can still conflict for hand-resolution. A
   clean merge then writes the H1 from the merged `title:` (else `name:`) and
   sorts the rows into the order `wiki update` writes, with the wiki's own class
-  (a trusted hook's `category_order` included) when that class wrote ours'
-  index, so a clean merge in which each side only added, deleted or retitled
-  entries passes `update --check` and `lint` as merged. A side missing its `***`
-  entirely (formatter damage) can't be split into regions, so it conflicts
-  whole-file with a hint comment naming the repair — restore the `***` on that
-  branch (`wiki update` does it), then redo the merge. Run `wiki update --check`
-  after a merge and `wiki update` when it reports changes — a row one side
-  changed and the other deleted, both sides changing one row, or a conflict
-  resolved by hand. `init`/`config` register the driver in local git config and
-  write the `**/_index.md` glob to `.gitattributes` in the working tree only —
-  you stage and commit it yourself, and each clone runs `wiki config` once to
-  register the driver.
+  (a trusted hook's `category_order` included) when that class leaves ours'
+  index as written — a check that sees a category order only where ours' rows
+  span two or more categories, so an embedder's own order can still be re-sorted
+  into this class's — so a clean merge in which each side only added, deleted or
+  retitled entries passes `update --check` and `lint` as merged. A side missing
+  its `***` entirely (formatter damage) can't be split into regions, so it
+  conflicts whole-file with a hint comment naming the repair — restore the `***`
+  on that branch (`wiki update` does it), then redo the merge. Run
+  `wiki update --check` after a merge and `wiki update` when it reports changes
+  — a row one side changed and the other deleted, both sides changing one row, a
+  merge that changes the hook's `category_order`, or a conflict resolved by
+  hand. Every other page the wiki manages gets a plain three-way text merge
+  after both sides take the later `updated` stamp (and, over a base with no
+  `created`, the earlier `created`), so a page whose sides differ only in stamps
+  merges clean; an excluded or gitignored page gets a plain text merge, and
+  Markdown outside the wiki never reaches the driver. `init`/`config` register
+  the driver in local git config and write `**/_index.md merge=wiki` to the
+  repository root's `.gitattributes` and `*.md merge=wiki` to one in the wiki
+  root, in the working tree only — you stage and commit them yourself, and each
+  clone runs `wiki config` once to register the driver. Without `wiki` on PATH
+  the driver falls back to git's own text merge.
 - **Leave new-directory index bodies empty during concurrent work.** When
   sibling branches both create the same new directory, its two `_index.md`s
   merge add/add with no common ancestor: the generated region resolves

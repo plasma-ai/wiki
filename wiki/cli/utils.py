@@ -53,6 +53,21 @@ _LOCK_TIMEOUT = 10.0
 # how often the bounded wait retries the non-blocking lock acquisition
 _LOCK_POLL = 0.05
 
+# the registered merge driver: the wiki's merge when its CLI is on PATH, else
+# git's own text merge, labeled as the driver labels its conflicts -- a driver
+# command that cannot run leaves a conflict holding ours alone, no markers
+_MERGE_DRIVER = (
+    'if command -v wiki >/dev/null 2>&1; then wiki _merge %O %A %B %L %P;'
+    ' else git merge-file -L ours -L base -L theirs --marker-size=%L %A %O %B; fi'
+)
+
+# the .gitattributes blocks mapping files to the merge driver, each a comment
+# and its mapping line: index files at the repository root, and every page in
+# the wiki root's own file (embedders match these bytes, so a change here is a
+# change to their commit checks)
+_INDEX_ATTRIBUTES = ('# Wiki index merge driver', '**/_index.md merge=wiki')
+_PAGE_ATTRIBUTES = ('# Wiki page merge driver', '*.md merge=wiki')
+
 
 def command(
     app: typer.Typer,
@@ -525,14 +540,15 @@ def refuse_nested_init(path: pathlib.Path) -> None:
 def configure_git_merge_driver(path: pathlib.Path) -> None:
     """Wire git's wiki merge driver for the repo holding the wiki.
 
-    Sets the ``merge.wiki`` config and writes the ``**/_index.md`` glob to
-    ``.gitattributes`` (working tree only -- the user commits it). A no-op
-    outside a git repo. The ``.gitattributes`` write is skipped while it has
-    uncommitted changes (the config still applies; it writes on the next clean
-    run), so the command never disturbs the user's pending work.
+    Sets the ``merge.wiki`` config, maps ``_index.md`` files to the driver
+    in the repository root's ``.gitattributes``, and maps every page in a
+    ``.gitattributes`` in the wiki root itself, so Markdown outside the
+    wiki keeps git's own merge and the rules set for it (working tree
+    only -- the user commits both files). A wiki at the repository root
+    carries both blocks in its one file. A no-op outside a git repo.
 
     Args:
-        path: A path inside the wiki (used to find the enclosing repo).
+        path: The wiki root (also used to find the enclosing repo).
 
     """
     # resolve enclosing git repo (no-op outside one)
@@ -553,40 +569,67 @@ def configure_git_merge_driver(path: pathlib.Path) -> None:
     cmd = [
         'config',
         'merge.wiki.driver',
-        'wiki _merge %O %A %B %L %P',
+        _MERGE_DRIVER,
     ]
     _git(cmd, cwd=repo)
-    # map _index.md files to the driver
-    gitattributes = repo / '.gitattributes'
-    current = ''
-    if gitattributes.exists():
-        current = gitattributes.read_text(encoding='utf-8')
-    lines = current.split('\n')
-    if '**/_index.md merge=wiki' in lines:
+    # map index files at the root and pages in the wiki's own file; git names
+    # the wiki's place in the repo (an empty prefix at the top level), so no
+    # path comparison can misjudge a case-folded or symlinked spelling
+    cmd = ['rev-parse', '--show-prefix']
+    prefix = _git(cmd, cwd=path, check=False)
+    # a failed query names no place: map nothing rather than take it for the
+    # top level, which would map every page in the repo
+    if prefix is None:
         return
-    # don't entangle with the user's pending work: if .gitattributes already has
-    # uncommitted changes, leave it untouched (the merge.wiki config above
-    # still applies; the attribute map is written on the next clean run),
-    # reading without the optional index lock a plain status takes, which
-    # would fail a concurrent git add or commit in the same repository
-    cmd = ['--no-optional-locks', 'status', '--porcelain', '--', '.gitattributes']
-    if _git(cmd, cwd=repo, check=False):
-        return
-    if not current:
-        prefix = ''
-    elif current.endswith('\n'):
-        prefix = '\n'
+    if prefix:
+        _append_attributes(repo / '.gitattributes', [_INDEX_ATTRIBUTES])
+        _append_attributes(pathlib.Path(path) / '.gitattributes', [_PAGE_ATTRIBUTES])
     else:
-        prefix = '\n\n'
-    # write the attribute map into the working tree only; the user stages and
-    # commits .gitattributes themselves (this command never touches the index)
-    wiki.util.fs.write_atomic(
-        gitattributes,
-        f'{current}{prefix}# Wiki index merge driver\n**/_index.md merge=wiki\n',
-    )
+        blocks = [_INDEX_ATTRIBUTES, _PAGE_ATTRIBUTES]
+        _append_attributes(repo / '.gitattributes', blocks)
 
 
 # ------ helper functions
+
+
+def _append_attributes(path: pathlib.Path, blocks: list[tuple[str, str]]) -> None:
+    """Append to ``path`` each attribute block whose mapping line it lacks.
+
+    Existing bytes are never rewritten: each block follows the file's last
+    line, set off by a blank line, in the file's own line ending (CRLF once
+    it holds a CRLF line). A file with uncommitted changes, an untracked
+    one included, is left untouched -- the merge config still applies, and
+    the next clean run writes it -- so the wiring never entangles with the
+    user's pending work.
+
+    Args:
+        path: The ``.gitattributes`` file to append to.
+        blocks: Comment and mapping-line pairs, in the order they land.
+
+    """
+    current = path.read_bytes().decode('utf-8') if path.exists() else ''
+    lines = current.splitlines()
+    missing = [block for block in blocks if block[1] not in lines]
+    if not missing:
+        return
+    # read without the optional index lock a plain status takes, which would
+    # fail a concurrent git add or commit in the same repository
+    cmd = ['--no-optional-locks', 'status', '--porcelain', '--', f'./{path.name}']
+    if _git(cmd, cwd=path.parent, check=False):
+        return
+    eol = '\r\n' if '\r\n' in current else '\n'
+    text = current
+    for block in missing:
+        if not text:
+            prefix = ''
+        elif text.endswith('\n'):
+            prefix = eol
+        else:
+            prefix = eol + eol
+        text += prefix + eol.join(block) + eol
+    # write into the working tree only; the user stages and commits the file
+    # (this command never touches the index)
+    wiki.util.fs.write_atomic(path, text)
 
 
 def _config_home() -> pathlib.Path:

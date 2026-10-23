@@ -185,9 +185,11 @@ new-link format is seeded when the vault has none, and top-level
 ``.json`` files are created when absent or merged when present (arrays
 union-merged, dicts deep-merged with the source winning). It restores a missing
 ``.wiki/settings.json`` as ``{}``, registers the ``merge.wiki`` driver in the
-repository's local git config, and writes the ``**/_index.md merge=wiki`` line
-to ``.gitattributes`` when that file has no uncommitted changes — it never
-stages or commits. See :doc:`/guide/obsidian` and :doc:`/guide/merge-driver`.
+repository's local git config, and maps the driver in ``.gitattributes`` —
+``**/_index.md merge=wiki`` in the repository root's file and
+``*.md merge=wiki`` in the wiki root's own — skipping a file that has
+uncommitted changes; it never stages or commits. See :doc:`/guide/obsidian`
+and :doc:`/guide/merge-driver`.
 
 Because the merge driver lives in each clone's local git config while
 ``.gitattributes`` only names it, every contributor runs ``wiki config`` once
@@ -494,7 +496,10 @@ keeps the tool-owned surfaces in sync with the filesystem (see
 - **Restores a missing** ``.wiki/settings.json`` as ``{}`` and recreates a
   deleted ``.wiki/cache/``.
 
-``updated:`` is re-stamped only on files whose content actually changed.
+``updated:`` is re-stamped only on files whose content actually changed —
+and, inside a git repository, on a tracked file edited since its last commit
+while its ``updated:`` still matches the committed one, each named in a
+``Restamped`` line (see :doc:`/guide/generation`).
 Files the sweep cannot safely fix are left alone with a notice: pages whose
 frontmatter never closes, is valid YAML but not ``key: value`` pairs, is a
 mapping with no column-0 ``key:`` lines, or would be left rejected by its own
@@ -573,6 +578,11 @@ index, dangling from the root chain), or reached through a symlinked segment, a
 path segment violating the naming policy, a target excluded from indexing
 (``exclude.patterns`` or the enclosing repo's gitignore, naming the cause), and
 a folder whose ``_index.md`` already exists — the generator never overwrites.
+The gitignore is judged on the ``_index.md`` the command would write, so a
+re-include naming folders only (``!*/``) applies to a folder that does not
+exist yet: under ``*``, ``!*/`` and ``!*.md`` the new folder is admitted. A
+repository that ignores ``_index.md`` files refuses every new folder, since
+that index could never be committed.
 The wiring sweep's own refusals (merge conflict markers or a nested wiki in the
 parent scope) are checked before the index is written — marker-shaped lines in
 the authored inputs are refused the same way — so a refused adoption leaves
@@ -636,7 +646,8 @@ on a broken link, ``line`` on a wrap mangle, or ``line``/``reason`` on
 invalid YAML frontmatter), the rendered prose under ``text``, and a
 ``summary`` with both counts; the exit-code contract is unchanged.
 
-**Issues** (hard, exit 1) cover everything ``wiki update`` would rewrite —
+**Issues** (hard, exit 1) cover everything ``wiki update`` would rewrite but
+the restamp of a hand-edited file, which only ``wiki update --check`` lists —
 each shown as ``<path>: Requires update`` with an indented unified diff — plus
 problems update cannot fix: missing indexes, invalid page/folder names, pages
 shadowed by same-named folders, merge conflict markers, leftover merge repair
@@ -660,14 +671,15 @@ wiki (the path spells one machine's layout; the issue names the prefix-free
 form, as the ``./``/``../`` issue does), prose wikilinks written with ``./``
 or ``../`` that land outside every ``links.external`` folder (whatever is on
 disk; the issue names the entry to add), dangling or nested region markers,
-and — when the ``titles.required`` setting is on — missing titles.
+missing titles when the ``titles.required`` setting is on, and stale
+``[[wikilinks]]`` in authored prose when the ``lint.strict`` setting is on.
 
 **Notes** (soft, stderr) flag placeholder (``...``) descriptions, descriptions
 over 500 characters, empty index content sections, CRLF line endings, stale
-``[[wikilinks]]`` in authored prose (inside the wiki, or under a
-``links.external`` folder present on this machine; the note suggests the
-root-relative form of the target, or the root-relative spelling of an
-allowlisted file, when one resolves), a ``links.external`` entry naming no
+``[[wikilinks]]`` in authored prose unless ``lint.strict`` is on (inside the
+wiki, or under a ``links.external`` folder present on this machine; the note
+suggests the root-relative form of the target, or the root-relative spelling
+of an allowlisted file, when one resolves), a ``links.external`` entry naming no
 folder on this machine (noted once per run; links into it go unchecked), an
 indexed path this machine's git ignores (a personal ``core.excludesFile`` rule
 — the row ships where the file cannot, so every other clone reds on a broken
@@ -675,8 +687,8 @@ link), a gitignore fence the probe cannot read inside an enclosing repository
 (``git check-ignore`` failed — git off ``PATH`` or a broken install — so
 indexing proceeds unfenced and adopts what the repository ignores), and a
 ``.gitattributes`` mapping ``merge=wiki`` with no ``merge.wiki.driver``
-configured — the fresh-clone state where index merges silently fall back to a
-plain text merge until ``wiki config`` registers the driver. Resolver
+configured — the fresh-clone state where index and page merges silently fall
+back to a plain text merge until ``wiki config`` registers the driver. Resolver
 diagnostics (an upward resolution, a missing settings marker or root index,
 an outer index above the declared root) join the notes too — counted in the
 closing summary and typed as ``resolver_notice`` rows in ``--json`` — beside

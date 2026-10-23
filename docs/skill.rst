@@ -192,7 +192,8 @@ document each area in full:
   ``links.external``, whose entry is the link's prefix (see
   :doc:`/configuration`). Files elsewhere are referenced in backticks, never
   linked, and a folder is linked as ``folder/_index``, never ``folder``.
-  Stale prose links are soft lint notes; broken generated-index links, prose
+  Stale prose links are soft lint notes (issues under ``lint.strict``); broken
+  generated-index links, prose
   links naming a folder — this wiki's or an allowlisted wiki's — a ``./`` or
   ``../`` link that lands inside the wiki, an absolute path that lands inside
   the wiki, and a ``./`` or ``../`` link outside every allowlisted folder are

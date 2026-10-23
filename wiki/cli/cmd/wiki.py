@@ -53,6 +53,7 @@ from wiki.core.wiki import (
     NameSkipEvent,
     PageAdoptEvent,
     PathUntrackableEvent,
+    RestampEvent,
     Wiki,
     WriteSkipEvent,
 )
@@ -101,6 +102,13 @@ _UPDATE_CATEGORIES = [
         'Adopted {n} bare pages (frontmatter added)',
         'Would adopt 1 bare page',
         'Would adopt {n} bare pages',
+    ),
+    (
+        RestampEvent,
+        'Restamped 1 file edited since its stamp',
+        'Restamped {n} files edited since their stamps',
+        'Would restamp 1 file edited since its stamp',
+        'Would restamp {n} files edited since their stamps',
     ),
     (
         LinkAddEvent,
@@ -372,8 +380,9 @@ def config(
         absolute in .obsidian/app.json) when the vault has none (a value
         you have chosen stands), restores a missing .wiki/settings.json
         ({}), registers the git merge driver in the repo's local config,
-        and writes the **/_index.md glob to .gitattributes when that file
-        has no pending edits (you commit it yourself). Run once per clone.
+        and maps it in .gitattributes -- **/_index.md at the repo root,
+        *.md in the wiki root -- skipping a file with pending edits (you
+        commit both yourself). Run once per clone.
         Exits 0 even when a plugin download fails -- download failures are
         stderr warnings (re-run online to finish setup), never the exit
         code.
@@ -1104,13 +1113,17 @@ def merge(app: typer.Typer) -> typer.Typer:
     ) -> None:
         """Run the wiki merge driver (invoked by git).
 
-        init/config register ``wiki _merge %O %A %B %L %P`` as the merge.wiki
-        driver -- a stable entry point that survives the venv rebuilds and
-        moves an absolute script path silently breaks on. The real pathname
+        init/config register a merge.wiki driver that runs ``wiki _merge %O
+        %A %B %L %P`` -- a stable entry point that survives the venv rebuilds
+        and moves an absolute script path silently breaks on -- and falls back
+        to git's own text merge when the CLI is not on PATH. The real pathname
         (%P) dispatches internally, so the registration string never changes:
         an ``_index.md`` below a declared wiki root gets the field-aware
-        index merge, everything else git's default text merge. A clean
-        index merge gets the H1 and row order ``wiki update`` writes.
+        index merge, a page the wiki manages a text merge over settled
+        stamps, and everything else a plain text merge. Both wiki merges keep
+        the later ``updated`` stamp, and a clean index merge gets the H1 and
+        row order ``wiki update`` writes; every conflict is labeled ours,
+        base and theirs.
         """
         # dispatch on the real pathname: an _index.md below a declared wiki
         # root -> field-aware index merge (git runs merge drivers at the
@@ -1128,15 +1141,38 @@ def merge(app: typer.Typer) -> typer.Typer:
             cmd = ['bash', f'{script}', ours, base, theirs, marker_size]
             # judge ours' index before the script writes the merge over it
             wiki = _index_canonicalizer(root, pathlib.Path(ours))
-        # any other file class: git's default three-way text merge -- an
-        # _index.md outside every declared wiki (a site generator's content
-        # page) is not tool-owned, and the index merge would resolve its
-        # pre-*** region to ours, silently dropping theirs' edits
+            # restamp ours first: the script resolves the stamps to ours'
+            _merge_stamps(
+                root=root,
+                base=pathlib.Path(base),
+                ours=pathlib.Path(ours),
+                theirs=pathlib.Path(theirs),
+            )
+        # a page the wiki manages: settle both sides' stamps first, so a
+        # merge whose sides differ in them alone comes out clean, then the
+        # text merge, labeled as the index merge labels its conflicts
+        elif (root is not None) and _is_managed_page(root, pathlib.Path(pathname)):
+            _merge_stamps(
+                root=root,
+                base=pathlib.Path(base),
+                ours=pathlib.Path(ours),
+                theirs=pathlib.Path(theirs),
+            )
+            size = f'--marker-size={marker_size}'
+            labels = ['-L', 'ours', '-L', 'base', '-L', 'theirs']
+            cmd = ['git', 'merge-file', size, *labels, ours, base, theirs]
+            wiki = None
+        # any other file class: a three-way text merge, labeled the same way
+        # -- an _index.md outside every declared wiki (a site generator's
+        # content page) is not tool-owned, and the index merge would resolve
+        # its pre-*** region to ours, silently dropping theirs' edits
         else:
             size = f'--marker-size={marker_size}'
-            cmd = ['git', 'merge-file', size, ours, base, theirs]
+            labels = ['-L', 'ours', '-L', 'base', '-L', 'theirs']
+            cmd = ['git', 'merge-file', size, *labels, ours, base, theirs]
             wiki = None
-        # pass the exit code through (nonzero tells git the merge left conflicts)
+        # pass the exit code through (nonzero tells git the merge left
+        # conflicts); the best-effort rewrite below never changes it
         result = subprocess.run(cmd)
         # bring a clean index merge's H1 and row order to update's form --
         # the script keeps ours' H1 and appends each row only theirs carries
@@ -1315,39 +1351,138 @@ def _index_canonicalizer(root: pathlib.Path, path: pathlib.Path) -> Optional[Wik
         The engine, or ``None`` to leave the merged index as it is.
 
     """
-    # NOTE: a merge driver passes the merge's exit code through untouched
-    #   (patterns: conventions/cli/errors/exit-codes), and the index merge
-    #   stands without this step, so any failure here -- a hook that will
-    #   not load, construct or run, bytes that are not UTF-8 -- leaves the
-    #   index as merged rather than failing a clean merge
+    # NOTE: a merge driver passes the merge's exit code through untouched,
+    #   and the index merge stands without this step, so any failure here --
+    #   a hook that will not load, construct or run, bytes that are not
+    #   UTF-8 -- leaves the index as merged rather than failing a clean merge
+    try:
+        text = path.read_bytes().decode('utf-8')
+    except (OSError, UnicodeDecodeError):
+        return None
+    # the wiki's class may be hook code, loaded from outside the package,
+    # which can raise anything -- an exit included, which would end the
+    # driver before the merge runs
     try:
         wiki = load_wiki_class(root)(root)
-        text = path.read_bytes().decode('utf-8')
         if wiki.canonicalize_index(text) != text:
             return None
-    except Exception:
+    except (Exception, SystemExit):
         return None
     return wiki
 
 
-def _canonicalize_index(wiki: Wiki, path: pathlib.Path) -> None:
-    """Bring a merged ``_index.md``'s H1 and row order to ``wiki update``'s form.
+def _merge_stamps(
+    root: pathlib.Path,
+    base: pathlib.Path,
+    ours: pathlib.Path,
+    theirs: pathlib.Path,
+) -> None:
+    """Restamp both sides of a wiki file's merge with the stamps it keeps.
 
-    The file is read and written as bytes, so the lines it leaves alone
-    keep their endings. A failed write fails the merge: a file written in
-    part cannot stand as merged.
+    The wiki's own class settles the stamps
+    (:meth:`~wiki.core.wiki.Wiki._settle_stamps`): ``updated`` the later of
+    the two sides', and ``created``, over a base without one, the earlier.
+    Each side the settlement changes is rewritten in place before the
+    merge runs.
 
     Args:
-        wiki: The engine :func:`_index_canonicalizer` returned.
+        root: Wiki root the file sits under.
+        base: The common ancestor's copy (%O).
+        ours: The current branch's copy (%A), restamped in place.
+        theirs: The other branch's copy (%B), restamped in place.
+
+    """
+    # NOTE: a merge driver passes the merge's exit code through untouched,
+    #   and the merge stands without this step, so any failure here -- a
+    #   hook that will not load or construct, bytes that are not UTF-8, a
+    #   write that fails -- leaves the sides as they are, and the merge
+    #   resolves the stamps itself
+    try:
+        base_text, ours_text, theirs_text = (
+            path.read_bytes().decode('utf-8') for path in (base, ours, theirs)
+        )
+    except (OSError, UnicodeDecodeError):
+        return
+    # the wiki's class may be hook code, loaded from outside the package,
+    # which can raise anything -- an exit included, which would end the
+    # driver before the merge runs
+    try:
+        engine = load_wiki_class(root)(root)
+        ours_settled, theirs_settled = engine._settle_stamps(
+            base_text,
+            ours_text,
+            theirs_text,
+        )
+    except (Exception, SystemExit):
+        return
+    # write each side its settled text changed
+    sides = [
+        (ours, ours_text, ours_settled),
+        (theirs, theirs_text, theirs_settled),
+    ]
+    for path, text, settled in sides:
+        if settled == text:
+            continue
+        try:
+            wiki.util.fs.write_atomic(path, settled)
+        except OSError:
+            return
+
+
+def _is_managed_page(root: pathlib.Path, path: pathlib.Path) -> bool:
+    """Return ``True`` if the wiki at ``root`` manages the page at ``path``.
+
+    The wiki's own class judges it (:meth:`~wiki.core.wiki.Wiki._manages_page`):
+    a Markdown page its walk would index, not one excluded, gitignored, or
+    under a dot folder.
+
+    Args:
+        root: Wiki root the page sits under.
+        path: The page's repo-relative pathname (%P).
+
+    Returns:
+        Whether the page takes the merge over settled stamps.
+
+    """
+    # NOTE: a merge driver passes the merge's exit code through untouched,
+    #   and git's default text merge stands without this step, so any
+    #   failure here -- hook code from outside the package that will not
+    #   load or construct, or exits -- reads the page as unmanaged
+    try:
+        engine = load_wiki_class(root)(root)
+        return engine._manages_page(engine._root / path.relative_to(root))
+    except (Exception, SystemExit):
+        return False
+
+
+def _canonicalize_index(engine: Wiki, path: pathlib.Path) -> None:
+    """Bring a merged ``_index.md``'s H1 and row order to ``wiki update``'s form.
+
+    The text is written back verbatim, so the lines it leaves alone keep
+    their endings, and atomically: the file is replaced whole or, when
+    the write fails, left as merged.
+
+    Args:
+        engine: The engine :func:`_index_canonicalizer` returned.
         path: The merged index git hands the driver (%A).
 
     """
-    # NOTE: as in _index_canonicalizer, a failure to read or canonicalize
-    #   leaves the index as merged
+    # NOTE: a merge driver passes the merge's exit code through untouched,
+    #   and the merge stands without this step, so a failure to read,
+    #   canonicalize or write leaves the index as merged
     try:
         text = path.read_bytes().decode('utf-8')
-        canonical = wiki.canonicalize_index(text)
-    except Exception:
+    except (OSError, UnicodeDecodeError):
+        return
+    # the engine may run hook code, loaded from outside the package, which
+    # can raise anything -- an exit included, which would replace the
+    # merge's exit code with its own
+    try:
+        canonical = engine.canonicalize_index(text)
+    except (Exception, SystemExit):
         return
     if canonical != text:
-        path.write_bytes(canonical.encode('utf-8'))
+        try:
+            wiki.util.fs.write_atomic(path, canonical)
+        except OSError:
+            return

@@ -90,3 +90,14 @@ def _git(cwd: pathlib.Path, *args: str) -> subprocess.CompletedProcess:
         text=True,
         env=_env(),
     )
+
+
+def _git_repo(path: pathlib.Path) -> None:
+    """Initialize a git repository at ``path`` on ``main``.
+
+    The repository carries a local commit identity: ``_git`` reads no
+    global config, so a commit finds no other.
+    """
+    assert _git(path, 'init', '-q', '-b', 'main').returncode == 0
+    _git(path, 'config', 'user.email', 't@t')
+    _git(path, 'config', 'user.name', 't')

@@ -10,6 +10,7 @@ import pathlib
 import subprocess
 import sys
 import threading
+import time
 from typing import Optional
 
 import pytest
@@ -28,7 +29,7 @@ from wiki.cli.utils import (
 )
 from wiki.core.wiki import Wiki
 
-from .conftest import GIT, _env, _git
+from .conftest import GIT, _env, _git, _git_repo
 
 __all__ = [
     'test_resolve_wiki_root',
@@ -60,8 +61,11 @@ __all__ = [
     'test_interrupt_reports_and_exits_130',
     'test_merge_driver_wiring_ignores_ambient_git_dir',
     'test_configure_git_merge_driver',
+    'test_merge_driver_maps_indexes_at_the_root_and_pages_in_the_wiki',
     'test_merge_driver_skips_dirty_gitattributes',
+    'test_merge_driver_reads_gitattributes_without_the_index_lock',
     'test_merge_driver_tolerates_undecodable_git_output',
+    'test_merge_driver_maps_nothing_when_git_cannot_place_the_wiki',
 ]
 
 
@@ -992,14 +996,16 @@ def test_merge_driver_wiring_ignores_ambient_git_dir(
     monkeypatch.delenv('GIT_DIR')
     # the enclosing repo got both halves of the wiring
     driver = _git(repo, 'config', '--get', 'merge.wiki.driver')
-    assert driver.stdout.strip() == 'wiki _merge %O %A %B %L %P'
+    assert 'wiki _merge %O %A %B %L %P' in driver.stdout
     attributes = (repo / '.gitattributes').read_text(encoding='utf-8')
     assert '**/_index.md merge=wiki' in attributes.splitlines()
-    # the foreign repo got neither, and none landed inside the wiki
+    # the foreign repo got neither, and the root's index mapping did not land
+    # inside the wiki, whose own file maps its pages alone
     foreign_driver = _git(foreign, 'config', '--get', 'merge.wiki.driver')
     assert foreign_driver.returncode != 0
     assert not (foreign / '.gitattributes').exists()
-    assert not (repo / 'wiki' / '.gitattributes').exists()
+    own = (repo / 'wiki' / '.gitattributes').read_text(encoding='utf-8')
+    assert own.splitlines() == ['# Wiki page merge driver', '*.md merge=wiki']
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
@@ -1029,10 +1035,9 @@ def test_configure_git_merge_driver(tmp_path: pathlib.Path) -> None:
 
     configure_git_merge_driver(wiki_dir)
 
-    # driver is the stable CLI command and the glob is written to the worktree
-    assert _git(tmp_path, 'config', 'merge.wiki.driver').stdout.strip() == (
-        'wiki _merge %O %A %B %L %P'
-    )
+    # driver runs the stable CLI command and the glob is written to the worktree
+    driver = _git(tmp_path, 'config', 'merge.wiki.driver').stdout
+    assert 'wiki _merge %O %A %B %L %P' in driver
     attributes = (tmp_path / '.gitattributes').read_text(encoding='utf-8')
     assert '**/_index.md merge=wiki' in attributes.splitlines()
     # nothing is committed (no new HEAD) and nothing is staged (the rule)
@@ -1046,6 +1051,101 @@ def test_configure_git_merge_driver(tmp_path: pathlib.Path) -> None:
     configure_git_merge_driver(wiki_dir)
     final = (tmp_path / '.gitattributes').read_text(encoding='utf-8')
     assert final.splitlines().count('**/_index.md merge=wiki') == 1
+
+
+# the attribute blocks: index files at the repository root, pages in the
+# wiki root's own file
+_INDEX_BLOCK = '# Wiki index merge driver\n**/_index.md merge=wiki\n'
+_PAGE_BLOCK = '# Wiki page merge driver\n*.md merge=wiki\n'
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
+    argnames=('folder', 'current', 'expected'),
+    argvalues=[
+        (
+            'wiki',
+            {},
+            {'.gitattributes': _INDEX_BLOCK, 'wiki/.gitattributes': _PAGE_BLOCK},
+        ),
+        (
+            'wiki',
+            {'.gitattributes': '*.png binary\n'},
+            {
+                '.gitattributes': '*.png binary\n\n' + _INDEX_BLOCK,
+                'wiki/.gitattributes': _PAGE_BLOCK,
+            },
+        ),
+        (
+            'wiki',
+            {'.gitattributes': _INDEX_BLOCK, 'wiki/.gitattributes': '*.svg binary'},
+            {
+                '.gitattributes': _INDEX_BLOCK,
+                'wiki/.gitattributes': '*.svg binary\n\n' + _PAGE_BLOCK,
+            },
+        ),
+        (
+            'wiki',
+            {'.gitattributes': _INDEX_BLOCK, 'wiki/.gitattributes': _PAGE_BLOCK},
+            {'.gitattributes': _INDEX_BLOCK, 'wiki/.gitattributes': _PAGE_BLOCK},
+        ),
+        (
+            'wiki',
+            {'.gitattributes': '*.png binary\r\n'},
+            {
+                '.gitattributes': '*.png binary\r\n\r\n'
+                + _INDEX_BLOCK.replace('\n', '\r\n'),
+                'wiki/.gitattributes': _PAGE_BLOCK,
+            },
+        ),
+        ('', {}, {'.gitattributes': _INDEX_BLOCK + '\n' + _PAGE_BLOCK}),
+        (
+            '',
+            {'.gitattributes': _INDEX_BLOCK},
+            {'.gitattributes': _INDEX_BLOCK + '\n' + _PAGE_BLOCK},
+        ),
+    ],
+    ids=[
+        'no-files',
+        'root-rules',
+        'wiki-rules-no-newline',
+        'both-mapped',
+        'root-crlf',
+        'repo-root-wiki',
+        'repo-root-wiki-indexes-mapped',
+    ],
+)
+def test_merge_driver_maps_indexes_at_the_root_and_pages_in_the_wiki(
+    tmp_path: pathlib.Path,
+    folder: str,
+    current: dict[str, str],
+    expected: dict[str, str],
+) -> None:
+    """The wiring maps index files at the root and pages in the wiki's own file.
+
+    Markdown outside the wiki keeps git's own merge and the rules set for
+    it, since only the wiki's file maps pages. Each file gains the block
+    whose mapping line it lacks, after its last line and set off by a
+    blank line, in the file's own line ending; its existing bytes stay
+    as they are, the shape an embedder's commit check accepts. A wiki at
+    the repository root carries both blocks in its one file, and a
+    re-run writes nothing more.
+    """
+    _git_repo(tmp_path)
+    wiki_dir = tmp_path / folder
+    wiki_dir.mkdir(exist_ok=True)
+    if current:
+        for name, text in current.items():
+            (tmp_path / name).write_bytes(text.encode('utf-8'))
+        _git(tmp_path, 'add', '-A')
+        _git(tmp_path, 'commit', '-m', 'attributes')
+
+    for _ in range(2):
+        configure_git_merge_driver(wiki_dir)
+        written = {
+            name: (tmp_path / name).read_bytes().decode('utf-8') for name in expected
+        }
+        assert written == expected
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
@@ -1080,6 +1180,46 @@ def test_merge_driver_skips_dirty_gitattributes(tmp_path: pathlib.Path) -> None:
     assert '**/_index.md merge=wiki' in attributes.read_text(encoding='utf-8')
 
 
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_merge_driver_reads_gitattributes_without_the_index_lock(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The wiring's ``.gitattributes`` check never rewrites the git index.
+
+    A plain status refreshes stale stat data into the index under
+    ``index.lock``, so a ``git add`` or commit run in the same repository
+    at that moment fails on the lock. The check reads without optional
+    locks, whatever the caller's environment says.
+    """
+    # a repo whose tracked .gitattributes lacks the map, read with the
+    # optional locks git takes by default
+    _git_repo(tmp_path)
+    attributes = tmp_path / '.gitattributes'
+    attributes.write_text('*.txt text\n', encoding='utf-8')
+    _git(tmp_path, 'add', '.gitattributes')
+    _git(tmp_path, 'commit', '-m', 'init')
+    wiki_dir = tmp_path / 'wiki'
+    wiki_dir.mkdir()
+    index = tmp_path / '.git' / 'index'
+    monkeypatch.delenv('GIT_OPTIONAL_LOCKS', raising=False)
+
+    # a plain status rewrites the index once the file's stat data is stale
+    stale = time.time() - 3600
+    os.utime(attributes, (stale, stale))
+    before = index.read_bytes()
+    _git(tmp_path, 'status', '--porcelain', '--', '.gitattributes')
+    assert index.read_bytes() != before
+
+    # the wiring writes the map over stale stat data, the index untouched
+    stale -= 3600
+    os.utime(attributes, (stale, stale))
+    before = index.read_bytes()
+    configure_git_merge_driver(wiki_dir)
+    assert '**/_index.md merge=wiki' in attributes.read_text(encoding='utf-8')
+    assert index.read_bytes() == before
+
+
 def test_merge_driver_tolerates_undecodable_git_output(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1105,6 +1245,41 @@ def test_merge_driver_tolerates_undecodable_git_output(
     path = os.environ['PATH']
     monkeypatch.setenv('PATH', f'{stub_dir}{os.pathsep}{path}')
     configure_git_merge_driver(tmp_path)
+
+
+def test_merge_driver_maps_nothing_when_git_cannot_place_the_wiki(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed query for the wiki's place in the repo writes no map.
+
+    Only a wiki at the repository root maps every page from the root
+    ``.gitattributes``, so a query that fails must not read as that top
+    level. The stub git finds the repo but fails the place query, and
+    reports every file clean so the wiring would write if it chose to.
+    """
+    # a stub git that finds the repo at tmp_path but cannot place the wiki
+    stub_dir = tmp_path / 'bin'
+    stub_dir.mkdir()
+    stub = stub_dir / 'git'
+    stub.write_text(
+        '#!/bin/sh\n'
+        'case "$*" in\n'
+        f"*--show-toplevel*) printf '%s\\n' '{tmp_path}' ;;\n"
+        '*--show-prefix*) exit 128 ;;\n'
+        'esac\n',
+        encoding='utf-8',
+    )
+    stub.chmod(0o755)
+    path = os.environ['PATH']
+    monkeypatch.setenv('PATH', f'{stub_dir}{os.pathsep}{path}')
+    wiki_dir = tmp_path / 'wiki'
+    wiki_dir.mkdir()
+
+    # neither the root nor the wiki gains a .gitattributes
+    configure_git_merge_driver(wiki_dir)
+    assert not (tmp_path / '.gitattributes').exists()
+    assert not (wiki_dir / '.gitattributes').exists()
 
 
 # ------ helpers

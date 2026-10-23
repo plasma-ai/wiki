@@ -54,6 +54,24 @@ jobs:
         run: uv build
       - name: Check distribution metadata
         run: uvx twine check dist/*
+      - name: Check wheel and sdist ship every tracked package file
+        run: |
+          export LC_ALL=C
+          tracked=$(git ls-files wiki | sort)
+          # an empty listing would compare as nothing missing
+          if [[ -z "$tracked" ]]; then
+            echo "::error::no tracked files under wiki/"
+            exit 1
+          fi
+          # the sdist nests every path under its top folder
+          missing=$(
+            comm -23 <(echo "$tracked") <(unzip -Z1 dist/plasma_wiki-*.whl | sort) | sed 's/^/::error::wheel lacks /'
+            comm -23 <(echo "$tracked") <(tar -tzf dist/plasma_wiki-*.tar.gz | sed 's|^[^/]*/||' | sort) | sed 's/^/::error::sdist lacks /'
+          )
+          if [[ -n "$missing" ]]; then
+            echo "$missing"
+            exit 1
+          fi
       - uses: actions/upload-artifact@v7
         with:
           name: dist

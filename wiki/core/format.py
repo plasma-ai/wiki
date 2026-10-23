@@ -16,7 +16,9 @@ from wiki.typing import Link
 
 __all__ = []
 
-# index link row as [[target|label]] with an optional ': desc' tail
+# index link row as [[target|label]] with an optional ': desc' tail; the
+# merge driver's awk rowline (_assets/git/merge_index.sh) mirrors it on a
+# stripped line, keyed on the target, so keep the two in sync
 _LINK_ROW = re.compile(r'^\[\[(.+?)\|(.+?)\]\](?::\s*(.*))?$')
 
 # region-directive marker grammar; pairing semantics live in parse_regions
@@ -241,6 +243,10 @@ def match_link_row(line: str, *, repair: bool = True) -> Optional[Link]:
     continuation escapes inside its brackets (``[\[``) and never
     matches, so it is never promoted to a link. Returns
     ``(target, label, desc)`` or ``None``.
+
+    The ``_index.md`` merge driver (``_assets/git/merge_index.sh``)
+    mirrors this repair in awk, so it reads a side's escaped rows as
+    update does; keep the two in sync.
     """
     stripped = line.strip()
     match = _LINK_ROW.match(stripped)
@@ -981,13 +987,24 @@ def restamp_updated(frontmatter: str, now: str) -> str:
     comment lines under it stay. A block without the field gains it
     before the closing delimiter.
     """
-    span = _field_span(frontmatter, 'updated')
+    return restamp(frontmatter, 'updated', now)
+
+
+def restamp(frontmatter: str, key: str, now: str) -> str:
+    """Rewrite the ``key`` stamp to ``now``, as :func:`restamp_updated` rewrites ``updated``.
+
+    A block without the field gains it before the closing delimiter.
+    """
+    span = _field_span(frontmatter, key)
     if span is None:
-        return _fill_stamp(frontmatter, 'updated', now, before=None)
+        return _fill_stamp(frontmatter, key, now, before=None)
     start, end = span
     indicator, _, body = frontmatter[start:end].partition('\n')
+    # a CRLF block (a merge driver reads bytes as written) keeps its ending
+    eol = '\r\n' if indicator.endswith('\r') else '\n'
+    indicator = indicator.removesuffix('\r')
     tail, comments = _field_comments(indicator, body)
-    stamp = f'updated: {_properties(indicator)}{quote(now)}{tail}\n{comments}'
+    stamp = f'{key}: {_properties(indicator)}{quote(now)}{tail}{eol}{comments}'
     return frontmatter[:start] + stamp + frontmatter[end:]
 
 

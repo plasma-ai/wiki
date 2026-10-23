@@ -1,10 +1,11 @@
 """Test the ``wiki.core.wiki`` module.
 
 Construction and policy: settings/naming/timestamp validation, the
-``validate_name`` matrix, init idempotence and refusals, and the
-legacy-layout guard. Each verb's behavior has its own suite
-(``test_update``, ``test_plan``, ``test_lint``, ``test_read``,
-``test_search``, ``test_map``, ``test_config``).
+``validate_name`` matrix, init idempotence and refusals, the
+legacy-layout guard, and the ``canonicalize_index`` rewrite the merge
+driver runs. Each verb's behavior has its own suite (``test_update``,
+``test_plan``, ``test_lint``, ``test_read``, ``test_search``,
+``test_map``, ``test_config``).
 """
 
 from __future__ import annotations
@@ -12,12 +13,13 @@ from __future__ import annotations
 import json
 import pathlib
 import re
+import unicodedata
 
 import pytest
 
 from wiki.core.wiki import Wiki
 
-from ._helpers import _make_wiki
+from ._helpers import CategorizedWiki, _make_wiki
 
 __all__ = [
     'test_init_creates_structure',
@@ -35,7 +37,23 @@ __all__ = [
     'test_timestamp_zone_swaps_default_z_for_offset',
     'test_timestamp_format_rejects_blank_or_multiline',
     'test_init_refuses_legacy_layout_before_writing',
+    'test_canonicalize_index_puts_the_h1_and_rows_in_form',
 ]
+
+# the parts of a core index in update's form: the head through its H1 (and
+# a titled head), the parent row, two page rows (zeta's desc on two lines),
+# two categorized rows in the base class's order, and the content below the
+# delimiter, which holds a thematic break of its own
+_HEAD = '---\nname: core\ndesc: Core concepts.\n---\n\n# core\n\n'
+_TITLED = '---\nname: core\ntitle: Core Concepts\ndesc: Core concepts.\n---\n\n'
+_PARENT = '[[_index|..]]\n\n'
+_ALPHA = '[[core/alpha|alpha]]: The alpha page.\n\n'
+_ZETA = '[[core/zeta|zeta]]: The zeta page.\nIts second line.\n\n'
+_API = '[[core/api|[api] api]]: The api page.\n\n'
+_STORE = '[[core/db|[store] db]]: The db page.\n\n'
+_CAFE = '[[core/café|café]]: The café page.\n\n'
+_CAFE_NFD = unicodedata.normalize('NFD', _CAFE)
+_CONTENT = '***\n\nBody text.\n\n***\n\nMore text.\n'
 
 
 # ------ init and naming policy
@@ -205,6 +223,8 @@ def test_init_seeds_custom_settings(tmp_path: pathlib.Path) -> None:
         {'map': {'desc_limit': 'wide'}},
         {'exclude': {'patterns': ['!vendor']}},
         {'links': {'external': ['src']}},
+        {'lint': {'strict': 'yes'}},
+        {'lint': ['strict']},
     ],
     ids=[
         'bad-naming',
@@ -213,6 +233,8 @@ def test_init_seeds_custom_settings(tmp_path: pathlib.Path) -> None:
         'bad-map',
         'bad-exclude',
         'bad-links',
+        'bad-lint',
+        'bad-lint-block',
     ],
 )
 def test_init_rejects_bad_settings_before_writing(
@@ -444,3 +466,79 @@ def test_init_refuses_legacy_layout_before_writing(
     assert not (tmp_path / '.wiki').exists()
     assert not (tmp_path / '_index.md').exists()
     assert not (tmp_path / '_config' / '_index.md').exists()
+
+
+# ------ index canonicalization
+
+
+@pytest.mark.parametrize(
+    argnames=('wiki_class', 'text', 'expected'),
+    argvalues=[
+        # an index in form keeps every byte
+        (
+            Wiki,
+            f'{_HEAD}{_PARENT}{_ALPHA}{_ZETA}{_CONTENT}',
+            f'{_HEAD}{_PARENT}{_ALPHA}{_ZETA}{_CONTENT}',
+        ),
+        # a retitled index takes the title into its H1 alone
+        (
+            Wiki,
+            f'{_TITLED}# core\n\n{_PARENT}{_ALPHA}{_CONTENT}',
+            f'{_TITLED}# Core Concepts\n\n{_PARENT}{_ALPHA}{_CONTENT}',
+        ),
+        # rows out of order move to update's order, rendered as it renders them
+        (
+            Wiki,
+            f'{_HEAD}{_PARENT}{_ZETA}{_ALPHA}{_CONTENT}',
+            f'{_HEAD}{_PARENT}{_ALPHA}{_ZETA}{_CONTENT}',
+        ),
+        # the class's category order places the categorized rows
+        (
+            CategorizedWiki,
+            f'{_HEAD}{_PARENT}{_API}{_STORE}{_CONTENT}',
+            f'{_HEAD}{_PARENT}{_STORE}{_API}{_CONTENT}',
+        ),
+        # a text with no delimiter, or with two rows for one target, stays whole
+        (
+            Wiki,
+            f'{_HEAD}{_PARENT}{_ZETA}{_ALPHA}',
+            f'{_HEAD}{_PARENT}{_ZETA}{_ALPHA}',
+        ),
+        (
+            Wiki,
+            f'{_HEAD}{_PARENT}{_ZETA}{_ALPHA}{_ZETA}{_CONTENT}',
+            f'{_HEAD}{_PARENT}{_ZETA}{_ALPHA}{_ZETA}{_CONTENT}',
+        ),
+        # one target spelled composed on one row and decomposed on the other
+        (
+            Wiki,
+            f'{_HEAD}{_PARENT}{_ZETA}{_CAFE}{_CAFE_NFD}{_CONTENT}',
+            f'{_HEAD}{_PARENT}{_ZETA}{_CAFE}{_CAFE_NFD}{_CONTENT}',
+        ),
+    ],
+    ids=[
+        'in-form',
+        'retitled',
+        'out-of-order',
+        'category-order',
+        'no-delimiter',
+        'repeated-target',
+        'repeated-target-nfd',
+    ],
+)
+def test_canonicalize_index_puts_the_h1_and_rows_in_form(
+    tmp_path: pathlib.Path,
+    wiki_class: type[Wiki],
+    text: str,
+    expected: str,
+) -> None:
+    """``canonicalize_index`` sets the H1 and the row order, and nothing else.
+
+    The merge driver brings a clean merge to update's form with it: the
+    H1 follows the title, else the name, and the rows take the order the
+    wiki's class gives them, rendered as update renders them, while the
+    frontmatter and the content below the delimiter keep their bytes. A
+    text with no delimiter, or with two rows for one target, comes back
+    whole.
+    """
+    assert wiki_class(tmp_path).canonicalize_index(text) == expected

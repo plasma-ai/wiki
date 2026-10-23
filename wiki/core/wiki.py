@@ -9,6 +9,7 @@ import hashlib
 import http.client
 import json
 import logging
+import operator
 import os
 import pathlib
 import re
@@ -47,6 +48,10 @@ __all__ = ['Wiki']
 # bounds the plugin-asset fetch in _download; ample for the kilobyte-scale
 # release assets, small enough that a dead network fails the run fast
 _TIMEOUT_SECONDS = 10
+
+# how long after its stamp a file's last write still counts as the write that
+# stamped it: a run takes one stamp as it starts, and its writes land after
+_STAMP_GRACE = dt.timedelta(seconds=60)
 
 # soft ceiling for a folded frontmatter desc: past it lint notes the page,
 # since every map row and parent index link reproduces the whole desc
@@ -409,6 +414,27 @@ class Wiki:
         return required
 
     @functools.cached_property
+    def _lint_strict(self: Wiki) -> bool:
+        """Return the effective ``lint.strict`` flag from ``settings.json``.
+
+        When true, lint reports each stale link in user content as a hard
+        issue rather than a soft note, so a wiki can gate on prose links
+        that reach nothing.
+        """
+        # overlay the settings.json lint block onto the default
+        override = self._settings.get('lint', {})
+        if not isinstance(override, dict):
+            raise ValueError(
+                f'The lint block must be a JSON object in {WIKI_SETTINGS}.'
+            )
+        strict = override.get('strict', False)
+        if not isinstance(strict, bool):
+            raise ValueError(
+                f'lint.strict must be a boolean, got {strict!r} in {WIKI_SETTINGS}.'
+            )
+        return strict
+
+    @functools.cached_property
     def _exclude_policy(self: Wiki) -> list[tuple[str, re.Pattern[str]]]:
         """Return the compiled ``exclude.patterns`` from ``settings.json``.
 
@@ -563,13 +589,13 @@ class Wiki:
         force-tracked reads as fenced all the same and the fence and the
         tool agree about what is content. Empty -- no fencing -- outside
         a git repository, when git is unavailable (narrated, inside a
-        repository), and when the root itself is ignored (a deliberately
-        unindexed wiki inside a repo must keep working).
+        repository), and when the root and its index are both ignored (a
+        deliberately unindexed wiki inside a repo must keep working).
         """
-        # enumerate the candidates one batch probe covers: the root itself
-        # ('.', probing the fence-disable case) and every non-dot entry
-        # below it (dot paths and symlinked dirs are excluded either way)
-        candidates = ['.']
+        # enumerate the candidates one batch probe covers: the root and its
+        # index (together probing the fence-disable case) and every non-dot
+        # entry below it (dot paths and symlinked dirs are excluded either way)
+        candidates = ['.', WIKI_INDEX]
         for dirpath, dirnames, filenames in os.walk(self._root):
             dirnames[:] = [d for d in dirnames if not d.startswith('.')]
             prefix = self._relpath(pathlib.Path(dirpath))
@@ -583,10 +609,12 @@ class Wiki:
         if matched is None:
             return frozenset()
         # a fenced root would fence the whole wiki out of itself: leave a
-        # deliberately ignored wiki unfenced instead
-        if '.' in matched:
+        # deliberately ignored wiki unfenced instead; its index must read
+        # ignored too, since at a repository's top level git reads '.' as
+        # ignored under any '*' line, whatever re-includes follow it
+        if {'.', WIKI_INDEX} <= matched:
             return frozenset()
-        return frozenset(matched)
+        return frozenset(matched - {'.'})
 
     def _check_ignore(self: Wiki, candidates: list[str]) -> Optional[set[str]]:
         """Batch-probe ``candidates`` against the repo's gitignore fences.
@@ -603,9 +631,11 @@ class Wiki:
         matched subset, or ``None`` when no fence applies (outside a
         repository, or git unavailable -- the latter narrated where a
         repository encloses the root, since indexing then adopts what
-        that repository fences).
+        that repository fences). Each candidate is probed as ``./<path>``,
+        which git reads literally -- a bare name opening on ``:`` reads as
+        pathspec magic -- and the prefix git echoes back is dropped.
         """
-        payload = b'\0'.join(os.fsencode(entry) for entry in candidates) + b'\0'
+        payload = b''.join(os.fsencode(f'./{entry}') + b'\0' for entry in candidates)
         cmd = [
             '-c',
             f'core.excludesFile={os.devnull}',
@@ -624,7 +654,11 @@ class Wiki:
             if self._in_repository():
                 self.on_git_fence_unavailable()
             return None
-        return {os.fsdecode(entry) for entry in result.stdout.split(b'\0') if entry}
+        return {
+            os.fsdecode(entry).removeprefix('./')
+            for entry in result.stdout.split(b'\0')
+            if entry
+        }
 
     def _probe_gitignore_fence(self: Wiki, relative: str) -> bool:
         """Return ``True`` if the repo's gitignore fences folder ``relative``.
@@ -632,20 +666,52 @@ class Wiki:
         The direct probe for a folder that may not exist yet -- the
         cached fence set (:attr:`_gitignore_fence`) enumerates existing
         paths only -- with the same exemptions: no repository, no git,
-        and an ignored root all read as unfenced. The trailing-slash
-        form probes beside the bare one, since a dir-only pattern
-        (``scratch/``) cannot match a bare pathname git has no inode
-        for.
+        and an ignored root and root index all read as unfenced. It
+        probes the index the folder would carry: git has no inode to
+        read a missing folder as one, so a pattern naming folders only
+        (``scratch/``, ``!*/``) never applies to the bare path, but a
+        leading directory of a probed path always reads as a folder. A
+        repository ignoring the index itself fences the folder too,
+        since that index could never be committed.
         """
-        matched = self._check_ignore(['.', relative, relative + '/'])
-        if (matched is None) or ('.' in matched):
+        index = f'{relative}/{WIKI_INDEX}'
+        matched = self._check_ignore(['.', WIKI_INDEX, index])
+        if (matched is None) or ({'.', WIKI_INDEX} <= matched):
             return False
-        return bool(matched)
+        return index in matched
 
     def _in_repository(self: Wiki) -> bool:
-        """Return ``True`` if a git repository encloses the wiki root."""
-        enclosing = (self._root, *self._root.parents)
-        return any((ancestor / '.git').exists() for ancestor in enclosing)
+        """Return ``True`` if a git repository encloses the wiki root.
+
+        The search stops where git's own discovery stops, below the
+        nearest ``GIT_CEILING_DIRECTORIES`` entry above the root, so a
+        repository a caller's ceiling hides from the wiki's git calls
+        reads as none here too.
+        """
+        # git checks the root itself whatever the ceiling
+        if (self._root / '.git').exists():
+            return True
+        # the ceilings git honors: absolute entries, each resolved unless an
+        # empty entry precedes it
+        ceilings = set()
+        resolve = True
+        for entry in os.environ.get('GIT_CEILING_DIRECTORIES', '').split(os.pathsep):
+            if not entry:
+                resolve = False
+                continue
+            ceiling = pathlib.Path(entry)
+            if not ceiling.is_absolute():
+                continue
+            if resolve:
+                ceiling = ceiling.resolve()
+            ceilings.add(ceiling)
+        # walk up to the nearest ceiling, which git never checks
+        for ancestor in self._root.parents:
+            if ancestor in ceilings:
+                return False
+            if (ancestor / '.git').exists():
+                return True
+        return False
 
     def _warn_untrackable_rows(self: Wiki, walk: Iterable[_WalkStep]) -> None:
         """Note indexed paths the caller's full ignore stack excludes.
@@ -674,8 +740,9 @@ class Wiki:
             return
         # index-aware and unpinned: the question is whether THIS machine's
         # git would refuse the file, so a tracked file reads as safe and
-        # the personal global counts
-        payload = b'\0'.join(os.fsencode(entry) for entry in candidates) + b'\0'
+        # the personal global counts; each path is probed as ./<path>, read
+        # literally, as the fence probes
+        payload = b''.join(os.fsencode(f'./{entry}') + b'\0' for entry in candidates)
         cmd = ['check-ignore', '-z', '-v', '--stdin']
         result = wiki.util.git._git(cmd, cwd=self._root, input=payload, raw=True)
         if (result is None) or (result.returncode not in (0, 1)):
@@ -683,19 +750,154 @@ class Wiki:
         # -v -z frames each hit as source, line, pattern, pathname
         fields = [os.fsdecode(entry) for entry in result.stdout.split(b'\0') if entry]
         for source, line, pattern, path in zip(*[iter(fields)] * 4, strict=False):
+            # -v also reports a path whose last match is a negation, which
+            # re-includes it: git tracks that file
+            if pattern.startswith('!'):
+                continue
             self.on_path_untrackable(
-                path=path,
+                path=path.removeprefix('./'),
                 source=source,
                 line=int(line),
                 pattern=pattern,
             )
 
+    def _edited_since_stamp(
+        self: Wiki,
+        folder: pathlib.Path,
+        baseline: dict[pathlib.Path, Optional[str]],
+    ) -> list[pathlib.Path]:
+        """Return the planned files edited since their ``updated:`` stamp.
+
+        Git is the reference: a tracked file whose working-tree bytes
+        differ from HEAD while its ``updated:`` still reads as HEAD's
+        changed after it was stamped -- an edit no run stamped. A stamp
+        names a period at the policy's resolution (a second, or a day
+        under a date format), and a write within HEAD's stamp period
+        leaves that stamp on new bytes, so a file last modified within
+        the period, or within the stamp grace (``_STAMP_GRACE``) after
+        the stamp (a run takes its stamp as it starts, and its writes
+        land after), counts as stamped: only a later modification is an
+        edit. Only the plan's files are judged, so a path the walk skips
+        (excluded, gitignored, under a dot folder) never is, nor is a
+        file HEAD does not hold or one with no ``updated:`` on either
+        side. Outside a repository, or before its first commit, nothing
+        is; a fresh clone matches HEAD, so nothing is there either.
+        """
+        if not self._in_repository():
+            return []
+        # one diff names the scope's tracked files that differ from HEAD,
+        # staged or not, root-relative -- without the optional index lock its
+        # stat refresh takes, which would fail a concurrent git add or commit
+        # the scope goes as ./<path>, which git reads literally
+        scope = f'./{self._relpath(folder)}'
+        cmd = [
+            '--no-optional-locks',
+            'diff',
+            '--name-only',
+            '-z',
+            '--no-renames',
+            '--relative',
+            'HEAD',
+            '--',
+            scope,
+        ]
+        result = wiki.util.git._git(cmd, cwd=self._root, raw=True)
+        if (result is None) or (result.returncode != 0):
+            return []
+        # the batch read below is line-framed, so a name carrying a newline
+        # is left unjudged; a name git spells precomposed (macOS's
+        # core.precomposeUnicode) where the walk read it decomposed matches
+        # by its NFC form
+        candidates: dict[pathlib.Path, str] = {}
+        composed = None
+        for entry in result.stdout.split(b'\0'):
+            if (not entry) or (b'\n' in entry):
+                continue
+            name = os.fsdecode(entry)
+            path = self._root / name
+            if path not in baseline:
+                if composed is None:
+                    composed = {
+                        unicodedata.normalize('NFC', self._relpath(planned)): planned
+                        for planned in baseline
+                    }
+                path = composed.get(unicodedata.normalize('NFC', name))
+            if (path is not None) and (baseline[path] is not None):
+                candidates[path] = name
+        if not candidates:
+            return []
+        heads = self._head_texts(list(candidates.values()))
+        policy = self._timestamp_policy
+        result = []
+        for path, name in candidates.items():
+            text = baseline[path]
+            head = heads.get(name)
+            # git lists a change of line endings or file mode alone, which is
+            # no edit: the plan reads text with its newlines normalized, so
+            # HEAD's copy is read alike before the two compare
+            if head is None:
+                continue
+            normalized = head.replace('\r\n', '\n').replace('\r', '\n')
+            if normalized == text:
+                continue
+            stamp = _updated_stamp(text)
+            if (stamp is None) or (stamp != _updated_stamp(head)):
+                continue
+            # a file vanishing under the probe (a concurrent delete) is the
+            # writer's to skip, as it skips any file changed since the plan
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            # a file last modified within its stamp's period, or within the
+            # grace after the stamp, is the write that stamped it
+            modified = dt.datetime.fromtimestamp(mtime, policy['zone'])
+            if modified.strftime(policy['format']) == stamp:
+                continue
+            start = _stamp_instant(stamp, policy)
+            if (start is not None) and (start <= modified < start + _STAMP_GRACE):
+                continue
+            result.append(path)
+        return result
+
+    def _head_texts(self: Wiki, names: list[str]) -> dict[str, str]:
+        """Return HEAD's text of each of ``names`` that HEAD holds.
+
+        One ``git cat-file --batch`` call reads them all, each a path
+        relative to the root as git spells it; a path HEAD does not hold
+        is left out. Bytes that are not UTF-8 read as replacement
+        characters, which leaves an ASCII stamp readable.
+        """
+        payload = b''.join(os.fsencode(f'HEAD:./{name}\n') for name in names)
+        cmd = ['cat-file', '--batch']
+        result = wiki.util.git._git(cmd, cwd=self._root, input=payload, raw=True)
+        if (result is None) or (result.returncode != 0):
+            return {}
+        output = result.stdout
+        texts = {}
+        offset = 0
+        for name in names:
+            # a found object answers '<oid> <type> <size>', then its bytes and
+            # a newline; any other answer ('<name> missing') carries no bytes
+            end = output.index(b'\n', offset)
+            parts = output[offset:end].split(b' ')
+            offset = end + 1
+            if (len(parts) == 3) and parts[2].isdigit():
+                size = int(parts[2])
+                if parts[1] == b'blob':
+                    data = output[offset : offset + size]
+                    texts[name] = data.decode('utf-8', errors='replace')
+                offset += size + 1
+        return texts
+
     def _git_read(self: Wiki, cmd: list[str]) -> Optional[str]:
         """Run a read-only git command at the root; ``None`` on any failure.
 
-        The probe shares the fence's environment discipline: git's
-        repo-discovery variables are dropped, so the answering
-        repository is always the one enclosing the root.
+        The probe shares the fence's environment discipline: the
+        variables that redirect git (``GIT_DIR`` and the like) are
+        dropped, so the answering repository is the one enclosing the
+        root -- unless the caller's ``GIT_CEILING_DIRECTORIES`` hides
+        it, and the read returns ``None``.
         """
         return wiki.util.git._git(cmd, cwd=self._root, check=False)
 
@@ -706,9 +908,9 @@ class Wiki:
         ``.gitattributes`` map (committed, it travels with the
         repository) and the ``merge.wiki.driver`` config (local, per
         clone). A fresh clone carries the map alone, and git then falls
-        back to a plain text merge of ``_index.md`` files -- silently,
-        at the clone's first merge -- so lint notes the gap while it is
-        one ``wiki config`` away from wired.
+        back to a plain text merge of ``_index.md`` files and pages --
+        silently, at the clone's first merge -- so lint notes the gap
+        while it is one ``wiki config`` away from wired.
         """
         attribute = self._git_read(['check-attr', 'merge', '--', WIKI_INDEX])
         if (attribute is None) or not attribute.endswith(': merge: wiki'):
@@ -802,7 +1004,10 @@ class Wiki:
         ``update`` renders it, so a clean merge's H1 and row order match
         what update writes. An H1 or a row order already in form keeps
         its bytes, a text with no delimiter comes back unchanged, and the
-        frontmatter and the content below the delimiter never change.
+        frontmatter and the content below the delimiter never change. A
+        text with two rows for one target also comes back unchanged: the
+        rows are one entry, and only ``update``, which reads the
+        filesystem, can choose between them.
 
         Args:
             text: Raw index content.
@@ -840,6 +1045,11 @@ class Wiki:
         # sort the parsed rows; a changed order renders each row and a blank
         # line after it, as format.render_index does
         _, links, _ = format.parse_index(text, delimiter=self.index_delimiter)
+        # rows that share a target are one entry, which only update can
+        # choose a row for from the filesystem: leave the text as it is
+        targets = [unicodedata.normalize('NFC', target) for target, _, _ in links]
+        if len(set(targets)) != len(targets):
+            return text
         ordered = self._sort_links(links)
         if ordered != links:
             rows = []
@@ -848,6 +1058,61 @@ class Wiki:
                 rows.append('')
             lines[first:end] = rows
         return '\n'.join(lines)
+
+    def _settle_stamps(
+        self: Wiki,
+        base_text: str,
+        ours_text: str,
+        theirs_text: str,
+    ) -> tuple[str, str]:
+        """Restamp both sides of a wiki file's merge with the stamps it keeps.
+
+        Each side takes the settled stamps: ``updated`` the later of the
+        two sides' stamps, and ``created``, when the base has none and the
+        sides' stamps are churn, the earlier. The merge driver writes them
+        before the merge runs: the index merge resolves each regenerated
+        stamp to the current branch's, and a page's text merge then finds
+        the stamp lines equal on both sides, so one that differed in them
+        alone comes out clean. Stamps compare as instants under the
+        timestamp policy, and a stamp either side spells in a form the
+        policy does not parse leaves both sides' as they are.
+
+        Args:
+            base_text: The common ancestor's content.
+            ours_text: The current branch's content.
+            theirs_text: The other branch's content.
+
+        Returns:
+            The current and the other branch's content, each restamped.
+
+        """
+        policy = self._timestamp_policy
+        base_block, _ = format.extract_frontmatter(base_text.split('\n'))
+        ours_block, _ = format.extract_frontmatter(ours_text.split('\n'))
+        theirs_block, _ = format.extract_frontmatter(theirs_text.split('\n'))
+        # updated takes the later stamp; created, churn over a base without
+        # one, the earlier
+        keys = {'updated': operator.gt}
+        if not format.read_frontmatter_field(base_block, 'created'):
+            keys['created'] = operator.lt
+        ours_settled, theirs_settled = ours_block, theirs_block
+        for key, wins in keys.items():
+            ours_stamp = format.read_frontmatter_field(ours_block, key)
+            theirs_stamp = format.read_frontmatter_field(theirs_block, key)
+            if (ours_stamp is None) or (theirs_stamp is None):
+                continue
+            ours_instant = _stamp_instant(ours_stamp, policy)
+            theirs_instant = _stamp_instant(theirs_stamp, policy)
+            if (ours_instant is None) or (theirs_instant is None):
+                continue
+            # the winning stamp lands on the other side; a tie keeps ours'
+            if wins(theirs_instant, ours_instant):
+                ours_settled = format.restamp(ours_settled, key, theirs_stamp)
+            elif theirs_stamp != ours_stamp:
+                theirs_settled = format.restamp(theirs_settled, key, ours_stamp)
+        ours_text = ours_settled + ours_text[len(ours_block) :]
+        theirs_text = theirs_settled + theirs_text[len(theirs_block) :]
+        return ours_text, theirs_text
 
     @format.run_scoped
     def init(
@@ -895,13 +1160,15 @@ class Wiki:
         violation = self._name_violation(name)
         if violation is not None:
             raise ValueError(f'Invalid wiki name {name!r}: {violation}')
-        # the titles, map, exclude, and links policies are read lazily (first
-        # inside the plan, the map render, the walk, and lint's folder check),
-        # so touch them here to reject a bad seed early
+        # the titles, map, exclude, links, and lint policies are read lazily
+        # (first inside the plan, the map render, the walk, lint's folder
+        # check, and lint's link scan), so touch them here to reject
+        # a bad seed early
         self._titles_required  # noqa: B018
         self._map_policy  # noqa: B018
         self._exclude_policy  # noqa: B018
         self._links_policy  # noqa: B018
+        self._lint_strict  # noqa: B018
         # alias current timestamp
         now = self._utc_now()
         # initialize wiki root
@@ -1188,6 +1455,12 @@ class Wiki:
         individually -- output modes (the CLI's condensed default)
         are the caller's concern.
 
+        A file edited since its ``updated:`` stamp is restamped as a
+        tool write would be: inside a git repository, a tracked file
+        that differs from HEAD while its stamp still reads as HEAD's
+        changed after it was stamped (:meth:`_edited_since_stamp`). A
+        clean checkout, or a wiki outside git, restamps nothing.
+
         Emits a notice for each new link added with a placeholder
         ``...`` description and when a deleted ``.wiki/cache/`` is
         recreated, and a warning for each index-side link description
@@ -1271,6 +1544,14 @@ class Wiki:
         # refuse to write over merge conflict markers: the write and the
         # dry run refuse alike, naming every marked file
         self._refuse_conflicted(baseline)
+        # restamp a file edited since its stamp, as a tool write would: the
+        # overlay carries each file's original stamp, so the plan alone
+        # leaves a hand edit's stamp behind it
+        for path in self._edited_since_stamp(folder, baseline):
+            content = overlay[path]
+            block, _ = format.extract_frontmatter(content.split('\n'))
+            overlay[path] = format.restamp_updated(block, now) + content[len(block) :]
+            notices.append(RestampEvent(path=str(path.relative_to(self._root))))
         # report every broken/new link (pruned or added during the run)
         # individually and statelessly; the CLI condenses by default
         for event in notices:
@@ -1400,7 +1681,10 @@ class Wiki:
         # paths only, and the target may not exist yet
         relative = folder.relative_to(self._root).as_posix()
         if self._probe_gitignore_fence(relative):
-            raise ValueError('Folder is gitignored; gitignored paths are not indexed.')
+            raise ValueError(
+                'Folder is gitignored, or its _index.md is;'
+                ' gitignored paths are not indexed.'
+            )
         if folder.is_file():
             raise ValueError(f'A file already stands at: {name!r}')
         # each level carries its own authored index, so the parent must
@@ -1490,11 +1774,13 @@ class Wiki:
         - **Out of date:** any file ``update`` would rewrite, shown as
           a unified diff of the change it would make -- a byte
           comparison against the plan (:meth:`_plan`), so lint flags
-          exactly what ``update`` changes. (A file with merge conflict
-          markers is the one exception: it is reported only as such,
-          with its diff suppressed.) A bare page (no frontmatter) is
-          additionally named as one, so the pending adoption is
-          legible without reading its diff.
+          what ``update`` changes but the restamp of a file edited by
+          hand since its last commit (:meth:`_edited_since_stamp`),
+          which lint does not judge. (A file with merge conflict
+          markers is reported only as such, with its diff
+          suppressed.) A bare page (no frontmatter) is additionally
+          named as one, so the pending adoption is legible without
+          reading its diff.
         - **Needs attention:** problems ``update`` cannot fix --
           invalid names, merge conflict markers (``update`` refuses
           the sweep until they are resolved), unclosed page
@@ -1527,9 +1813,10 @@ class Wiki:
           target; flagged with the prefix-free form as the fix),
           outside links under no allowlisted folder (a ``./`` or
           ``../`` target that lands outside every ``links.external``
-          folder, whatever is on disk; flagged with the entry to add),
-          and -- under ``titles.required`` -- a missing or unfilled
-          ``title:``.
+          folder, whatever is on disk; flagged with the entry to add), a
+          missing or unfilled ``title:`` under ``titles.required``, and
+          stale links in user content under ``lint.strict`` (otherwise
+          soft notes, below).
 
         Every line begins with the relevant path; an out-of-date file's
         diff follows its ``Requires update`` header, indented.
@@ -1549,7 +1836,8 @@ class Wiki:
         naming no folder on this machine (noted once per run; links into
         it go unchecked), and CRLF line endings (which the next
         ``update`` normalizes) are soft notes (stderr)
-        and do not count as issues.
+        and do not count as issues; ``lint.strict`` makes the stale links
+        issues.
 
         Args:
             name: Restrict scope to named subtree (relative
@@ -1588,6 +1876,8 @@ class Wiki:
         # per run, not one per link; reading the policy here also fails a
         # malformed block before the plan, links or none
         self._warn_missing_link_folders()
+        # a malformed lint block fails here too, stale links or none
+        self._lint_strict  # noqa: B018
         # compute what update would write (the source of truth for drift); the
         # blocks the planners keep as written come back as notices, keyed here
         # by path like the overlay, so lint names the refusals update applies
@@ -2375,6 +2665,26 @@ class Wiki:
         """
         if event is None:
             event = PageAdoptEvent(message, **kwargs)
+        return self.on_notice(event, logging_level=logging_level)
+
+    def on_restamp(
+        self: Wiki,
+        message: Optional[str] = None,
+        *,
+        logging_level: int = logging.INFO,
+        event: Optional[RestampEvent] = None,
+        **kwargs: Any,
+    ) -> Event:
+        """Handle a restamped-edit notice event.
+
+        Constructs a ``RestampEvent`` from ``message`` and the payload
+        kwargs unless a pre-built ``event`` is passed through, then
+        delegates to ``on_notice``. Override in subclasses to intercept
+        this notice kind alone; override ``on_notice`` to intercept
+        every notice.
+        """
+        if event is None:
+            event = RestampEvent(message, **kwargs)
         return self.on_notice(event, logging_level=logging_level)
 
     def on_link_add(
@@ -3349,6 +3659,28 @@ class Wiki:
         if self._excluded_by(path) is not None:
             return True
         return self._is_gitignored(path)
+
+    def _manages_page(self: Wiki, path: pathlib.Path) -> bool:
+        """Return ``True`` if ``path`` is a Markdown page the walk would index.
+
+        The single-path form of the walk's verdict, for a caller holding
+        one path and no walk (the merge driver): a dot segment anywhere
+        below the root, an ``exclude.patterns`` match, or the enclosing
+        repo's gitignore -- probed directly, with the fence's own
+        exemptions -- leaves the path unmanaged. An ``_index.md`` is its
+        folder's, not a page.
+        """
+        relative = self._relpath(path)
+        if (path.suffix != '.md') or (path.name == WIKI_INDEX):
+            return False
+        if any(part.startswith('.') for part in relative.split('/')):
+            return False
+        if self._excluded_by(path) is not None:
+            return False
+        matched = self._check_ignore(['.', WIKI_INDEX, relative])
+        if (matched is None) or ({'.', WIKI_INDEX} <= matched):
+            return True
+        return relative not in matched
 
     def _is_excluded_dir(self: Wiki, path: pathlib.Path) -> bool:
         """Return ``True`` if directory should be excluded from index links.
@@ -5749,7 +6081,11 @@ class Wiki:
                 if target in reported:
                     continue
                 reported.add(target)
-                self.on_link_stale(path=str(relpath), target=target + alias)
+                self._report_stale_link(
+                    result,
+                    path=str(relpath),
+                    target=target + alias,
+                )
                 continue
             # every target is read from the wiki root: a target carrying a
             # '.' or '..' segment (most often leading, as './' or '../')
@@ -5949,14 +6285,32 @@ class Wiki:
             else:
                 canonical = self._canonical_link_target(path, page_target)
             if (canonical is not None) and (canonical != page_target):
-                self.on_link_stale(
+                self._report_stale_link(
+                    result,
                     path=str(relpath),
                     target=target + alias,
                     canonical=canonical + anchor + alias,
                 )
             else:
-                self.on_link_stale(path=str(relpath), target=target + alias)
+                self._report_stale_link(
+                    result,
+                    path=str(relpath),
+                    target=target + alias,
+                )
         return result
+
+    def _report_stale_link(self: Wiki, issues: list[Issue], **fields: Any) -> None:
+        """Report a stale link: a soft note, or under ``lint.strict`` an issue.
+
+        The issue carries the note's line and payload, typed ``link_stale``
+        as the note is in ``lint --json``, so a consumer reads one kind
+        whichever severity the wiki chose.
+        """
+        if self._lint_strict:
+            event = LinkStaleEvent(**fields)
+            issues.append(Issue(event.description, kind='link_stale', **fields))
+        else:
+            self.on_link_stale(**fields)
 
 
 # ------ issues
@@ -6011,6 +6365,17 @@ class PageAdoptEvent(Event):
         if self.title:
             result += '; title: seeded from its H1'
         return result + ')'
+
+
+class RestampEvent(Event):
+    """Emitted when update restamps a file edited since its stamp."""
+
+    path: str
+
+    @property
+    def description(self: RestampEvent) -> str:
+        """Return the restamped-edit notice line."""
+        return f'Restamped {self.path}: edited since its updated: stamp'
 
 
 class LinkAddEvent(Event):
@@ -6158,7 +6523,7 @@ class MergeDriverUnconfiguredEvent(Event):
         return (
             '.gitattributes maps merge=wiki but merge.wiki.driver is not'
             ' configured; run `wiki config` to register the driver (index'
-            ' merges fall back to a plain text merge until then)'
+            ' and page merges fall back to a plain text merge until then)'
         )
 
 
@@ -6327,6 +6692,7 @@ class LinkFolderMissingEvent(Event):
 _NOTICE_HOOKS = {
     IndexCreateEvent: 'on_index_create',
     PageAdoptEvent: 'on_page_adopt',
+    RestampEvent: 'on_restamp',
     LinkAddEvent: 'on_link_add',
     LinkPruneEvent: 'on_link_prune',
     DescOverwriteEvent: 'on_desc_overwrite',
@@ -6366,6 +6732,30 @@ def _as_written(frontmatter: str, now: str) -> str:
     """
     stamped = format.restamp_updated(frontmatter, now)
     return frontmatter if format.frontmatter_issues(stamped) else stamped
+
+
+def _stamp_instant(stamp: str, policy: dict) -> Optional[dt.datetime]:
+    """Return the instant ``stamp`` names under the timestamp ``policy``, if it parses.
+
+    A zoneless stamp reads in the policy's zone.
+    """
+    try:
+        moment = dt.datetime.strptime(stamp, policy['format'])
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=policy['zone'])
+    return moment
+
+
+def _updated_stamp(text: Optional[str]) -> Optional[str]:
+    """Return the ``updated:`` value of ``text``'s closed frontmatter block, if any."""
+    if text is None:
+        return None
+    block, _ = format.extract_frontmatter(text.split('\n'))
+    if not block:
+        return None
+    return format.read_frontmatter_field(block, 'updated')
 
 
 def _conflict_marker_lines(text: str) -> list[int]:

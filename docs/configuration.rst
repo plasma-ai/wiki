@@ -80,9 +80,9 @@ The settings file: ``.wiki/settings.json``
 A JSON object at the wiki root. An absent file means all defaults; malformed
 JSON or a non-object top level fails every command that reads policy, with a
 message naming the file. The recognized blocks — ``naming``, ``timestamp``,
-``map``, ``titles``, ``exclude``, and ``links`` — are all optional, all
-objects. Unknown top-level keys are ignored, but a wrong-typed known block or
-key is an error naming the file and key.
+``map``, ``titles``, ``lint``, ``exclude``, and ``links`` — are all optional,
+all objects. Unknown top-level keys are ignored, but a wrong-typed known block
+or key is an error naming the file and key.
 
 Seeding and restoration are asymmetric:
 
@@ -138,6 +138,15 @@ rules are opt-in. An entry whose name breaks the policy is skipped by
    String of characters, default ``""``. Characters stripped from the name
    before the ``validate`` predicates run — for example, allow ``-`` so
    dashed names pass ``identifier``.
+
+A name is checked as a link carries it: a Markdown page by its stem
+(``notes`` for ``notes.md``), and every other file by its full name, extension
+included (``data.json``), as is a page whose stem a sibling file claims. The
+dot of an extension is checked like any other character, so ``alpha``,
+``alphanum``, and ``identifier`` reject every non-Markdown file with an
+extension (``data.json``, ``main.py``) unless ``allow`` contains ``.``. A
+wiki that keeps data files or scripts beside its pages under one of these
+predicates sets ``"allow": "."``.
 
 ``naming.deny``
    String of characters, default ``""``. Extra characters rejected anywhere
@@ -221,6 +230,18 @@ Presentation defaults for ``wiki map``.
    on files missing the field, and ``wiki lint`` fails each placeholder
    until a value is authored. (When false, a ``null`` title is the transient
    unset idiom and update removes the line — see :doc:`/guide/pages`.)
+
+``lint`` — lint severity
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+``lint.strict``
+   Boolean, default ``false``. When true, ``wiki lint`` reports each stale
+   link in user content — a ``[[wikilink]]`` in index or page prose that
+   reaches nothing — as a hard issue that fails the run, rather than a soft
+   note (see :doc:`/guide/generation`). The line and its ``--json`` kind,
+   ``link_stale``, are the same either way. A ``links.external`` entry
+   naming no folder on this machine stays a note, and the links into it go
+   unchecked, since the folder's absence says nothing about the wiki.
 
 ``exclude`` — indexing exclusions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -310,13 +331,18 @@ from indexing exactly like a pattern match — never walked, adopted, or
 linked — so a driver's stray output beside tracked content cannot be swept
 into the corpus by the next update. Matching is pattern-pure (a
 force-tracked file matching a fence is still fenced), and a wiki whose own
-root is ignored is exempt, so a deliberately unindexed wiki inside a repo
-keeps working. The repository is always the one enclosing the wiki root: the
-probe drops the caller's ``GIT_*`` environment, so a command run from a git
-hook (which exports ``GIT_DIR``) fences exactly as the same command run from
-a shell. The two variables that only restrict git pass through:
-``GIT_CEILING_DIRECTORIES`` stops the search for the enclosing repository,
-and ``GIT_OPTIONAL_LOCKS=0`` keeps the wiki's git reads off the index lock.
+root and root ``_index.md`` are both ignored is exempt, so a deliberately
+unindexed wiki inside a repo keeps working. At a repository's top level git
+reads the root as ignored under any ``*`` line, so a ``.gitignore`` that
+ignores ``*`` and re-includes what it tracks (``!*/``, ``!*.md``) keeps its
+fence there as in any subfolder. The repository is always the one enclosing
+the wiki root: the probe drops the caller's ``GIT_*`` environment, so a
+command run from a git hook (which exports ``GIT_DIR``) fences exactly as
+the same command run from a shell. Two variables that only restrict git
+pass through: ``GIT_CEILING_DIRECTORIES`` stops the search for the
+enclosing repository, so a wiki whose repository a ceiling hides reads as
+outside one, and ``GIT_OPTIONAL_LOCKS=0`` keeps the wiki's git reads off
+the index lock.
 Outside a git repository — or with git unavailable — no fence
 applies; inside one, an unreadable fence (git off ``PATH``, a broken install)
 is narrated as a note, since the sweep is about to adopt what the repository
@@ -344,7 +370,8 @@ whose entry is the link's prefix. A sibling wiki's page is
 alike. ``wiki lint`` accepts such a link when its target lands under a
 listed folder and the file, its ``.md`` form, or the folder exists there;
 judges a target inside another wiki by that wiki's own page rules (below);
-notes a missing target under a listed folder as a ``Stale link``, unless
+notes a missing target under a listed folder as a ``Stale link`` (an issue
+under ``lint.strict``), unless
 the same text read from the page's folder names something in the wiki, in
 which case the author meant that in-wiki target and the link is the hard
 ``points inside the wiki through './' or '../'`` issue naming its
@@ -568,8 +595,9 @@ it holds:
    exactly one `wiki.core.wiki.Wiki` subclass.
 
 The settings marker also drives the git merge driver: ``wiki _merge``
-dispatches an ``_index.md`` to the index-aware merge only when the file sits
-below a declared root — see :doc:`/guide/merge-driver`.
+dispatches an ``_index.md`` to the index-aware merge, and settles a page's
+stamps before its text merge, only when the file sits below a declared root
+— see :doc:`/guide/merge-driver`.
 
 Legacy layout
 ~~~~~~~~~~~~~

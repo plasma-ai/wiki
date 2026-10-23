@@ -88,8 +88,9 @@ The command sets up:
   is the one manual action Obsidian requires. See :doc:`/guide/obsidian`.
 - ``wiki/.wiki/cache/`` — a derived word-counts cache; it ignores itself via
   its own ``.gitignore`` and can be deleted at any time.
-- The git merge driver for ``_index.md`` files, registered in the repository's
-  local git config and named in ``.gitattributes``. See
+- The git merge driver for ``_index.md`` files and pages, registered in the
+  repository's local git config and named in ``.gitattributes`` — the
+  repository root's for indexes, ``wiki/.gitattributes`` for pages. See
   :doc:`/guide/merge-driver`.
 
 .. list-table::
@@ -238,8 +239,8 @@ Lint distinguishes **issues** from **notes**. Issues are hard problems — files
 that drifted from the generated form (shown as a diff), invalid names, broken
 index links, malformed frontmatter — and any issue makes lint exit 1. Notes
 are advisory (placeholder or oversized descriptions, empty index content,
-stale prose links, CRLF endings), print on stderr, and never affect the exit
-code.
+stale prose links unless the wiki sets ``lint.strict``, CRLF endings), print
+on stderr, and never affect the exit code.
 
 Now author the descriptions. A page's ``desc:`` frontmatter is the source of
 truth for its link row in the parent index — edit it in the page, not in the

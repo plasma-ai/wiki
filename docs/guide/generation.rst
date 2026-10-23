@@ -214,8 +214,8 @@ would destroy authored content or race a concurrent editor:
   the same way ``exclude.patterns`` paths are: what the repo fences out of
   version control is not wiki content, so a driver's stray output is never
   adopted, never gains a minted ``_index.md``, and never draws a parent link
-  row. A wiki that is itself gitignored is exempt — the fence never empties
-  a deliberately unindexed wiki.
+  row. A wiki whose root and root ``_index.md`` both read as gitignored is
+  exempt — the fence never empties a deliberately unindexed wiki.
 - **Files edited between plan and write** are skipped — writing the staged
   content would silently revert the concurrent edit. The next run converges.
 
@@ -249,7 +249,8 @@ reports two kinds of problem — without writing anything:
   *cannot* fix. Any issue makes lint **exit 1** — and nothing else does: a
   command error exits 2, so 1 always means exactly "issues found".
 - **Notes** (stderr): soft advisories — unauthored descriptions, stale prose
-  links, a ``links.external`` entry naming no folder on this machine,
+  links (issues under ``lint.strict``), a ``links.external`` entry naming no
+  folder on this machine,
   pending CRLF normalization, an unconfigured merge driver in a fresh clone.
   Notes **never affect the exit code**. A note kind that repeats condenses to
   one count line (``12 indexes have empty content``) unless you pass
@@ -314,8 +315,11 @@ Out-of-date files
 
 Any file update would rewrite is reported as ``<path>: Requires update``
 followed by an indented unified diff of exactly the change update would make —
-the comparison is byte-exact against update's plan, so lint and update can
-never disagree about what is pending. A change only to the file's final
+the comparison is byte-exact against update's plan, so lint and update agree
+about what is pending, with one exception: lint does not judge hand edits, so
+a file update restamps only because it was edited since its last commit
+(below) is listed by ``update --check`` and not by lint. A change only to the
+file's final
 newline reports as ``Requires update (final newline differs)``. A bare page
 (no frontmatter) is additionally named — ``Bare page (no frontmatter); update
 will adopt it`` — so the pending adoption is legible without reading its diff.
@@ -507,6 +511,10 @@ its meaning:
    Only under ``titles.required`` (see :doc:`/configuration`): the file's
    ``title:`` is absent, blank, or the seeded ``null`` placeholder.
 
+``Stale link [[target]]``
+   Only under ``lint.strict`` (see :doc:`/configuration`): the stale-link
+   note below, reported as an issue with the same line and fix.
+
 Soft notes
 ~~~~~~~~~~
 
@@ -545,8 +553,9 @@ notes is clean — lint exits 0.
        ``links.external`` folder, that file's root-relative spelling —
        ``(use [[../src/main.py]])``.
        Prose links are soft because pages come and go — the generated link
-       block's broken-link check is the hard surface. A target notes once
-       per file, however often the prose repeats it.
+       block's broken-link check is the hard surface — unless the wiki sets
+       ``lint.strict``, which makes each one a hard issue (above). A target
+       notes once per file, however often the prose repeats it.
    * - ``<path>: indexed, but this machine's git ignores it (<source>:<line> '<pattern>'); its generated row ships where the file cannot, so every other clone reds on a broken link``
      - The gitignore fence reads only the repository's own rules (pinned, so
        indexing is identical on every clone), but the named ignore rule —
@@ -555,11 +564,11 @@ notes is clean — lint exits 0.
        would be committed without it. Drop the rule, or keep the path out of
        the index with ``exclude.patterns``. Only emitted inside a git
        repository.
-   * - ``.gitattributes maps merge=wiki but merge.wiki.driver is not configured; run `wiki config` to register the driver (index merges fall back to a plain text merge until then)``
+   * - ``.gitattributes maps merge=wiki but merge.wiki.driver is not configured; run `wiki config` to register the driver (index and page merges fall back to a plain text merge until then)``
      - A fresh clone carries the committed ``.gitattributes`` map but not the
        per-clone ``merge.wiki.driver`` config, so git text-merges
-       ``_index.md`` files until ``wiki config`` registers the driver (see
-       :doc:`/guide/merge-driver`).
+       ``_index.md`` files and pages until ``wiki config`` registers the
+       driver (see :doc:`/guide/merge-driver`).
    * - ``links.external entry '<folder>' names no folder on this machine; links into it are not checked``
      - A ``links.external`` entry names a folder absent from this clone (a
        sibling checkout missing from a partial clone) or names a file
@@ -632,6 +641,10 @@ topics/_index.md``). The condensed lines and what they mean:
    * - ``Adopted N bare pages (frontmatter added)``
      - Frontmatterless pages gained a fresh block; an authored H1 is
        preserved as a seeded ``title:``.
+   * - ``Restamped N files edited since their stamps``
+     - Tracked files edited by hand since their last commit, their
+       ``updated:`` still the committed one, were restamped (see
+       *Stamps follow hand edits* below).
    * - ``Added N new links``
      - New entries were linked into their parent indexes with ``...``
        placeholder descriptions.
@@ -681,10 +694,27 @@ Both commands are safe to run at any time, as often as you like:
   update.`` The only exception is a concurrently-edited file, which is
   skipped with a notice — the next run picks it up.
 - **Timestamps never churn.** ``updated:`` is re-stamped only on a real
-  content change; a would-be timestamp-only difference never triggers a
-  write, and a rewrite forced solely to normalize CRLF endings does not
-  re-stamp. Re-running update on a clean wiki changes nothing, including the
+  content change — a write update makes, or a hand edit (below); a would-be
+  timestamp-only difference never triggers a write, and a rewrite forced
+  solely to normalize CRLF endings does not re-stamp. Re-running update on a clean wiki changes nothing, including the
   stamps.
+- **Stamps follow hand edits.** Inside a git repository, a tracked file whose
+  text differs from HEAD while its ``updated:`` still reads as HEAD's was
+  edited after it was stamped, so update re-stamps it as it would its own
+  write, names it (``Restamped <path>: edited since its updated: stamp``),
+  and ``update --check`` lists it; lint does not. A difference in line
+  endings or file mode alone is no edit. A stamp names a period at the
+  configured format's resolution — a second by default, a day under a
+  date-only format — and a file last modified within its stamp's period, or
+  within a minute after the stamp, counts as stamped: a write in that period
+  leaves the same stamp, and a run takes its stamp as it starts, its writes
+  landing moments later. A
+  stamp that already moved stands, so the first run after an edit sets it
+  and later runs leave it until the next commit. Untracked files and files
+  the wiki does not index are never judged, and a file with no ``updated:``
+  gains none this way. A clean checkout, a fresh clone, or a wiki outside git
+  restamps nothing. Before a merge is committed, a file the merge changed
+  whose ``updated:`` is still HEAD's reads as edited too, and is restamped.
 - **Authored content is never regenerated away.** User content below ``***``,
   authored frontmatter values, and unrecognized frontmatter keys are
   preserved; damaged files (unclosed frontmatter, truncated indexes) are

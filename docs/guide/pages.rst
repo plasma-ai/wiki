@@ -98,7 +98,8 @@ Frontmatter fields
      - Stamped when the file gains frontmatter, kept from then on.
    * - ``updated``
      - tool
-     - Re-stamped only when a write actually changes content.
+     - Re-stamped when a write actually changes content, or when a tracked
+       file was edited by hand since its last commit.
 
 Path-derived names
 ~~~~~~~~~~~~~~~~~~
@@ -183,8 +184,10 @@ Timestamps
 ~~~~~~~~~~
 
 ``created:`` and ``updated:`` are tool-owned. ``created`` is written once,
-when the file gains frontmatter; ``updated`` is re-stamped only on writes that
-actually change content, so timestamp churn never dirties a file on its own.
+when the file gains frontmatter; ``updated`` is re-stamped on writes that
+actually change content, so timestamp churn never dirties a file on its own,
+and, inside a git repository, on a tracked file edited by hand since its
+last commit (see :doc:`/guide/generation`).
 Stamps default to UTC in ``%Y-%m-%dT%H:%M:%SZ`` format; configure the zone and
 format through the ``timestamp`` block in ``.wiki/settings.json`` (see
 :doc:`/configuration`). Never hand-edit a stamp: an edit goes undetected

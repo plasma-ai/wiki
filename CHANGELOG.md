@@ -7,6 +7,111 @@ may include breaking changes, each listed under a Breaking heading.
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-10-23
+
+### Added
+
+- `wiki update` restamps a file edited by hand since its `updated:` stamp.
+  Inside a git repository, a tracked file whose text differs from HEAD while its
+  `updated:` still equals HEAD's is restamped as the tool's own writes are,
+  named in a `Restamped` line, and listed by `wiki update --check` (not by
+  `wiki lint`), unless the file was last modified within its stamp's own period
+  (a second by default, a day under a date-only format) or within a minute after
+  the stamp, where a write leaves the same stamp. A stamp already moved stands,
+  and untracked files, files the wiki does not index, and files with no
+  `updated:` are never judged. A clean checkout, a fresh clone, or a wiki
+  outside git restamps nothing, so `updated:` no longer falls behind edits made
+  outside a run.
+- An opt-in `lint.strict` setting in `.wiki/settings.json`. When true,
+  `wiki lint` reports each stale link in index or page prose as a hard issue
+  that fails the run, rather than a soft note. The line and its `--json` kind,
+  `link_stale`, are the same either way, so a gate that filtered the notes for
+  that kind can read the issues instead. A `links.external` entry naming no
+  folder on this machine stays a note.
+- The merge driver settles the `updated:` stamp of every wiki page it merges,
+  not only `_index.md`: both sides take the later stamp, and over a base with no
+  `created:` the earlier `created:`, before the text merge. A page whose two
+  branches each edited their own part and ran `wiki update` now merges clean
+  instead of conflicting on the stamp line; an excluded or gitignored page, or
+  one whose wiki hook cannot load, gets a plain text merge. `wiki init` and
+  `wiki config` map the wiki's pages in a `.gitattributes` in the wiki root
+  (`# Wiki page merge driver`, `*.md merge=wiki`), so Markdown outside the wiki
+  keeps git's own merge and any rule set for it; the repository root keeps the
+  index lines alone. Run `wiki config` and commit the new file to adopt it.
+- The registered merge driver falls back to git's own text merge, its conflicts
+  labeled `ours`/`theirs`, when `wiki` is not on PATH, so a merge without the
+  CLI shows both sides of a conflict rather than leaving the current branch's
+  file alone without markers. Each clone picks up the new driver on its next
+  `wiki config`.
+
+### Fixed
+
+- A `.wiki/wiki.py` hook that exits while the merge driver loads it (a
+  `sys.exit` in its constructor) no longer ends the driver before it merges. The
+  driver skips its hook steps, as it does for a hook that fails to load, and the
+  merge runs; before, the driver exited with the hook's code, so an exit 0 left
+  the current branch's file as the merge, the other side's edits lost.
+- A file or folder whose name starts with `:` is judged by the gitignore checks
+  as itself. Git read such a path as pathspec magic, so `:notes` was judged as
+  `notes`: an ignore rule for `notes` kept `:notes` out of the index and made
+  `wiki new` refuse it. Every git probe now names its path literally.
+- The `_index.md` merge driver reads a link row as `wiki update` does, as a
+  whole line, so a desc line that opens on a wikilink, such as
+  `[[core/design|design]] explains each stage.`, stays with its row. A row one
+  side edited by adding such a line while the other side deleted it is kept with
+  the new line, rather than dropped with the line moved into the row above, and
+  a row the other side deleted stays deleted when another row's desc line opens
+  on a link to it.
+- The `_index.md` merge driver reads a link row a formatter escaped (`\[\[`) as
+  `wiki update` does, with the escapes undone, so a side whose link rows carry
+  this damage merges like any other: its added rows ride over, its edits land,
+  its deletions stay deleted, and an escaped row and the other side's copy of it
+  are one entry rather than two rows. A row brought over from the other side
+  lands with its row line repaired. A line in the damage shape that still reads
+  as no row, such as an escaped desc line opening on a wikilink, holds that
+  side's deletions until the next `wiki update`. `Wiki.canonicalize_index`
+  returns an index with two rows for one target unchanged, so `wiki _merge`
+  leaves such a merge for `wiki update` to resolve.
+- A wiki whose enclosing repository a caller's `GIT_CEILING_DIRECTORIES` hides
+  reads as outside a repository, as its git calls already read it, so
+  `wiki update` and `wiki lint` no longer note on every run that the gitignore
+  fence is unavailable and ask whether git is installed.
+- `wiki update` and `wiki lint` no longer note a path that a negated ignore
+  pattern re-includes as one this machine's git ignores. Git tracks such a path,
+  so its row ships with it, and a wiki whose `.gitignore` ignores `*` and
+  re-includes `!*.md` no longer draws the note for every page and index.
+- `wiki new` judges a folder that does not exist yet by the `_index.md` it would
+  write, so a `.gitignore` that ignores `*` and re-includes `!*/` and `!*.md`
+  admits the new folder. Git cannot tell that a missing path is a folder, so
+  `!*/` never re-included it, and `wiki new` refused every new folder under such
+  an allowlist. A repository that ignores `_index.md` files now refuses every
+  new folder, since the index could never be committed.
+- A wiki at its repository's top level keeps its gitignore fence under a
+  `.gitignore` that ignores `*` and re-includes what it tracks (`!*/`, `!*.md`).
+  Git reads the top level as ignored under any `*` line, and the wiki took that
+  for a wiki its repository keeps out, so it dropped the fence and indexed the
+  files the allowlist leaves out. The exemption now also needs the root
+  `_index.md` to read as ignored, so a top-level wiki whose `.gitignore` ignores
+  everything stays exempt.
+- `wiki _merge` replaces a clean `_index.md` merge whole when it sets the H1 and
+  row order, so a write that fails leaves the file as the driver merged it and
+  the driver's exit code stands: `wiki _merge` no longer exits 2, which git
+  reads as a conflict, over a file the failed write left in part. A read-only
+  merged file is rewritten too.
+- An `_index.md` merge keeps the later of the two sides' `updated:` stamps, so a
+  merge in which only the other branch re-stamped the index no longer leaves the
+  current branch's older stamp on the merged result. Over a base index with no
+  `created:` stamp, the merge keeps the earlier of the two sides' `created:`
+  stamps. Stamps compare as instants under the wiki's timestamp policy, and a
+  stamp either side spells in a form the policy does not parse keeps the current
+  branch's.
+- The configuration reference and the skill say how a name is checked: a
+  Markdown page by its stem, any other file by its full name, extension
+  included. `alpha`, `alphanum`, and `identifier` therefore reject every
+  non-Markdown file with an extension unless `naming.allow` contains `.`, the
+  remedy the docs now name for a strict wiki that keeps data files or scripts
+  beside its pages.
+
 ## [1.7.0] - 2026-10-14
 
 ### Changed
@@ -17,13 +122,15 @@ may include breaking changes, each listed under a Breaking heading.
   and puts its rows in the order `wiki update` writes them, sorting with the
   wiki's own class (a trusted `.wiki/wiki.py` hook's `category_order` included)
   when that class leaves the current branch's index as written — an index
-  another class wrote, or one whose hook cannot load or run, stays as merged —
-  and a row the base had that one side deleted while the other left it alone
-  stays deleted rather than riding back in — unless the deleting side's rows
-  carry formatter escape damage, whose unread rows say nothing of a deletion.
-  Two branches that each add or delete pages in one folder and run
-  `wiki update`, or retitle the index, now merge to an index that passes
-  `wiki update --check` and `wiki lint`; the other side's new rows no longer sit
+  another class wrote, or one whose hook cannot load or run, stays as merged,
+  though the check sees another class's category order only where the current
+  branch's rows span two or more categories — and a row the base had that one
+  side deleted while the other left it alone stays deleted rather than riding
+  back in — unless the deleting side's rows carry formatter escape damage, whose
+  unread rows say nothing of a deletion. Two branches that each add or delete
+  pages in one folder and run `wiki update`, or retitle the index, now merge to
+  an index that passes `wiki update --check` and `wiki lint`, unless the merge
+  changes the hook's `category_order`; the other side's new rows no longer sit
   below ours', a deleted page's row no longer returns, and a merged-in title no
   longer waits for an update to reach the H1, each failing both until a
   post-merge update. `Wiki.canonicalize_index` exposes the rewrite.
@@ -42,7 +149,7 @@ may include breaking changes, each listed under a Breaking heading.
   the index to save refreshed file data, so a `git add` or commit run in the
   same repository at that moment otherwise fails on the existing `index.lock`.
 - The wiki's git calls keep the caller's `GIT_CEILING_DIRECTORIES` and
-  `GIT_OPTIONAL_LOCKS`, the two `GIT_*` variables that only restrict git, while
+  `GIT_OPTIONAL_LOCKS`, two `GIT_*` variables that only restrict git, while
   still dropping those that redirect it, such as the `GIT_DIR` a hook exports. A
   wiki below a ceiling the caller set otherwise still finds the repository above
   it and applies that repository's ignore rules, and a caller's lock-free
@@ -909,4 +1016,5 @@ Initial release.
 [1.5.0]: https://github.com/plasma-ai/wiki/compare/v1.4.0...v1.5.0
 [1.6.0]: https://github.com/plasma-ai/wiki/compare/v1.5.0...v1.6.0
 [1.7.0]: https://github.com/plasma-ai/wiki/compare/v1.6.0...v1.7.0
-[unreleased]: https://github.com/plasma-ai/wiki/compare/v1.7.0...HEAD
+[1.8.0]: https://github.com/plasma-ai/wiki/compare/v1.7.0...v1.8.0
+[unreleased]: https://github.com/plasma-ai/wiki/compare/v1.8.0...HEAD
