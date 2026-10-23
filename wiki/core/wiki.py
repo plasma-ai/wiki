@@ -637,6 +637,7 @@ class Wiki:
         """
         payload = b''.join(os.fsencode(f'./{entry}') + b'\0' for entry in candidates)
         cmd = [
+            '--no-optional-locks',
             '-c',
             f'core.excludesFile={os.devnull}',
             'check-ignore',
@@ -743,7 +744,7 @@ class Wiki:
         # the personal global counts; each path is probed as ./<path>, read
         # literally, as the fence probes
         payload = b''.join(os.fsencode(f'./{entry}') + b'\0' for entry in candidates)
-        cmd = ['check-ignore', '-z', '-v', '--stdin']
+        cmd = ['--no-optional-locks', 'check-ignore', '-z', '-v', '--stdin']
         result = wiki.util.git._git(cmd, cwd=self._root, input=payload, raw=True)
         if (result is None) or (result.returncode not in (0, 1)):
             return
