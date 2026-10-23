@@ -786,35 +786,48 @@ class Wiki:
         """
         if not self._in_repository():
             return []
-        # one diff names the scope's tracked files that differ from HEAD,
-        # staged or not, root-relative -- without the optional index lock its
-        # stat refresh takes, which would fail a concurrent git add or commit
+        # one status read names the scope's tracked files that differ from
+        # HEAD, staged or not, reading the index without the optional lock
+        # its stat refresh takes, which would fail a concurrent git add or
+        # commit -- a working-tree diff takes that lock even with optional
+        # locks off
         # the scope goes as ./<path>, which git reads literally
         scope = f'./{self._relpath(folder)}'
         cmd = [
             '--no-optional-locks',
-            'diff',
-            '--name-only',
+            'status',
+            '--porcelain',
             '-z',
             '--no-renames',
-            '--relative',
-            'HEAD',
+            '--untracked-files=no',
             '--',
             scope,
         ]
         result = wiki.util.git._git(cmd, cwd=self._root, raw=True)
         if (result is None) or (result.returncode != 0):
             return []
+        entries = [entry[3:] for entry in result.stdout.split(b'\0') if entry]
+        if not entries:
+            return []
+        # porcelain names each path from the repository's top level, and the
+        # scope keeps every one under the root, so dropping the root's own
+        # prefix by its component count names it root-relative whatever case
+        # or composition git spells the prefix in
+        cmd = ['rev-parse', '--show-prefix']
+        prefix = self._git_read(cmd)
+        if prefix is None:
+            return []
+        depth = len(pathlib.PurePosixPath(prefix).parts)
         # the batch read below is line-framed, so a name carrying a newline
         # is left unjudged; a name git spells precomposed (macOS's
         # core.precomposeUnicode) where the walk read it decomposed matches
         # by its NFC form
         candidates: dict[pathlib.Path, str] = {}
         composed = None
-        for entry in result.stdout.split(b'\0'):
-            if (not entry) or (b'\n' in entry):
+        for entry in entries:
+            if b'\n' in entry:
                 continue
-            name = os.fsdecode(entry)
+            name = '/'.join(os.fsdecode(entry).split('/')[depth:])
             path = self._root / name
             if path not in baseline:
                 if composed is None:

@@ -143,6 +143,7 @@ __all__ = [
     'test_update_restamps_a_page_edited_since_its_stamp',
     'test_a_tool_write_landing_after_its_stamp_is_no_hand_edit',
     'test_update_reads_a_stamp_period_in_the_policy_zone',
+    'test_the_hand_edit_check_never_rewrites_the_git_index',
 ]
 
 
@@ -3814,6 +3815,51 @@ def test_update_reads_a_stamp_period_in_the_policy_zone(
     Wiki(tmp_path).update()
     stamp = _stamp(page.read_text(encoding='utf-8'))
     assert stamp == ('2031-01-01' if restamped else '2020-01-01')
+
+
+@_needs_git
+def test_the_hand_edit_check_never_rewrites_the_git_index(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The hand-edit check reads the tree without rewriting the git index.
+
+    A read that refreshes stale stat data saves it under ``index.lock``,
+    so a ``git add`` or commit run in the same worktree at that moment
+    fails on the lock -- and a working-tree diff refreshes even with
+    optional locks off. Over stale stat data, a dry run and a writing run
+    both leave the index's bytes alone, and the page edited by hand is
+    still restamped.
+    """
+    # a committed wiki under an old stamp, read with the optional locks git
+    # takes by default
+    monkeypatch.setattr(Wiki, '_utc_now', lambda self: '2020-01-01T00:00:00Z')
+    monkeypatch.delenv('GIT_OPTIONAL_LOCKS', raising=False)
+    _make_wiki(tmp_path, folders={'notes': ['kept', 'edited']})
+    Wiki(tmp_path).update()
+    _git_repo(tmp_path)
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # every tracked file's stat data goes stale, and one page is edited
+    stale = dt.datetime(2020, 1, 1, tzinfo=dt.UTC).timestamp()
+    for name in _git(tmp_path, 'ls-files', '-z').stdout.split('\0'):
+        if name:
+            os.utime(tmp_path / name, (stale, stale))
+    page = tmp_path / 'notes' / 'edited.md'
+    page.write_text(page.read_text(encoding='utf-8') + '\nEdited.\n', encoding='utf-8')
+    index = tmp_path / '.git' / 'index'
+    before = index.read_bytes()
+
+    # the dry run names the edit, the writing run restamps it, and neither
+    # touches the index
+    now = '2031-01-01T00:00:00Z'
+    monkeypatch.setattr(Wiki, '_utc_now', lambda self: now)
+    assert Wiki(tmp_path).update(check=True) == ['notes/edited.md']
+    assert index.read_bytes() == before
+    Wiki(tmp_path).update()
+    assert index.read_bytes() == before
+    assert _stamp(page.read_text(encoding='utf-8')) == now
 
 
 # ------ helpers
