@@ -913,7 +913,8 @@ class Wiki:
         silently, at the clone's first merge -- so lint notes the gap
         while it is one ``wiki config`` away from wired.
         """
-        attribute = self._git_read(['check-attr', 'merge', '--', WIKI_INDEX])
+        cmd = ['--no-optional-locks', 'check-attr', 'merge', '--', WIKI_INDEX]
+        attribute = self._git_read(cmd)
         if (attribute is None) or not attribute.endswith(': merge: wiki'):
             return
         if self._git_read(['config', '--get', 'merge.wiki.driver']):
