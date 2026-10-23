@@ -50,14 +50,14 @@ def _isolate_trust_store(
 def _isolate_ambient_env() -> Iterator[None]:
     """Strip a live deployment's exported env for the whole session.
 
-    A wiki host (fractal's node loop, a CI job) exports ``OFFLINE_MODE``
-    for its own ``wiki`` invocations. Inherited by the suite, ``true``
-    skips the stubbed downloads the config tests assert on, and a value
-    outside true/false makes every in-process ``init``/``update_config``
-    call raise ``ValueError``. Tests that need the var set it themselves
-    with the function-scoped ``monkeypatch``, which runs later and is
-    undone per test; the CLI suite is unaffected -- its ``_wiki`` runner
-    pins the var per subprocess.
+    An offline host exports ``OFFLINE_MODE`` for every tool that reads it (a
+    CI job, or a shell set up for fractal, which honors the same switch).
+    Inherited by the suite, ``true`` skips the stubbed downloads the config
+    tests assert on, and a value outside true/false makes every in-process
+    ``init``/``update_config`` call raise ``ValueError``. Tests that need
+    the var set it themselves with the function-scoped ``monkeypatch``,
+    which runs later and is undone per test; the CLI suite is unaffected --
+    its ``_wiki`` runner pins the var per subprocess.
     """
     monkeypatch = pytest.MonkeyPatch()
     for var in _AMBIENT_ENV_VARS:
