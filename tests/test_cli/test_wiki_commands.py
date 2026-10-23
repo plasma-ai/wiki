@@ -1134,7 +1134,9 @@ def test_update_cli_refuses_nested_wiki(tmp_path: pathlib.Path) -> None:
     A wiki copy dropped inside another wiki (a backup, a vendored
     snapshot) would be absorbed by the sweep -- every nested ``name:``
     rewritten against the outer root -- so update exits nonzero with
-    the enclosure message instead of rewriting anything.
+    the enclosure message instead of rewriting anything. Embedders tell
+    this refusal apart by the message's opening phrase on stderr, and
+    rely on it writing nothing, so both are pinned.
     """
     root = tmp_path / 'wiki'
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
@@ -1145,14 +1147,16 @@ def test_update_cli_refuses_nested_wiki(tmp_path: pathlib.Path) -> None:
     (nested / '.wiki').mkdir(parents=True)
     (nested / '.wiki' / 'settings.json').write_text('{}\n', encoding='utf-8')
     before = (root / 'note.md').read_text(encoding='utf-8')
+    index = (root / '_index.md').read_text(encoding='utf-8')
 
     # the sweep is refused with the enclosure message, naming the root
     result = _wiki(root, 'update', '--path', str(root))
-    combined = result.stdout + result.stderr
     assert result.returncode == 2
-    assert f'encloses the wiki at: {nested};' in combined
-    assert 'declared root' in combined
+    assert f'Error: Path encloses the wiki at: {nested};' in result.stderr
+    assert 'declared root' in result.stderr
+    # nothing was written: the page and the root index keep their bytes
     assert (root / 'note.md').read_text(encoding='utf-8') == before
+    assert (root / '_index.md').read_text(encoding='utf-8') == index
 
 
 def test_update_refuses_a_scope_inside_a_nested_wiki(tmp_path: pathlib.Path) -> None:

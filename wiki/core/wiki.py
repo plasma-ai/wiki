@@ -6819,7 +6819,12 @@ def _is_offline() -> bool:
 
 
 def _encloses_wiki_error(nested: pathlib.Path) -> ValueError:
-    """Build the path-encloses-a-wiki error, naming the nested root."""
+    """Build the path-encloses-a-wiki error, naming the nested root.
+
+    Embedders tell this refusal from other failures by its opening phrase,
+    ``Path encloses the wiki at``, so a change to it is a change to their
+    checks.
+    """
     return ValueError(
         f'Path encloses the wiki at: {nested}; run the command from that declared root.'
     )
