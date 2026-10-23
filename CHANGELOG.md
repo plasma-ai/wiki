@@ -7,6 +7,14 @@ may include breaking changes, each listed under a Breaking heading.
 
 ## [Unreleased]
 
+### Fixed
+
+- `wiki update`, and its `--check` dry run, no longer rewrite the git index. The
+  check for files edited by hand read them with a working-tree `git diff`, which
+  saves refreshed file stat data under `index.lock` even with optional locks
+  off, so a `git add` or commit run in the same worktree at that moment could
+  fail on the lock. The check now reads `git status` without the lock.
+
 ## [1.8.0] - 2026-10-23
 
 ### Added
