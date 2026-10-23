@@ -7,7 +7,7 @@ may include breaking changes, each listed under a Breaking heading.
 
 ## [Unreleased]
 
-## [1.8.0] - 2026-10-22
+## [1.8.0] - 2026-10-23
 
 ### Added
 
