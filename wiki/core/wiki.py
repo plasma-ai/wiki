@@ -637,6 +637,7 @@ class Wiki:
         """
         payload = b''.join(os.fsencode(f'./{entry}') + b'\0' for entry in candidates)
         cmd = [
+            '--no-optional-locks',
             '-c',
             f'core.excludesFile={os.devnull}',
             'check-ignore',
@@ -743,7 +744,7 @@ class Wiki:
         # the personal global counts; each path is probed as ./<path>, read
         # literally, as the fence probes
         payload = b''.join(os.fsencode(f'./{entry}') + b'\0' for entry in candidates)
-        cmd = ['check-ignore', '-z', '-v', '--stdin']
+        cmd = ['--no-optional-locks', 'check-ignore', '-z', '-v', '--stdin']
         result = wiki.util.git._git(cmd, cwd=self._root, input=payload, raw=True)
         if (result is None) or (result.returncode not in (0, 1)):
             return
@@ -785,35 +786,48 @@ class Wiki:
         """
         if not self._in_repository():
             return []
-        # one diff names the scope's tracked files that differ from HEAD,
-        # staged or not, root-relative -- without the optional index lock its
-        # stat refresh takes, which would fail a concurrent git add or commit
+        # one status read names the scope's tracked files that differ from
+        # HEAD, staged or not, reading the index without the optional lock
+        # its stat refresh takes, which would fail a concurrent git add or
+        # commit -- a working-tree diff takes that lock even with optional
+        # locks off
         # the scope goes as ./<path>, which git reads literally
         scope = f'./{self._relpath(folder)}'
         cmd = [
             '--no-optional-locks',
-            'diff',
-            '--name-only',
+            'status',
+            '--porcelain',
             '-z',
             '--no-renames',
-            '--relative',
-            'HEAD',
+            '--untracked-files=no',
             '--',
             scope,
         ]
         result = wiki.util.git._git(cmd, cwd=self._root, raw=True)
         if (result is None) or (result.returncode != 0):
             return []
+        entries = [entry[3:] for entry in result.stdout.split(b'\0') if entry]
+        if not entries:
+            return []
+        # porcelain names each path from the repository's top level, and the
+        # scope keeps every one under the root, so dropping the root's own
+        # prefix by its component count names it root-relative whatever case
+        # or composition git spells the prefix in
+        cmd = ['rev-parse', '--show-prefix']
+        prefix = self._git_read(cmd)
+        if prefix is None:
+            return []
+        depth = len(pathlib.PurePosixPath(prefix).parts)
         # the batch read below is line-framed, so a name carrying a newline
         # is left unjudged; a name git spells precomposed (macOS's
         # core.precomposeUnicode) where the walk read it decomposed matches
         # by its NFC form
         candidates: dict[pathlib.Path, str] = {}
         composed = None
-        for entry in result.stdout.split(b'\0'):
-            if (not entry) or (b'\n' in entry):
+        for entry in entries:
+            if b'\n' in entry:
                 continue
-            name = os.fsdecode(entry)
+            name = '/'.join(os.fsdecode(entry).split('/')[depth:])
             path = self._root / name
             if path not in baseline:
                 if composed is None:
@@ -912,7 +926,8 @@ class Wiki:
         silently, at the clone's first merge -- so lint notes the gap
         while it is one ``wiki config`` away from wired.
         """
-        attribute = self._git_read(['check-attr', 'merge', '--', WIKI_INDEX])
+        cmd = ['--no-optional-locks', 'check-attr', 'merge', '--', WIKI_INDEX]
+        attribute = self._git_read(cmd)
         if (attribute is None) or not attribute.endswith(': merge: wiki'):
             return
         if self._git_read(['config', '--get', 'merge.wiki.driver']):
@@ -6819,7 +6834,12 @@ def _is_offline() -> bool:
 
 
 def _encloses_wiki_error(nested: pathlib.Path) -> ValueError:
-    """Build the path-encloses-a-wiki error, naming the nested root."""
+    """Build the path-encloses-a-wiki error, naming the nested root.
+
+    Embedders tell this refusal from other failures by its opening phrase,
+    ``Path encloses the wiki at``, so a change to it is a change to their
+    checks.
+    """
     return ValueError(
         f'Path encloses the wiki at: {nested}; run the command from that declared root.'
     )

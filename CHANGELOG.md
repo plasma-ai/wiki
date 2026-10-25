@@ -7,6 +7,16 @@ may include breaking changes, each listed under a Breaking heading.
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-10-25
+
+### Fixed
+
+- `wiki update`, and its `--check` dry run, no longer rewrite the git index. The
+  check for files edited by hand read them with a working-tree `git diff`, which
+  saves refreshed file stat data under `index.lock` even with optional locks
+  off, so a `git add` or commit run in the same worktree at that moment could
+  fail on the lock. The check now reads `git status` without the lock.
+
 ## [1.8.0] - 2026-10-23
 
 ### Added
@@ -1017,4 +1027,5 @@ Initial release.
 [1.6.0]: https://github.com/plasma-ai/wiki/compare/v1.5.0...v1.6.0
 [1.7.0]: https://github.com/plasma-ai/wiki/compare/v1.6.0...v1.7.0
 [1.8.0]: https://github.com/plasma-ai/wiki/compare/v1.7.0...v1.8.0
-[unreleased]: https://github.com/plasma-ai/wiki/compare/v1.8.0...HEAD
+[1.9.0]: https://github.com/plasma-ai/wiki/compare/v1.8.0...v1.9.0
+[unreleased]: https://github.com/plasma-ai/wiki/compare/v1.9.0...HEAD
