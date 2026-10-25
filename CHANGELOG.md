@@ -7,6 +7,8 @@ may include breaking changes, each listed under a Breaking heading.
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-10-25
+
 ### Fixed
 
 - `wiki update`, and its `--check` dry run, no longer rewrite the git index. The
@@ -1025,4 +1027,5 @@ Initial release.
 [1.6.0]: https://github.com/plasma-ai/wiki/compare/v1.5.0...v1.6.0
 [1.7.0]: https://github.com/plasma-ai/wiki/compare/v1.6.0...v1.7.0
 [1.8.0]: https://github.com/plasma-ai/wiki/compare/v1.7.0...v1.8.0
-[unreleased]: https://github.com/plasma-ai/wiki/compare/v1.8.0...HEAD
+[1.9.0]: https://github.com/plasma-ai/wiki/compare/v1.8.0...v1.9.0
+[unreleased]: https://github.com/plasma-ai/wiki/compare/v1.9.0...HEAD
