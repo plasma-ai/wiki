@@ -46,8 +46,12 @@ Then run commands directly:
 wiki <command> ...
 ```
 
-Run `wiki --help` for a list of commands, and `wiki <command> --help` for full
-option descriptions.
+For a list of commands, or a command's full option descriptions, run:
+
+```bash
+wiki --help
+wiki <command> --help
+```
 
 ## Working at scale
 
