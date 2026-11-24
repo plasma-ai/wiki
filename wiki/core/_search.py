@@ -285,9 +285,21 @@ def _refresh(
             for path, (_, mtime_ns, size) in present.items()
             if indexed.get(path) != (mtime_ns, size)
         }
+        # find the rows to drop -- path is UNINDEXED, so a lookup scans every
+        # row: one scan serves every removed or changed page, and only a page
+        # with a signature can hold a row
+        stale = removed | (changed & set(indexed))
+        rowids = {}
+        if stale:
+            for rowid, path in connection.execute('SELECT rowid, path FROM notes_fts'):
+                if path in stale:
+                    rowids[path] = rowid
         # drop rows for removed pages
         for relpath in sorted(removed):
-            connection.execute('DELETE FROM notes_fts WHERE path = ?', (relpath,))
+            if relpath in rowids:
+                connection.execute(
+                    'DELETE FROM notes_fts WHERE rowid = ?', (rowids[relpath],)
+                )
             connection.execute('DELETE FROM files WHERE path = ?', (relpath,))
         # reindex changed pages in path order, so the rows and the read
         # notices come out the same on every run
@@ -313,10 +325,10 @@ def _refresh(
                 continue
             title, desc, headings, tags, body = _read_fields(path, text)
             folder = str(pathlib.PurePath(relpath).parent)
-            # path is UNINDEXED, so the delete scans every row: only a page
-            # with a signature can hold a row to drop
-            if relpath in indexed:
-                connection.execute('DELETE FROM notes_fts WHERE path = ?', (relpath,))
+            if relpath in rowids:
+                connection.execute(
+                    'DELETE FROM notes_fts WHERE rowid = ?', (rowids[relpath],)
+                )
             connection.execute(
                 'INSERT INTO files(path, mtime_ns, size) VALUES (?, ?, ?) '
                 'ON CONFLICT(path) DO UPDATE SET '
