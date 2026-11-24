@@ -14,11 +14,16 @@ from __future__ import annotations
 
 import json
 import pathlib
+import random
+import re
+from collections.abc import Iterator
+from typing import Optional
 
 import pytest
 
 from wiki.core.wiki import Wiki
 from wiki.util import git
+from wiki.util.glob import translate
 
 from ._helpers import (
     _capture_notices,
@@ -33,6 +38,7 @@ __all__ = [
     'test_exclude_policy_rejects_invalid_settings',
     'test_init_rejects_invalid_exclude_seed',
     'test_exclude_pattern_matching',
+    'test_exclusion_names_the_pattern_a_full_scan_names',
     'test_update_skips_excluded_subtree',
     'test_update_names_excluded_link_target',
     'test_update_symlink_precedence',
@@ -288,6 +294,40 @@ def test_exclude_pattern_matching(
             assert not (tmp_path / entry / '_index.md').exists(), entry
         else:
             assert f'[[{entry}|' not in rows, entry
+
+
+@pytest.mark.parametrize('source', ['corners', 'fuzz', 'class-fuzz'])
+def test_exclusion_names_the_pattern_a_full_scan_names(
+    tmp_path: pathlib.Path,
+    source: str,
+) -> None:
+    """A path is excluded by the pattern a scan of the whole list names.
+
+    The reference runs every pattern's translation, in list order,
+    against the path and each of its ancestors and names the first
+    that matches; the wiki names the same pattern, or none, for every
+    path. ``corners`` runs the hand-written patterns as one list, as
+    the list reversed, one at a time and as seeded sub-lists, over
+    names nested under each other; the fuzz sources draw seeded
+    patterns (free-form, then mostly classes) and paths built to match
+    them. Verdicts are read from the matcher itself: the paths hold
+    newlines, control characters, and names differing only in case or
+    normalization, which no one tree on disk can hold.
+    """
+    root = tmp_path.resolve()
+    _make_wiki(root)
+    rng = random.Random(_SEED)
+    if source == 'corners':
+        cases = _corner_cases(rng)
+    else:
+        cases = _fuzz_cases(rng, root, classes=(source == 'class-fuzz'))
+    for patterns, paths in cases:
+        _set_exclude_patterns(root, patterns)
+        wiki = Wiki(root)
+        policy = [(pattern, re.compile(translate(pattern))) for pattern in patterns]
+        for relative in paths:
+            named = wiki._excluded_by(root / relative)
+            assert named == _scan(policy, relative), (patterns, relative)
 
 
 # ------ update, prune, and scope behavior
@@ -1070,3 +1110,374 @@ def test_gitignored_link_target_names_the_cause(tmp_path: pathlib.Path) -> None:
     assert 'Pruned link:' in err
     index = tmp_path / 'data' / '_index.md'
     assert '[[data/report|report]]' not in index.read_text(encoding='utf-8')
+
+
+# ------ helpers
+
+# seeds the sub-lists, the random paths and the fuzz draws
+_SEED = 7
+# seeded sub-lists of the hand-written patterns, and the longest of them
+_CORNER_SUBLISTS = 30
+_CORNER_SUBLIST_SIZE = 12
+# random paths joined from the hand-written names, and their deepest nesting
+_CORNER_RANDOM_PATHS = 400
+_CORNER_DEPTH = 5
+# fuzz rounds, and the patterns drawn in each
+_FUZZ_ROUNDS = 40
+_FUZZ_ROUND_SIZE = 8
+# hand-written patterns, each one the settings accept
+_CORNER_PATTERNS = [
+    # trailing slash, anchoring and floating
+    'vendor/',
+    'vendor',
+    '/vendor',
+    '/vendor/',
+    'a/b/',
+    'a/b',
+    'foo.md',
+    '*.md',
+    'notes',
+    'x',
+    'b',
+    'c',
+    # '**' forms
+    '**',
+    '**/',
+    '/**',
+    '/**/',
+    '**/x',
+    'a/**',
+    'a/**/',
+    'a/**/b',
+    '**/**/x',
+    'a/**/**/b',
+    'a/**/**',
+    '**/a/**',
+    'a**b',
+    '***',
+    'a/***/b',
+    '**x',
+    'x**',
+    '/**/x',
+    'a/**/b/**/c',
+    '**/**',
+    '**/*',
+    '*/**',
+    '*',
+    '?',
+    '/*',
+    '*/*',
+    # classes and '/'
+    '[/]',
+    'a[!/]b',
+    '[a/b]',
+    '[.-0]',
+    'a[.-0]c',
+    '[!.-0]',
+    '[/-z]',
+    # negated, reversed and odd ranges
+    '[!a]',
+    '[!]a]',
+    '[!-]',
+    '[!]',
+    '[!z-a]',
+    '[z-a]',
+    '[z-ab]',
+    '[b-a-c]',
+    '[z-a!x]',
+    '[z-a!]',
+    '[z-a^x]',
+    '[z-a[x]',
+    '[a-c-e]',
+    '[--z]',
+    '[!--z]',
+    '[]-a]',
+    '[!]-a]',
+    '[a-]',
+    '[-a]',
+    '[!-a]',
+    '[a--b]',
+    '[a&&b]',
+    '[a~~b]',
+    '[a||b]',
+    '[^a]',
+    '[[:alpha:]]',
+    '[[a]',
+    '[a[b]',
+    '[!^]',
+    '[]',
+    '[]]',
+    '[]x]',
+    '[!]x]',
+    '[!]]',
+    '[ab]*',
+    'file?.[ch]',
+    '[é-ü]',
+    '[!é]',
+    '[😀-😂]',
+    '[\x00-\x1f]',
+    '[ -~]',
+    '[!\n]',
+    '[\n]',
+    # an unclosed '['
+    '[x',
+    'a[',
+    '[',
+    '[!',
+    'a[b/c]',
+    '[a/',
+    '[!a',
+    # braces and regex metacharacters, all literal
+    '{a,b}',
+    'a{1,2}',
+    '{}',
+    'a.b',
+    'a+b',
+    '(x)',
+    '$x',
+    '^x',
+    'a|b',
+    '#x',
+    'x y',
+    'foo ',
+    ' foo',
+    '<!-- a comment -->',
+    '.hidden',
+    'a.',
+    '-',
+    '~',
+    '&',
+    '|',
+    # non-ASCII names (composed and decomposed) and case
+    'é.md',
+    'e\u0301.md',
+    '€*',
+    '😀',
+    '?.md',
+    'Foo',
+    'ß',
+    'İ',
+    # newlines
+    'a\nb',
+    '*\n*',
+    'x\n',
+    '**/a\nb/**',
+    'a\nb/c',
+    '[\n-\r]',
+    # deep anchored literals, and patterns listed twice
+    'a/b/c',
+    '/a/b/c',
+    'vendor',
+    '*.md',
+    'deep/er/path/x',
+]
+# hand-written path segments
+_CORNER_NAMES = [
+    'a',
+    'b',
+    'c',
+    'x',
+    'z',
+    'vendor',
+    'notes',
+    'foo.md',
+    'Foo',
+    'foo',
+    'foo ',
+    ' foo',
+    'a.b',
+    'aXb',
+    'axxb',
+    'ab',
+    'a+b',
+    'aab',
+    '(x)',
+    '$x',
+    '^x',
+    'a|b',
+    '#x',
+    'x y',
+    '{a,b}',
+    'a{1,2}',
+    '{}',
+    'a1',
+    '[x',
+    'a[',
+    '[',
+    '[!',
+    '[a',
+    '[!a',
+    '!',
+    '^',
+    ']',
+    '-',
+    '..x',
+    '.hidden',
+    'a.',
+    '&',
+    '~',
+    '|',
+    '\\',
+    'a\\b',
+    '\\d',
+    'é.md',
+    'e\u0301.md',
+    'ë',
+    'é',
+    'e\u0301',
+    '€',
+    '€x',
+    '😀',
+    '😁',
+    '😃',
+    'ß',
+    'İ',
+    'i',
+    'a\nb',
+    '\n',
+    'x\n',
+    '\nx',
+    'a\rb',
+    '\x00',
+    '\x1f',
+    ' ',
+    'q',
+    'file1.c',
+    'file1.h',
+    'file12.c',
+    'temp1',
+    'build',
+    'drafts',
+    'cache',
+    '<!-- a comment -->',
+    'x.md',
+    'notes.md',
+    'deep',
+    'er',
+    'path',
+    '0',
+    ':',
+    '[]',
+    '[]]',
+    'x]',
+    '***',
+    'a**b',
+    '*',
+]
+# folders each hand-written name is nested under, and nests
+_CORNER_PARENTS = ['a', 'x', 'vendor', 'a\nb', 'é', 'a/b', 'deep/er']
+# characters of a free-form fuzzed pattern, the weightier ones repeated
+_FUZZ_PATTERN_CHARS = 'ab/*?[]!-^&~|{},.\n é€😀#<>$()+:zA' + 'ab*[]/-!'
+# characters of a fuzzed class body, the weightier ones repeated
+_FUZZ_CLASS_CHARS = '!-]^az&~|[é/0.!-]' + '--!]za'
+# characters of a fuzzed path segment, the weightier ones repeated
+_FUZZ_NAME_CHARS = 'ab-z!^&]\n[ é€😀#.{},:A~|\\*?' + 'abab'
+# characters a fuzzed path puts where a pattern holds a wildcard
+_FUZZ_FILL_CHARS = ['', 'a', 'z', '!', '\n', 'é']
+# characters a fuzzed path puts where a pattern holds a class
+_FUZZ_MEMBER_CHARS = ['a', 'b', '-', '!', 'z', '^']
+
+
+def _scan(policy: list[tuple[str, re.Pattern[str]]], relative: str) -> Optional[str]:
+    """Return the first pattern, in list order, matching a path or an ancestor."""
+    candidates = [relative]
+    while '/' in candidates[-1]:
+        candidates.append(candidates[-1].rpartition('/')[0])
+    for pattern, compiled in policy:
+        if any(compiled.match(candidate) for candidate in candidates):
+            return pattern
+    return None
+
+
+def _walkable(paths: set[str]) -> list[str]:
+    """Return the ``paths`` a walk could yield, sorted.
+
+    A walked path has no empty segment, and ``pathlib`` drops a ``.``
+    segment, so the wiki would judge a different path than the reference.
+    """
+    return sorted(path for path in paths if not ({'', '.'} & set(path.split('/'))))
+
+
+def _corner_cases(rng: random.Random) -> Iterator[tuple[list[str], list[str]]]:
+    """Yield the hand-written policies, each with the hand-written paths."""
+    paths = set(_CORNER_NAMES)
+    for name in _CORNER_NAMES:
+        for parent in _CORNER_PARENTS:
+            paths.add(f'{parent}/{name}')
+            paths.add(f'{name}/{parent}')
+    for _ in range(_CORNER_RANDOM_PATHS):
+        depth = rng.randint(1, _CORNER_DEPTH)
+        paths.add('/'.join(rng.choice(_CORNER_NAMES) for _ in range(depth)))
+    walkable = _walkable(paths)
+    # the whole list both ways round, so each pattern shadows and is shadowed
+    yield _CORNER_PATTERNS, walkable
+    yield _CORNER_PATTERNS[::-1], walkable
+    # each pattern alone, so every pattern's own verdict is exercised
+    for pattern in dict.fromkeys(_CORNER_PATTERNS):
+        yield [pattern], walkable
+    for _ in range(_CORNER_SUBLISTS):
+        size = rng.randint(1, _CORNER_SUBLIST_SIZE)
+        yield rng.sample(_CORNER_PATTERNS, size), walkable
+
+
+def _fuzz_cases(
+    rng: random.Random,
+    root: pathlib.Path,
+    classes: bool,
+) -> Iterator[tuple[list[str], list[str]]]:
+    """Yield fuzzed policies, each with paths built from its patterns.
+
+    Each round draws patterns, keeps the ones the settings accept, and
+    yields them as one list and one at a time. With ``classes``, four
+    draws in five wrap a class body, and half the path segments are
+    single characters a class is likely to hold.
+    """
+    for _ in range(_FUZZ_ROUNDS):
+        drawn = [_fuzz_pattern(rng, classes) for _ in range(_FUZZ_ROUND_SIZE)]
+        patterns = [pattern for pattern in drawn if _accepted(root, pattern)]
+        paths = set()
+        for pattern in patterns:
+            path = _fuzz_match(rng, pattern)
+            paths.update([path, f'a/{path}', f'{path}/b'])
+        for _ in range(_FUZZ_ROUND_SIZE):
+            depth = rng.randint(1, 4)
+            paths.add('/'.join(_fuzz_name(rng, classes) for _ in range(depth)))
+        walkable = _walkable(paths)
+        yield patterns, walkable
+        for pattern in patterns:
+            yield [pattern], walkable
+
+
+def _fuzz_pattern(rng: random.Random, classes: bool) -> str:
+    """Draw one pattern: free-form, or wrapped around a class body."""
+    if classes and (rng.random() < 0.8):
+        body = ''.join(rng.choice(_FUZZ_CLASS_CHARS) for _ in range(rng.randint(0, 6)))
+        head = rng.choice(['', 'a', '*'])
+        close = rng.choice([']', ']', ']x', ''])
+        tail = rng.choice(['', '*', '/b'])
+        return f'{head}[{body}{close}{tail}'
+    return ''.join(rng.choice(_FUZZ_PATTERN_CHARS) for _ in range(rng.randint(1, 10)))
+
+
+def _fuzz_name(rng: random.Random, classes: bool) -> str:
+    """Draw one path segment."""
+    if classes and (rng.random() < 0.5):
+        return rng.choice(_FUZZ_CLASS_CHARS + 'bcy`{1~+,é\n')
+    return ''.join(rng.choice(_FUZZ_NAME_CHARS) for _ in range(rng.randint(1, 4)))
+
+
+def _fuzz_match(rng: random.Random, pattern: str) -> str:
+    """Return a path ``pattern`` is likely to match: its wildcards filled in."""
+    path = pattern.strip('/').replace('**', rng.choice(['a', 'a/b', 'é']))
+    path = re.sub(r'[*?]', lambda _: rng.choice(_FUZZ_FILL_CHARS), path)
+    return re.sub(r'\[[^\]/]*\]', lambda _: rng.choice(_FUZZ_MEMBER_CHARS), path)
+
+
+def _accepted(root: pathlib.Path, pattern: str) -> bool:
+    """Return ``True`` if the settings accept ``pattern`` as a policy."""
+    _set_exclude_patterns(root, [pattern])
+    try:
+        Wiki(root)._excluded_by(root / 'x')
+    except ValueError:
+        return False
+    return True
