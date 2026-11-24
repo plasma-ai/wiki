@@ -100,10 +100,10 @@ def literal(pattern: str, /) -> Optional[tuple[str, bool]]:
     equality and a caller can key a lookup on it instead of running the
     regex: an anchored pattern matches the candidate equal to its text,
     and a floating one the candidate whose last segment is its text, at
-    the root or below a parent path that holds no newline (the directory
-    run ``.+`` never matches one). The text is the pattern without its
-    one trailing ``/`` and its leading ``/``. Returns ``None`` for a
-    pattern holding a wildcard.
+    the root or below a non-empty parent path that holds no newline (the
+    directory run ``.+`` is never empty and never spans one). The text
+    is the pattern without its one trailing ``/`` and its leading ``/``.
+    Returns ``None`` for a pattern holding a wildcard.
 
     >>> literal('/scratch.md')
     ('scratch.md', False)
