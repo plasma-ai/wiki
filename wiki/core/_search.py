@@ -160,26 +160,35 @@ def _rank(
     connection = _open(root)
     try:
         _refresh(connection, root, files, on_unreadable=on_unreadable)
-        # select weighted-BM25-ranked rows with a snippet of the body
+        # rank the matching rows by weighted BM25, selecting their rowids
+        # alone: SQLite evaluates a statement's result columns for each row
+        # that enters the best set as it scans, so a snippet selected here is
+        # built for the rows stored first on every query, whatever their size
         # (only trusted module constants interpolate; values bind via ?)
+        ranked = 'SELECT rowid FROM notes_fts WHERE notes_fts MATCH ?'
+        parameters: list[object] = [expression, expression]
+        # scope to the subtree: the folder itself or any folder below it
+        if folder != root:
+            relpath = _relative(folder, root)
+            prefix_path = relpath.rstrip('/') + '/'
+            ranked += ' AND (folder = ? OR substr(folder, 1, ?) = ?)'
+            parameters.extend((relpath, len(prefix_path), prefix_path))
+        # order by rank, then path -- tied rows otherwise follow the order the
+        # index stored them in, so a limit cut varies with its refresh history
+        order = f' ORDER BY bm25(notes_fts, {_BM25_WEIGHTS}), path'
+        ranked += f'{order} LIMIT ?'
+        parameters.append(limit)
+        # select the ranked rows with a snippet of the body, in the same
+        # order; the unary + keeps the rowid test a filter over one match
+        # scan, where a rowid lookup would run the match once per ranked row
         sql = (
             'SELECT path, '
             f"snippet(notes_fts, 4, '{_SNIPPET_START}', '{_SNIPPET_END}', "
             f"'{_SNIPPET_ELLIPSIS}', {_SNIPPET_TOKENS}), "
             f'bm25(notes_fts, {_BM25_WEIGHTS}) '
-            'FROM notes_fts WHERE notes_fts MATCH ?'
+            f'FROM notes_fts WHERE notes_fts MATCH ? AND +rowid IN ({ranked})'
+            f'{order}'
         )
-        parameters: list[object] = [expression]
-        # scope to the subtree: the folder itself or any folder below it
-        if folder != root:
-            relpath = _relative(folder, root)
-            prefix_path = relpath.rstrip('/') + '/'
-            sql += ' AND (folder = ? OR substr(folder, 1, ?) = ?)'
-            parameters.extend((relpath, len(prefix_path), prefix_path))
-        # order by rank, then path -- tied rows otherwise follow the order the
-        # index stored them in, so a limit cut varies with its refresh history
-        sql += f' ORDER BY bm25(notes_fts, {_BM25_WEIGHTS}), path LIMIT ?'
-        parameters.append(limit)
         # execute the ranked query
         try:
             return connection.execute(sql, parameters).fetchall()
