@@ -758,6 +758,14 @@ class Wiki:
         # the personal global counts; each path is probed as ./<path>, read
         # literally, as the fence probes
         payload = b''.join(os.fsencode(f'./{entry}') + b'\0' for entry in candidates)
+        # that probe scans the whole index once per path, so a pattern-pure
+        # pass narrows the payload first to the paths some pattern ignores,
+        # which git echoes back in the payload's framing; no hit, no note
+        cmd = ['--no-optional-locks', 'check-ignore', '-z', '--stdin', '--no-index']
+        result = wiki.util.git._git(cmd, cwd=self._root, input=payload, raw=True)
+        if (result is None) or (result.returncode != 0):
+            return
+        payload = result.stdout
         cmd = ['--no-optional-locks', 'check-ignore', '-z', '-v', '--stdin']
         result = wiki.util.git._git(cmd, cwd=self._root, input=payload, raw=True)
         if (result is None) or (result.returncode not in (0, 1)):

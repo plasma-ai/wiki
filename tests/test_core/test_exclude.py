@@ -46,6 +46,7 @@ __all__ = [
     'test_unavailable_fence_is_narrated_inside_a_repository',
     'test_personally_ignored_row_draws_a_note',
     'test_reincluded_row_draws_no_note',
+    'test_untrackable_notes_spare_tracked_and_reincluded_paths',
     'test_a_leading_colon_reads_as_a_name_in_every_git_probe',
     'test_gitignore_fence_reaches_a_nested_wiki_root',
     'test_gitignore_fence_honors_a_discovery_ceiling',
@@ -744,6 +745,83 @@ def test_reincluded_row_draws_no_note(tmp_path: pathlib.Path) -> None:
     notices = _capture_notices(wiki)
     assert wiki.lint() == []
     assert not any(type(event).__name__ == 'PathUntrackableEvent' for event in notices)
+
+
+@_needs_git
+def test_untrackable_notes_spare_tracked_and_reincluded_paths(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Each note is this machine's verdict on one indexed path.
+
+    The check asks what this machine's ``git add`` would refuse, under
+    its whole ignore stack: an untracked page a personal pattern
+    ignores is named, as are the index and the pages of a folder one
+    ignores. A file the repository already tracks is safe whatever
+    ignores it, and a path a later negation re-includes -- the personal
+    file's or a committed allowlist's -- is one git accepts, so neither
+    is named. Git reads a probed path as a pathspec, so an ignored name
+    holding glob characters is judged tracked when a tracked name
+    matches it, and is named only when none does.
+    """
+    root = tmp_path / 'memory'
+    _make_wiki(
+        root,
+        folders={
+            'notes': ['keep', 'kept.draft'],
+            'scratch': ['pinned'],
+            'globs': ['qa', 'starry'],
+            'allow': ['tracked'],
+        },
+    )
+    _git_repo(tmp_path)
+    # a personal ignore file, in force on this machine only
+    excludes = tmp_path.parent / f'{tmp_path.name}_personal_ignore'
+    excludes.write_text(
+        '*.draft.md\n!final.draft.md\nscratch/\ndrafts/\nq*.md\nstar*.md\nlone*\n',
+        encoding='utf-8',
+    )
+    _git(tmp_path, 'config', 'core.excludesFile', str(excludes))
+    # a committed allowlist: ignore the folder's files, re-include its pages
+    (root / 'allow' / '.gitignore').write_text('*\n!*.md\n', encoding='utf-8')
+    # everything so far is tracked, the personally ignored files included
+    _git(tmp_path, 'add', '-f', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+    # the pages no commit holds
+    (root / 'drafts').mkdir()
+    untracked = [
+        'notes/plan.draft.md',
+        'notes/final.draft.md',
+        'scratch/idea.md',
+        'drafts/idea.md',
+        'allow/fresh.md',
+        'globs/q?.md',
+        'globs/star*.md',
+        'globs/lone?.md',
+        'globs/lone[1].md',
+    ]
+    for relpath in untracked:
+        (root / relpath).write_text('# page\n\nBody.\n', encoding='utf-8')
+
+    wiki = Wiki(root)
+    notices = _capture_notices(wiki)
+    wiki.lint()
+    flagged = [
+        (event.path, event.pattern)
+        for event in notices
+        if type(event).__name__ == 'PathUntrackableEvent'
+    ]
+    assert flagged == [
+        # an ignored folder: the index it would gain, and its page
+        ('drafts/_index.md', 'drafts/'),
+        ('drafts/idea.md', 'drafts/'),
+        # glob characters that match no tracked name
+        ('globs/lone?.md', 'lone*'),
+        ('globs/lone[1].md', 'lone*'),
+        # an untracked page beside a tracked one the same pattern ignores
+        ('notes/plan.draft.md', '*.draft.md'),
+        # an untracked page in a tracked folder the personal file ignores
+        ('scratch/idea.md', 'scratch/'),
+    ]
 
 
 @_needs_git
