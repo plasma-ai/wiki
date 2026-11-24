@@ -403,20 +403,35 @@ def test_search_notices_unreadable_pages_in_path_order(tmp_path: pathlib.Path) -
     """Several failed refresh reads are narrated in path order on every run.
 
     The notices are output a reader sees, so their order follows the
-    page paths, never the process hash seed.
+    page paths, never the process hash seed. The order is that of the
+    relative paths compared as strings, the order equal scores tie by:
+    ``core-b/`` sorts ahead of ``core/``, though a folder-by-folder
+    walk reaches ``core/`` first.
     """
-    wiki = _make_wiki(tmp_path, folders={'core': []})
-    stems = ['foxtrot', 'delta', 'alpha', 'echo', 'charlie', 'bravo']
-    for stem in stems:
+    wiki = _make_wiki(tmp_path, folders={'core': [], 'core-b': []})
+    pages = [
+        'core/foxtrot.md',
+        'core-b/delta.md',
+        'core/alpha.md',
+        'core-b/echo.md',
+        'core/charlie.md',
+        'core-b/bravo.md',
+    ]
+    for relpath in pages:
         # bytes no UTF-8 read decodes
-        (tmp_path / 'core' / f'{stem}.md').write_bytes(b'\xff\xfe')
+        (tmp_path / relpath).write_bytes(b'\xff\xfe')
     notices = _capture_notices(wiki)
 
     assert wiki.search('anytoken') == []
     skips = [event for event in notices if type(event).__name__ == 'ReadSkipEvent']
-    assert [event.path for event in skips] == sorted(
-        f'core/{stem}.md' for stem in stems
-    )
+    assert [event.path for event in skips] == [
+        'core-b/bravo.md',
+        'core-b/delta.md',
+        'core-b/echo.md',
+        'core/alpha.md',
+        'core/charlie.md',
+        'core/foxtrot.md',
+    ]
 
 
 def test_search_retries_indexed_pages_after_a_transient_read_failure(
