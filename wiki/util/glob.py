@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Optional
 
 __all__ = []
 
@@ -89,6 +90,38 @@ def translate(pattern: str, /) -> str:
             result += _translate_segment(segment)
             pending_sep = True
     return rf'\A{result}\Z'
+
+
+def literal(pattern: str, /) -> Optional[tuple[str, bool]]:
+    """Return a wildcard-free pattern's text and whether it floats.
+
+    A pattern holding no ``*``, ``?``, or ``[`` translates
+    (:func:`translate`) to its own escaped text, so it matches by string
+    equality and a caller can key a lookup on it instead of running the
+    regex: an anchored pattern matches the candidate equal to its text,
+    and a floating one the candidate whose last segment is its text, at
+    the root or below a parent path that holds no newline (the directory
+    run ``.+`` never matches one). The text is the pattern without its
+    one trailing ``/`` and its leading ``/``. Returns ``None`` for a
+    pattern holding a wildcard.
+
+    >>> literal('/scratch.md')
+    ('scratch.md', False)
+    >>> literal('a/b/')
+    ('a/b', False)
+    >>> literal('vendor/')
+    ('vendor', True)
+    >>> literal('*.tmp') is None
+    True
+    """
+    if any(char in pattern for char in '*?['):
+        return None
+    # strip the trailing and leading '/' and settle anchoring as translate does
+    if pattern.endswith('/'):
+        pattern = pattern[:-1]
+    if pattern.startswith('/'):
+        return pattern[1:], False
+    return pattern, '/' not in pattern
 
 
 def _translate_segment(segment: str) -> str:
