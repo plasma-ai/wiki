@@ -142,8 +142,9 @@ __all__ = [
     'test_wiki_now_fixes_every_stamp',
     'test_wiki_now_stamps_the_trust_record',
     'test_blank_wiki_now_leaves_the_clock_running',
-    'test_invalid_wiki_now_fails_every_command',
+    'test_invalid_wiki_now_fails_a_command_before_it_acts',
     'test_wiki_now_is_read_when_a_command_runs',
+    'test_merge_driver_never_reads_wiki_now',
 ]
 
 # a hook ordering the ref category ahead of guide
@@ -198,6 +199,12 @@ _NOTING_HOOK = (
 # the line a command opens stderr with while WIKI_NOW fixes the clock
 _PINNED_CLOCK_NOTICE = (
     'WIKI_NOW is set: timestamps use its fixed instant, not the clock.\n'
+)
+
+# the one error an invalid WIKI_NOW gets, formatted with the value's repr
+_PINNED_CLOCK_ERROR = (
+    'Error: WIKI_NOW must be an RFC 3339 instant in the UTC years 1001 to'
+    ' 9998, like 2026-01-02T03:04:05Z, got {now}.\n'
 )
 
 pytestmark = pytest.mark.skipif(
@@ -4456,8 +4463,28 @@ def test_root_resolution_survives_a_symlink_loop_home(tmp_path: pathlib.Path) ->
             {'format': '%Y-%m-%dT%H:%M:%S.%fZ'},
             '2026-01-02T03:04:05.250000Z',
         ),
+        (' \x1f2026-01-02T03:04:05Z\n', {}, '2026-01-02T03:04:05Z'),
+        (
+            '1001-01-01T00:00:00Z',
+            {'timezone': 'Etc/GMT+12'},
+            '1000-12-31T12:00:00-1200',
+        ),
+        (
+            '9998-12-31T23:59:59Z',
+            {'timezone': 'Etc/GMT-14'},
+            '9999-01-01T13:59:59+1400',
+        ),
     ],
-    ids=['utc', 'offset', 'configured-zone', 'authored-format', 'fraction'],
+    ids=[
+        'utc',
+        'offset',
+        'configured-zone',
+        'authored-format',
+        'fraction',
+        'padded',
+        'first-year',
+        'last-year',
+    ],
 )
 def test_wiki_now_fixes_every_stamp(
     tmp_path: pathlib.Path,
@@ -4471,7 +4498,10 @@ def test_wiki_now_fixes_every_stamp(
     The seam replaces the clock, not the rendering: the instant passes
     through the wiki's own zone and format, so two runs given one value
     write the same bytes whenever they run. Each command says so in a
-    fixed line that opens its stderr.
+    fixed line that opens its stderr. Whitespace around the value is
+    stripped as Python strips it, the ASCII separators included, and
+    the first and last years the seam takes render in the zones farthest
+    from UTC.
     """
     monkeypatch.setenv(WIKI_NOW, now)
     root = tmp_path / 'wiki'
@@ -4571,6 +4601,8 @@ def test_blank_wiki_now_leaves_the_clock_running(
         '2026-01-02T03:04:05,5Z',
         '2026-02-30T03:04:05Z',
         '0001-01-01T00:00:00+01:00',
+        '1000-12-31T23:59:59Z',
+        '9999-01-01T00:00:00+00:00',
     ],
     ids=[
         'word',
@@ -4587,9 +4619,11 @@ def test_blank_wiki_now_leaves_the_clock_running(
         'comma-fraction',
         'no-such-day',
         'before-year-one',
+        'before-first-year',
+        'after-last-year',
     ],
 )
-def test_invalid_wiki_now_fails_every_command(
+def test_invalid_wiki_now_fails_a_command_before_it_acts(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
     now: str,
@@ -4598,19 +4632,18 @@ def test_invalid_wiki_now_fails_every_command(
 
     The value takes one form -- an RFC 3339 date-time with a capital
     ``T`` and ``Z``, no leap second, and at most six fraction digits --
-    so nothing reads it by a looser rule than the next reader's. A
-    command that never reads the clock refuses alike, and a refused
-    update writes nothing.
+    so nothing reads it by a looser rule than the next reader's. Its
+    UTC year lies in 1001 to 9998, so no zone renders it outside the
+    calendar or below the four digits ``%Y`` pads to. A command that
+    never reads the clock refuses alike, and a refused update writes
+    nothing.
     """
     root = tmp_path / 'wiki'
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     page = root / 'core' / 'design.md'
     _write(page, 'Body.\n')
     monkeypatch.setenv(WIKI_NOW, now)
-    error = (
-        f'Error: WIKI_NOW must be an RFC 3339 instant like'
-        f' 2026-01-02T03:04:05Z, got {now!r}.\n'
-    )
+    error = _PINNED_CLOCK_ERROR.format(now=repr(now))
     for args in (('update',), ('map',)):
         result = _wiki(root, *args, '--path', str(root))
         assert result.returncode == 2, (args, result.stdout + result.stderr)
@@ -4623,19 +4656,88 @@ def test_wiki_now_is_read_when_a_command_runs(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Help, the version and a usage error never read ``WIKI_NOW``.
+    """``WIKI_NOW`` is read once a command line parses, as its command starts.
 
-    The seam belongs to a command's run: what typer answers before any
-    command runs prints no notice and judges no value.
+    What typer answers while it parses -- help, the version, an unknown
+    option, a missing argument -- prints no notice and judges no value.
+    A usage error a command raises over its own options comes after the
+    read: an invalid value is the error reported in its place, and a
+    valid value's notice precedes it.
     """
     monkeypatch.setenv(WIKI_NOW, 'now')
     for args in (('--version',), ('--help',), ('lint', '--help')):
         result = _wiki(tmp_path, *args)
         assert result.returncode == 0, (args, result.stdout + result.stderr)
         assert result.stderr == ''
-    usage = _wiki(tmp_path, 'lint', '--no-such-option')
+    for args in (('lint', '--no-such-option'), ('read',)):
+        usage = _wiki(tmp_path, *args)
+        assert usage.returncode == 2, (args, usage.stdout + usage.stderr)
+        assert 'WIKI_NOW' not in usage.stderr
+    # lint itself refuses the pair of options, after the wrapper's read
+    args = ('lint', '--full', '--count')
+    refused = _wiki(tmp_path, *args)
+    assert refused.returncode == 2
+    assert refused.stderr == _PINNED_CLOCK_ERROR.format(now=repr('now'))
+    monkeypatch.setenv(WIKI_NOW, '2026-01-02T03:04:05Z')
+    usage = _wiki(tmp_path, *args)
     assert usage.returncode == 2
-    assert 'WIKI_NOW' not in usage.stderr
+    assert usage.stderr.startswith(f'{_PINNED_CLOCK_NOTICE}Usage: wiki lint')
+    assert '--full and --count are mutually exclusive.' in usage.stderr
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
+    argnames='now',
+    argvalues=[None, '2026-01-02T03:04:05Z', 'now'],
+    ids=['unset', 'valid', 'invalid'],
+)
+def test_merge_driver_never_reads_wiki_now(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    now: Optional[str],
+) -> None:
+    """A merge comes out the same whatever ``WIKI_NOW`` holds.
+
+    Git reads the driver's exit code as the merge outcome, and the driver
+    reads no clock: a value that fails every other command leaves a clean
+    merge clean, and a valid one adds no line to git's output.
+    """
+    root = tmp_path / 'wiki'
+    # a real repo whose wiki has the driver registered by init
+    _git_repo(tmp_path)
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    page = root / 'notes.md'
+    base = (
+        '---\nname: notes\ndesc: Notes.\nupdated: 2026-01-01T00:00:00Z\n---\n'
+        '\n# notes\n\nFirst line.\n\nMiddle line.\n\nLast line.\n'
+    )
+    _write(page, base)
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # each branch edits its own line and restamps the page, so the merge is
+    # clean only when the driver settles the stamps
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    theirs = base.replace('2026-01-01T00:00:00Z', '2026-01-03T00:00:00Z')
+    _write(page, theirs.replace('Last line.', 'Their last line.'))
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    ours = base.replace('2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z')
+    _write(page, ours.replace('First line.', 'Our first line.'))
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
+
+    if now is not None:
+        monkeypatch.setenv(WIKI_NOW, now)
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    assert 'WIKI_NOW' not in merge.stdout + merge.stderr
+    assert _git(tmp_path, 'status', '--porcelain').stdout == ''
+    merged = page.read_text(encoding='utf-8')
+    assert re.findall(r'^updated:.*$', merged, re.M) == [
+        'updated: 2026-01-03T00:00:00Z'
+    ]
+    assert 'Our first line.' in merged
+    assert 'Their last line.' in merged
 
 
 # ------ helpers

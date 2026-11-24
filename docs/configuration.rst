@@ -572,13 +572,18 @@ Environment variables
    policy, so two runs given one value write the same bytes whenever they
    run; ``wiki trust`` records it too. The value takes one form — a capital
    ``T``, an offset of ``Z`` or ``±HH:MM``, no leap second, at most six
-   fraction digits — with surrounding whitespace ignored. Any other value
-   fails every command with exit 2 before it does anything, and an empty
-   value counts as unset. While it is set, each command opens stderr with
-   the line ``WIKI_NOW is set: timestamps use its fixed instant, not the
-   clock.`` — if that line appears outside a test, unset the variable. A
-   ``.wiki/wiki.py`` hook that overrides ``_utc_now`` keeps its own time
-   source.
+   fraction digits, a UTC year from 1001 to 9998 — with surrounding
+   whitespace ignored, and an empty value counts as unset. A command reads
+   the variable as it starts, once its command line has parsed. A value of
+   any other form fails the command with exit 2 before it does anything,
+   whether or not it reads the clock and ahead of its own option checks. While
+   the variable is set, each command opens stderr with the line ``WIKI_NOW
+   is set: timestamps use its fixed instant, not the clock.`` — if that line
+   appears outside a test, unset the variable. Help, ``--version`` and a
+   command line that does not parse never read the variable. Neither does
+   the git merge driver: its exit code is the merge's outcome, and it reads
+   no clock. A ``.wiki/wiki.py`` hook that overrides ``_utc_now`` keeps its
+   own time source.
 
 Other files under ``.wiki/``
 ----------------------------

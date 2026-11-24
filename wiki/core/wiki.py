@@ -62,6 +62,11 @@ _PINNED_INSTANT = re.compile(
     r'(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])'
 )
 
+# the UTC years a WIKI_NOW instant may fall in: a zone shifts an instant by
+# under a day, so every rendering stays within the years 1000 to 9999, where
+# the calendar holds it and %Y is four digits on every platform
+_PINNED_YEARS = (1001, 9998)
+
 # soft ceiling for a folded frontmatter desc: past it lint notes the page,
 # since every map row and parent index link reproduces the whole desc
 _DESC_NOTE_CHARS = 500
@@ -6850,15 +6855,16 @@ def _pinned_now() -> Optional[dt.datetime]:
         ValueError: If ``WIKI_NOW`` is set to anything other than an RFC
             3339 date-time (capital ``T`` and ``Z``, no leap second, at
             most six fraction digits) that names a UTC instant in the
-            years 1 to 9999.
+            years 1001 to 9998.
 
     """
     value = os.environ.get(WIKI_NOW, '').strip()
     if not value:
         return None
+    first, last = _PINNED_YEARS
     message = (
-        f'{WIKI_NOW} must be an RFC 3339 instant like 2026-01-02T03:04:05Z,'
-        f' got {value!r}.'
+        f'{WIKI_NOW} must be an RFC 3339 instant in the UTC years {first} to'
+        f' {last}, like 2026-01-02T03:04:05Z, got {value!r}.'
     )
     # NOTE: fromisoformat reads more forms than this one, and which ones turns
     # on the Python version (24:00:00, a 60-minute offset, a seventh fraction
@@ -6866,9 +6872,12 @@ def _pinned_now() -> Optional[dt.datetime]:
     if _PINNED_INSTANT.fullmatch(value) is None:
         raise ValueError(message)
     try:
-        return dt.datetime.fromisoformat(value).astimezone(dt.UTC)
+        pinned = dt.datetime.fromisoformat(value).astimezone(dt.UTC)
     except (ValueError, OverflowError):
         raise ValueError(message) from None
+    if not (first <= pinned.year <= last):
+        raise ValueError(message)
+    return pinned
 
 
 def _now(zone: dt.tzinfo) -> dt.datetime:

@@ -88,7 +88,8 @@ def command(
     the command's own nonzero outcome and a script gating on one can
     never read a failed run as the other. A command run under a set
     ``WIKI_NOW`` opens stderr with one fixed line; an invalid value is a
-    command error, raised before the command does anything.
+    command error, raised before the command does anything. A private
+    command never reads the variable.
     """
 
     def decorator(f: Callable, /) -> Callable:
@@ -98,7 +99,10 @@ def command(
         @functools.wraps(f)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
-                if _pinned_now() is not None:
+                # NOTE: a private command's exit code is its caller's protocol
+                # (git reads the merge driver's as the merge outcome), so a
+                # WIKI_NOW the command never reads must not fail it
+                if (not private) and (_pinned_now() is not None):
                     typer.echo(_PINNED_CLOCK_NOTICE, err=True)
                 return f(*args, **kwargs)
             except (typer.Exit, typer.Abort, typer.BadParameter):
