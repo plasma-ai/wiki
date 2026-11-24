@@ -47,6 +47,8 @@ __all__ = [
     'test_personally_ignored_row_draws_a_note',
     'test_reincluded_row_draws_no_note',
     'test_untrackable_notes_spare_tracked_and_reincluded_paths',
+    'test_untrackable_notes_stop_at_an_ignored_path_inside_a_submodule',
+    'test_untrackable_notes_read_ignore_files_from_disk',
     'test_a_leading_colon_reads_as_a_name_in_every_git_probe',
     'test_gitignore_fence_reaches_a_nested_wiki_root',
     'test_gitignore_fence_honors_a_discovery_ceiling',
@@ -822,6 +824,111 @@ def test_untrackable_notes_spare_tracked_and_reincluded_paths(
         # an untracked page in a tracked folder the personal file ignores
         ('scratch/idea.md', 'scratch/'),
     ]
+
+
+@_needs_git
+@pytest.mark.parametrize(
+    argnames=('ignored_inside', 'scoped', 'flagged'),
+    argvalues=[
+        (False, False, ['notes/plan.draft.md']),
+        (False, True, ['notes/plan.draft.md']),
+        (True, False, []),
+        (True, True, ['notes/plan.draft.md']),
+    ],
+    ids=[
+        'whole-wiki',
+        'scope-outside',
+        'ignored-inside-whole-wiki',
+        'ignored-inside-scope-outside',
+    ],
+)
+def test_untrackable_notes_stop_at_an_ignored_path_inside_a_submodule(
+    tmp_path: pathlib.Path,
+    ignored_inside: bool,
+    scoped: bool,
+    flagged: list[str],
+) -> None:
+    """A submodule silences the check only through an ignored path inside it.
+
+    Git refuses an index-aware probe of a path inside a submodule, and
+    a refused batch draws no note. Only the paths some pattern ignores
+    are probed that way, so a wiki holding a submodule still names the
+    ignored page outside it. An ignored page inside the submodule joins
+    that batch: git refuses it, and no path of the walk is named, while
+    a scope that leaves the submodule out is judged on its own paths.
+    """
+    _make_wiki(tmp_path, folders={'notes': ['keep']})
+    _git_repo(tmp_path)
+    # a personal ignore file, in force on this machine only
+    excludes = tmp_path.parent / f'{tmp_path.name}_personal_ignore'
+    excludes.write_text('*.draft.md\n', encoding='utf-8')
+    _git(tmp_path, 'config', 'core.excludesFile', str(excludes))
+    # a repository of its own below the wiki, committed as a submodule
+    module = tmp_path / 'module'
+    module.mkdir()
+    _git_repo(module)
+    (module / 'inner.md').write_text('# inner\n\nBody.\n', encoding='utf-8')
+    _git(module, 'add', '-A')
+    _git(module, 'commit', '-q', '-m', 'module')
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+    # the pages no commit holds
+    untracked = [tmp_path / 'notes' / 'plan.draft.md']
+    if ignored_inside:
+        untracked.append(module / 'inside.draft.md')
+    for path in untracked:
+        path.write_text('# page\n\nBody.\n', encoding='utf-8')
+
+    # lint the whole wiki, or the one folder outside the submodule
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+    wiki.lint('notes' if scoped else None)
+    paths = [
+        event.path
+        for event in notices
+        if type(event).__name__ == 'PathUntrackableEvent'
+    ]
+    assert paths == flagged
+
+
+@_needs_git
+def test_untrackable_notes_read_ignore_files_from_disk(tmp_path: pathlib.Path) -> None:
+    """An ignore file the index alone holds names no path.
+
+    A sparse checkout can keep a tracked ``.gitignore`` out of the
+    working tree. The fence reads ignore files from disk, so a page
+    that file would ignore is indexed like any other, and the check
+    narrows its paths by the same files: the page draws no note, while
+    a page the personal file ignores is still named.
+    """
+    _make_wiki(tmp_path, folders={'notes': ['keep']})
+    _git_repo(tmp_path)
+    # a personal ignore file, in force on this machine only
+    excludes = tmp_path.parent / f'{tmp_path.name}_personal_ignore'
+    excludes.write_text('*.draft.md\n', encoding='utf-8')
+    _git(tmp_path, 'config', 'core.excludesFile', str(excludes))
+    # a committed folder ignore file the checkout leaves off disk
+    ignore = tmp_path / 'notes' / '.gitignore'
+    ignore.write_text('secret.md\n', encoding='utf-8')
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+    _git(tmp_path, 'update-index', '--skip-worktree', 'notes/.gitignore')
+    ignore.unlink()
+    for stem in ('secret', 'plan.draft'):
+        (tmp_path / 'notes' / f'{stem}.md').write_text(
+            '# page\n\nBody.\n',
+            encoding='utf-8',
+        )
+
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+    wiki.lint()
+    flagged = [
+        event.path
+        for event in notices
+        if type(event).__name__ == 'PathUntrackableEvent'
+    ]
+    assert flagged == ['notes/plan.draft.md']
 
 
 @_needs_git
