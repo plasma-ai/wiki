@@ -17,6 +17,7 @@ import unicodedata
 
 import pytest
 
+from wiki.constants import WIKI_NOW
 from wiki.core.wiki import Wiki
 
 from ._helpers import CategorizedWiki, _make_wiki
@@ -36,6 +37,7 @@ __all__ = [
     'test_timestamp_timezone_configurable',
     'test_timestamp_zone_swaps_default_z_for_offset',
     'test_timestamp_format_rejects_blank_or_multiline',
+    'test_wiki_now_fixes_the_clock_in_process',
     'test_init_refuses_legacy_layout_before_writing',
     'test_canonicalize_index_puts_the_h1_and_rows_in_form',
 ]
@@ -439,6 +441,29 @@ def test_timestamp_format_rejects_blank_or_multiline(
     # the bad format fails loudly when update resolves the timestamp policy
     with pytest.raises(ValueError, match='single non-empty line'):
         Wiki(tmp_path).update()
+
+
+def test_wiki_now_fixes_the_clock_in_process(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``WIKI_NOW`` fixes the stamps of a host that drives the class itself.
+
+    The class reads the seam, not the CLI, so a host that sets it gets the
+    clock a CLI run under the same value gets -- and an invalid value
+    raises where the clock is read rather than falling back to the clock.
+    """
+    monkeypatch.setenv(WIKI_NOW, '2026-01-02T03:04:05+02:00')
+    wiki = Wiki(tmp_path)
+    wiki.init(name='root', settings={'timestamp': {'timezone': 'America/New_York'}})
+    text = (tmp_path / '_index.md').read_text(encoding='utf-8')
+    assert 'created: 2026-01-01T20:04:05-0500\n' in text
+    assert 'updated: 2026-01-01T20:04:05-0500\n' in text
+    monkeypatch.setenv(WIKI_NOW, 'now')
+    (tmp_path / 'page.md').write_text('Body.\n', encoding='utf-8')
+    with pytest.raises(ValueError, match='WIKI_NOW must be an RFC 3339 instant'):
+        wiki.update()
+    assert (tmp_path / 'page.md').read_text(encoding='utf-8') == 'Body.\n'
 
 
 # ------ legacy layout

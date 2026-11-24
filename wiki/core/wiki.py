@@ -28,6 +28,7 @@ from wiki.constants import (
     WIKI_CONFIG_DIR,
     WIKI_DIR,
     WIKI_INDEX,
+    WIKI_NOW,
     WIKI_SETTINGS,
 )
 from wiki.typing import Link, PathLike
@@ -52,6 +53,14 @@ _TIMEOUT_SECONDS = 10
 # how long after its stamp a file's last write still counts as the write that
 # stamped it: a run takes one stamp as it starts, and its writes land after
 _STAMP_GRACE = dt.timedelta(seconds=60)
+
+# the one form WIKI_NOW takes: an RFC 3339 date-time with a capital T and Z,
+# no leap second, and at most the microseconds the clock it replaces returns
+_PINNED_INSTANT = re.compile(
+    r'[0-9]{4}-[0-9]{2}-[0-9]{2}'
+    r'T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\.[0-9]{1,6})?'
+    r'(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])'
+)
 
 # soft ceiling for a folded frontmatter desc: past it lint notes the page,
 # since every map row and parent index link reproduces the whole desc
@@ -2622,14 +2631,15 @@ class Wiki:
         (``timestamp.timezone`` / ``timestamp.format``); when a timezone is
         configured without an authored format, the default format's literal
         trailing ``Z`` becomes ``%z``, so the stamp carries the zone's real
-        offset. Override in subclasses for a different time source.
+        offset. A set ``WIKI_NOW`` fixes the instant rendered. Override in
+        subclasses for a different time source.
 
         Returns:
             Timestamp string like ``YYYY-MM-DDTHH:MM:SSZ``.
 
         """
         policy = self._timestamp_policy
-        return dt.datetime.now(policy['zone']).strftime(policy['format'])
+        return _now(policy['zone']).strftime(policy['format'])
 
     @functools.cached_property
     def logger(self: Wiki) -> logging.Logger:
@@ -6831,6 +6841,42 @@ def _is_offline() -> bool:
     if value not in ('false', ''):
         raise ValueError(f'{OFFLINE_MODE} must be "true" or "false", got {value!r}.')
     return False
+
+
+def _pinned_now() -> Optional[dt.datetime]:
+    """Return the instant ``WIKI_NOW`` fixes the clock at, if it is set.
+
+    Raises:
+        ValueError: If ``WIKI_NOW`` is set to anything other than an RFC
+            3339 date-time (capital ``T`` and ``Z``, no leap second, at
+            most six fraction digits) that names a UTC instant in the
+            years 1 to 9999.
+
+    """
+    value = os.environ.get(WIKI_NOW, '').strip()
+    if not value:
+        return None
+    message = (
+        f'{WIKI_NOW} must be an RFC 3339 instant like 2026-01-02T03:04:05Z,'
+        f' got {value!r}.'
+    )
+    # NOTE: fromisoformat reads more forms than this one, and which ones turns
+    # on the Python version (24:00:00, a 60-minute offset, a seventh fraction
+    # digit dropped): the pattern fixes the form and leaves it the calendar
+    if _PINNED_INSTANT.fullmatch(value) is None:
+        raise ValueError(message)
+    try:
+        return dt.datetime.fromisoformat(value).astimezone(dt.UTC)
+    except (ValueError, OverflowError):
+        raise ValueError(message) from None
+
+
+def _now(zone: dt.tzinfo) -> dt.datetime:
+    """Return the current instant in ``zone``: the one ``WIKI_NOW`` fixes, else the clock's."""
+    pinned = _pinned_now()
+    if pinned is None:
+        return dt.datetime.now(zone)
+    return pinned.astimezone(zone)
 
 
 def _encloses_wiki_error(nested: pathlib.Path) -> ValueError:

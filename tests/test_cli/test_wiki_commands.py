@@ -10,7 +10,9 @@ reporting as observable output rather than internal state.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -21,6 +23,7 @@ import pytest
 
 from wiki import __version__ as WIKI_VERSION
 from wiki.cli.utils import configure_git_merge_driver
+from wiki.constants import WIKI_CONFIG_DIR, WIKI_NOW
 
 from .conftest import GIT, WIKI, _env, _git, _git_repo, _wiki
 
@@ -136,6 +139,11 @@ __all__ = [
     'test_trust_store_does_not_mark_home_as_wiki_root',
     'test_trust_store_exemption_survives_symlinked_home',
     'test_root_resolution_survives_a_symlink_loop_home',
+    'test_wiki_now_fixes_every_stamp',
+    'test_wiki_now_stamps_the_trust_record',
+    'test_blank_wiki_now_leaves_the_clock_running',
+    'test_invalid_wiki_now_fails_every_command',
+    'test_wiki_now_is_read_when_a_command_runs',
 ]
 
 # a hook ordering the ref category ahead of guide
@@ -185,6 +193,11 @@ _NOTING_HOOK = (
     "        self.on_desc_missing(path='a.md')\n"
     "        self.on_desc_missing(path='b.md')\n"
     "        raise RuntimeError('boom')\n"
+)
+
+# the line a command opens stderr with while WIKI_NOW fixes the clock
+_PINNED_CLOCK_NOTICE = (
+    'WIKI_NOW is set: timestamps use its fixed instant, not the clock.\n'
 )
 
 pytestmark = pytest.mark.skipif(
@@ -4422,6 +4435,207 @@ def test_root_resolution_survives_a_symlink_loop_home(tmp_path: pathlib.Path) ->
     result = _wiki(root, 'lint', home=loop)
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'Symlink loop' not in result.stderr
+
+
+# ------ clock seam
+
+
+@pytest.mark.parametrize(
+    argnames=('now', 'timestamp', 'stamp'),
+    argvalues=[
+        ('2026-01-02T03:04:05Z', {}, '2026-01-02T03:04:05Z'),
+        ('2026-01-02T03:04:05+02:00', {}, '2026-01-02T01:04:05Z'),
+        (
+            '2026-01-02T03:04:05Z',
+            {'timezone': 'America/New_York'},
+            '2026-01-01T22:04:05-0500',
+        ),
+        ('2026-01-02T20:04:05-10:30', {'format': '%Y-%m-%d'}, '2026-01-03'),
+        (
+            '2026-01-02T03:04:05.25Z',
+            {'format': '%Y-%m-%dT%H:%M:%S.%fZ'},
+            '2026-01-02T03:04:05.250000Z',
+        ),
+    ],
+    ids=['utc', 'offset', 'configured-zone', 'authored-format', 'fraction'],
+)
+def test_wiki_now_fixes_every_stamp(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    now: str,
+    timestamp: dict,
+    stamp: str,
+) -> None:
+    """Every stamp is the instant ``WIKI_NOW`` names, under the wiki's policy.
+
+    The seam replaces the clock, not the rendering: the instant passes
+    through the wiki's own zone and format, so two runs given one value
+    write the same bytes whenever they run. Each command says so in a
+    fixed line that opens its stderr.
+    """
+    monkeypatch.setenv(WIKI_NOW, now)
+    root = tmp_path / 'wiki'
+    settings = json.dumps({'timestamp': timestamp})
+    init = _wiki(tmp_path, 'init', '--path', str(root), '--settings', settings)
+    assert init.returncode == 0, init.stdout + init.stderr
+    _write(root / 'core' / 'design.md', 'Body.\n')
+    # lint previews the stamps an update would write
+    lint = _wiki(root, 'lint', '--full', '--path', str(root))
+    assert f'+created: {stamp}\n' in lint.stdout
+    assert f'+updated: {stamp}\n' in lint.stdout
+    update = _wiki(root, 'update', '--path', str(root))
+    assert update.returncode == 0, update.stdout + update.stderr
+    (root / 'guides').mkdir()
+    new = _wiki(
+        root,
+        'new',
+        'guides',
+        '--desc',
+        'How-to guides.',
+        '--content',
+        'Text.',
+        '--path',
+        str(root),
+    )
+    assert new.returncode == 0, new.stdout + new.stderr
+    for result in (init, lint, update, new):
+        assert result.stderr.startswith(_PINNED_CLOCK_NOTICE)
+    # the root index, the adopted page and both folder indexes carry it
+    stamps = []
+    for path in sorted(root.rglob('*.md')):
+        text = path.read_text(encoding='utf-8')
+        stamps += re.findall(r'^(?:created|updated): (.*)$', text, re.MULTILINE)
+    assert stamps == [stamp] * 8
+
+
+def test_wiki_now_stamps_the_trust_record(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``wiki trust`` records the instant ``WIKI_NOW`` names, in UTC.
+
+    The trust store is the one clock read outside a wiki's stamps, and it
+    keeps its own fixed format whatever the wiki's timestamp policy.
+    """
+    root = tmp_path / 'wiki'
+    settings = json.dumps({'timestamp': {'timezone': 'America/New_York'}})
+    init = _wiki(tmp_path, 'init', '--path', str(root), '--settings', settings)
+    assert init.returncode == 0, init.stdout + init.stderr
+    monkeypatch.setenv(WIKI_NOW, '2026-01-02T03:04:05+02:00')
+    result = _wiki(root, 'trust', '--path', str(root))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stderr == _PINNED_CLOCK_NOTICE
+    store = pathlib.Path(os.environ[WIKI_CONFIG_DIR]) / 'settings.json'
+    trusted = json.loads(store.read_text(encoding='utf-8'))['trusted']
+    assert trusted == {str(root.resolve()): '2026-01-02T01:04:05Z'}
+
+
+@pytest.mark.parametrize(
+    argnames='now',
+    argvalues=['', ' \t'],
+    ids=['empty', 'whitespace'],
+)
+def test_blank_wiki_now_leaves_the_clock_running(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    now: str,
+) -> None:
+    """A blank ``WIKI_NOW`` is an unset one: the real clock, and no notice."""
+    monkeypatch.setenv(WIKI_NOW, now)
+    root = tmp_path / 'wiki'
+    before = dt.datetime.now(dt.UTC).replace(microsecond=0)
+    result = _wiki(tmp_path, 'init', '--path', str(root))
+    after = dt.datetime.now(dt.UTC)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _PINNED_CLOCK_NOTICE not in result.stderr
+    text = (root / '_index.md').read_text(encoding='utf-8')
+    stamp = re.search(r'^updated: (.*)$', text, re.MULTILINE).group(1)
+    written = dt.datetime.strptime(stamp, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=dt.UTC)
+    assert before <= written <= after
+
+
+@pytest.mark.parametrize(
+    argnames='now',
+    argvalues=[
+        'now',
+        '2026-01-02',
+        '2026-01-02T03:04:05',
+        '2026-01-02 03:04:05Z',
+        '2026-01-02t03:04:05z',
+        '2026-01-02T03:04Z',
+        '2026-01-02T03:04:05+0200',
+        '2026-01-02T03:04:05+01:60',
+        '2026-01-02T24:00:00Z',
+        '2026-01-02T23:59:60Z',
+        '2026-01-02T03:04:05.1234567Z',
+        '2026-01-02T03:04:05,5Z',
+        '2026-02-30T03:04:05Z',
+        '0001-01-01T00:00:00+01:00',
+    ],
+    ids=[
+        'word',
+        'date-only',
+        'no-offset',
+        'space-separator',
+        'lower-case',
+        'no-seconds',
+        'offset-without-colon',
+        'offset-minute-60',
+        'hour-24',
+        'leap-second',
+        'seven-fraction-digits',
+        'comma-fraction',
+        'no-such-day',
+        'before-year-one',
+    ],
+)
+def test_invalid_wiki_now_fails_every_command(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    now: str,
+) -> None:
+    """An invalid ``WIKI_NOW`` is exit 2 before a command does anything.
+
+    The value takes one form -- an RFC 3339 date-time with a capital
+    ``T`` and ``Z``, no leap second, and at most six fraction digits --
+    so nothing reads it by a looser rule than the next reader's. A
+    command that never reads the clock refuses alike, and a refused
+    update writes nothing.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    page = root / 'core' / 'design.md'
+    _write(page, 'Body.\n')
+    monkeypatch.setenv(WIKI_NOW, now)
+    error = (
+        f'Error: WIKI_NOW must be an RFC 3339 instant like'
+        f' 2026-01-02T03:04:05Z, got {now!r}.\n'
+    )
+    for args in (('update',), ('map',)):
+        result = _wiki(root, *args, '--path', str(root))
+        assert result.returncode == 2, (args, result.stdout + result.stderr)
+        assert result.stderr == error
+    assert page.read_text(encoding='utf-8') == 'Body.\n'
+    assert not (root / 'core' / '_index.md').exists()
+
+
+def test_wiki_now_is_read_when_a_command_runs(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Help, the version and a usage error never read ``WIKI_NOW``.
+
+    The seam belongs to a command's run: what typer answers before any
+    command runs prints no notice and judges no value.
+    """
+    monkeypatch.setenv(WIKI_NOW, 'now')
+    for args in (('--version',), ('--help',), ('lint', '--help')):
+        result = _wiki(tmp_path, *args)
+        assert result.returncode == 0, (args, result.stdout + result.stderr)
+        assert result.stderr == ''
+    usage = _wiki(tmp_path, 'lint', '--no-such-option')
+    assert usage.returncode == 2
+    assert 'WIKI_NOW' not in usage.stderr
 
 
 # ------ helpers
