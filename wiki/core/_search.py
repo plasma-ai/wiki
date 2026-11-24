@@ -176,8 +176,8 @@ def _rank(
             prefix_path = relpath.rstrip('/') + '/'
             sql += ' AND (folder = ? OR substr(folder, 1, ?) = ?)'
             parameters.extend((relpath, len(prefix_path), prefix_path))
-        # order by rank, then path -- tied rows otherwise follow the refresh's
-        # hash-seeded insertion order, so a limit cut varies between runs
+        # order by rank, then path -- tied rows otherwise follow the order the
+        # index stored them in, so a limit cut varies with its refresh history
         sql += f' ORDER BY bm25(notes_fts, {_BM25_WEIGHTS}), path LIMIT ?'
         parameters.append(limit)
         # execute the ranked query
@@ -277,11 +277,12 @@ def _refresh(
             if indexed.get(path) != (mtime_ns, size)
         }
         # drop rows for removed pages
-        for relpath in removed:
+        for relpath in sorted(removed):
             connection.execute('DELETE FROM notes_fts WHERE path = ?', (relpath,))
             connection.execute('DELETE FROM files WHERE path = ?', (relpath,))
-        # reindex changed pages
-        for relpath in changed:
+        # reindex changed pages in path order, so the rows and the read
+        # notices come out the same on every run
+        for relpath in sorted(changed):
             path, mtime_ns, size = present[relpath]
             # read before mutating: a failed read leaves an indexed page
             # serving its stale row, to be retried on the next refresh
@@ -303,7 +304,10 @@ def _refresh(
                 continue
             title, desc, headings, tags, body = _read_fields(path, text)
             folder = str(pathlib.PurePath(relpath).parent)
-            connection.execute('DELETE FROM notes_fts WHERE path = ?', (relpath,))
+            # path is UNINDEXED, so the delete scans every row: only a page
+            # with a signature can hold a row to drop
+            if relpath in indexed:
+                connection.execute('DELETE FROM notes_fts WHERE path = ?', (relpath,))
             connection.execute(
                 'INSERT INTO files(path, mtime_ns, size) VALUES (?, ?, ?) '
                 'ON CONFLICT(path) DO UPDATE SET '
