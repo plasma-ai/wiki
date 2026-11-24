@@ -431,6 +431,18 @@ falls back to the event's own `logging_level`), and the `Event` base in
 without being a hook. The two offset, so the raw totals happen to match — audit
 per-kind hooks against per-kind signature defaults, not the raw grep totals.
 
+### Clock
+
+Every wall-clock read goes through `_now` (`core/wiki.py`), so the `WIKI_NOW`
+test seam governs all of them: when the variable holds an RFC 3339 instant,
+`_now` returns that instant instead of the clock's. `_pinned_now` is the one
+reader and validator of the variable. The `@command` wrapper calls it before
+each command runs: an invalid value is a command error, and a valid one opens
+stderr with the fixed `_PINNED_CLOCK_NOTICE` line, so a seam left set in a real
+shell is never silent. A new clock read calls `_now`, never `datetime.now`
+(`grep -rn --include='*.py' 'datetime\.now' wiki` shows the one call, in
+`_now`).
+
 ### Run Bracket
 
 Every operation the `Wiki` class docstring names carries `@format.run_scoped`

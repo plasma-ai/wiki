@@ -8,7 +8,8 @@ Configuration
   indexing exclusions, and external link folders for that wiki;
 - the user-global file ``~/.wiki/settings.json`` — the machine-local trust
   store, not wiki policy;
-- the environment variables ``OFFLINE_MODE`` and ``WIKI_CONFIG_DIR``.
+- the environment variables ``OFFLINE_MODE`` and ``WIKI_CONFIG_DIR``, plus
+  the test seam ``WIKI_NOW``.
 
 The per-wiki file doubles as the *declared-root marker*: its presence tells
 every command where the wiki begins. This page covers each surface, plus how
@@ -563,6 +564,21 @@ Environment variables
 
 ``WIKI_CONFIG_DIR``
    Path. Overrides the ``~/.wiki`` config home, relocating the trust store.
+
+``WIKI_NOW``
+   A test seam, not a setting: an RFC 3339 instant, such as
+   ``2026-01-02T03:04:05Z``, that every clock read returns in place of the
+   current time. Stamps render it through the wiki's own ``timestamp``
+   policy, so two runs given one value write the same bytes whenever they
+   run; ``wiki trust`` records it too. The value takes one form — a capital
+   ``T``, an offset of ``Z`` or ``±HH:MM``, no leap second, at most six
+   fraction digits — with surrounding whitespace ignored. Any other value
+   fails every command with exit 2 before it does anything, and an empty
+   value counts as unset. While it is set, each command opens stderr with
+   the line ``WIKI_NOW is set: timestamps use its fixed instant, not the
+   clock.`` — if that line appears outside a test, unset the variable. A
+   ``.wiki/wiki.py`` hook that overrides ``_utc_now`` keeps its own time
+   source.
 
 Other files under ``.wiki/``
 ----------------------------
