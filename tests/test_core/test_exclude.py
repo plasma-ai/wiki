@@ -312,7 +312,10 @@ def test_exclusion_names_the_pattern_a_full_scan_names(
     patterns (free-form, then mostly classes) and paths built to match
     them. Verdicts are read from the matcher itself: the paths hold
     newlines, control characters, and names differing only in case or
-    normalization, which no one tree on disk can hold.
+    normalization, which no one tree on disk can hold. Every source
+    must also name a wildcard-free pattern, name a pattern holding a
+    wildcard, and leave a path unnamed, so one whose patterns or paths
+    thin out fails instead of passing on nothing.
     """
     root = tmp_path.resolve()
     _make_wiki(root)
@@ -321,6 +324,7 @@ def test_exclusion_names_the_pattern_a_full_scan_names(
         cases = _corner_cases(rng)
     else:
         cases = _fuzz_cases(rng, root, classes=(source == 'class-fuzz'))
+    kinds = set()
     for patterns, paths in cases:
         _set_exclude_patterns(root, patterns)
         wiki = Wiki(root)
@@ -328,6 +332,8 @@ def test_exclusion_names_the_pattern_a_full_scan_names(
         for relative in paths:
             named = wiki._excluded_by(root / relative)
             assert named == _scan(policy, relative), (patterns, relative)
+            kinds.add(_kind(named))
+    assert kinds == {'literal', 'wildcard', None}
 
 
 # ------ update, prune, and scope behavior
@@ -1389,6 +1395,13 @@ def _scan(policy: list[tuple[str, re.Pattern[str]]], relative: str) -> Optional[
     return None
 
 
+def _kind(named: Optional[str]) -> Optional[str]:
+    """Return the kind of pattern a verdict names, ``None`` when it names none."""
+    if named is None:
+        return None
+    return 'wildcard' if any(char in named for char in '*?[') else 'literal'
+
+
 def _walkable(paths: set[str]) -> list[str]:
     """Return the ``paths`` a walk could yield, sorted.
 
@@ -1477,7 +1490,7 @@ def _accepted(root: pathlib.Path, pattern: str) -> bool:
     """Return ``True`` if the settings accept ``pattern`` as a policy."""
     _set_exclude_patterns(root, [pattern])
     try:
-        Wiki(root)._excluded_by(root / 'x')
+        Wiki(root)._exclude_policy  # noqa: B018
     except ValueError:
         return False
     return True
