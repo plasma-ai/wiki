@@ -48,7 +48,15 @@ argv = ["/path/to/venv/bin/wiki"]
 argv = ["/path/to/python", "-P", "/path/to/wrapper.py"]
 notice = false
 env = { EXAMPLE = "1" }
+describe = ["/path/to/python", "-P", "/path/to/describe.py"]
 ```
+
+`describe` is optional. It is a whole command, run once under the side's
+environment before anything is snapshotted, and its stdout goes into the result
+file. Both sides of a release may report the same version, so this is where a
+result file says what each side is made of: the interpreter, the versions of the
+dependencies, and the commit or the path of the package. A `describe` that fails
+ends the run with exit 2.
 
 `CORPORA` is a TOML file with one table per corpus. The harness reads corpus
 paths from this file only. Labels are neutral (`corpus-a`), and the file that
@@ -64,10 +72,10 @@ root = "wiki"
 
 Each corpus gets one result file, `<out>/<label>.json`. It records the host
 (platform, Python, SQLite, git, the system git config), the instant, each side's
-argv, variables and reported version, the sample, for every stage how many
-commands of each run ended with each exit code and which searches found nothing,
-and for every case the exit code, the size and sha256 of both streams, and the
-touched count on every run. `matrix` saves the streams of a case under
+argv, variables, reported version and description, the sample, for every stage
+how many commands of each run ended with each exit code and which searches found
+nothing, and for every case the exit code, the size and sha256 of both streams,
+and the touched count on every run. `matrix` saves the streams of a case under
 `<out>/<label>/<stage>/` when they differ, and `selfcheck` saves those of a
 failed check under `<out>/<label>/<check>/<stage>/`. Result files hold corpus
 paths and text, so they stay outside the repository too.
@@ -77,9 +85,9 @@ snapshots, comparison, caches, the matrix and the self-check.
 
 ## Sides
 
-A side has a name, an argv prefix, variables of its own, and a `notice` flag.
-The harness appends the wiki arguments to the prefix. The environment is built
-from nothing:
+A side has a name, an argv prefix, variables of its own, a `notice` flag, and an
+optional `describe` command. The harness appends the wiki arguments to the
+prefix. The environment is built from nothing:
 
 | Variable              | Value                                                                            |
 | --------------------- | -------------------------------------------------------------------------------- |

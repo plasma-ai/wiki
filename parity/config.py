@@ -46,8 +46,10 @@ def load_sides(path: pathlib.Path) -> dict[str, Side]:
     """Return the sides a TOML file declares, by name.
 
     Each table is one side: ``argv`` is the command prefix, ``env`` an
-    optional table of variables for that side only, and ``notice`` whether
-    the side prints the ``WIKI_NOW`` notice (true unless stated).
+    optional table of variables for that side only, ``notice`` whether
+    the side prints the ``WIKI_NOW`` notice (true unless stated), and
+    ``describe`` an optional whole command that prints what the side is
+    made of.
     """
     data = tomllib.loads(path.read_text(encoding='utf-8'))
     result = {}
@@ -57,5 +59,6 @@ def load_sides(path: pathlib.Path) -> dict[str, Side]:
             argv=tuple(table['argv']),
             env=dict(table.get('env', {})),
             notice=table.get('notice', True),
+            describe=tuple(table.get('describe', ())),
         )
     return result

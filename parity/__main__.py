@@ -205,17 +205,27 @@ def _header(sides: Sequence[Side], *, now: str) -> dict[str, Any]:
 
 
 def _side_record(item: Side, *, now: str) -> Mapping[str, Any]:
-    """Return one side's argv, variables and the version it reports.
+    """Return one side's argv, variables, reported version and description.
 
     Raises:
-        ValueError: If the side's ``--version`` fails or prints nothing.
-            Such a side runs no wiki command, and two of them would fail
-            every case alike.
+        ValueError: If the side's ``--version`` fails or prints nothing
+            (such a side runs no wiki command, and two of them would fail
+            every case alike), or if its ``describe`` command fails.
 
     """
+    described = None
     with tempfile.TemporaryDirectory() as home:
         env = side.environment(item, pathlib.Path(home), now=now)
         probe = side.run(item, ['--version'], cwd=pathlib.Path(home), env=env)
+        if item.describe:
+            described = subprocess.run(
+                item.describe,
+                cwd=home,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+            )
     version = probe.stdout.decode('utf-8', 'replace').strip()
     if (probe.code != 0) or not version:
         error = probe.stderr.decode('utf-8', 'replace').strip()
@@ -223,12 +233,18 @@ def _side_record(item: Side, *, now: str) -> Mapping[str, Any]:
             f'side {item.name!r} does not start: --version exited'
             f' {probe.code} and printed {version!r} ({error!r} on stderr)'
         )
+    if (described is not None) and (described.returncode != 0):
+        raise ValueError(
+            f'side {item.name!r}: describe exited {described.returncode}'
+            f' ({described.stderr.strip()!r} on stderr)'
+        )
     return {
         'name': item.name,
         'argv': list(item.argv),
         'env': dict(item.env),
         'notice': item.notice,
         'version': version,
+        'describe': described.stdout.strip() if described is not None else None,
     }
 
 

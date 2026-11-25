@@ -41,6 +41,9 @@ class Side:
         env: Variables set for this side only, over the fixed environment.
         notice: Whether the side prints :data:`NOTICE` when ``WIKI_NOW`` is
             set. A side that fixes its clock through a wrapper prints none.
+        describe: A whole command whose stdout says what the side is made
+            of (its interpreter, its dependencies, its commit), for the
+            result file. Empty for a side that has none.
 
     """
 
@@ -48,6 +51,7 @@ class Side:
     argv: tuple[str, ...]
     env: Mapping[str, str] = dataclasses.field(default_factory=dict)
     notice: bool = True
+    describe: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)

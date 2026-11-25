@@ -44,6 +44,10 @@ sys.exit(result.returncode)
 """
 
 
+# a describe command: what it prints comes from the side's own environment
+_DESCRIBE = "import os; print(os.environ['PYTHONPATH'], os.environ['WIKI_NOW'])"
+
+
 @pytest.mark.parametrize(
     argnames=('declared', 'code'),
     argvalues=[(True, 0), (False, 1)],
@@ -70,6 +74,7 @@ def test_matrix_command_strips_only_a_declared_notice(
         f'argv = [{json.dumps(f"{WIKI}")}]\n'
         f'notice = {json.dumps(declared)}\n'
         f'env = {{ PYTHONPATH = {json.dumps(ENGINE.env["PYTHONPATH"])} }}\n'
+        f'describe = {json.dumps([sys.executable, "-c", _DESCRIBE])}\n'
         f'[relay]\n'
         f'argv = [{json.dumps(sys.executable)}, {json.dumps(f"{relay}")}]\n'
         f'notice = false\n'
@@ -91,9 +96,12 @@ def test_matrix_command_strips_only_a_declared_notice(
         *('--work', f'{tmp_path / "work"}', '--out', f'{out}', '--now', NOW),
     ]
     assert cli.main(argv) == code
-    # the result file names both sides and what they report as their version
+    # the result file names both sides, what they report as their version,
+    # and what the one side that has a describe command says it is made of
     document = json.loads((out / 'example.json').read_text(encoding='utf-8'))
     assert [item['version'] for item in document['sides']] == [wiki.__version__] * 2
+    described = [item['describe'] for item in document['sides']]
+    assert described == [f'{ENGINE.env["PYTHONPATH"]} {NOW}', None]
     (stage,) = document['stages']
     aspects = {difference['aspect'] for difference in stage['differences']}
     kept = out / 'example' / 'write' / '000 engine.err'
