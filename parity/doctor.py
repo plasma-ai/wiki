@@ -26,12 +26,14 @@ __all__ = [
 ]
 
 #: what a doctored side changes: one stdout byte, one stderr byte, the exit
-#: code, one byte of a file, one file mode, one extra written file, one file
-#: written again with the same bytes, one word count, or one search row
+#: code, the ``WIKI_NOW`` notice, one byte of a file, one file mode, one
+#: extra written file, one file written again with the same bytes, one word
+#: count, or one search row
 KINDS = (
     'stdout',
     'stderr',
     'exit',
+    'notice',
     'file',
     'mode',
     'extra',
@@ -59,9 +61,12 @@ def main(argv: Sequence[str]) -> int:
         if kind == 'stdout':
             stdout = _flip(stdout)
         elif kind == 'stderr':
-            stderr = _flip(stderr)
+            # one more byte at the end: the first line may be the notice
+            stderr += b'\x01'
         elif kind == 'exit':
             code ^= 1
+        elif kind == 'notice':
+            stderr = stderr.partition(b'\n')[2]
         elif kind == 'file':
             content = pathlib.Path(path).read_bytes()
             _write_quietly(path, _flip(content))

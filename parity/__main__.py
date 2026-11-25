@@ -5,7 +5,9 @@ usage: python -m parity matrix --sides FILE --a NAME --b NAME --corpora FILE --w
 
 ``matrix`` compares two sides over the matrix; ``selfcheck`` runs one side
 against itself, clean and doctored. Both exit 0 when every result is the
-expected one, and 1 otherwise.
+expected one, and 1 otherwise. A run that would compare nothing -- no
+corpus, an unknown stage, a side that does not start -- exits 2 before it
+snapshots anything.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from typing import Any, Optional
 
-from . import config, runner, selfcheck, side
+from . import config, matrix, runner, selfcheck, side
 from .runner import Corpus
 from .side import Side
 
@@ -49,7 +51,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if name == 'matrix':
             command.add_argument('--a', required=True)
             command.add_argument('--b', required=True)
-            command.add_argument('--stage', action='append')
+            command.add_argument('--stage', action='append', choices=matrix.STAGES)
             command.add_argument('--keep', action='store_true')
         else:
             command.add_argument('--side', required=True)
@@ -58,18 +60,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     sides = config.load_sides(options.sides)
     corpora = config.load_corpora(options.corpora)
     labels = options.corpus or list(corpora)
+    unknown = [label for label in labels if label not in corpora]
+    if unknown:
+        parser.error(f'{options.corpora} declares no corpus named {unknown!r}')
+    if not labels:
+        parser.error(f'{options.corpora} declares no corpus')
+    if options.command == 'matrix':
+        chosen = [sides[options.a], sides[options.b]]
+    else:
+        chosen = [sides[options.side]]
+    try:
+        header = _header(chosen, now=options.now)
+    except ValueError as e:
+        parser.error(f'{e}')
     options.out.mkdir(parents=True, exist_ok=True)
     failed = False
     for label in labels:
         corpus = corpora[label]
         work = options.work / label
         if options.command == 'matrix':
-            chosen = [sides[options.a], sides[options.b]]
             document, passed = _matrix(corpus, chosen, work=work, options=options)
         else:
-            chosen = [sides[options.side]]
             document, passed = _selfcheck(corpus, chosen[0], work=work, options=options)
-        document = {**_header(chosen, now=options.now), **document}
+        document = {**header, **document}
         text = json.dumps(document, indent=1)
         (options.out / f'{label}.json').write_text(text + '\n', encoding='utf-8')
         failed = failed or not passed
@@ -172,16 +185,30 @@ def _header(sides: Sequence[Side], *, now: str) -> dict[str, Any]:
 
 
 def _side_record(item: Side, *, now: str) -> Mapping[str, Any]:
-    """Return one side's argv, variables and the version it reports."""
+    """Return one side's argv, variables and the version it reports.
+
+    Raises:
+        ValueError: If the side's ``--version`` fails or prints nothing.
+            Such a side runs no wiki command, and two of them would fail
+            every case alike.
+
+    """
     with tempfile.TemporaryDirectory() as home:
         env = side.environment(item, pathlib.Path(home), now=now)
-        version = side.run(item, ['--version'], cwd=pathlib.Path(home), env=env)
+        probe = side.run(item, ['--version'], cwd=pathlib.Path(home), env=env)
+    version = probe.stdout.decode('utf-8', 'replace').strip()
+    if (probe.code != 0) or not version:
+        error = probe.stderr.decode('utf-8', 'replace').strip()
+        raise ValueError(
+            f'side {item.name!r} does not start: --version exited'
+            f' {probe.code} and printed {version!r} ({error!r} on stderr)'
+        )
     return {
         'name': item.name,
         'argv': list(item.argv),
         'env': dict(item.env),
         'notice': item.notice,
-        'version': version.stdout.decode('utf-8', 'replace').strip(),
+        'version': version,
     }
 
 

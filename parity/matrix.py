@@ -11,6 +11,7 @@ from collections.abc import Iterable, Sequence
 from typing import Optional
 
 __all__ = [
+    'STAGES',
     'Case',
     'Stage',
     'Sample',
@@ -18,6 +19,16 @@ __all__ = [
     'stages',
 ]
 
+#: the names of the stages, in the order they run
+STAGES = ('pristine', 'query', 'write', 'full', 'cross')
+
+# the exit codes a case allows: a command that must succeed; one that may
+# also report (issues, pending changes, no match); a search built to find
+# nothing; a command built to fail
+_DONE = frozenset({0})
+_REPORTS = frozenset({0, 1})
+_NOTHING = frozenset({1})
+_FAILS = frozenset({2})
 # how many of each kind a sample holds
 _TOP_SCOPES = 4
 _DEEP_SCOPES = 2
@@ -44,6 +55,9 @@ class Case:
             (empty for the root itself). ``None`` runs from a neutral
             folder with ``--path``.
         writes: Whether the command may write outside the cache folder.
+        codes: The exit codes the command may end with. A side that ends
+            with another one did not run the command the case is built
+            for, however well the sides agree.
 
     """
 
@@ -51,6 +65,7 @@ class Case:
     args: tuple[str, ...]
     inside: Optional[str] = None
     writes: bool = False
+    codes: frozenset[int] = _DONE
 
 
 @dataclasses.dataclass(frozen=True)
@@ -137,64 +152,65 @@ def stages(sample: Sample) -> tuple[Stage, ...]:
     scope = sample.scopes[0] if sample.scopes else None
     # read-only commands, from a neutral folder and from inside the wiki
     pristine = [
-        ['lint'],
-        ['lint', '--json'],
-        ['lint', '--full'],
-        ['lint', '--count'],
-        ['update', '--check'],
-        ['update', '--check', '--full'],
+        _case(['lint']),
+        _case(['lint', '--json']),
+        _case(['lint', '--full']),
+        _case(['lint', '--count']),
+        _case(['update', '--check']),
+        _case(['update', '--check', '--full']),
     ]
     for folder in sample.scopes:
-        pristine.append(['lint', folder])
-        pristine.append(['update', '--check', folder])
-    inside = [_case(['lint'], inside=''), _case(['update', '--check'], inside='')]
+        pristine.append(_case(['lint', folder]))
+        pristine.append(_case(['update', '--check', folder]))
+    pristine.append(_case(['lint'], inside=''))
+    pristine.append(_case(['update', '--check'], inside=''))
     if scope is not None:
-        inside.append(_case(['lint'], inside=scope))
+        pristine.append(_case(['lint'], inside=scope))
     # views, searches, matches and reads, on the caches the snapshot holds
     query = [
-        ['map'],
-        ['map', '--depth', '0'],
-        ['map', '--depth', '1'],
-        ['map', '--no-desc'],
-        ['map', '--desc-limit', '20'],
-        ['map', '--no-words'],
-        ['map', '--stat'],
-        ['map', '--markdown'],
-        ['map', '--no-markdown'],
-        ['map', '--category', ''],
-        ['search', term],
-        ['search', term, '--json'],
-        ['search', f'{term} {other}', '--json'],
-        ['search', term, '--limit', '3'],
-        ['search', term[:3], '--prefix', '--json'],
-        ['search', f'{term} OR {other}', '--raw', '--json'],
-        ['search', term, '--tag', other],
-        ['search', _ABSENT],
-        ['search', '"', '--raw'],
-        ['match', term],
-        ['match', term, '--lines'],
-        ['match', term, '--lineno'],
-        ['match', term.upper(), '--ignore-case', '--lines'],
-        ['match', term, '--all'],
-        ['match', term, '--field', 'desc'],
-        ['match', term, '--field', 'name,tags', '--lines'],
-        ['match', _ABSENT],
-        ['match', '('],
-        ['read', _INDEX],
-        ['read', f'{_ABSENT}.md'],
+        _case(['map']),
+        _case(['map', '--depth', '0']),
+        _case(['map', '--depth', '1']),
+        _case(['map', '--no-desc']),
+        _case(['map', '--desc-limit', '20']),
+        _case(['map', '--no-words']),
+        _case(['map', '--stat']),
+        _case(['map', '--markdown']),
+        _case(['map', '--no-markdown']),
+        _case(['map', '--category', '']),
+        _case(['search', term]),
+        _case(['search', term, '--json']),
+        _case(['search', f'{term} {other}', '--json']),
+        _case(['search', term, '--limit', '3']),
+        _case(['search', term[:3], '--prefix', '--json']),
+        _case(['search', f'{term} OR {other}', '--raw', '--json']),
+        _case(['search', term, '--tag', other]),
+        _case(['search', _ABSENT], codes=_NOTHING),
+        _case(['search', '"', '--raw'], codes=_FAILS),
+        _case(['match', term]),
+        _case(['match', term, '--lines']),
+        _case(['match', term, '--lineno']),
+        _case(['match', term.upper(), '--ignore-case', '--lines']),
+        _case(['match', term, '--all']),
+        _case(['match', term, '--field', 'desc']),
+        _case(['match', term, '--field', 'name,tags', '--lines']),
+        _case(['match', _ABSENT], codes=_NOTHING),
+        _case(['match', '('], codes=_FAILS),
+        _case(['read', _INDEX]),
+        _case(['read', f'{_ABSENT}.md'], codes=_FAILS),
     ]
     if scope is not None:
-        query.append(['map', scope])
-        query.append(['search', term, scope, '--json'])
-        query.append(['match', r'^#+ \S', scope, '--lineno'])
-        query.append(['read', scope])
+        query.append(_case(['map', scope]))
+        query.append(_case(['search', term, scope, '--json']))
+        query.append(_case(['match', r'^#+ \S', scope, '--lineno']))
+        query.append(_case(['read', scope]))
     for page in sample.pages:
-        query.append(['read', page])
+        query.append(_case(['read', page]))
     for page in sample.pages[:1]:
-        query.append(['read', page, '--lines', '0:5'])
-        query.append(['read', page, '--lines', '2:'])
-        query.append(['read', page, '--words', '3:40'])
-        query.append(['read', page, '--chars', '10:200'])
+        query.append(_case(['read', page, '--lines', '0:5']))
+        query.append(_case(['read', page, '--lines', '2:']))
+        query.append(_case(['read', page, '--words', '3:40']))
+        query.append(_case(['read', page, '--chars', '10:200']))
     # cold caches, then the writes
     new = ['--desc', _NEW_DESC, '--content', _NEW_CONTENT]
     write = [
@@ -220,8 +236,8 @@ def stages(sample: Sample) -> tuple[Stage, ...]:
         _case(['update'], writes=True),
     ]
     return (
-        Stage(name='pristine', cases=_named([*map(_case, pristine), *inside])),
-        Stage(name='query', cases=_named(map(_case, query))),
+        Stage(name='pristine', cases=_named(pristine)),
+        Stage(name='query', cases=_named(query)),
         Stage(name='write', cases=_named(write), cold=True),
         Stage(name='full', cases=_named(full)),
         Stage(name='cross', cases=_named(cross), base='write'),
@@ -256,12 +272,27 @@ def _case(
     *,
     inside: Optional[str] = None,
     writes: bool = False,
+    codes: Optional[frozenset[int]] = None,
 ) -> Case:
-    """Build a case named after its arguments and where it runs."""
+    """Build a case named after its arguments and where it runs.
+
+    Unless ``codes`` names them, the case allows the exit codes of a
+    command that works: ``lint``, ``update --check``, ``search`` and
+    ``match`` report through exit code 1, and every other command exits 0.
+    """
     name = ' '.join(args)
     if inside is not None:
         name += f' [in {inside or "."}]'
-    return Case(name=name, args=tuple(args), inside=inside, writes=writes)
+    if codes is None:
+        reports = (args[0] in ('lint', 'search', 'match')) or ('--check' in args)
+        codes = _REPORTS if reports else _DONE
+    return Case(
+        name=name,
+        args=tuple(args),
+        inside=inside,
+        writes=writes,
+        codes=codes,
+    )
 
 
 def _named(cases: Iterable[Case]) -> tuple[Case, ...]:

@@ -18,7 +18,10 @@ from parity import __main__ as cli, runner, side
 
 from .conftest import ENGINE, NOW, WIKI
 
-__all__ = ['test_matrix_command_strips_only_a_declared_notice']
+__all__ = [
+    'test_matrix_command_strips_only_a_declared_notice',
+    'test_run_that_would_compare_nothing_is_refused',
+]
 
 pytestmark = pytest.mark.skipif(
     (WIKI is None) or (shutil.which('git') is None),
@@ -101,3 +104,60 @@ def test_matrix_command_strips_only_a_declared_notice(
         assert kept.read_bytes().startswith(side.NOTICE)
     # the snapshot and every clone are gone
     assert not (tmp_path / 'work' / 'example').exists()
+
+
+@pytest.mark.parametrize(
+    argnames=('broken', 'message'),
+    argvalues=[
+        ('stage', 'invalid choice'),
+        ('corpora', 'declares no corpus'),
+        ('side', 'does not start'),
+    ],
+)
+def test_run_that_would_compare_nothing_is_refused(
+    tmp_path: pathlib.Path,
+    corpus: runner.Corpus,
+    capsys: pytest.CaptureFixture[str],
+    broken: str,
+    message: str,
+) -> None:
+    """A mistyped stage, an empty corpora file and a dead side are no pass.
+
+    Each would compare nothing and report no difference. The command exits
+    2 with a message instead, before it snapshots anything or writes a
+    result file.
+    """
+    sides = tmp_path / 'sides.toml'
+    engine = [f'{WIKI}']
+    if broken == 'side':
+        engine = [sys.executable, '-c', 'import nonexistent_module']
+    sides.write_text(
+        f'[engine]\n'
+        f'argv = {json.dumps(engine)}\n'
+        f'env = {{ PYTHONPATH = {json.dumps(ENGINE.env["PYTHONPATH"])} }}\n',
+        encoding='utf-8',
+    )
+    corpora = tmp_path / 'corpora.toml'
+    if broken != 'corpora':
+        corpora.write_text(
+            f'[example]\n'
+            f'checkout = {json.dumps(f"{corpus.checkout}")}\n'
+            f'root = {json.dumps(corpus.root)}\n',
+            encoding='utf-8',
+        )
+    else:
+        corpora.write_text('', encoding='utf-8')
+    out = tmp_path / 'out'
+    argv = [
+        'matrix',
+        *('--sides', f'{sides}', '--a', 'engine', '--b', 'engine'),
+        *('--corpora', f'{corpora}'),
+        *('--stage', 'wirte' if broken == 'stage' else 'write'),
+        *('--work', f'{tmp_path / "work"}', '--out', f'{out}', '--now', NOW),
+    ]
+    with pytest.raises(SystemExit) as raised:
+        cli.main(argv)
+    assert raised.value.code == 2
+    assert message in capsys.readouterr().err
+    assert not (tmp_path / 'work').exists()
+    assert not out.exists()

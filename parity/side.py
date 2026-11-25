@@ -58,12 +58,15 @@ class Outcome:
         stdout: The bytes written to stdout.
         stderr: The bytes written to stderr, without the notice line.
         code: The exit code.
+        notice: Whether stderr opened with the notice, on a side that
+            prints it; always true on a side that prints none.
 
     """
 
     stdout: bytes
     stderr: bytes
     code: int
+    notice: bool = True
 
 
 def environment(side: Side, home: pathlib.Path, *, now: str) -> dict[str, str]:
@@ -131,6 +134,14 @@ def run(
         timeout=_TIMEOUT,
     )
     stderr = result.stderr
-    if side.notice and stderr.startswith(NOTICE):
-        stderr = stderr[len(NOTICE) :]
-    return Outcome(stdout=result.stdout, stderr=stderr, code=result.returncode)
+    notice = True
+    if side.notice:
+        notice = stderr.startswith(NOTICE)
+        if notice:
+            stderr = stderr[len(NOTICE) :]
+    return Outcome(
+        stdout=result.stdout,
+        stderr=stderr,
+        code=result.returncode,
+        notice=notice,
+    )

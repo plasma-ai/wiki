@@ -171,7 +171,9 @@ def run(
         The differences and the report.
 
     Raises:
-        ValueError: If two sides share a name: a kept tree is filed under it.
+        ValueError: If two sides share a name (a kept tree is filed under
+            it), or if ``only`` names no stage of the plan: a run of no
+            stage would report no difference.
 
     """
     names = [runner.name for runner in sides]
@@ -179,6 +181,12 @@ def run(
         raise ValueError(f'Sides must have different names, got {names!r}.')
     stages = plan.stages
     if only is not None:
+        known = [stage.name for stage in stages]
+        unknown = sorted(set(only) - set(known))
+        if unknown:
+            raise ValueError(
+                f'No stage is named {unknown!r}; the stages are {known!r}.'
+            )
         bases = {stage.base for stage in stages if stage.name in only}
         stages = tuple(stage for stage in stages if stage.name in {*only, *bases})
     continued = {stage.base for stage in stages}
@@ -216,7 +224,15 @@ def run(
                 )
                 seconds = time.monotonic() - started
                 label = plan.corpus.label
-                logger.info('%s %s %s: %.1f s', label, stage.name, name, seconds)
+                exits = _exits(done)
+                logger.info(
+                    '%s %s %s: %.1f s, exit codes %s',
+                    label,
+                    stage.name,
+                    name,
+                    seconds,
+                    exits,
+                )
                 runs.append(done)
                 if keep or (stage.name in continued):
                     (kept / stage.name).mkdir(parents=True, exist_ok=True)
@@ -348,6 +364,12 @@ def _below(
     }
 
 
+def _exits(run: Run) -> dict[int, int]:
+    """Return how many commands of ``run`` ended with each exit code."""
+    codes = [record.outcome.code for record in run.records]
+    return {code: codes.count(code) for code in sorted(set(codes))}
+
+
 def _differing_streams(stage: Stage, runs: Sequence[Run]) -> dict[str, bytes]:
     """Return both streams of every run, for each case whose streams differ."""
     result = {}
@@ -384,6 +406,10 @@ def _stage_report(
     return {
         'name': stage.name,
         'runs': [run.name for run in runs],
+        'exits': {
+            run.name: {f'{code}': count for code, count in _exits(run).items()}
+            for run in runs
+        },
         'cases': cases,
         'differences': [dataclasses.asdict(difference) for difference in found],
     }

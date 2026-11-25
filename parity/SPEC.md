@@ -26,8 +26,11 @@ file. `--now` sets the fixed instant and `--seed` the seed of the matrix sample.
 `matrix` also takes `--stage NAME` (repeatable) and `--keep`, which leaves the
 snapshot and every tree in the work folder.
 
-Both commands exit 0 when every result is the expected one and 1 otherwise. An
-error of the harness itself is a Python traceback.
+Both commands exit 0 when every result is the expected one and 1 otherwise. A
+run that would compare nothing exits 2 with a message, before it snapshots
+anything: a corpora file with no corpus, an unknown corpus label or stage name,
+or a side whose `--version` fails or prints nothing. An error of the harness
+itself is a Python traceback.
 
 The harness makes `<work>/<label>` for each corpus and removes it at the end. It
 must not exist beforehand, and a run that fails leaves it in place.
@@ -58,7 +61,8 @@ root = "wiki"
 
 Each corpus gets one result file, `<out>/<label>.json`. It records the host
 (platform, Python, SQLite, git, the system git config), the instant, each side's
-argv, variables and reported version, the sample, and for every case the exit
+argv, variables and reported version, the sample, for every stage how many
+commands of each run ended with each exit code, and for every case the exit
 code, the size and sha256 of both streams, and the touched count on every run.
 The streams of a case are saved under `<out>/<label>/<stage>/` only when they
 differ. Result files hold corpus paths and text, so they stay outside the
@@ -99,7 +103,10 @@ The side's own variables are applied last. stdin is the null device.
   fixes its clock. On a side with `notice = true` (the default) the harness
   removes that line when it is the first line of stderr. A side that fixes its
   clock through a wrapper prints no notice and sets `notice = false`. A notice
-  on a side that does not declare it is a stderr difference.
+  on a side that does not declare it is a stderr difference. Every matrix
+  command reads the clock variable, so a side that declares the notice must
+  print it on each one: a command without it is a `notice` difference, since
+  that side's clock was not fixed.
 - **Hash seed.** Outside the self-check a side has no `PYTHONHASHSEED` unless
   its table sets one.
 
@@ -156,6 +163,13 @@ home and the neutral folder) before the first command and after each one.
 - **Read-only commands.** `lint`, `update --check`, `read`, `match`, `map` and
   `search` may touch nothing outside `<root>/.wiki/cache`. This is checked on
   each side by itself.
+- **Allowed exit codes.** Two sides that fail the same way agree on everything,
+  so each case names the exit codes it allows, and each side is checked by
+  itself. A command that must succeed allows 0 (`update`, `new`, `map`, `read`).
+  One that also reports through its exit code allows 0 and 1 (`lint`,
+  `update --check`, `search`, `match`). A search for a word no page holds allows
+  1, and a command built to fail allows 2. Any other code is an `unexpected`
+  difference: the side did not run the command the case is built for.
 - **Scans.** The first scan of a clone takes its digests from the snapshot for
   every file whose size, mode and mtime are the snapshot's. A later scan hashes
   a file again when its inode, size, mode, mtime or ctime changed; no write
@@ -166,19 +180,22 @@ home and the neutral folder) before the first command and after each one.
 Each difference names the stage, the run that differs from the first run, the
 case, an aspect and a detail:
 
-| Aspect    | Meaning                                               | Detail        |
-| --------- | ----------------------------------------------------- | ------------- |
-| `stdout`  | the bytes of stdout differ                            | empty         |
-| `stderr`  | the bytes of stderr differ                            | empty         |
-| `exit`    | the exit codes differ                                 | empty         |
-| `tree`    | the manifests differ at a path                        | the path      |
-| `touched` | one side touched a path and the other did not         | the path      |
-| `wrote`   | a read-only command touched a path outside the caches | the path      |
-| `cache`   | the caches differ                                     | cache and key |
+| Aspect       | Meaning                                               | Detail        |
+| ------------ | ----------------------------------------------------- | ------------- |
+| `stdout`     | the bytes of stdout differ                            | empty         |
+| `stderr`     | the bytes of stderr differ                            | empty         |
+| `exit`       | the exit codes differ                                 | empty         |
+| `tree`       | the manifests differ at a path                        | the path      |
+| `touched`    | one side touched a path and the other did not         | the path      |
+| `cache`      | the caches differ                                     | cache and key |
+| `wrote`      | a read-only command touched a path outside the caches | the path      |
+| `unexpected` | a command ended with an exit code its case forbids    | the exit code |
+| `notice`     | a side that declares the notice printed none          | empty         |
 
-Paths are relative to the slot, so a page reads `tree/<root>/<page>`. The case
-is `(baseline)` for a difference before the first command and `(end)` for a tree
-that does not hold what its commands left.
+The last three rows are checked on each run by itself, and the run they name is
+the one that breaks the rule. Paths are relative to the slot, so a page reads
+`tree/<root>/<page>`. The case is `(baseline)` for a difference before the first
+command and `(end)` for a tree that does not hold what its commands left.
 
 ## Caches
 
@@ -229,8 +246,11 @@ has five stages:
   group at the end of `pristine`, which runs from inside the wiki.
 - **Left out.** The matrix has no `--help` call and no usage error. Their layout
   belongs to the version of the argument parser, not to the engine.
-- A command the wiki refuses (a name its policy rejects, a folder its settings
-  exclude) is still a case: both sides must refuse it the same way.
+- **Refusals.** Three cases are built to fail: an invalid search query, an
+  invalid match pattern and a page that does not exist. A sampled folder or page
+  the wiki refuses on both sides (a name its policy rejects, a folder its
+  settings exclude) compares only the refusal, so it is an `unexpected`
+  difference and the run does not pass; another `--seed` draws another sample.
 
 ## Self-check
 
@@ -247,8 +267,8 @@ corpus. It runs one engine on both sides.
 | Check     | The doctored side                                                      | Stage   | Must show as                                |
 | --------- | ---------------------------------------------------------------------- | ------- | ------------------------------------------- |
 | `stdout`  | changes one byte of stdout                                             | `full`  | `stdout`                                    |
-| `stderr`  | changes one byte of stderr                                             | `full`  | `stderr`                                    |
-| `exit`    | changes the exit code                                                  | `full`  | `exit`                                      |
+| `stderr`  | adds one byte to stderr                                                | `full`  | `stderr`                                    |
+| `exit`    | changes the exit code                                                  | `full`  | `exit`, `unexpected`                        |
 | `file`    | changes one byte of `.wiki/settings.json` in place, old times put back | `full`  | `tree`                                      |
 | `mode`    | changes the mode of `.wiki/settings.json`                              | `full`  | `tree`                                      |
 | `extra`   | writes one extra file                                                  | `full`  | `tree`, `touched`                           |
@@ -256,8 +276,10 @@ corpus. It runs one engine on both sides.
 | `stray`   | writes one extra file during a read-only command                       | `write` | `tree`, `touched`, `wrote`                  |
 | `counts`  | adds one to a word count in place, old times put back                  | `write` | `cache` (`word_counts.json`)                |
 | `index`   | adds a row to each table of `search.db`, old times put back            | `write` | `cache` (`search.db`: `files`, `notes_fts`) |
+| `notice`  | drops the first line of stderr                                         | `full`  | `notice`                                    |
 
 The first six are one stdout byte, one stderr byte, one exit code, one file
-byte, one mode and one extra written file. The other four prove the rules those
-six do not reach: the touched set by itself, the read-only rule, and the two
-caches.
+byte, one mode and one extra written file. The others prove the rules those six
+do not reach: the touched set by itself, the read-only rule, the two caches and
+the notice. The `exit` check also proves the rule of allowed exit codes. The
+`notice` check is left out for a side that prints no notice.

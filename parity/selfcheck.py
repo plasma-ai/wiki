@@ -38,6 +38,7 @@ CHECKS = (
     ('stray', 'extra', 'write'),
     ('counts', 'counts', 'write'),
     ('index', 'index', 'write'),
+    ('notice', 'notice', 'full'),
 )
 
 # the two sides of one engine differ only in their hash seed
@@ -90,12 +91,15 @@ def run(
         seed: Seed of the matrix sample.
 
     Returns:
-        The clean check, then one check per row of :data:`CHECKS`.
+        The clean check, then one check per row of :data:`CHECKS`. The
+        ``notice`` row is left out for an engine that prints no notice.
 
     """
     plan = runner.prepare(corpus, work=work, seed=seed)
     result = [clean(plan, base, now=now)]
-    for name, _, _ in CHECKS:
+    for name, kind, _ in CHECKS:
+        if (kind == 'notice') and not base.notice:
+            continue
         result.append(doctored(plan, base, name, now=now))
     runner.discard(plan)
     return result
@@ -188,8 +192,12 @@ def _acts_on(kind: str) -> str:
 
 def _shows_as(kind: str, case: Case, corpus: Corpus) -> list[tuple[str, str]]:
     """Return the aspect and detail of each difference a doctored command must show."""
-    if kind in ('stdout', 'stderr', 'exit'):
+    if kind in ('stdout', 'stderr', 'notice'):
         return [(kind, '')]
+    # the low bit flips in the one exit code the case allows
+    if kind == 'exit':
+        (code,) = case.codes
+        return [('exit', ''), ('unexpected', f'exit {code ^ 1}')]
     if kind == 'counts':
         return [('cache', f'word_counts.json: {doctor.COUNTS_KEY}')]
     if kind == 'index':
