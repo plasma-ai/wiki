@@ -223,6 +223,39 @@ def _record(
         ),
         (('match', 'a*+'), None, (b'', b'x\n', 2), (b'', b'Error: No.\n', 2), (), None),
         (('match', 'a*+'), None, (b'x\n', b'', 0), (b'', b'Error: No.\n', 1), (), None),
+        # D3: the pattern is the first positional argument, under its flags
+        (
+            ('match', '--field', 'desc', '--', 'a*+', 'folder'),
+            None,
+            (b'x\n', b'', 0),
+            (b'', b'Error: No.\n', 2),
+            (),
+            'D3',
+        ),
+        (
+            ('match', '--field', 'a*+', 'a+'),
+            None,
+            (b'x\n', b'', 0),
+            (b'', b'Error: No.\n', 2),
+            (),
+            None,
+        ),
+        (
+            ('match', '-ai', r'(a)\1'),
+            None,
+            (b'x\n', b'', 0),
+            (b'', b'Error: No.\n', 2),
+            (),
+            'D3',
+        ),
+        (
+            ('match', '-af', 'i', r'(a)\1'),
+            None,
+            (b'x\n', b'', 0),
+            (b'', b'Error: No.\n', 2),
+            (),
+            None,
+        ),
         # D3: a settings value is refused as malformed JSON, and no other way
         (
             ('lint',),
@@ -264,6 +297,14 @@ def _record(
             (b'', _MALFORMED + b'two\n', 2),
             (),
             None,
+        ),
+        (
+            ('lint',),
+            b'{"parity": ' + b'9' * 4301 + b'}',
+            (b'', _MALFORMED + b'one\n', 2),
+            (b'', _MALFORMED + b'two\n', 2),
+            (),
+            'D1',
         ),
         # D1: v1's text is another error than its `re` raises on the pattern
         (
@@ -314,11 +355,16 @@ def _record(
         'refusal in two lines',
         'refusal where v1 refused',
         'refusal with another exit code',
+        'pattern behind options',
+        'pattern that is an option value',
+        'pattern under a short flag',
+        'pattern beside a short value',
         'value refused as malformed',
         'value refused another way',
         'malformed text',
         'malformed with no text',
         'malformed where v1 reads',
+        'malformed by the digit limit',
         'another error',
         'warning',
         'another warning',
@@ -347,7 +393,9 @@ def test_classifier_excuses_only_its_own_frame(
     a v1 that refused too; a library's text with no text, or where v1's
     own reader does not raise; a warning the pattern does not give; a kept
     message with a line beside it; a page where no help was asked for.
-    Every neighbor stays a difference.
+    Every neighbor stays a difference. The pattern of a ``match`` command
+    is found as the command line finds it, and v1's reader raises on an
+    integer past its digit limit as it does on a syntax error.
     """
     one = _record(tmp_path, *first, settings=settings)
     two = _record(tmp_path, *second, touched=touched, settings=settings)
