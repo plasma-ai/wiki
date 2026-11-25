@@ -160,26 +160,35 @@ def _rank(
     connection = _open(root)
     try:
         _refresh(connection, root, files, on_unreadable=on_unreadable)
-        # select weighted-BM25-ranked rows with a snippet of the body
+        # rank the matching rows by weighted BM25, selecting their rowids
+        # alone: SQLite evaluates a statement's result columns for each row
+        # that enters the best set as it scans, so a snippet selected here is
+        # built for the rows stored first on every query, whatever their size
         # (only trusted module constants interpolate; values bind via ?)
+        ranked = 'SELECT rowid FROM notes_fts WHERE notes_fts MATCH ?'
+        parameters: list[object] = [expression, expression]
+        # scope to the subtree: the folder itself or any folder below it
+        if folder != root:
+            relpath = _relative(folder, root)
+            prefix_path = relpath.rstrip('/') + '/'
+            ranked += ' AND (folder = ? OR substr(folder, 1, ?) = ?)'
+            parameters.extend((relpath, len(prefix_path), prefix_path))
+        # order by rank, then path -- tied rows otherwise follow the order the
+        # index stored them in, so a limit cut varies with its refresh history
+        order = f' ORDER BY bm25(notes_fts, {_BM25_WEIGHTS}), path'
+        ranked += f'{order} LIMIT ?'
+        parameters.append(limit)
+        # select the ranked rows with a snippet of the body, in the same
+        # order; the unary + keeps the rowid test a filter over one match
+        # scan, where a rowid lookup would run the match once per ranked row
         sql = (
             'SELECT path, '
             f"snippet(notes_fts, 4, '{_SNIPPET_START}', '{_SNIPPET_END}', "
             f"'{_SNIPPET_ELLIPSIS}', {_SNIPPET_TOKENS}), "
             f'bm25(notes_fts, {_BM25_WEIGHTS}) '
-            'FROM notes_fts WHERE notes_fts MATCH ?'
+            f'FROM notes_fts WHERE notes_fts MATCH ? AND +rowid IN ({ranked})'
+            f'{order}'
         )
-        parameters: list[object] = [expression]
-        # scope to the subtree: the folder itself or any folder below it
-        if folder != root:
-            relpath = _relative(folder, root)
-            prefix_path = relpath.rstrip('/') + '/'
-            sql += ' AND (folder = ? OR substr(folder, 1, ?) = ?)'
-            parameters.extend((relpath, len(prefix_path), prefix_path))
-        # order by rank, then path -- tied rows otherwise follow the refresh's
-        # hash-seeded insertion order, so a limit cut varies between runs
-        sql += f' ORDER BY bm25(notes_fts, {_BM25_WEIGHTS}), path LIMIT ?'
-        parameters.append(limit)
         # execute the ranked query
         try:
             return connection.execute(sql, parameters).fetchall()
@@ -276,12 +285,25 @@ def _refresh(
             for path, (_, mtime_ns, size) in present.items()
             if indexed.get(path) != (mtime_ns, size)
         }
+        # find the rows to drop -- path is UNINDEXED, so a lookup scans every
+        # row: one scan serves every removed or changed page, and only a page
+        # with a signature can hold a row
+        stale = removed | (changed & set(indexed))
+        rowids = {}
+        if stale:
+            for rowid, path in connection.execute('SELECT rowid, path FROM notes_fts'):
+                if path in stale:
+                    rowids[path] = rowid
         # drop rows for removed pages
-        for relpath in removed:
-            connection.execute('DELETE FROM notes_fts WHERE path = ?', (relpath,))
+        for relpath in sorted(removed):
+            if relpath in rowids:
+                connection.execute(
+                    'DELETE FROM notes_fts WHERE rowid = ?', (rowids[relpath],)
+                )
             connection.execute('DELETE FROM files WHERE path = ?', (relpath,))
-        # reindex changed pages
-        for relpath in changed:
+        # reindex changed pages in path order, so the rows and the read
+        # notices come out the same on every run
+        for relpath in sorted(changed):
             path, mtime_ns, size = present[relpath]
             # read before mutating: a failed read leaves an indexed page
             # serving its stale row, to be retried on the next refresh
@@ -303,7 +325,10 @@ def _refresh(
                 continue
             title, desc, headings, tags, body = _read_fields(path, text)
             folder = str(pathlib.PurePath(relpath).parent)
-            connection.execute('DELETE FROM notes_fts WHERE path = ?', (relpath,))
+            if relpath in rowids:
+                connection.execute(
+                    'DELETE FROM notes_fts WHERE rowid = ?', (rowids[relpath],)
+                )
             connection.execute(
                 'INSERT INTO files(path, mtime_ns, size) VALUES (?, ?, ?) '
                 'ON CONFLICT(path) DO UPDATE SET '

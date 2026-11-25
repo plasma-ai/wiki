@@ -782,11 +782,23 @@ class Wiki:
                 candidates.append(self._relpath(page))
         if not candidates:
             return
+        # each path is probed as ./<path>, as the fence probes, so a leading
+        # ':' never reads as pathspec magic
+        payload = b''.join(os.fsencode(f'./{entry}') + b'\0' for entry in candidates)
+        # the index-aware probe scans the whole index once per path, so a
+        # pattern-pure pass first narrows the payload to the paths some
+        # pattern on disk ignores, which git echoes back in the payload's
+        # framing; no hit, no note
+        cmd = ['--no-optional-locks', 'check-ignore', '-z', '--stdin', '--no-index']
+        result = wiki.util.git._git(cmd, cwd=self._root, input=payload, raw=True)
+        if (result is None) or (result.returncode != 0):
+            return
+        payload = result.stdout
         # index-aware and unpinned: the question is whether THIS machine's
         # git would refuse the file, so a tracked file reads as safe and
-        # the personal global counts; each path is probed as ./<path>, read
-        # literally, as the fence probes
-        payload = b''.join(os.fsencode(f'./{entry}') + b'\0' for entry in candidates)
+        # the personal global counts; a path's glob characters still match
+        # tracked names here, and git refuses a batch that holds a path
+        # inside a submodule, which draws no note
         cmd = ['--no-optional-locks', 'check-ignore', '-z', '-v', '--stdin']
         result = wiki.util.git._git(cmd, cwd=self._root, input=payload, raw=True)
         if (result is None) or (result.returncode not in (0, 1)):
