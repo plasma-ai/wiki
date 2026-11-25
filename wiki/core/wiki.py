@@ -27,6 +27,7 @@ from wiki.constants import (
     WIKI_CACHE,
     WIKI_CONFIG_DIR,
     WIKI_DIR,
+    WIKI_FREEZE_TIME,
     WIKI_INDEX,
     WIKI_SETTINGS,
 )
@@ -52,6 +53,19 @@ _TIMEOUT_SECONDS = 10
 # how long after its stamp a file's last write still counts as the write that
 # stamped it: a run takes one stamp as it starts, and its writes land after
 _STAMP_GRACE = dt.timedelta(seconds=60)
+
+# the one form WIKI_FREEZE_TIME takes: an RFC 3339 date-time with a capital T
+# and Z, no leap second, and at most the microseconds of the clock it replaces
+_PINNED_INSTANT = re.compile(
+    r'[0-9]{4}-[0-9]{2}-[0-9]{2}'
+    r'T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\.[0-9]{1,6})?'
+    r'(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])'
+)
+
+# the UTC years a WIKI_FREEZE_TIME instant may fall in: a zone shifts an
+# instant by under a day, so every rendering stays within the years 1000 to
+# 9999, where the calendar holds it and %Y is four digits on every platform
+_PINNED_YEARS = (1001, 9998)
 
 # soft ceiling for a folded frontmatter desc: past it lint notes the page,
 # since every map row and parent index link reproduces the whole desc
@@ -493,6 +507,35 @@ class Wiki:
         return result
 
     @functools.cached_property
+    def _exclude_lookup(
+        self: Wiki,
+    ) -> tuple[dict[str, int], dict[str, int], list[tuple[int, re.Pattern[str]]]]:
+        """Return the ``exclude.patterns`` policy keyed for matching.
+
+        Splits :attr:`_exclude_policy` three ways, each entry carrying
+        its position in the list so a match can still name the first
+        pattern in list order: the anchored wildcard-free patterns by
+        their text, the floating ones (bare names) by their name -- see
+        :func:`wiki.util.glob.literal` -- and the patterns holding a
+        wildcard with their compiled regex, in list order. A text listed
+        twice keeps its first position.
+        """
+        anchored: dict[str, int] = {}
+        floating: dict[str, int] = {}
+        wildcards = []
+        for position, (pattern, compiled) in enumerate(self._exclude_policy):
+            literal = wiki.util.glob.literal(pattern)
+            if literal is None:
+                wildcards.append((position, compiled))
+                continue
+            text, floats = literal
+            if floats:
+                floating.setdefault(text, position)
+            else:
+                anchored.setdefault(text, position)
+        return anchored, floating, wildcards
+
+    @functools.cached_property
     def _links_policy(self: Wiki) -> list[tuple[str, pathlib.Path]]:
         """Return the ``links.external`` folders from ``settings.json``.
 
@@ -739,11 +782,23 @@ class Wiki:
                 candidates.append(self._relpath(page))
         if not candidates:
             return
+        # each path is probed as ./<path>, as the fence probes, so a leading
+        # ':' never reads as pathspec magic
+        payload = b''.join(os.fsencode(f'./{entry}') + b'\0' for entry in candidates)
+        # the index-aware probe scans the whole index once per path, so a
+        # pattern-pure pass first narrows the payload to the paths some
+        # pattern on disk ignores, which git echoes back in the payload's
+        # framing; no hit, no note
+        cmd = ['--no-optional-locks', 'check-ignore', '-z', '--stdin', '--no-index']
+        result = wiki.util.git._git(cmd, cwd=self._root, input=payload, raw=True)
+        if (result is None) or (result.returncode != 0):
+            return
+        payload = result.stdout
         # index-aware and unpinned: the question is whether THIS machine's
         # git would refuse the file, so a tracked file reads as safe and
-        # the personal global counts; each path is probed as ./<path>, read
-        # literally, as the fence probes
-        payload = b''.join(os.fsencode(f'./{entry}') + b'\0' for entry in candidates)
+        # the personal global counts; a path's glob characters still match
+        # tracked names here, and git refuses a batch that holds a path
+        # inside a submodule, which draws no note
         cmd = ['--no-optional-locks', 'check-ignore', '-z', '-v', '--stdin']
         result = wiki.util.git._git(cmd, cwd=self._root, input=payload, raw=True)
         if (result is None) or (result.returncode not in (0, 1)):
@@ -2622,14 +2677,15 @@ class Wiki:
         (``timestamp.timezone`` / ``timestamp.format``); when a timezone is
         configured without an authored format, the default format's literal
         trailing ``Z`` becomes ``%z``, so the stamp carries the zone's real
-        offset. Override in subclasses for a different time source.
+        offset. A set ``WIKI_FREEZE_TIME`` fixes the instant rendered.
+        Override in subclasses for a different time source.
 
         Returns:
             Timestamp string like ``YYYY-MM-DDTHH:MM:SSZ``.
 
         """
         policy = self._timestamp_policy
-        return dt.datetime.now(policy['zone']).strftime(policy['format'])
+        return _now(policy['zone']).strftime(policy['format'])
 
     @functools.cached_property
     def logger(self: Wiki) -> logging.Logger:
@@ -3623,22 +3679,40 @@ class Wiki:
         when no pattern matches. A pattern matches the entry's
         root-relative POSIX path or the relpath of any strict in-root
         ancestor -- excluding a directory excludes its whole subtree.
-        The root itself (empty relpath) is never tested.
+        The root itself (empty relpath) is never tested. When several
+        patterns match, the first in list order is the one named.
         """
         if not self._exclude_policy:
             return None
+        anchored, floating, wildcards = self._exclude_lookup
         # test the path and every strict in-root ancestor, so a pattern
-        # naming a directory covers everything inside it
+        # naming a directory covers everything inside it; the wildcard-free
+        # patterns are looked up by text, keeping the lowest position found
+        first = len(self._exclude_policy)
         candidates = []
         relative = self._relpath(path)
         while relative:
             candidates.append(relative)
-            relative = relative.rpartition('/')[0]
-        for pattern, compiled in self._exclude_policy:
+            if relative in anchored:
+                first = min(first, anchored[relative])
+            parent, sep, name = relative.rpartition('/')
+            if name in floating:
+                # NOTE: a bare name's regex reaches below the root through
+                #   the directory run '.+', which is never empty and never
+                #   spans a newline, so the name counts only under such a parent
+                if (not sep) or (parent and ('\n' not in parent)):
+                    first = min(first, floating[name])
+            relative = parent
+        # run the wildcard patterns listed before the best lookup
+        for position, compiled in wildcards:
+            if position > first:
+                break
             for candidate in candidates:
                 if compiled.match(candidate):
-                    return pattern
-        return None
+                    return self._exclude_policy[position][0]
+        if first == len(self._exclude_policy):
+            return None
+        return self._exclude_policy[first][0]
 
     def _is_gitignored(self: Wiki, path: pathlib.Path) -> bool:
         """Return ``True`` if the enclosing repo's gitignore fences ``path``.
@@ -6831,6 +6905,49 @@ def _is_offline() -> bool:
     if value not in ('false', ''):
         raise ValueError(f'{OFFLINE_MODE} must be "true" or "false", got {value!r}.')
     return False
+
+
+def _pinned_now() -> Optional[dt.datetime]:
+    """Return the instant ``WIKI_FREEZE_TIME`` fixes the clock at, if set.
+
+    Raises:
+        ValueError: If ``WIKI_FREEZE_TIME`` is set to anything other than an
+            RFC 3339 date-time (capital ``T`` and ``Z``, no leap second, at
+            most six fraction digits) that names an instant in the allowed
+            UTC years (``_PINNED_YEARS``).
+
+    """
+    value = os.environ.get(WIKI_FREEZE_TIME, '').strip()
+    if not value:
+        return None
+    first, last = _PINNED_YEARS
+    message = (
+        f'{WIKI_FREEZE_TIME} must be an RFC 3339 instant in the UTC years'
+        f' {first} to {last}, like 2026-01-02T03:04:05Z, got {value!r}.'
+    )
+    # NOTE: fromisoformat reads more forms than this one, and which ones turns
+    #   on the Python version (24:00:00, a 60-minute offset, a seventh fraction
+    #   digit dropped): the pattern fixes the form and leaves it the calendar
+    if _PINNED_INSTANT.fullmatch(value) is None:
+        raise ValueError(message)
+    try:
+        pinned = dt.datetime.fromisoformat(value).astimezone(dt.UTC)
+    except (ValueError, OverflowError):
+        raise ValueError(message) from None
+    if not (first <= pinned.year <= last):
+        raise ValueError(message)
+    return pinned
+
+
+def _now(zone: dt.tzinfo) -> dt.datetime:
+    """Return the current instant in ``zone``.
+
+    The instant is the one ``WIKI_FREEZE_TIME`` fixes, else the clock's.
+    """
+    pinned = _pinned_now()
+    if pinned is None:
+        return dt.datetime.now(zone)
+    return pinned.astimezone(zone)
 
 
 def _encloses_wiki_error(nested: pathlib.Path) -> ValueError:

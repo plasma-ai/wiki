@@ -8,7 +8,8 @@ Configuration
   indexing exclusions, and external link folders for that wiki;
 - the user-global file ``~/.wiki/settings.json`` — the machine-local trust
   store, not wiki policy;
-- the environment variables ``OFFLINE_MODE`` and ``WIKI_CONFIG_DIR``.
+- the environment variables ``OFFLINE_MODE`` and ``WIKI_CONFIG_DIR``, plus
+  the test switch ``WIKI_FREEZE_TIME``.
 
 The per-wiki file doubles as the *declared-root marker*: its presence tells
 every command where the wiki begins. This page covers each surface, plus how
@@ -563,6 +564,28 @@ Environment variables
 
 ``WIKI_CONFIG_DIR``
    Path. Overrides the ``~/.wiki`` config home, relocating the trust store.
+
+``WIKI_FREEZE_TIME``
+   A test switch, not a setting: an RFC 3339 instant, such as
+   ``2026-01-02T03:04:05Z``, that every clock read returns in place of the
+   current time. Stamps render it through the wiki's own ``timestamp`` policy,
+   so two runs given one value write the same bytes whenever they run;
+   ``wiki trust`` records it too. The value takes one form — a capital ``T``,
+   an offset of ``Z``, ``+HH:MM`` or ``-HH:MM``, no leap second, at most six
+   fraction digits, a UTC year from 1001 to 9998 — with surrounding whitespace
+   ignored, and an empty value counts as unset. A command reads the variable as
+   it starts, once its command line has parsed. A value of any other form fails
+   the command with exit 2 before it does anything, whether or not it reads the
+   clock and ahead of its own option checks. While the variable is set, each
+   command opens stderr with the line ``WIKI_FREEZE_TIME is set: timestamps use
+   its fixed instant, not the clock.`` — if that line appears outside a test,
+   unset the variable. Help, ``--version`` and a command line that does not
+   parse never read the variable. Neither does the git merge driver: its exit
+   code is the merge's outcome, and it reads no clock. A ``.wiki/wiki.py`` hook
+   that overrides ``_utc_now`` keeps its own time source. File modification
+   times stay real as well: ``wiki update`` tells a hand edit by a file's
+   modification time, so while the stamp is frozen it can report ``Restamped``
+   for the same edited file on every run and leave the file's bytes unchanged.
 
 Other files under ``.wiki/``
 ----------------------------

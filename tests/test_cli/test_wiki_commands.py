@@ -10,7 +10,9 @@ reporting as observable output rather than internal state.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -21,6 +23,7 @@ import pytest
 
 from wiki import __version__ as WIKI_VERSION
 from wiki.cli.utils import configure_git_merge_driver
+from wiki.constants import WIKI_CONFIG_DIR, WIKI_FREEZE_TIME
 
 from .conftest import GIT, WIKI, _env, _git, _git_repo, _wiki
 
@@ -136,6 +139,12 @@ __all__ = [
     'test_trust_store_does_not_mark_home_as_wiki_root',
     'test_trust_store_exemption_survives_symlinked_home',
     'test_root_resolution_survives_a_symlink_loop_home',
+    'test_wiki_freeze_time_fixes_every_stamp',
+    'test_wiki_freeze_time_stamps_the_trust_record',
+    'test_blank_wiki_freeze_time_leaves_the_clock_running',
+    'test_invalid_wiki_freeze_time_fails_a_command_before_it_acts',
+    'test_wiki_freeze_time_is_read_when_a_command_runs',
+    'test_merge_driver_never_reads_wiki_freeze_time',
 ]
 
 # a hook ordering the ref category ahead of guide
@@ -185,6 +194,18 @@ _NOTING_HOOK = (
     "        self.on_desc_missing(path='a.md')\n"
     "        self.on_desc_missing(path='b.md')\n"
     "        raise RuntimeError('boom')\n"
+)
+
+# the line a command opens stderr with while WIKI_FREEZE_TIME fixes the clock
+_PINNED_CLOCK_NOTICE = (
+    'WIKI_FREEZE_TIME is set: timestamps use its fixed instant, not the clock.\n'
+)
+
+# the one error an invalid WIKI_FREEZE_TIME gets, formatted with the repr
+# of the value
+_PINNED_CLOCK_ERROR = (
+    'Error: WIKI_FREEZE_TIME must be an RFC 3339 instant in the UTC years'
+    ' 1001 to 9998, like 2026-01-02T03:04:05Z, got {now}.\n'
 )
 
 pytestmark = pytest.mark.skipif(
@@ -4422,6 +4443,304 @@ def test_root_resolution_survives_a_symlink_loop_home(tmp_path: pathlib.Path) ->
     result = _wiki(root, 'lint', home=loop)
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'Symlink loop' not in result.stderr
+
+
+# ------ clock seam
+
+
+@pytest.mark.parametrize(
+    argnames=('now', 'timestamp', 'stamp'),
+    argvalues=[
+        ('2026-01-02T03:04:05Z', {}, '2026-01-02T03:04:05Z'),
+        ('2026-01-02T03:04:05+02:00', {}, '2026-01-02T01:04:05Z'),
+        (
+            '2026-01-02T03:04:05Z',
+            {'timezone': 'America/New_York'},
+            '2026-01-01T22:04:05-0500',
+        ),
+        ('2026-01-02T20:04:05-10:30', {'format': '%Y-%m-%d'}, '2026-01-03'),
+        (
+            '2026-01-02T03:04:05.25Z',
+            {'format': '%Y-%m-%dT%H:%M:%S.%fZ'},
+            '2026-01-02T03:04:05.250000Z',
+        ),
+        (' \x1f2026-01-02T03:04:05Z\n', {}, '2026-01-02T03:04:05Z'),
+        (
+            '1001-01-01T00:00:00Z',
+            {'timezone': 'Etc/GMT+12'},
+            '1000-12-31T12:00:00-1200',
+        ),
+        (
+            '9998-12-31T23:59:59Z',
+            {'timezone': 'Etc/GMT-14'},
+            '9999-01-01T13:59:59+1400',
+        ),
+    ],
+    ids=[
+        'utc',
+        'offset',
+        'configured-zone',
+        'authored-format',
+        'fraction',
+        'padded',
+        'first-year',
+        'last-year',
+    ],
+)
+def test_wiki_freeze_time_fixes_every_stamp(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    now: str,
+    timestamp: dict,
+    stamp: str,
+) -> None:
+    """Every stamp is the ``WIKI_FREEZE_TIME`` instant, in the wiki's policy.
+
+    The seam replaces the clock, not the rendering: the instant passes
+    through the wiki's own zone and format, so two runs given one value
+    write the same bytes whenever they run. Each command says so in a
+    fixed line that opens its stderr. Whitespace around the value is
+    stripped as Python strips it, the ASCII separators included, and
+    the first and last years the seam takes render in the zones farthest
+    from UTC.
+    """
+    monkeypatch.setenv(WIKI_FREEZE_TIME, now)
+    root = tmp_path / 'wiki'
+    settings = json.dumps({'timestamp': timestamp})
+    init = _wiki(tmp_path, 'init', '--path', str(root), '--settings', settings)
+    assert init.returncode == 0, init.stdout + init.stderr
+    _write(root / 'core' / 'design.md', 'Body.\n')
+    # lint previews the stamps an update would write
+    lint = _wiki(root, 'lint', '--full', '--path', str(root))
+    assert f'+created: {stamp}\n' in lint.stdout
+    assert f'+updated: {stamp}\n' in lint.stdout
+    update = _wiki(root, 'update', '--path', str(root))
+    assert update.returncode == 0, update.stdout + update.stderr
+    (root / 'guides').mkdir()
+    new = _wiki(
+        root,
+        'new',
+        'guides',
+        '--desc',
+        'How-to guides.',
+        '--content',
+        'Text.',
+        '--path',
+        str(root),
+    )
+    assert new.returncode == 0, new.stdout + new.stderr
+    for result in (init, lint, update, new):
+        assert result.stderr.startswith(_PINNED_CLOCK_NOTICE)
+    # the root index, the adopted page and both folder indexes carry it
+    stamps = []
+    for path in sorted(root.rglob('*.md')):
+        text = path.read_text(encoding='utf-8')
+        stamps += re.findall(r'^(?:created|updated): (.*)$', text, re.M)
+    assert stamps == [stamp] * 8
+
+
+def test_wiki_freeze_time_stamps_the_trust_record(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``wiki trust`` records the instant ``WIKI_FREEZE_TIME`` names, in UTC.
+
+    The trust store is the one clock read outside a wiki's stamps, and it
+    keeps its own fixed format whatever the wiki's timestamp policy.
+    """
+    root = tmp_path / 'wiki'
+    settings = json.dumps({'timestamp': {'timezone': 'America/New_York'}})
+    init = _wiki(tmp_path, 'init', '--path', str(root), '--settings', settings)
+    assert init.returncode == 0, init.stdout + init.stderr
+    monkeypatch.setenv(WIKI_FREEZE_TIME, '2026-01-02T03:04:05+02:00')
+    result = _wiki(root, 'trust', '--path', str(root))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stderr == _PINNED_CLOCK_NOTICE
+    store = pathlib.Path(os.environ[WIKI_CONFIG_DIR]) / 'settings.json'
+    trusted = json.loads(store.read_text(encoding='utf-8'))['trusted']
+    assert trusted == {str(root.resolve()): '2026-01-02T01:04:05Z'}
+
+
+@pytest.mark.parametrize(
+    argnames='now',
+    argvalues=['', ' \t'],
+    ids=['empty', 'whitespace'],
+)
+def test_blank_wiki_freeze_time_leaves_the_clock_running(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    now: str,
+) -> None:
+    """A blank ``WIKI_FREEZE_TIME`` is unset: the real clock, and no notice."""
+    monkeypatch.setenv(WIKI_FREEZE_TIME, now)
+    root = tmp_path / 'wiki'
+    before = dt.datetime.now(dt.UTC).replace(microsecond=0)
+    result = _wiki(tmp_path, 'init', '--path', str(root))
+    after = dt.datetime.now(dt.UTC)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _PINNED_CLOCK_NOTICE not in result.stderr
+    text = (root / '_index.md').read_text(encoding='utf-8')
+    stamp = re.search(r'^updated: (.*)$', text, re.M).group(1)
+    written = dt.datetime.strptime(stamp, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=dt.UTC)
+    assert before <= written <= after
+
+
+@pytest.mark.parametrize(
+    argnames='now',
+    argvalues=[
+        'now',
+        '2026-01-02',
+        '2026-01-02T03:04:05',
+        '2026-01-02 03:04:05Z',
+        '2026-01-02t03:04:05z',
+        '2026-01-02T03:04Z',
+        '2026-01-02T03:04:05+0200',
+        '2026-01-02T03:04:05+01:60',
+        '2026-01-02T24:00:00Z',
+        '2026-01-02T23:59:60Z',
+        '2026-01-02T03:04:05.1234567Z',
+        '2026-01-02T03:04:05,5Z',
+        '2026-02-30T03:04:05Z',
+        '0001-01-01T00:00:00+01:00',
+        '1000-12-31T23:59:59Z',
+        '9999-01-01T00:00:00+00:00',
+    ],
+    ids=[
+        'word',
+        'date-only',
+        'no-offset',
+        'space-separator',
+        'lower-case',
+        'no-seconds',
+        'offset-without-colon',
+        'offset-minute-60',
+        'hour-24',
+        'leap-second',
+        'seven-fraction-digits',
+        'comma-fraction',
+        'no-such-day',
+        'before-year-one',
+        'before-first-year',
+        'after-last-year',
+    ],
+)
+def test_invalid_wiki_freeze_time_fails_a_command_before_it_acts(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    now: str,
+) -> None:
+    """An invalid ``WIKI_FREEZE_TIME`` is exit 2 before a command does a thing.
+
+    The value takes one form -- an RFC 3339 date-time with a capital
+    ``T`` and ``Z``, no leap second, and at most six fraction digits --
+    so nothing reads it by a looser rule than the next reader's. Its
+    UTC year lies within the years ``_PINNED_YEARS`` allows, so no
+    zone renders it outside the calendar or below the four digits
+    ``%Y`` pads to. A command that never reads the clock refuses
+    alike, and a refused update writes nothing.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    page = root / 'core' / 'design.md'
+    _write(page, 'Body.\n')
+    monkeypatch.setenv(WIKI_FREEZE_TIME, now)
+    error = _PINNED_CLOCK_ERROR.format(now=repr(now))
+    for args in (('update',), ('map',)):
+        result = _wiki(root, *args, '--path', str(root))
+        assert result.returncode == 2, (args, result.stdout + result.stderr)
+        assert result.stderr == error
+    assert page.read_text(encoding='utf-8') == 'Body.\n'
+    assert not (root / 'core' / '_index.md').exists()
+
+
+def test_wiki_freeze_time_is_read_when_a_command_runs(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``WIKI_FREEZE_TIME`` is read once a command line parses, as it starts.
+
+    What typer answers while it parses -- help, the version, an unknown
+    option, a missing argument -- prints no notice and judges no value.
+    A usage error a command raises over its own options comes after the
+    read: an invalid value is the error reported in its place, and a
+    valid value's notice precedes it.
+    """
+    monkeypatch.setenv(WIKI_FREEZE_TIME, 'now')
+    # typer answers these while it parses, with no notice
+    for args in (('--version',), ('--help',), ('lint', '--help')):
+        result = _wiki(tmp_path, *args)
+        assert result.returncode == 0, (args, result.stdout + result.stderr)
+        assert result.stderr == ''
+    # typer's own usage errors come before the read
+    for args in (('lint', '--no-such-option'), ('read',)):
+        usage = _wiki(tmp_path, *args)
+        assert usage.returncode == 2, (args, usage.stdout + usage.stderr)
+        assert 'WIKI_FREEZE_TIME' not in usage.stderr
+    # lint itself refuses the pair of options, after the wrapper's read
+    args = ('lint', '--full', '--count')
+    refused = _wiki(tmp_path, *args)
+    assert refused.returncode == 2, refused.stdout + refused.stderr
+    assert refused.stderr == _PINNED_CLOCK_ERROR.format(now=repr('now'))
+    monkeypatch.setenv(WIKI_FREEZE_TIME, '2026-01-02T03:04:05Z')
+    usage = _wiki(tmp_path, *args)
+    assert usage.returncode == 2, usage.stdout + usage.stderr
+    assert usage.stderr.startswith(f'{_PINNED_CLOCK_NOTICE}Usage: wiki lint')
+    assert '--full and --count are mutually exclusive.' in usage.stderr
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
+    argnames='now',
+    argvalues=[None, '2026-01-02T03:04:05Z', 'now'],
+    ids=['unset', 'valid', 'invalid'],
+)
+def test_merge_driver_never_reads_wiki_freeze_time(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    now: Optional[str],
+) -> None:
+    """A merge comes out the same whatever ``WIKI_FREEZE_TIME`` holds.
+
+    Git reads the driver's exit code as the merge outcome, and the driver
+    reads no clock: a value that fails every other command leaves a clean
+    merge clean, and a valid one adds no line to git's output.
+    """
+    root = tmp_path / 'wiki'
+    # a real repo whose wiki has the driver registered by init
+    _git_repo(tmp_path)
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    page = root / 'notes.md'
+    base = (
+        '---\nname: notes\ndesc: Notes.\nupdated: 2026-01-01T00:00:00Z\n---\n'
+        '\n# notes\n\nFirst line.\n\nMiddle line.\n\nLast line.\n'
+    )
+    _write(page, base)
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    # each branch edits its own line and restamps the page, so the merge is
+    # clean only when the driver settles the stamps
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    theirs = base.replace('2026-01-01T00:00:00Z', '2026-01-03T00:00:00Z')
+    _write(page, theirs.replace('Last line.', 'Their last line.'))
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    ours = base.replace('2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z')
+    _write(page, ours.replace('First line.', 'Our first line.'))
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
+
+    if now is not None:
+        monkeypatch.setenv(WIKI_FREEZE_TIME, now)
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    assert 'WIKI_FREEZE_TIME' not in merge.stdout + merge.stderr
+    assert _git(tmp_path, 'status', '--porcelain').stdout == ''
+    merged = page.read_text(encoding='utf-8')
+    assert re.findall(r'^updated:.*$', merged, re.M) == [
+        'updated: 2026-01-03T00:00:00Z'
+    ]
+    assert 'Our first line.' in merged
+    assert 'Their last line.' in merged
 
 
 # ------ helpers

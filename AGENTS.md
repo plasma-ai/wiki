@@ -29,6 +29,11 @@ The `wiki/` Python package is organized into `cli/` (typer app), `core/`
 `_assets/` (wiki config templates and the git merge driver), with the pytest
 suite in `tests/`.
 
+`parity/` at the repository root is the parity harness, a development tool that
+runs two engines on clones of one tree and reports every difference between them
+(`parity/SPEC.md`). It is not part of the wheel or the sdist; its tests are in
+`tests/test_parity/`.
+
 A wiki is a folder tree of markdown pages indexed at every level by `_index.md`
 files, with `.wiki/settings.json` declaring the root. The tool owns the
 generated surfaces — `wiki update` regenerates index link blocks, frontmatter,
@@ -430,6 +435,41 @@ falls back to the event's own `logging_level`), and the `Event` base in
 `core/event.py` declares a `logging_level` class default that the grep counts
 without being a hook. The two offset, so the raw totals happen to match — audit
 per-kind hooks against per-kind signature defaults, not the raw grep totals.
+
+### Clock
+
+Every wall-clock read goes through `_now` (`core/wiki.py`), so the
+`WIKI_FREEZE_TIME` test seam governs all of them: when the variable holds an RFC
+3339 instant, `_now` returns that instant instead of the clock's. `_pinned_now`
+is the one reader and validator of the variable. The `@command` wrapper calls it
+as each public command starts — after typer has parsed the command line, before
+the command's own option checks: an invalid value is a command error, and a
+valid one opens stderr with the fixed `_PINNED_CLOCK_NOTICE` line, so a seam
+left set in a real shell is never silent. Help, `--version` and a parse error
+never reach the wrapper, so they never read the variable. A private command is
+exempt: git reads the `_merge` driver's exit code as the merge outcome, and the
+driver reads no clock. A new clock read calls `_now`, never `datetime.now`
+(`grep -rn --include='*.py' 'datetime\.now' wiki` shows the one call, in
+`_now`).
+
+### Parity Harness
+
+`parity/` compares two sides: each is an argv prefix that the harness runs under
+one built environment, on its own copy-on-write clone of one snapshot, at the
+same absolute path. `python -m parity matrix` compares two sides over the
+command matrix, and `python -m parity selfcheck` proves the harness with one
+side: clean under two hash seeds, then against a doctored copy for each check in
+the spec's table; the unit tests in `tests/test_parity` pin the rules no
+doctored check reaches. `parity/SPEC.md` is the specification, and a change to a
+rule changes the spec and the matching doctored check or unit test in the same
+commit. Two sides that fail the same way agree on everything, so each matrix
+case names the exit codes it allows (`_case` in `parity/matrix.py`), and a
+search or match draws its word from the text the command reads; a new case
+states both. The harness treats a side as a black box, so it imports nothing
+from `wiki`. Corpus paths come only from the TOML file a run names: nothing
+committed names a private wiki, its paths, its sizes or its text, and result
+files stay outside the repository. The harness snapshots a checkout and runs
+only in clones, in a new work folder outside any wiki.
 
 ### Run Bracket
 
