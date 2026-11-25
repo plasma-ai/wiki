@@ -31,8 +31,9 @@ suite in `tests/`.
 
 `parity/` at the repository root is the parity harness, a development tool that
 runs two engines on clones of one tree and reports every difference between them
-(`parity/SPEC.md`). It is not part of the wheel or the sdist; its tests are in
-`tests/test_parity/`.
+(`parity/SPEC.md`). It is not part of the wheel or the sdist. Its tests are in
+`parity/tests/`, with their own pytest settings (`parity/pytest.ini`) and their
+own dependency group (`parity`).
 
 A wiki is a folder tree of markdown pages indexed at every level by `_index.md`
 files, with `.wiki/settings.json` declaring the root. The tool owns the
@@ -67,6 +68,11 @@ uv run pre-commit install
 
 # run tests
 uv run --no-sync pytest
+
+# run the parity harness's tests (they run v1 from the oracle checkout)
+uv sync --inexact --group parity
+uv run --no-sync python -m parity oracle ensure
+uv run --no-sync pytest parity
 
 # run pre-commit
 uv run --no-sync pre-commit run [--all-files]
@@ -464,11 +470,25 @@ changes the spec and the matching doctored check in the same commit. Two sides
 that fail the same way agree on everything, so each matrix case names the exit
 codes it allows (`_case` in `parity/matrix.py`), and a search or match draws its
 word from the text the command reads; a new case states both. The harness treats
-a side as a black box, so it imports nothing from `wiki`. Corpus paths come only
-from the TOML file a run names: nothing committed names a private wiki, its
-paths, its sizes or its text, and result files stay outside the repository. The
-harness snapshots a checkout and runs only in clones, in a new work folder
-outside any wiki.
+a side as a black box, so it imports nothing from `wiki` and nothing from
+`tests/`: its own tests run v1 as a side. Corpus paths come only from the TOML
+file a run names: nothing committed names a private wiki, its paths, its sizes
+or its text, and result files stay outside the repository. The harness snapshots
+a checkout and runs only in clones, in a new work folder outside any wiki.
+
+The oracle is v1 at the commit `parity/oracle.toml` names, the merge base of
+this branch and `dev`. `python -m parity oracle ensure` builds its checkout, a
+detached worktree at `worktrees/wiki-oracle-<sha7>`, with one venv per v1 side:
+`oracle`, which defines parity, and `campaign`, the same commit under the
+interpreter and package versions the consumers of 1.9.x run. Each side's
+constraints file in `parity/constraints/` pins every package of its venv. A v1
+side runs through `parity/launcher.py` and proves on every command that it is
+the oracle commit. Never edit the oracle checkout, and never sync or install
+into its venvs by hand: the harness refuses a checkout or a venv that is not
+what the file names. `python -m parity oracle check` holds the file level with
+v1; run it after `git fetch origin` when a work session starts. The two scripts
+the harness runs inside a side's interpreter, `launcher.py` and `facts.py`,
+import nothing from `parity`.
 
 ### Run Bracket
 
