@@ -10,14 +10,7 @@ from typing import Optional
 
 from . import classify
 
-__all__ = [
-    'PATH',
-    'STATUSES',
-    'CHECKS',
-    'Entry',
-    'load',
-    'unready',
-]
+__all__ = []
 
 #: the registry file
 PATH = pathlib.Path(__file__).parent / 'differences.toml'
@@ -90,7 +83,7 @@ def load(path: Optional[pathlib.Path] = None) -> dict[str, Entry]:
         if (entry.check == 'none') and not entry.unchecked:
             raise ValueError(f'{path.name}: {id} does not say why nothing checks it.')
         result[id] = entry
-    # every classifier excuses a registered difference, and no other
+    # hold the entries a classifier checks to the classifiers the harness has
     named = {id for id, entry in result.items() if entry.check == 'classifier'}
     if named != set(classify.CLASSIFIERS):
         raise ValueError(

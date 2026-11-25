@@ -1,4 +1,4 @@
-"""The classifiers of the registry: each excuses one registered difference.
+"""Functions for classifying the registered differences.
 
 A classifier reads one command as two sides ran it and says whether its
 registry entry explains everything the two did differently. The first run of
@@ -19,17 +19,7 @@ from typing import Any, Optional
 from .compare import Difference, Record, Run
 from .matrix import Stage
 
-__all__ = [
-    'Judge',
-    'Command',
-    'Excused',
-    'library_text',
-    'usage',
-    'refusal',
-    'CLASSIFIERS',
-    'explain',
-    'apply',
-]
+__all__ = []
 
 # the aspects that compare a later run with the first
 _PAIRED = ('stdout', 'stderr', 'exit', 'tree', 'touched', 'cache')
@@ -151,18 +141,19 @@ def library_text(command: Command, judge: Optional[Judge]) -> bool:
         first = re.sub(_WARNING % named, b'', first, flags=re.MULTILINE)
         if first == second:
             return True
-    # the text of an invalid pattern: v1's is what its own `re` raises with
+    # excuse the text of an invalid pattern, where v1's is what its own `re`
+    # raises with
     for prefix, verdict in ((_ERROR, pattern), (_NAMING, naming)):
         if (verdict is None) or (verdict['error'] is None):
             continue
         tails = _tails(first, second, prefix)
         if (tails is not None) and (tails[0] == verdict['error'].encode('utf-8')):
             return True
-    # the text of malformed settings, where v1's own `json` raises
+    # excuse the text of malformed settings, where v1's own `json` raises
     if settings['error'] is not None:
         if _tails(first, second, _MALFORMED) is not None:
             return True
-    # the text of SQLite behind an invalid query
+    # excuse the text of SQLite behind an invalid query
     for opened in _QUERY.finditer(first):
         if _tails(first, second, opened[0]) is not None:
             return True
@@ -187,7 +178,7 @@ def usage(command: Command, judge: Optional[Judge]) -> bool:
     error = _USAGE.match(first.stderr)
     if error is None:
         return False
-    # the parser's own message is the second side's parser's to word
+    # leave the parser's own message to the second side's parser
     if not error['message'].startswith(_PARAMETER):
         return bool(second.stderr)
     lines = [
@@ -294,7 +285,7 @@ def apply(
     for difference in found:
         differing = aspects.get((difference.run, difference.case), set())
         covered = difference.aspect in _PAIRED
-        # a refusal ends with an exit code its case may not allow
+        # cover the exit code a refusal ends with, which its case may forbid
         if (difference.aspect == 'unexpected') and ('exit' in differing):
             covered = True
         if covered and ((difference.run, difference.case) in entries):
@@ -331,7 +322,7 @@ def _pattern(command: Command, judge: Optional[Judge]) -> Optional[dict[str, Any
             if item == '--ignore-case':
                 flags = 'i'
         elif item.startswith('-') and (item != '-'):
-            # -f takes the rest of its cluster, or the next argument
+            # skip the value of -f: the rest of its cluster, or the next argument
             letters, valued, value = item[1:].partition('f')
             if valued and not value:
                 rest[:1] = []

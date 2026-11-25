@@ -1,4 +1,7 @@
-"""A stand-in for a second engine: a real side with other words on some commands.
+"""Functions for the stand-in of the registry check.
+
+A stand-in runs a real side and prints other words on some commands, as a
+second engine may.
 
 usage: <python> standin.py EDITS COUNT <side argv> <wiki args>
 
@@ -22,7 +25,7 @@ import subprocess
 import sys
 from collections.abc import Sequence
 
-__all__ = ['main']
+__all__ = []
 
 
 def main(argv: Sequence[str]) -> int:
@@ -33,8 +36,10 @@ def main(argv: Sequence[str]) -> int:
             stand-in that changes nothing would pass for the real side.
 
     """
+    # parse arguments
     edits, count = json.loads(argv[0]), int(argv[1])
     prefix, args = argv[2 : 2 + count], argv[2 + count :]
+    # run the real side
     result = subprocess.run(
         [*prefix, *args],
         stdin=subprocess.DEVNULL,
@@ -42,6 +47,7 @@ def main(argv: Sequence[str]) -> int:
     )
     streams = {'stdout': result.stdout, 'stderr': result.stderr}
     code = result.returncode
+    # edit what the listed commands answer
     for target, edit in edits:
         if list(args) != target:
             continue
@@ -53,6 +59,7 @@ def main(argv: Sequence[str]) -> int:
             if not changed:
                 raise ValueError(f'{pattern!r} matches nothing in {name}.')
         code = edit.get('exit', code)
+    # relay the streams and the exit code
     sys.stdout.buffer.write(streams['stdout'])
     sys.stderr.buffer.write(streams['stderr'])
     return code

@@ -207,7 +207,8 @@ def run(
     kept = plan.kept
     # the manifest each kept tree ended with, for the stage that continues it
     ended: dict[tuple[str, str], Mapping[str, manifest.Entry]] = {}
-    # the reference side's interpreter, under the variables its commands get
+    # build the judge: the reference side's interpreter, under the variables
+    # its commands get
     judge = None
     if sides and sides[0].judge:
         env = side.environment(sides[0], slot / _HOME, now=now)
@@ -353,13 +354,8 @@ def _run_stage(
         settings = None
         if (plan.root / WIKI_SETTINGS).is_file():
             settings = (plan.root / WIKI_SETTINGS).read_bytes()
-        outcome = side.run(
-            runner,
-            command(case, plan.root),
-            cwd=cwd,
-            env=env,
-            notice=case.notice,
-        )
+        args = command(case, plan.root)
+        outcome = side.run(runner, args, cwd=cwd, env=env, notice=case.notice)
         after = manifest.scan(slot, skip=skip, previous=before)
         touched = manifest.touched(before, after)
         changes = manifest.changes(before, after)

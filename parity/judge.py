@@ -1,4 +1,6 @@
-"""The oracle-side judge: what a v1 side's interpreter makes of an input.
+"""Functions for the oracle-side judge.
+
+The judge answers what a v1 side's interpreter makes of an input.
 
 usage: <a v1 venv's python> -P judge.py < requests > answers
 
@@ -37,16 +39,7 @@ import warnings
 import zoneinfo
 from typing import Any
 
-__all__ = [
-    'DIRECTIVES',
-    'DEPTH',
-    'regex',
-    'timestamp',
-    'zone',
-    'settings',
-    'answer',
-    'main',
-]
+__all__ = []
 
 #: the ``strftime`` directives every engine supports
 DIRECTIVES = ('%Y', '%m', '%d', '%H', '%M', '%S', '%z', '%%')
@@ -110,7 +103,7 @@ def regex(pattern: str, flags: str = '') -> dict[str, Any]:
     outside: list[str] = []
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter('always')
-        # a cached pattern compiles without its warnings
+        # purge the cache: a cached pattern compiles without its warnings
         re.purge()
         try:
             re.compile(pattern, bits)
@@ -178,7 +171,7 @@ def settings(data: bytes) -> dict[str, Any]:
         text = data.decode('utf-8')
     except UnicodeDecodeError:
         return result
-    # the engine reads the file with universal newlines
+    # translate newlines as the engine's read of the file does
     text = text.replace('\r\n', '\n').replace('\r', '\n')
     try:
         value = json.loads(text)
@@ -303,16 +296,16 @@ def _values(text: str) -> list[str]:
     while it reads does not get that far.
     """
     result: list[str] = []
-    # a surrogate escape that is not one half of a pair
+    # find a surrogate escape that is not one half of a pair
     for string in _STRING.findall(text):
         if _lone_surrogate(string):
             result.append('a lone surrogate escape')
             break
     bare = _STRING.sub('""', text)
-    # the constants a strict reader refuses
+    # list the constants a strict reader refuses
     for constant in sorted(set(_CONSTANT.findall(bare))):
         result.append(constant)
-    # the deepest nesting of arrays and objects
+    # measure the deepest nesting of arrays and objects
     depth = 0
     deepest = 0
     for char in bare:
@@ -338,7 +331,7 @@ def _lone_surrogate(string: str) -> bool:
             return True
         if not (0xD800 <= code <= 0xDBFF):
             continue
-        # a high half pairs with a low half directly behind it
+        # pair a high half with a low half directly behind it
         if (index == len(escapes)) or (escapes[index].start() != escape.end()):
             return True
         follower = escapes[index][1]

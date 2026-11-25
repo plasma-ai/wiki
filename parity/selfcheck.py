@@ -83,23 +83,36 @@ _STANDIN = 'stand-in'
 _STAGE = 'registry {tree}'
 # the tree whose settings file ends one character early
 _CUT = 'malformed'
-# the wiki-written prefixes a library's text follows
-_ERROR = 'Error: '
+# the wiki-written prefix of malformed settings, as v1 prints it, as an
+# expression, and as a stand-in changes it
 _MALFORMED = 'Error: Malformed JSON in .wiki/settings.json: '
-_NAMING = 'Error: naming.pattern in .wiki/settings.json is not a valid regex: '
-_QUERY = """Error: Invalid FTS5 query '"': """
-# what a stand-in changes: a whole stream, the text behind a prefix, the
-# warning of `re` with its source line, and the frame of a usage error
+_PREFIX = r'Error: Malformed JSON in \.wiki/settings\.json: '
+_RENAMED = 'Error: Malformed JSON in settings.json: '
+# what a stand-in changes: a whole stream, the text behind each wiki-written
+# prefix, the warning of `re` with its source line, and the frame of a usage
+# error
 _WHOLE = r'(?s)\A.*\Z'
-_TAIL = r'(?m)^({}).*$'
+_PATTERN_TEXT = r'(?m)^(Error: ).*$'
+_SETTINGS_TEXT = rf'(?m)^({_PREFIX}).*$'
+_NAMING_TEXT = (
+    r'(?m)^(Error: naming\.pattern in \.wiki/settings\.json is not a valid regex: ).*$'
+)
+_QUERY_TEXT = r"""(?m)^(Error: Invalid FTS5 query '"': ).*$"""
 _WARNING = r'(?m)^.*: FutureWarning: .*\n  .*\n'
 _FRAME = r"Usage: .*\nTry '.*' for help\.\n\n(Error: .*\n)"
 _REFRAMED = "\n\nUsage: wiki [OPTIONS]\n\nFor more information, try '--help'.\n"
 # a refusal: nothing on stdout, one error line behind the notice, exit code 2
-_KEPT = rf'(?s)\A({re.escape(NOTICE.decode("ascii"))})?.*\Z'
+_NOTICE = re.escape(NOTICE.decode('ascii'))
+_KEPT = rf'(?s)\A({_NOTICE})?.*\Z'
 _REFUSED = {
     'stdout': [_WHOLE, ''],
     'stderr': [_KEPT, r'\1Error: Refused by the stand-in.\n'],
+    'exit': 2,
+}
+# a refusal of a settings value, under the prefix of malformed settings
+_REFUSED_VALUE = {
+    'stdout': [_WHOLE, ''],
+    'stderr': [_KEPT, rf'\1{_MALFORMED}NaN at column 12\n'],
     'exit': 2,
 }
 # a zone file that only the `tzdata` package holds: TZif, one type, UTC
@@ -185,7 +198,7 @@ FIXTURES = (
         entry='D1',
         tree='snapshot',
         args=('match', '('),
-        edit={'stderr': [_TAIL.format(re.escape(_ERROR)), r'\1unclosed group']},
+        edit={'stderr': [_PATTERN_TEXT, r'\1unclosed group']},
         codes=frozenset({2}),
     ),
     Fixture(
@@ -201,7 +214,7 @@ FIXTURES = (
         entry='D1',
         tree='snapshot',
         args=('search', '"', '--raw'),
-        edit={'stderr': [_TAIL.format(re.escape(_QUERY)), r'\1unclosed string']},
+        edit={'stderr': [_QUERY_TEXT, r'\1unclosed string']},
         codes=frozenset({2}),
     ),
     Fixture(
@@ -209,7 +222,7 @@ FIXTURES = (
         entry='D1',
         tree='malformed',
         args=('lint',),
-        edit={'stderr': [_TAIL.format(re.escape(_MALFORMED)), r'\1EOF at column 11']},
+        edit={'stderr': [_SETTINGS_TEXT, r'\1EOF at column 11']},
         codes=frozenset({2}),
     ),
     Fixture(
@@ -217,12 +230,7 @@ FIXTURES = (
         entry='D1',
         tree='malformed',
         args=('update', '--check'),
-        edit={
-            'stderr': [
-                re.escape(_MALFORMED),
-                'Error: Malformed JSON in settings.json: ',
-            ]
-        },
+        edit={'stderr': [_PREFIX, _RENAMED]},
         codes=frozenset({2}),
         shows=(('stderr', ''),),
     ),
@@ -231,7 +239,7 @@ FIXTURES = (
         entry='D1',
         tree='pattern',
         args=('lint',),
-        edit={'stderr': [_TAIL.format(re.escape(_NAMING)), r'\1unclosed group']},
+        edit={'stderr': [_NAMING_TEXT, r'\1unclosed group']},
         codes=frozenset({2}),
     ),
     Fixture(
@@ -301,7 +309,7 @@ FIXTURES = (
         entry='D3',
         tree='value',
         args=('lint',),
-        edit={**_REFUSED, 'stderr': [_KEPT, rf'\1{_MALFORMED}NaN at column 12\n']},
+        edit=_REFUSED_VALUE,
         codes=frozenset({0, 1}),
     ),
     Fixture(
@@ -380,11 +388,11 @@ def clean(plan: Plan, base: Side, *, now: str, keep: bool = False) -> Check:
     """
     found = runner.run(plan, _seeded(base), now=now, keep=keep)
     return Check(
-        'clean',
-        (),
-        found.differences,
-        found.report,
-        found.streams,
+        name='clean',
+        expected=(),
+        found=found.differences,
+        report=found.report,
+        streams=found.streams,
         excused=found.excused,
     )
 
@@ -444,11 +452,11 @@ def doctored(
     )
     found = runner.run(plan, [one, changed], now=now, only=[stage], keep=keep)
     return Check(
-        f'doctored {name}',
-        expected,
-        found.differences,
-        found.report,
-        found.streams,
+        name=f'doctored {name}',
+        expected=expected,
+        found=found.differences,
+        report=found.report,
+        streams=found.streams,
         excused=found.excused,
     )
 
@@ -527,14 +535,16 @@ def fixtures(
     )
     name = _STAGE.format(tree=tree)
     stage = Stage(name=name, cases=cases, settings=_settings(plan, tree))
-    # a zone the interpreter loads from the package, and no file to find it in
+    # write a zone the interpreter loads from the package, and no file to
+    # find it in
     zones = plan.work / _ZONES
     zone = zones / 'tzdata' / 'zoneinfo' / 'Parity' / 'Zone'
+    empty = zones / 'none'
     if not zone.exists():
         zone.parent.mkdir(parents=True)
         zone.write_bytes(_TZIF)
-        (zones / 'none').mkdir()
-    env = {'PYTHONPATH': f'{zones}', 'PYTHONTZPATH': f'{zones / "none"}'}
+        empty.mkdir()
+    env = {'PYTHONPATH': f'{zones}', 'PYTHONTZPATH': f'{empty}'}
     one, two = (
         dataclasses.replace(seeded, env={**seeded.env, **env})
         for seeded in _seeded(base)
@@ -566,11 +576,11 @@ def fixtures(
     staged = dataclasses.replace(plan, stages=(stage,))
     found = runner.run(staged, [one, other], now=now, keep=keep)
     return Check(
-        stage.name,
-        expected,
-        found.differences,
-        found.report,
-        found.streams,
+        name=stage.name,
+        expected=expected,
+        found=found.differences,
+        report=found.report,
+        streams=found.streams,
         registered=registered,
         excused=found.excused,
     )
@@ -602,7 +612,7 @@ def _settings(plan: Plan, tree: str) -> Optional[str]:
         return None
     held = json.loads(text)
     for key, value in TREES[tree].items():
-        # a block keeps the members the tree does not set
+        # keep the members of a block that the tree does not set
         if isinstance(value, dict) and isinstance(held.get(key), dict):
             value = {**held[key], **value}
         held[key] = value
