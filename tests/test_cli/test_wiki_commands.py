@@ -4535,7 +4535,7 @@ def test_wiki_freeze_time_fixes_every_stamp(
     stamps = []
     for path in sorted(root.rglob('*.md')):
         text = path.read_text(encoding='utf-8')
-        stamps += re.findall(r'^(?:created|updated): (.*)$', text, re.MULTILINE)
+        stamps += re.findall(r'^(?:created|updated): (.*)$', text, re.M)
     assert stamps == [stamp] * 8
 
 
@@ -4580,7 +4580,7 @@ def test_blank_wiki_freeze_time_leaves_the_clock_running(
     assert result.returncode == 0, result.stdout + result.stderr
     assert _PINNED_CLOCK_NOTICE not in result.stderr
     text = (root / '_index.md').read_text(encoding='utf-8')
-    stamp = re.search(r'^updated: (.*)$', text, re.MULTILINE).group(1)
+    stamp = re.search(r'^updated: (.*)$', text, re.M).group(1)
     written = dt.datetime.strptime(stamp, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=dt.UTC)
     assert before <= written <= after
 
