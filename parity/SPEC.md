@@ -29,6 +29,9 @@ snapshot and every tree in the work folder.
 Both commands exit 0 when every result is the expected one and 1 otherwise. An
 error of the harness itself is a Python traceback.
 
+The harness makes `<work>/<label>` for each corpus and removes it at the end. It
+must not exist beforehand, and a run that fails leaves it in place.
+
 `SIDES` is a TOML file with one table per side:
 
 ```toml
