@@ -8,25 +8,19 @@ that hold for one side by itself.
 from __future__ import annotations
 
 import pathlib
-import shutil
 import sys
 
 import pytest
 
 from parity import runner, side
 
-from .conftest import NOW, WIKI
+from .conftest import NOW, _needs_engine
 
 __all__ = [
     'test_work_folder_below_a_wiki_is_refused',
     'test_unknown_stage_is_refused',
     'test_sides_that_fail_alike_are_reported',
 ]
-
-pytestmark = pytest.mark.skipif(
-    (WIKI is None) or (shutil.which('git') is None),
-    reason='requires the wiki console script and git',
-)
 
 
 def test_work_folder_below_a_wiki_is_refused(tmp_path: pathlib.Path) -> None:
@@ -45,6 +39,7 @@ def test_work_folder_below_a_wiki_is_refused(tmp_path: pathlib.Path) -> None:
     assert not (tmp_path / 'work').exists()
 
 
+@_needs_engine
 def test_unknown_stage_is_refused(
     tmp_path: pathlib.Path,
     corpus: runner.Corpus,
@@ -59,6 +54,7 @@ def test_unknown_stage_is_refused(
         runner.run(plan, [], now=NOW, only=['query', 'wirte'])
 
 
+@_needs_engine
 def test_sides_that_fail_alike_are_reported(
     tmp_path: pathlib.Path,
     corpus: runner.Corpus,

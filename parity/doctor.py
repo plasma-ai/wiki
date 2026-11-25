@@ -1,4 +1,6 @@
-"""A doctored side: it runs a real side and changes one thing in one command.
+"""Functions for the doctored side of the self-check.
+
+A doctored side runs a real side and changes one thing in one command.
 
 usage: <python> doctor.py KIND TARGET PATH COUNT <side argv> <wiki args>
 
@@ -18,13 +20,7 @@ import subprocess
 import sys
 from collections.abc import Sequence
 
-__all__ = [
-    'KINDS',
-    'COUNTS_KEY',
-    'INDEX_PATH',
-    'SCHEMA_TABLE',
-    'main',
-]
+__all__ = []
 
 #: what a doctored side changes: one stdout byte, one stderr byte, the exit
 #: code, the ``WIKI_FREEZE_TIME`` notice, one byte of a file, one file mode,
@@ -52,15 +48,25 @@ SCHEMA_TABLE = 'parity_doctored'
 
 
 def main(argv: Sequence[str]) -> int:
-    """Run the real side, doctor the targeted command, and return its exit code."""
+    """Run the real side, doctor the targeted command, and return its exit code.
+
+    Raises:
+        ValueError: If ``KIND`` is not one of :data:`KINDS`.
+
+    """
+    # parse arguments
     kind, target, path, count = argv[0], json.loads(argv[1]), argv[2], int(argv[3])
+    if kind not in KINDS:
+        raise ValueError(f'Invalid kind: {kind!r}')
     prefix, args = argv[4 : 4 + count], argv[4 + count :]
+    # run the real side
     result = subprocess.run(
         [*prefix, *args],
         stdin=subprocess.DEVNULL,
         capture_output=True,
     )
     stdout, stderr, code = result.stdout, result.stderr, result.returncode
+    # change one thing in the targeted command
     if list(args) == target:
         if kind == 'stdout':
             stdout = _flip(stdout)
@@ -90,18 +96,13 @@ def main(argv: Sequence[str]) -> int:
             text = json.dumps(data, indent=2, sort_keys=True) + '\n'
             _write_quietly(path, text.encode('utf-8'))
         elif kind == 'index':
-            _write_search(
-                path,
-                'INSERT INTO files(path, mtime_ns, size) VALUES (?, 0, 0)',
-                (INDEX_PATH,),
-            )
-            _write_search(
-                path,
-                'INSERT INTO notes_fts(body, path, folder) VALUES (?, ?, ?)',
-                ('doctored', INDEX_PATH, '.'),
-            )
+            sql = 'INSERT INTO files(path, mtime_ns, size) VALUES (?, 0, 0)'
+            _write_search(path, sql, (INDEX_PATH,))
+            sql = 'INSERT INTO notes_fts(body, path, folder) VALUES (?, ?, ?)'
+            _write_search(path, sql, ('doctored', INDEX_PATH, '.'))
         elif kind == 'schema':
             _write_search(path, f'CREATE TABLE {SCHEMA_TABLE} (value)')
+    # relay the streams and the exit code
     sys.stdout.buffer.write(stdout)
     sys.stderr.buffer.write(stderr)
     return code

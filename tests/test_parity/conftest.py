@@ -9,17 +9,13 @@ from __future__ import annotations
 
 import pathlib
 import shutil
-import subprocess
-import sys
 
 import pytest
 
 from parity import runner, side
 
-from ..test_cli.conftest import _env
+from ..test_cli.conftest import GIT, WIKI, _git
 
-# the console script beside the running interpreter: this checkout's install
-WIKI = shutil.which('wiki', path=pathlib.Path(sys.executable).parent)
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 #: the instant every side's clock is fixed at
 NOW = '2026-01-02T03:04:05Z'
@@ -28,6 +24,11 @@ ENGINE = side.Side(
     name='engine',
     argv=(f'{WIKI}',),
     env={'PYTHONPATH': f'{REPO_ROOT}'},
+)
+# gates the tests that run a real side on the committed corpus
+_needs_engine = pytest.mark.skipif(
+    (WIKI is None) or (GIT is None),
+    reason='requires the wiki console script and git',
 )
 
 
@@ -81,6 +82,6 @@ def corpus(tmp_path_factory: pytest.TempPathFactory) -> runner.Corpus:
         ['add', '-A'],
         ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'wiki'],
     ):
-        cmd = ['git', '-C', f'{checkout}', *args]
-        subprocess.run(cmd, env=_env(), capture_output=True, check=True)
+        committed = _git(checkout, *args)
+        assert committed.returncode == 0, committed.stderr
     return runner.Corpus(label='example', checkout=checkout, root='hello')

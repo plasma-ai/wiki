@@ -8,23 +8,19 @@ must show exactly that way. Each comparison rule has one doctored check.
 from __future__ import annotations
 
 import pathlib
-import shutil
 
 import pytest
 
 from parity import matrix, runner, selfcheck
 
-from .conftest import ENGINE, NOW, WIKI
+from .conftest import ENGINE, NOW, _needs_engine
 
 __all__ = [
     'test_one_engine_against_itself_shows_no_difference',
     'test_doctored_side_shows_exactly_its_difference',
 ]
 
-pytestmark = pytest.mark.skipif(
-    (WIKI is None) or (shutil.which('git') is None),
-    reason='requires the wiki console script and git',
-)
+pytestmark = _needs_engine
 
 
 def test_one_engine_against_itself_shows_no_difference(

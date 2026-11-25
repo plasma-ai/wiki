@@ -1,5 +1,6 @@
 """Tests for the parity harness."""
 
+from .test_config import *
 from .test_main import *
 from .test_matrix import *
 from .test_runner import *

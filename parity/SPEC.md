@@ -28,9 +28,12 @@ snapshot and every tree in the work folder.
 
 Both commands exit 0 when every result is the expected one and 1 otherwise. A
 run that would compare nothing exits 2 with a message, before it snapshots
-anything: a corpora file with no corpus, an unknown corpus label or stage name,
-or a side whose `--version` fails or prints nothing. An error of the harness
-itself is a Python traceback.
+anything: a corpora file with no corpus, an unknown corpus label, stage name or
+side name, the same side named as `--a` and `--b`, a sides or corpora file whose
+values have the wrong shape, a side or a `describe` command that cannot be
+started, or a side whose `--version` fails or prints nothing. An error of the
+harness itself prints a Python traceback and exits 2 as well, so exit 1 always
+means that a result is not the expected one.
 
 The harness makes `<work>/<label>` for each corpus; it must not exist
 beforehand. `matrix` removes it at the end unless `--keep` is given. `selfcheck`
