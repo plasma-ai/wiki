@@ -55,8 +55,7 @@ _TIMEOUT_SECONDS = 10
 _STAMP_GRACE = dt.timedelta(seconds=60)
 
 # the one form WIKI_FREEZE_TIME takes: an RFC 3339 date-time with a capital T
-# and Z, no leap second, and at most the microseconds the clock it replaces
-# returns
+# and Z, no leap second, and at most the microseconds of the clock it replaces
 _PINNED_INSTANT = re.compile(
     r'[0-9]{4}-[0-9]{2}-[0-9]{2}'
     r'T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\.[0-9]{1,6})?'
@@ -6914,8 +6913,8 @@ def _pinned_now() -> Optional[dt.datetime]:
     Raises:
         ValueError: If ``WIKI_FREEZE_TIME`` is set to anything other than an
             RFC 3339 date-time (capital ``T`` and ``Z``, no leap second, at
-            most six fraction digits) that names a UTC instant in the
-            years 1001 to 9998.
+            most six fraction digits) that names an instant in the allowed
+            UTC years (``_PINNED_YEARS``).
 
     """
     value = os.environ.get(WIKI_FREEZE_TIME, '').strip()
@@ -6927,8 +6926,8 @@ def _pinned_now() -> Optional[dt.datetime]:
         f' {first} to {last}, like 2026-01-02T03:04:05Z, got {value!r}.'
     )
     # NOTE: fromisoformat reads more forms than this one, and which ones turns
-    # on the Python version (24:00:00, a 60-minute offset, a seventh fraction
-    # digit dropped): the pattern fixes the form and leaves it the calendar
+    #   on the Python version (24:00:00, a 60-minute offset, a seventh fraction
+    #   digit dropped): the pattern fixes the form and leaves it the calendar
     if _PINNED_INSTANT.fullmatch(value) is None:
         raise ValueError(message)
     try:

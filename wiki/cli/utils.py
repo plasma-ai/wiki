@@ -100,8 +100,8 @@ def command(
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
                 # NOTE: a private command's exit code is its caller's protocol
-                # (git reads the merge driver's as the merge outcome), so a
-                # WIKI_FREEZE_TIME the command never reads must not fail it
+                #   (git reads the merge driver's as the merge outcome), so a
+                #   WIKI_FREEZE_TIME the command never reads must not fail it
                 if (not private) and (_pinned_now() is not None):
                     typer.echo(_PINNED_CLOCK_NOTICE, err=True)
                 return f(*args, **kwargs)
