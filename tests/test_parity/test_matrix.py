@@ -24,6 +24,7 @@ def test_sample_draws_plain_pages_and_the_words_their_commands_read(
     the whole word, with its accent folded. A page with no ``name`` field
     gives no word: the wiki does not manage it, so search may not hold it.
     """
+    # a wiki holding a managed page, a dashed name, a bare page and a symlink
     root = tmp_path / 'wiki'
     (root / 'topic').mkdir(parents=True)
     for folder in (root, root / 'topic'):
@@ -40,14 +41,18 @@ def test_sample_draws_plain_pages_and_the_words_their_commands_read(
     (root / 'topic' / '-dashed.md').write_text(page, encoding='utf-8')
     (root / 'topic' / 'bare.md').write_text('Unmanaged prose.\n', encoding='utf-8')
     (root / 'linked.md').symlink_to(root / 'topic' / 'entry.md')
+    # the sample names the folder and the regular pages
     drawn = matrix.sample(root, seed=0)
     assert drawn.scopes == ('topic',)
     assert set(drawn.pages) == {'topic/bare.md', 'topic/entry.md'}
+    # each word comes from the text its command reads
     body = {'Heading', 'wrote', 'paragraphs'}
-    assert set(drawn.terms) < body
+    terms = set(drawn.terms)
+    assert terms
+    assert terms <= body
     assert drawn.scoped in body
     assert drawn.desc in {'Summary', 'sentence'}
     assert drawn.label in {'topic', 'entry', 'alpha', 'gamma'}
-    (word, tag) = drawn.tagged
+    word, tag = drawn.tagged
     assert word in body
     assert tag in {'alpha', 'gamma'}

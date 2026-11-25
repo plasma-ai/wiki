@@ -2,7 +2,9 @@
 
 The self-check is the proof that a result of the harness counts: one
 engine against itself must show nothing, and a side doctored in one way
-must show exactly that way. Each comparison rule has one doctored check.
+must show exactly that way. Each doctored check proves one comparison
+rule; ``test_cache``, ``test_compare`` and ``test_manifest`` carry the
+rules no doctored check reaches.
 """
 
 from __future__ import annotations
