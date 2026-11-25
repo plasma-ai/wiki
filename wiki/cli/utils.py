@@ -87,9 +87,9 @@ def command(
     beside typer's own usage errors, so exit 1 is left to mean exactly
     the command's own nonzero outcome and a script gating on one can
     never read a failed run as the other. A command run under a set
-    ``WIKI_FREEZE_TIME`` opens stderr with one fixed line; an invalid value is
-    a command error, raised before the command does anything. A private
-    command never reads the variable.
+    ``WIKI_FREEZE_TIME`` opens stderr with one fixed line; an invalid
+    value is a command error, raised before the command does anything.
+    A private command never reads the variable.
     """
 
     def decorator(f: Callable, /) -> Callable:
