@@ -34,11 +34,11 @@ may include breaking changes, each listed under a Breaking heading.
   whole index per path. It now asks git first which of those paths an ignore
   pattern on disk matches, and puts only those to the index-aware check, which
   still writes every note. Two repository shapes read differently. In a wiki
-  that holds a git submodule, an ignored page outside the submodule draws its
-  note, where no path drew one before; an ignored page inside the submodule
-  still silences the notes of that run. And a page ignored only by a
-  `.gitignore` that a sparse checkout keeps in the index and off disk draws no
-  note.
+  that holds a git submodule, a run whose scope takes in the submodule now notes
+  an ignored page outside it, where such a run drew no note before; an ignored
+  page inside the submodule still silences the notes of that run. And a page
+  ignored only by a `.gitignore` that a sparse checkout keeps in the index and
+  off disk draws no note.
 - The first `wiki search` in a wiki, which builds the search index, and a search
   after many pages changed, as a branch switch or a merge leaves them, no longer
   scan the index once per page: the build grows with the count of pages rather
