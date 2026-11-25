@@ -127,7 +127,7 @@ The side's own variables are applied last. stdin is the null device.
 `prepare` clones the checkout once into `<work>/<label>/snapshot` and hashes it.
 Every tree a side runs on is a clone of that snapshot, placed at one path:
 
-```
+```text
 <work>/<label>/
     snapshot/        the clone of the checkout
     slot/            where every side runs, one at a time
@@ -159,8 +159,8 @@ Every tree a side runs on is a clone of that snapshot, placed at one path:
   work folder the system leaves alone.
 - **Live repositories.** The harness runs no `git worktree` subcommand, no
   commit and no checkout in a clone. Its one git write is the index refresh.
-- A stage marked cold removes `<root>/.wiki/cache` from its clone before the
-  first command.
+- **Cold stages.** A stage marked cold removes `<root>/.wiki/cache` from its
+  clone before the first command.
 
 ## Comparison
 
@@ -288,7 +288,7 @@ has five stages:
   settings exclude) compares only the refusal, so it is an `unexpected`
   difference and the run does not pass; another `--seed` draws another sample.
 
-## Self-check
+## Self-Check
 
 A result of the harness counts only after the self-check passes on the same
 corpus. It runs one engine on both sides.

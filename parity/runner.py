@@ -12,21 +12,13 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Optional
 
 from . import cache, compare, manifest, matrix, side, snapshot
+from .cache import CACHE
 from .compare import Difference, Record, Run
+from .manifest import Entry
 from .matrix import Case, Sample, Stage
 from .side import Side
 
-__all__ = [
-    'WIKI_SETTINGS',
-    'Corpus',
-    'Plan',
-    'Result',
-    'prepare',
-    'run',
-    'discard',
-    'manifest_path',
-    'command',
-]
+__all__ = []
 
 logger = logging.getLogger('parity')
 
@@ -80,7 +72,7 @@ class Plan:
     seed: int
     sample: Sample
     stages: tuple[Stage, ...]
-    manifest: Mapping[str, manifest.Entry]
+    manifest: Mapping[str, Entry]
 
     @property
     def root(self: Plan) -> pathlib.Path:
@@ -183,9 +175,11 @@ def run(
             stage would report no difference.
 
     """
+    # refuse sides that share a name
     names = [runner.name for runner in sides]
     if len(set(names)) != len(names):
         raise ValueError(f'Sides must have different names, got {names!r}.')
+    # resolve the stages to run: each named one and the stage it continues
     stages = plan.stages
     if only is not None:
         known = [stage.name for stage in stages]
@@ -200,7 +194,7 @@ def run(
     slot = plan.work / _SLOT
     kept = plan.kept
     # the manifest each kept tree ended with, for the stage that continues it
-    ended: dict[tuple[str, str], Mapping[str, manifest.Entry]] = {}
+    ended: dict[tuple[str, str], Mapping[str, Entry]] = {}
     differences = []
     streams = {}
     report = []
@@ -212,6 +206,7 @@ def run(
         runs = []
         for runner in sides:
             for producer in producers:
+                # resolve the tree the run starts from
                 name = runner.name
                 origin = plan.work / _SNAPSHOT
                 entries = plan.manifest
@@ -219,10 +214,11 @@ def run(
                     name = f'{runner.name} on {producer.name}'
                     origin = kept / stage.base / producer.name
                     entries = ended[(stage.base, producer.name)]
+                # run the stage and log how it ended
                 started = time.monotonic()
                 done, last = _run_stage(
-                    stage,
-                    runner,
+                    stage=stage,
+                    runner=runner,
                     name=name,
                     origin=origin,
                     entries=entries,
@@ -232,14 +228,11 @@ def run(
                 seconds = time.monotonic() - started
                 label = plan.corpus.label
                 exits = _exits(done)
-                logger.info(
-                    '%s %s %s: %.1f s, exit codes %s',
-                    label,
-                    stage.name,
-                    name,
-                    seconds,
-                    exits,
+                message = (
+                    f'{label} {stage.name} {name}: {seconds:.1f} s, exit codes {exits}'
                 )
+                logger.info(message)
+                # keep the slot for a later stage or the caller, or remove it
                 runs.append(done)
                 if stage.name in continued:
                     ended[(stage.name, name)] = last
@@ -248,11 +241,13 @@ def run(
                     slot.rename(kept / stage.name / name)
                 else:
                     shutil.rmtree(slot)
-        folder = manifest_path(plan.corpus, cache.CACHE)
+        # compare the runs of the stage
+        folder = manifest_path(plan.corpus, CACHE)
         found = compare.stage(stage, runs, folder=folder)
         differences.extend(found)
         streams.update(_differing_streams(stage, runs))
         report.append(_stage_report(stage, runs, found))
+    # remove the kept trees and build the report
     if kept.exists() and not keep:
         shutil.rmtree(kept)
     document = {
@@ -266,7 +261,7 @@ def run(
 
 def discard(plan: Plan) -> None:
     """Remove the plan's work folder: the snapshot and every tree kept in it."""
-    shutil.rmtree(plan.work)
+    return shutil.rmtree(plan.work)
 
 
 def manifest_path(corpus: Corpus, relpath: str) -> str:
@@ -294,10 +289,10 @@ def _run_stage(
     *,
     name: str,
     origin: pathlib.Path,
-    entries: Mapping[str, manifest.Entry],
+    entries: Mapping[str, Entry],
     plan: Plan,
     now: str,
-) -> tuple[Run, dict[str, manifest.Entry]]:
+) -> tuple[Run, dict[str, Entry]]:
     """Run every case of ``stage`` on a fresh clone of ``origin``.
 
     Returns:
@@ -316,8 +311,8 @@ def _run_stage(
         snapshot.clone(origin, slot)
     env = side.environment(runner, slot / _HOME, now=now)
     snapshot.refresh(slot / _TREE, env=env)
-    if stage.cold and (plan.root / cache.CACHE).exists():
-        shutil.rmtree(plan.root / cache.CACHE)
+    if stage.cold and (plan.root / CACHE).exists():
+        shutil.rmtree(plan.root / CACHE)
     # scan everything a command could write, the clone's own repository aside
     skip = frozenset({f'{_TREE}/.git'})
     before = manifest.scan(slot, skip=skip, origin=entries)
@@ -360,9 +355,9 @@ def _run_stage(
 
 
 def _below(
-    entries: Mapping[str, manifest.Entry],
+    entries: Mapping[str, Entry],
     corpus: Corpus,
-) -> dict[str, manifest.Entry]:
+) -> dict[str, Entry]:
     """Return the entries of the wiki root, keyed by path relative to it."""
     prefix = manifest_path(corpus, '')
     return {
@@ -399,6 +394,7 @@ def _stage_report(
     found: Sequence[Difference],
 ) -> dict[str, Any]:
     """Return one stage as JSON data."""
+    # record what every run did on each case
     cases = []
     for index, case in enumerate(stage.cases):
         row: dict[str, Any] = {'name': case.name, 'args': list(case.args), 'runs': {}}
