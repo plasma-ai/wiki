@@ -12,7 +12,7 @@ import shutil
 
 import pytest
 
-from parity import runner, selfcheck
+from parity import matrix, runner, selfcheck
 
 from .conftest import ENGINE, NOW, WIKI
 
@@ -42,7 +42,7 @@ def test_one_engine_against_itself_shows_no_difference(
     assert check.passed, check.found
     # every stage ran, and the commands did real work on the sampled wiki
     stages = {stage['name']: stage for stage in check.report['stages']}
-    assert list(stages) == ['pristine', 'query', 'write', 'full', 'cross']
+    assert list(stages) == list(matrix.STAGES)
     codes = {
         run['exit']
         for stage in stages.values()
@@ -50,6 +50,8 @@ def test_one_engine_against_itself_shows_no_difference(
         for run in case['runs'].values()
     }
     assert codes == {0, 1, 2}
+    # every search and match that is built to find something found it
+    assert [stage['no_hit'] for stage in stages.values()] == [[]] * len(stages)
 
 
 @pytest.mark.parametrize(

@@ -37,9 +37,11 @@ def corpus(tmp_path_factory: pytest.TempPathFactory) -> runner.Corpus:
 
     The wiki is the repository's example plus two indexed folders, one
     nested folder and a non-Markdown file, so the matrix has folders to
-    scope to and pages to read. It is built with the real CLI and then
-    committed, as a campaign checkout is. READ-ONLY: the harness
-    snapshots the checkout and runs only in its clones.
+    scope to and pages to read. Every page has a desc and one has tags,
+    so each search and match of the matrix has something to find. It is
+    built with the real CLI and then committed, as a campaign checkout
+    is. READ-ONLY: the harness snapshots the checkout and runs only in
+    its clones.
     """
     checkout = tmp_path_factory.mktemp('parity') / 'checkout'
     root = checkout / 'hello'
@@ -53,13 +55,24 @@ def corpus(tmp_path_factory: pytest.TempPathFactory) -> runner.Corpus:
         made = side.run(ENGINE, [*args, '--path', f'{root}'], cwd=home, env=env)
         assert made.code == 0, made.stderr
     pages = {
-        'guides/setup.md': '# Setup\n\nRun the installer to set up the widget.\n',
-        'guides/deep/notes.md': '# Notes\n\nWidgets render after the installer.\n',
-        'core/design.md': '# Design\n\nThe widget subsystem handles rendering.\n',
-        'core/snippet.txt': 'widget appears in plain code here\n',
+        'guides/setup.md': (
+            'desc: Installing the widget.\ntags: [install, widget]',
+            '# Setup\n\nRun the installer to set up the widget.\n',
+        ),
+        'guides/deep/notes.md': (
+            'desc: Notes on render order.',
+            '# Notes\n\nWidgets render after the installer.\n',
+        ),
+        'core/design.md': (
+            'desc: The widget subsystem.',
+            '# Design\n\nThe widget subsystem handles rendering.\n',
+        ),
     }
-    for relpath, text in pages.items():
+    for relpath, (fields, body) in pages.items():
+        text = f'---\n{fields}\n---\n\n{body}'
         (root / relpath).write_text(text, encoding='utf-8')
+    snippet = 'widget appears in plain code here\n'
+    (root / 'core' / 'snippet.txt').write_text(snippet, encoding='utf-8')
     updated = side.run(ENGINE, ['update', '--path', f'{root}'], cwd=home, env=env)
     assert updated.code == 0, updated.stderr
     # commit under the suite's hermetic git environment

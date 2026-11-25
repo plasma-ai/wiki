@@ -120,6 +120,8 @@ def _matrix(
     print(f'{corpus.label}: {count} difference{"s" if count != 1 else ""}')
     for difference in result.differences:
         print(f'  {_line(difference)}')
+    for name in _no_hits(result.report):
+        print(f'  found nothing: {name}')
     return dict(result.report), not result.differences
 
 
@@ -144,6 +146,8 @@ def _selfcheck(
         print(f'{corpus.label}: {check.name}: {verdict}')
         for difference in check.found:
             print(f'  {_line(difference)}')
+        for name in _no_hits(check.report):
+            print(f'  found nothing: {name}')
         row = {
             'name': check.name,
             'passed': check.passed,
@@ -160,6 +164,15 @@ def _line(difference: runner.Difference) -> str:
     """Return one difference as a line of the printed summary."""
     fields = dataclasses.astuple(difference)
     return ': '.join(field for field in fields if field)
+
+
+def _no_hits(report: Mapping[str, Any]) -> list[str]:
+    """Return the cases built to find something that found nothing, by stage."""
+    return [
+        f'{stage["name"]}: {name}'
+        for stage in report['stages']
+        for name in stage['no_hit']
+    ]
 
 
 def _header(sides: Sequence[Side], *, now: str) -> dict[str, Any]:

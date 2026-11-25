@@ -62,11 +62,11 @@ root = "wiki"
 Each corpus gets one result file, `<out>/<label>.json`. It records the host
 (platform, Python, SQLite, git, the system git config), the instant, each side's
 argv, variables and reported version, the sample, for every stage how many
-commands of each run ended with each exit code, and for every case the exit
-code, the size and sha256 of both streams, and the touched count on every run.
-The streams of a case are saved under `<out>/<label>/<stage>/` only when they
-differ. Result files hold corpus paths and text, so they stay outside the
-repository too.
+commands of each run ended with each exit code and which searches found nothing,
+and for every case the exit code, the size and sha256 of both streams, and the
+touched count on every run. The streams of a case are saved under
+`<out>/<label>/<stage>/` only when they differ. Result files hold corpus paths
+and text, so they stay outside the repository too.
 
 The sections below are the rules of the harness, one part each: sides,
 snapshots, comparison, caches, the matrix and the self-check.
@@ -228,7 +228,7 @@ has five stages:
 
 | Stage      | Tree                                         | Commands                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | ---------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pristine` | the snapshot                                 | `lint` plain, `--json`, `--full` and `--count`; `update --check` plain and `--full`; `lint` and `update --check` scoped to each sampled folder; then `lint` and `update --check` from the wiki root, and `lint` from a sampled folder, with no `--path`.                                                                                                                                                                               |
+| `pristine` | the snapshot                                 | `lint` plain, `--json`, `--full` and `--count`; `update --check` plain, `--full` and `--count`; `lint` and `update --check` scoped to each sampled folder; then `lint` and `update --check` from the wiki root, and `lint` from a sampled folder, with no `--path`.                                                                                                                                                                    |
 | `query`    | the snapshot, with the caches it holds       | `map` with each view option and scoped; `search` in text and JSON, with two terms, `--limit`, `--prefix`, `--raw`, `--tag`, scoped, with a word no page holds and with an invalid query; `match` in each output mode, with `--ignore-case`, `--all` and `--field`, scoped, with no hit and with an invalid pattern; `read` of the root index, a folder, a missing page, each sampled page, and line, word and character slices of one. |
 | `write`    | the snapshot without `<root>/.wiki/cache`    | `search` and `map` (both caches built from nothing), `update`, `update --check`, `new` at the root and under a sampled folder, `update --check`, `lint`, `map`, `search`.                                                                                                                                                                                                                                                              |
 | `full`     | the snapshot                                 | `update --check --full`, `update --full`.                                                                                                                                                                                                                                                                                                                                                                                              |
@@ -239,9 +239,24 @@ has five stages:
   reads the caches the other wrote. Every run is compared with the first.
 - **Sample.** The folders, pages and words a matrix names are drawn from the
   snapshot with a seeded generator, so one seed and one tree give one matrix. It
-  takes up to four top-level folders and two second-level folders, up to six
-  pages from folders that hold an index, and three words of those pages. Dot
-  folders, symlinks and names that start with a dash are not drawn.
+  takes up to four top-level folders and two second-level folders, and up to six
+  pages from folders that hold an index. Dot folders, symlinks and names that
+  start with a dash are not drawn.
+- **Words.** A search or a match compares more than "no match" only when it
+  finds something, so each word comes from the text its command reads. The
+  sample reads the head of the pages, in a drawn order, until it holds: two
+  words of one page's body (the search terms, so the two-term search can find
+  that page); a body word of a page below the first sampled folder (the scoped
+  search); a word of a `desc` field (`match --field desc`); a word of a `name`
+  or `tags` field (`match --field name,tags`); and a body word and a tag of one
+  page with tags (`search --tag`). A word is a whole run of five or more ASCII
+  letters. Where the wiki holds no such word, the command takes a body word
+  instead and the sample in the result file shows the gap.
+- **Found nothing.** Every search and match, but the two for a word no page
+  holds, is built to find something. One that exits 1 on every run is printed as
+  `found nothing` and listed under `no_hit` in its stage of the result file. It
+  is no difference, but a clean run with such a line compared less than the
+  matrix names.
 - **Where commands run.** From `<slot>/cwd` with `--path <root>`, except the
   group at the end of `pristine`, which runs from inside the wiki.
 - **Left out.** The matrix has no `--help` call and no usage error. Their layout

@@ -411,6 +411,11 @@ def _stage_report(
             for run in runs
         },
         'cases': cases,
+        'no_hit': [
+            case.name
+            for index, case in enumerate(stage.cases)
+            if case.hits and all(run.records[index].outcome.code == 1 for run in runs)
+        ],
         'differences': [dataclasses.asdict(difference) for difference in found],
     }
 

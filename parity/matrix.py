@@ -8,7 +8,7 @@ import pathlib
 import random
 import re
 from collections.abc import Iterable, Sequence
-from typing import Optional
+from typing import Any, Optional
 
 __all__ = [
     'STAGES',
@@ -33,14 +33,23 @@ _FAILS = frozenset({2})
 _TOP_SCOPES = 4
 _DEEP_SCOPES = 2
 _PAGES = 6
-_TERMS = 3
+_TERMS = 2
+# how much of a page the draw reads: its frontmatter and the head of its body
+_HEAD = 65536
 # a word no page holds, and the name of a page no wiki holds
 _ABSENT = 'zqxjkvparity'
 # the folder `new` creates
 _NEW = 'paritynew'
 _NEW_DESC = 'A folder the parity harness adds.'
 _NEW_CONTENT = 'Written by the parity harness.'
-_WORD = re.compile(r'[A-Za-z]{5,}')
+# a whole ASCII word: the search index folds accents, so part of a longer
+# word would match no token
+_WORD = re.compile(r'\b[A-Za-z]{5,}\b')
+# one token of a tags field
+_TAG = re.compile(r'[^\W_]+')
+# a frontmatter line that opens a field
+_FIELD = re.compile(r'([A-Za-z_][\w-]*):(.*)')
+_FENCE = '---'
 _INDEX = '_index.md'
 
 
@@ -58,6 +67,8 @@ class Case:
         codes: The exit codes the command may end with. A side that ends
             with another one did not run the command the case is built
             for, however well the sides agree.
+        hits: Whether the command is built to find something. Exit code 1
+            on every run then means the case compared only "no match".
 
     """
 
@@ -66,6 +77,7 @@ class Case:
     inside: Optional[str] = None
     writes: bool = False
     codes: frozenset[int] = _DONE
+    hits: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -92,16 +104,28 @@ class Stage:
 class Sample:
     """The folders, pages and words of one wiki that the matrix names.
 
+    Each word is drawn from the text the command it goes to reads, so that
+    the command finds something. A field is empty where the wiki holds no
+    such word.
+
     Attributes:
         scopes: Folders for scoped commands, relative to the wiki root.
         pages: Pages for ``read``.
-        terms: Words for ``search`` and ``match``.
+        terms: Words of one page's body, for ``search`` and ``match``.
+        scoped: A body word of a page below the first scope.
+        desc: A word of one page's ``desc`` field.
+        label: A word of one page's ``name`` or ``tags`` field.
+        tagged: A body word and a tag of one page that has tags.
 
     """
 
     scopes: tuple[str, ...]
     pages: tuple[str, ...]
     terms: tuple[str, ...]
+    scoped: Optional[str] = None
+    desc: Optional[str] = None
+    label: Optional[str] = None
+    tagged: tuple[str, ...] = ()
 
 
 def sample(root: pathlib.Path, *, seed: int) -> Sample:
@@ -109,8 +133,9 @@ def sample(root: pathlib.Path, *, seed: int) -> Sample:
 
     The draw reads names and page text only, and is the same for one seed
     and one tree. Scopes are top-level folders and second-level folders;
-    pages are Markdown files in folders that hold an index; terms are
-    words of those pages.
+    pages are Markdown files in folders that hold an index. The words come
+    from those pages, read in a drawn order until each kind is found: a
+    wiki with no tags at all is read to its last page.
     """
     rng = random.Random(seed)
     tops = _folders(root, [''])
@@ -126,17 +151,41 @@ def sample(root: pathlib.Path, *, seed: int) -> Sample:
         if _INDEX not in names:
             continue
         for name in names:
-            regular = os.path.isfile(root / folder / name)
+            path = root / folder / name
+            regular = os.path.isfile(path) and not os.path.islink(path)
             page = name.endswith('.md') and (name != _INDEX)
             if page and regular and not name.startswith('-'):
                 candidates.append(os.path.join(folder, name))
     pages = _draw(rng, candidates, _PAGES)
-    words: set[str] = set()
-    for page in pages:
-        text = (root / page).read_text(encoding='utf-8', errors='replace')
-        words.update(_WORD.findall(text))
-    terms = _draw(rng, sorted(words), _TERMS)
-    return Sample(scopes=scopes, pages=pages, terms=terms)
+    # the kinds of word still to find; a scoped one only where a page can hold it
+    inner = set()
+    if scopes:
+        below = os.path.join(scopes[0], '')
+        inner = {page for page in candidates if page.startswith(below)}
+    missing = {'terms', 'desc', 'label', 'tagged'}
+    if inner:
+        missing.add('scoped')
+    drawn: dict[str, Any] = {}
+    for page in rng.sample(candidates, len(candidates)):
+        if not missing:
+            break
+        fields, body = _head(root / page)
+        words = _words(body)
+        tags = _TAG.findall(fields.get('tags', ''))
+        descs = _words(fields.get('desc', ''))
+        labels = _words(f'{fields.get("name", "")}\n{fields.get("tags", "")}')
+        if ('terms' in missing) and words:
+            drawn['terms'] = _draw(rng, words, _TERMS)
+        if ('scoped' in missing) and words and (page in inner):
+            drawn['scoped'] = rng.choice(words)
+        if ('desc' in missing) and descs:
+            drawn['desc'] = rng.choice(descs)
+        if ('label' in missing) and labels:
+            drawn['label'] = rng.choice(labels)
+        if ('tagged' in missing) and words and tags:
+            drawn['tagged'] = (rng.choice(words), rng.choice(tags))
+        missing -= set(drawn)
+    return Sample(scopes=scopes, pages=pages, terms=drawn.pop('terms', ()), **drawn)
 
 
 def stages(sample: Sample) -> tuple[Stage, ...]:
@@ -145,10 +194,12 @@ def stages(sample: Sample) -> tuple[Stage, ...]:
     Read-only commands run on the snapshot (``pristine``, ``query``).
     Mutating commands run on a tree with no caches (``write``) and on the
     snapshot (``full``). ``cross`` then runs each side on the tree and
-    caches each side left after ``write``.
+    caches each side left after ``write``. Where the sample lacks a kind
+    of word, its command takes a body word and may find nothing.
     """
     term = sample.terms[0] if sample.terms else _ABSENT
     other = sample.terms[-1] if sample.terms else _ABSENT
+    (word, tag) = sample.tagged or (term, other)
     scope = sample.scopes[0] if sample.scopes else None
     # read-only commands, from a neutral folder and from inside the wiki
     pristine = [
@@ -158,6 +209,7 @@ def stages(sample: Sample) -> tuple[Stage, ...]:
         _case(['lint', '--count']),
         _case(['update', '--check']),
         _case(['update', '--check', '--full']),
+        _case(['update', '--check', '--count']),
     ]
     for folder in sample.scopes:
         pristine.append(_case(['lint', folder]))
@@ -184,7 +236,7 @@ def stages(sample: Sample) -> tuple[Stage, ...]:
         _case(['search', term, '--limit', '3']),
         _case(['search', term[:3], '--prefix', '--json']),
         _case(['search', f'{term} OR {other}', '--raw', '--json']),
-        _case(['search', term, '--tag', other]),
+        _case(['search', word, '--tag', tag]),
         _case(['search', _ABSENT], codes=_NOTHING),
         _case(['search', '"', '--raw'], codes=_FAILS),
         _case(['match', term]),
@@ -192,8 +244,8 @@ def stages(sample: Sample) -> tuple[Stage, ...]:
         _case(['match', term, '--lineno']),
         _case(['match', term.upper(), '--ignore-case', '--lines']),
         _case(['match', term, '--all']),
-        _case(['match', term, '--field', 'desc']),
-        _case(['match', term, '--field', 'name,tags', '--lines']),
+        _case(['match', sample.desc or term, '--field', 'desc']),
+        _case(['match', sample.label or term, '--field', 'name,tags', '--lines']),
         _case(['match', _ABSENT], codes=_NOTHING),
         _case(['match', '('], codes=_FAILS),
         _case(['read', _INDEX]),
@@ -201,7 +253,7 @@ def stages(sample: Sample) -> tuple[Stage, ...]:
     ]
     if scope is not None:
         query.append(_case(['map', scope]))
-        query.append(_case(['search', term, scope, '--json']))
+        query.append(_case(['search', sample.scoped or term, scope, '--json']))
         query.append(_case(['match', r'^#+ \S', scope, '--lineno']))
         query.append(_case(['read', scope]))
     for page in sample.pages:
@@ -260,6 +312,40 @@ def _folders(root: pathlib.Path, parents: Iterable[str]) -> list[str]:
     return result
 
 
+def _head(path: pathlib.Path) -> tuple[dict[str, str], str]:
+    """Return the frontmatter fields and the body of the head of a page.
+
+    The fields are read by line: a line that opens with a key starts a
+    field, and every line up to the next key belongs to it. This is enough
+    to draw words from; what a field holds is each side's to decide.
+    """
+    with open(path, 'rb') as handle:
+        raw = handle.read(_HEAD)
+    text = raw.decode('utf-8', errors='replace')
+    # a full head may end inside a word: drop its last line
+    if len(raw) == _HEAD:
+        text = text[: text.rfind('\n') + 1]
+    lines = text.splitlines()
+    if (not lines) or (lines[0] != _FENCE) or (_FENCE not in lines[1:]):
+        return {}, text
+    end = lines.index(_FENCE, 1)
+    fields: dict[str, str] = {}
+    key = None
+    for line in lines[1:end]:
+        opened = _FIELD.match(line)
+        if opened is not None:
+            key = opened[1]
+            fields[key] = opened[2]
+        elif key is not None:
+            fields[key] += f'\n{line}'
+    return fields, '\n'.join(lines[end + 1 :])
+
+
+def _words(text: str) -> list[str]:
+    """Return the distinct words of ``text``, sorted."""
+    return sorted(set(_WORD.findall(text)))
+
+
 def _draw(rng: random.Random, population: Sequence[str], count: int) -> tuple[str, ...]:
     """Return ``count`` members of ``population``, or all of a smaller one."""
     if len(population) <= count:
@@ -279,12 +365,15 @@ def _case(
     Unless ``codes`` names them, the case allows the exit codes of a
     command that works: ``lint``, ``update --check``, ``search`` and
     ``match`` report through exit code 1, and every other command exits 0.
+    Such a ``search`` or ``match`` is built to find something.
     """
     name = ' '.join(args)
     if inside is not None:
         name += f' [in {inside or "."}]'
+    hits = False
     if codes is None:
-        reports = (args[0] in ('lint', 'search', 'match')) or ('--check' in args)
+        hits = args[0] in ('search', 'match')
+        reports = hits or (args[0] == 'lint') or ('--check' in args)
         codes = _REPORTS if reports else _DONE
     return Case(
         name=name,
@@ -292,6 +381,7 @@ def _case(
         inside=inside,
         writes=writes,
         codes=codes,
+        hits=hits,
     )
 
 
