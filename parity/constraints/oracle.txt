@@ -1,0 +1,22 @@
+# Every package of the oracle side's venv (SPEC.md, Oracle).
+annotated-doc==0.0.7
+annotated-types==0.8.0
+coverage==7.17.5
+execnet==2.1.2
+iniconfig==2.3.1
+markdown-it-py==4.3.0
+mdurl==0.1.2
+packaging==26.4
+pluggy==1.7.0
+pydantic==2.14.4
+pydantic-core==2.50.5
+pygments==2.21.0
+pytest==9.2.0
+pytest-cov==7.1.0
+pytest-xdist==3.8.0
+pyyaml==6.0.3
+rich==15.0.0
+shellingham==1.5.4
+typer==0.29.2
+typing-extensions==4.16.0
+typing-inspection==0.4.5

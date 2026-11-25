@@ -15,7 +15,7 @@ import pytest
 
 from parity import runner, side
 
-from .conftest import NOW, WIKI
+from .conftest import NOW
 
 __all__ = [
     'test_work_folder_below_a_wiki_is_refused',
@@ -23,10 +23,7 @@ __all__ = [
     'test_sides_that_fail_alike_are_reported',
 ]
 
-pytestmark = pytest.mark.skipif(
-    (WIKI is None) or (shutil.which('git') is None),
-    reason='requires the wiki console script and git',
-)
+pytestmark = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
 
 
 def test_work_folder_below_a_wiki_is_refused(tmp_path: pathlib.Path) -> None:

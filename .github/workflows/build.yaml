@@ -5,11 +5,13 @@ on:
     branches:
       - main
       - dev
+      - v2
     tags: ["v*"]
   pull_request:
     branches:
       - main
       - dev
+      - v2
 
 jobs:
   build:

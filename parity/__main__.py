@@ -1,13 +1,20 @@
 """Command line of the parity harness.
 
-usage: python -m parity matrix --sides FILE --a NAME --b NAME --corpora FILE --work DIR --out DIR
-       python -m parity selfcheck --sides FILE --side NAME --corpora FILE --work DIR --out DIR
+usage: python -m parity matrix --a NAME --b NAME [--sides FILE] --corpora FILE --work DIR --out DIR
+       python -m parity selfcheck --side NAME [--sides FILE] --corpora FILE --work DIR --out DIR
+       python -m parity oracle ensure [--side NAME]
+       python -m parity oracle check [--skip NAME]
 
 ``matrix`` compares two sides over the matrix; ``selfcheck`` runs one side
 against itself, clean and doctored. Both exit 0 when every result is the
 expected one, and 1 otherwise. A run that would compare nothing -- no
 corpus, an unknown stage, a side that does not start -- exits 2 before it
-snapshots anything.
+snapshots anything. A side is one the sides file declares, or a v1 side of
+``oracle.toml``.
+
+``oracle ensure`` builds the oracle checkout and the venvs of its sides, and
+exits 2 when it refuses a checkout or a venv. ``oracle check`` holds
+``oracle.toml`` level with v1 and exits 1 when a check fails.
 """
 
 from __future__ import annotations
@@ -25,7 +32,7 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from typing import Any, Optional
 
-from . import config, matrix, runner, selfcheck, side
+from . import config, matrix, oracle, runner, selfcheck, side
 from .runner import Corpus
 from .side import Side
 
@@ -41,7 +48,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     commands = parser.add_subparsers(dest='command', required=True)
     for name in ('matrix', 'selfcheck'):
         command = commands.add_parser(name)
-        command.add_argument('--sides', type=pathlib.Path, required=True)
+        command.add_argument('--sides', type=pathlib.Path)
         command.add_argument('--corpora', type=pathlib.Path, required=True)
         command.add_argument('--corpus', action='append')
         command.add_argument('--work', type=pathlib.Path, required=True)
@@ -55,9 +62,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             command.add_argument('--keep', action='store_true')
         else:
             command.add_argument('--side', required=True)
+    command = commands.add_parser('oracle')
+    actions = command.add_subparsers(dest='action', required=True)
+    action = actions.add_parser('ensure')
+    action.add_argument('--side', action='append')
+    action = actions.add_parser('check')
+    action.add_argument('--skip', action='append', choices=oracle.CHECKS, default=[])
     options = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format='%(message)s')
-    sides = config.load_sides(options.sides)
+    if options.command == 'oracle':
+        return _oracle(options, parser)
     corpora = config.load_corpora(options.corpora)
     labels = options.corpus or list(corpora)
     unknown = [label for label in labels if label not in corpora]
@@ -66,10 +80,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if not labels:
         parser.error(f'{options.corpora} declares no corpus')
     if options.command == 'matrix':
-        chosen = [sides[options.a], sides[options.b]]
+        names = [options.a, options.b]
     else:
-        chosen = [sides[options.side]]
+        names = [options.side]
     try:
+        chosen = _sides(names, options.sides)
         header = _header(chosen, now=options.now)
     except ValueError as e:
         parser.error(f'{e}')
@@ -92,6 +107,54 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 
 # ------ helper functions
+
+
+def _oracle(options: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """Build the oracle, or check its file, and return the exit code."""
+    named = oracle.load()
+    if options.action == 'check':
+        verdicts = oracle.check(named, skip=options.skip)
+        for verdict in verdicts:
+            result = 'passed' if verdict.passed else 'FAILED'
+            print(f'{verdict.name}: {result}: {verdict.detail}')
+        if all(verdict.passed for verdict in verdicts):
+            return 0
+        return 1
+    unknown = [name for name in options.side or () if name not in named.builds]
+    if unknown:
+        parser.error(f'{named.path.name} names no side {unknown!r}')
+    try:
+        oracle.ensure(named, names=options.side)
+    except ValueError as e:
+        parser.error(f'{e}')
+    return 0
+
+
+def _sides(names: Sequence[str], path: Optional[pathlib.Path]) -> list[Side]:
+    """Return the sides ``names``: declared in the file at ``path``, or v1 sides.
+
+    Raises:
+        ValueError: If the file declares a side under the name of a v1 side
+            of ``oracle.toml``, if no side has one of the names, or if a v1
+            side is not what ``oracle.toml`` names.
+
+    """
+    declared = config.load_sides(path) if path is not None else {}
+    named = oracle.load()
+    taken = sorted(set(declared) & set(named.builds))
+    if taken:
+        raise ValueError(
+            f'{path} declares {taken!r}, which {named.path.name} names as v1 sides.'
+        )
+    result = []
+    for name in names:
+        if name in declared:
+            result.append(declared[name])
+        elif name in named.builds:
+            result.append(oracle.side(named, name))
+        else:
+            raise ValueError(f'No side is named {name!r}.')
+    return result
 
 
 def _matrix(
@@ -205,12 +268,13 @@ def _header(sides: Sequence[Side], *, now: str) -> dict[str, Any]:
 
 
 def _side_record(item: Side, *, now: str) -> Mapping[str, Any]:
-    """Return one side's argv, variables, reported version and description.
+    """Return one side's argv, variables, identity, version and description.
 
     Raises:
         ValueError: If the side's ``--version`` fails or prints nothing
             (such a side runs no wiki command, and two of them would fail
-            every case alike), or if its ``describe`` command fails.
+            every case alike), if the side does not prove it is the engine
+            it names, or if its ``describe`` command fails.
 
     """
     described = None
@@ -233,6 +297,11 @@ def _side_record(item: Side, *, now: str) -> Mapping[str, Any]:
             f'side {item.name!r} does not start: --version exited'
             f' {probe.code} and printed {version!r} ({error!r} on stderr)'
         )
+    if not probe.identity:
+        raise ValueError(
+            f'side {item.name!r} is not the engine it names: --version left'
+            f' no identity record of {dict(item.identity)!r}'
+        )
     if (described is not None) and (described.returncode != 0):
         raise ValueError(
             f'side {item.name!r}: describe exited {described.returncode}'
@@ -243,6 +312,7 @@ def _side_record(item: Side, *, now: str) -> Mapping[str, Any]:
         'argv': list(item.argv),
         'env': dict(item.env),
         'notice': item.notice,
+        'identity': dict(item.identity),
         'version': version,
         'describe': described.stdout.strip() if described is not None else None,
     }

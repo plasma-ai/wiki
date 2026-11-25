@@ -5,10 +5,12 @@ on:
     branches:
       - main
       - dev
+      - v2
   pull_request:
     branches:
       - main
       - dev
+      - v2
 
 jobs:
   tests:
@@ -29,3 +31,22 @@ jobs:
         with:
           files: ./coverage.xml
           token: ${{ secrets.CODECOV_TOKEN }}
+  parity:
+    name: parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
+      - name: Install harness test dependencies
+        run: uv sync --only-group parity
+      - name: Check that the oracle is the merge base with v1
+        run: uv run --no-sync python -m parity oracle check --skip level
+      - name: Build the oracle checkout
+        run: uv run --no-sync python -m parity oracle ensure
+      - name: Run harness tests
+        run: uv run --no-sync pytest parity
