@@ -458,17 +458,18 @@ driver reads no clock. A new clock read calls `_now`, never `datetime.now`
 one built environment, on its own copy-on-write clone of one snapshot, at the
 same absolute path. `python -m parity matrix` compares two sides over the
 command matrix, and `python -m parity selfcheck` proves the harness with one
-side: clean under two hash seeds, then against a doctored copy for each
-comparison rule. `parity/SPEC.md` is the specification, and a change to a rule
-changes the spec and the matching doctored check in the same commit. Two sides
-that fail the same way agree on everything, so each matrix case names the exit
-codes it allows (`_case` in `parity/matrix.py`), and a search or match draws its
-word from the text the command reads; a new case states both. The harness treats
-a side as a black box, so it imports nothing from `wiki`. Corpus paths come only
-from the TOML file a run names: nothing committed names a private wiki, its
-paths, its sizes or its text, and result files stay outside the repository. The
-harness snapshots a checkout and runs only in clones, in a new work folder
-outside any wiki.
+side: clean under two hash seeds, then against a doctored copy for each check in
+the spec's table; the unit tests in `tests/test_parity` pin the rules no
+doctored check reaches. `parity/SPEC.md` is the specification, and a change to a
+rule changes the spec and the matching doctored check or unit test in the same
+commit. Two sides that fail the same way agree on everything, so each matrix
+case names the exit codes it allows (`_case` in `parity/matrix.py`), and a
+search or match draws its word from the text the command reads; a new case
+states both. The harness treats a side as a black box, so it imports nothing
+from `wiki`. Corpus paths come only from the TOML file a run names: nothing
+committed names a private wiki, its paths, its sizes or its text, and result
+files stay outside the repository. The harness snapshots a checkout and runs
+only in clones, in a new work folder outside any wiki.
 
 ### Run Bracket
 

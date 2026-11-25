@@ -32,8 +32,7 @@ may include breaking changes, each listed under a Breaking heading.
   running machine's git ignores asked git about every page and `_index.md` of
   the wiki with the git index in play, which git answers with a scan of its
   whole index per path. It now asks git first which of those paths an ignore
-  pattern on disk matches, and puts only those to the index-aware check, which
-  still writes every note.
+  pattern on disk matches, and puts only those to the index-aware check.
 - `wiki lint`, `wiki update` and `wiki update --check` note ignored pages
   differently in two repository shapes. In a wiki that holds a git submodule, a
   run whose scope takes in the submodule notes an ignored page outside it, where
