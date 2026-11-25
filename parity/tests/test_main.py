@@ -7,6 +7,7 @@ code plus the result files.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import pathlib
 import shutil
@@ -157,6 +158,7 @@ def test_matrix_command_strips_only_a_declared_notice(
         ('stage', 'invalid choice'),
         ('corpora', 'declares no corpus'),
         ('side', 'does not start'),
+        ('identity', 'is not the engine it names'),
         ('name', 'No side is named'),
         ('taken', 'names as v1 sides'),
     ],
@@ -166,15 +168,17 @@ def test_run_that_would_compare_nothing_is_refused(
     corpus: runner.Corpus,
     engine: side.Side,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
     broken: str,
     message: str,
 ) -> None:
     """A mistyped stage or side, an empty corpora file and a dead side are no pass.
 
-    Each would compare nothing and report no difference, and a sides file
-    that takes the name of a v1 side would pass something else off as the
-    oracle. The command exits 2 with a message instead, before it snapshots
-    anything or writes a result file.
+    Each would compare nothing and report no difference. A sides file that
+    takes the name of a v1 side would pass something else off as the
+    oracle, and so would a v1 side that runs another build than the one it
+    is expected to be. The command exits 2 with a message instead, before
+    it snapshots anything or writes a result file.
     """
     sides = tmp_path / 'sides.toml'
     prefix = list(engine.argv)
@@ -194,6 +198,12 @@ def test_run_that_would_compare_nothing_is_refused(
         corpora.write_text('', encoding='utf-8')
     out = tmp_path / 'out'
     name = 'enigne' if broken == 'name' else declared
+    if broken == 'identity':
+        # the oracle side is handed out as a build its checkout does not hold
+        expected = {**engine.identity, 'build': 'another'}
+        other = dataclasses.replace(engine, identity=expected)
+        monkeypatch.setattr(oracle, 'side', lambda *_: other)
+        name = 'oracle'
     argv = [
         'matrix',
         *('--sides', f'{sides}', '--a', name, '--b', name),

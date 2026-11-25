@@ -167,7 +167,8 @@ def ensure(oracle: Oracle, *, names: Optional[Sequence[str]] = None) -> None:
     """Build the oracle checkout and the venvs of its sides.
 
     A checkout that exists is kept, and so is a venv that holds what its
-    side names. A venv that does not is built again from nothing.
+    side names. A venv that does not is built again from nothing, and so is
+    a checkout whose folder is gone.
 
     Args:
         oracle: The oracle, from :func:`load`.
@@ -182,8 +183,10 @@ def ensure(oracle: Oracle, *, names: Optional[Sequence[str]] = None) -> None:
     """
     if not oracle.checkout.exists():
         oracle.checkout.parent.mkdir(parents=True, exist_ok=True)
-        cmd = ['worktree', 'add', '--detach', f'{oracle.checkout}', oracle.commit]
-        _git(cmd, cwd=oracle.repo)
+        # NOTE: --force takes the path back when git still lists a checkout
+        #   whose folder was deleted
+        cmd = ['worktree', 'add', '--force', '--detach']
+        _git([*cmd, f'{oracle.checkout}', oracle.commit], cwd=oracle.repo)
         logger.info('checked out %s at %s', oracle.commit[:7], oracle.checkout)
     _hold(oracle)
     if names is None:
@@ -274,8 +277,10 @@ def _hold(oracle: Oracle) -> None:
             f'Oracle checkout {checkout} is at {head[:7]}, and'
             f' {oracle.path.name} names {oracle.commit[:7]}.'
         )
-    cmd = ['--no-optional-locks', 'status', '--porcelain', '--', *_SOURCES]
-    changed = _git(cmd, cwd=checkout)
+    # NOTE: the untracked mode is stated, so no status.showUntrackedFiles of
+    #   the caller's hides an added file
+    cmd = ['--no-optional-locks', 'status', '--porcelain', '--untracked-files=all']
+    changed = _git([*cmd, '--', *_SOURCES], cwd=checkout)
     if changed:
         raise ValueError(f'Oracle checkout {checkout} has local changes: {changed!r}.')
 
@@ -290,7 +295,7 @@ def _build(oracle: Oracle, build: Build) -> None:
     venv = oracle.checkout / _VENVS / build.name
     if venv.exists():
         shutil.rmtree(venv)
-    # a uv-managed interpreter is the same build on every host
+    # a uv-managed interpreter, so no Python of the host's stands in for it
     cmd = ['venv', '--quiet', '--managed-python', '--python', build.python]
     _uv([*cmd, f'{venv}'])
     # the pinned packages, then the checkout itself in place

@@ -2,8 +2,8 @@
 
 A v1 side that runs is covered by every matrix test, which goes through
 the oracle checkout; this module carries the refusals that keep a side
-from being anything but what the oracle file names, and the checks that
-hold the file level with v1.
+from being anything but what the oracle file names, the making of a
+checkout, and the checks that hold the file level with v1.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from .conftest import _git
 __all__ = [
     'test_venv_that_differs_from_its_side_is_refused',
     'test_checkout_that_is_not_the_oracle_commit_is_refused',
+    'test_ensure_makes_a_deleted_checkout_again',
     'test_check_follows_the_oracle_from_the_pending_branch_to_a_sync',
 ]
 
@@ -35,6 +36,8 @@ pytestmark = pytest.mark.skipif(shutil.which('git') is None, reason='requires gi
         ('unicode', 'unicode is'),
         ('libyaml', 'libyaml is'),
         ('version', 'wiki is'),
+        # the venv imports the package of another checkout, at the same version
+        ('package', 'wiki is imported from'),
         # the constraints file moves a pin, drops one, or pins one more
         ('moved', 'pyyaml is'),
         ('dropped', 'pinned at nothing'),
@@ -49,12 +52,25 @@ def test_venv_that_differs_from_its_side_is_refused(
     """A side is handed out only when its venv holds exactly what is named.
 
     The built venv is held against an oracle file and a constraints file
-    that each differ from it in one thing. Any of them would let a result
-    be read as the oracle's when another interpreter, loader or package
-    produced it.
+    that each differ from it in one thing, and against a checkout of
+    another commit: there it imports ``wiki`` at the named version from
+    elsewhere, as a venv that installed a release would. Any of them would
+    let a result be read as the oracle's when another interpreter, loader
+    or package produced it.
     """
     named = oracle.load()
     build = named.builds['oracle']
+    if changed == 'package':
+        # a scratch checkout that holds the oracle's venvs, not its package
+        checkout = tmp_path / 'checkout'
+        checkout.mkdir()
+        shutil.copy(named.checkout / 'pyproject.toml', checkout)
+        (checkout / '.venv').symlink_to(named.checkout / '.venv')
+        _git(checkout, 'init', '-q', '-b', 'main')
+        _git(checkout, 'add', 'pyproject.toml')
+        _git(checkout, 'commit', '-q', '-m', 'project')
+        commit = _git(checkout, 'rev-parse', 'HEAD')
+        named = dataclasses.replace(named, checkout=checkout, commit=commit)
     lines = build.constraints.read_text(encoding='utf-8').splitlines()
     if changed == 'moved':
         lines = [
@@ -78,7 +94,7 @@ def test_venv_that_differs_from_its_side_is_refused(
 
 @pytest.mark.parametrize(
     argnames='changed',
-    argvalues=['missing', 'moved', 'edited', 'added'],
+    argvalues=['missing', 'moved', 'edited', 'added', 'hidden'],
 )
 def test_checkout_that_is_not_the_oracle_commit_is_refused(
     tmp_path: pathlib.Path,
@@ -88,8 +104,9 @@ def test_checkout_that_is_not_the_oracle_commit_is_refused(
 
     The checkout here is a scratch repository: one that is missing, one
     whose ``HEAD`` moved past the named commit, one with an edited engine
-    file, and one with a new test file. Each is refused before the side's
-    venv is looked at.
+    file, one with a new test file, and one whose git config keeps new
+    files out of ``git status``. Each is refused before the side's venv is
+    looked at.
     """
     checkout = tmp_path / 'checkout'
     (checkout / 'wiki').mkdir(parents=True)
@@ -109,11 +126,38 @@ def test_checkout_that_is_not_the_oracle_commit_is_refused(
         message = f'names {commit[:7]}'
     elif changed == 'edited':
         (checkout / 'wiki' / 'engine.py').write_text('VALUE = 2\n', encoding='utf-8')
-    elif changed == 'added':
+    elif changed in ('added', 'hidden'):
         (checkout / 'tests' / 'test_more.py').write_text('', encoding='utf-8')
+        if changed == 'hidden':
+            _git(checkout, 'config', 'status.showUntrackedFiles', 'no')
     named = dataclasses.replace(oracle.load(), checkout=checkout, commit=commit)
     with pytest.raises(ValueError, match=message):
         oracle.side(named, 'oracle')
+
+
+def test_ensure_makes_a_deleted_checkout_again(tmp_path: pathlib.Path) -> None:
+    """A checkout whose folder was deleted is made again, not refused.
+
+    Git still lists a worktree whose folder is gone, and adds none at its
+    path unless it is told to. ``ensure`` is the only way a checkout is
+    made, so it takes the path back by itself. No side is built here.
+    """
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    _git(repo, 'init', '-q', '-b', 'main')
+    _git(repo, 'commit', '-q', '--allow-empty', '-m', 'engine')
+    commit = _git(repo, 'rev-parse', 'HEAD')
+    checkout = tmp_path / 'worktrees' / 'oracle'
+    named = dataclasses.replace(
+        oracle.load(),
+        repo=repo,
+        checkout=checkout,
+        commit=commit,
+    )
+    oracle.ensure(named, names=[])
+    shutil.rmtree(checkout)
+    oracle.ensure(named, names=[])
+    assert _git(checkout, 'rev-parse', 'HEAD') == commit
 
 
 def test_check_follows_the_oracle_from_the_pending_branch_to_a_sync(

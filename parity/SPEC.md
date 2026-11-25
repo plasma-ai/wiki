@@ -123,14 +123,19 @@ reason = "<why it waits>"
 - **Checkout.** A detached worktree at the oracle commit, beside the main
   checkout: `worktrees/<repository>-oracle-<the commit's first seven digits>`.
   When the oracle moves, the old checkout is removed with `git worktree remove`
-  once no branch names its commit.
+  once no branch names its commit. `ensure` makes a checkout again when its
+  folder was deleted some other way.
 - **Sides.** v1 has two sides, and both run the oracle commit. `oracle` defines
   parity. `campaign` is the commit as the consumers of 1.9.x run it: their
   interpreter version and their package versions. Each side has a venv in the
-  checkout, `.venv/<side>`: a uv-managed interpreter of the named version, which
-  is the same build on every host; exactly the packages its constraints file
-  pins; and the checkout itself installed in place, so the side imports `wiki`
-  from the checkout.
+  checkout, `.venv/<side>`: a uv-managed interpreter of the named version;
+  exactly the packages its constraints file pins; and the checkout itself
+  installed in place, so the side imports `wiki` from the checkout.
+- **Interpreter build.** The named version is the same CPython release on every
+  host, but not the same build: uv installs the build its own release lists and
+  keeps one it has already installed. The build and the SQLite inside it can
+  therefore differ between two hosts. Nothing names them, and the result file
+  records both for each v1 side.
 - **Pins.** A constraints file pins every package of its venv, one
   `name==version` per line. `oracle.toml` names what a package pin cannot: the
   interpreter, its Unicode tables, and the libyaml inside PyYAML's C loader.

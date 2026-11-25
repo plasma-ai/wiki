@@ -2,12 +2,13 @@
 
 usage: <a v1 venv's python> -P facts.py
 
-The object holds the interpreter's version, the versions of its Unicode
-tables and of its SQLite, the libyaml that PyYAML's C loader is built on
-(empty when the loader is absent), every installed distribution with its
+The object holds the interpreter's version and build, the versions of its
+Unicode tables and of its SQLite, the libyaml that PyYAML's C loader is built
+on (empty when the loader is absent), every installed distribution with its
 version, and the version and folder of the ``wiki`` package it imports. The
 harness holds these against what ``oracle.toml`` and the side's constraints
-file name, and a result file records them.
+file name, and a result file records them. Nothing names the build or the
+SQLite, which can differ between two hosts' interpreters of one version.
 
 Run with ``-P`` so the script's folder stays off ``sys.path``.
 """
@@ -51,6 +52,7 @@ def main() -> None:
         libyaml = importlib.import_module('yaml._yaml').get_version_string()
     facts: dict[str, Any] = {
         'python': platform.python_version(),
+        'build': ' '.join(platform.python_build()),
         'implementation': sys.implementation.name,
         'unicode': unicodedata.unidata_version,
         'sqlite': sqlite3.sqlite_version,
