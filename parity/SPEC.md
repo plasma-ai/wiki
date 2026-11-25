@@ -152,6 +152,11 @@ Every tree a side runs on is a clone of that snapshot, placed at one path:
   `.wiki/settings.json` is refused: every side runs under a scratch home, so
   even the user's own `~/.wiki` reads as an enclosing wiki, and a command run
   from inside the snapshot's wiki would fail the same way on both sides.
+- **Swept folders.** A clone keeps its source's times, so its entries look old
+  to a cleaner of temporary files. On a path the system sweeps, such as `/tmp`
+  on macOS, a snapshot can lose old empty folders while a run is under way, and
+  the runs on either side of the sweep then differ at `(baseline)`. Choose a
+  work folder the system leaves alone.
 - **Live repositories.** The harness runs no `git worktree` subcommand, no
   commit and no checkout in a clone. Its one git write is the index refresh.
 - A stage marked cold removes `<root>/.wiki/cache` from its clone before the
