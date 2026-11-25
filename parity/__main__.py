@@ -112,10 +112,7 @@ def _matrix(
     )
     if not options.keep:
         runner.discard(plan)
-    for name, stream in result.streams.items():
-        target = options.out / corpus.label / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(stream)
+    _save(result.streams, options.out / corpus.label)
     count = len(result.differences)
     print(f'{corpus.label}: {count} difference{"s" if count != 1 else ""}')
     for difference in result.differences:
@@ -132,7 +129,7 @@ def _selfcheck(
     work: pathlib.Path,
     options: argparse.Namespace,
 ) -> tuple[dict[str, Any], bool]:
-    """Run the self-check on one corpus."""
+    """Run the self-check on one corpus and save the streams of a failed check."""
     checks = selfcheck.run(
         corpus,
         base,
@@ -148,6 +145,8 @@ def _selfcheck(
             print(f'  {_line(difference)}')
         for name in _no_hits(check.report):
             print(f'  found nothing: {name}')
+        if not check.passed:
+            _save(check.streams, options.out / corpus.label / check.name)
         row = {
             'name': check.name,
             'passed': check.passed,
@@ -158,6 +157,14 @@ def _selfcheck(
         rows.append(row)
     document = {'corpus': corpus.label, 'checks': rows}
     return document, all(check.passed for check in checks)
+
+
+def _save(streams: Mapping[str, bytes], folder: pathlib.Path) -> None:
+    """Write each stream to its file below ``folder``."""
+    for name, stream in streams.items():
+        target = folder / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(stream)
 
 
 def _line(difference: runner.Difference) -> str:

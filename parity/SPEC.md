@@ -32,8 +32,11 @@ anything: a corpora file with no corpus, an unknown corpus label or stage name,
 or a side whose `--version` fails or prints nothing. An error of the harness
 itself is a Python traceback.
 
-The harness makes `<work>/<label>` for each corpus and removes it at the end. It
-must not exist beforehand, and a run that fails leaves it in place.
+The harness makes `<work>/<label>` for each corpus; it must not exist
+beforehand. `matrix` removes it at the end unless `--keep` is given. `selfcheck`
+removes it when every check passed; otherwise it leaves the snapshot and, under
+`failed/<check>/<stage>/<run>/`, the slot of every run of each failed check. An
+error of the harness itself leaves the folder as it stood.
 
 `SIDES` is a TOML file with one table per side:
 
@@ -64,9 +67,10 @@ Each corpus gets one result file, `<out>/<label>.json`. It records the host
 argv, variables and reported version, the sample, for every stage how many
 commands of each run ended with each exit code and which searches found nothing,
 and for every case the exit code, the size and sha256 of both streams, and the
-touched count on every run. The streams of a case are saved under
-`<out>/<label>/<stage>/` only when they differ. Result files hold corpus paths
-and text, so they stay outside the repository too.
+touched count on every run. `matrix` saves the streams of a case under
+`<out>/<label>/<stage>/` when they differ, and `selfcheck` saves those of a
+failed check under `<out>/<label>/<check>/<stage>/`. Result files hold corpus
+paths and text, so they stay outside the repository too.
 
 The sections below are the rules of the harness, one part each: sides,
 snapshots, comparison, caches, the matrix and the self-check.
@@ -123,6 +127,7 @@ Every tree a side runs on is a clone of that snapshot, placed at one path:
         home/        HOME, with the git config
         cwd/         the neutral folder commands run from
     kept/<stage>/<run>/   a slot moved aside for a later stage, or by --keep
+    failed/<check>/       the kept slots of a failed check of the self-check
 ```
 
 - **Clones.** `cp -Rpc` on macOS (`clonefile`), `cp -a --reflink=auto`

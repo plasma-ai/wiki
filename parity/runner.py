@@ -37,6 +37,8 @@ WIKI_SETTINGS = '.wiki/settings.json'
 _SNAPSHOT = 'snapshot'
 # the folder every side runs in, one at a time, so absolute paths match
 _SLOT = 'slot'
+# where the slots a run keeps are moved to
+_KEPT = 'kept'
 # the three folders of a slot: the clone, the scratch home, the neutral cwd
 _TREE = 'tree'
 _HOME = 'home'
@@ -84,6 +86,11 @@ class Plan:
     def root(self: Plan) -> pathlib.Path:
         """Return the path every side finds the wiki at."""
         return self.work / _SLOT / _TREE / self.corpus.root
+
+    @property
+    def kept(self: Plan) -> pathlib.Path:
+        """Return the folder that holds the trees a run keeps."""
+        return self.work / _KEPT
 
 
 @dataclasses.dataclass(frozen=True)
@@ -164,8 +171,8 @@ def run(
         now: RFC 3339 instant for ``WIKI_NOW``.
         only: Names of the stages to run; a stage named here brings the
             stage it continues from. ``None`` runs them all.
-        keep: Whether to leave the tree of every run in the plan's work
-            folder, under ``kept``.
+        keep: Whether to leave the tree of every run in the plan's
+            :attr:`~Plan.kept` folder, as ``<stage>/<run>``.
 
     Returns:
         The differences and the report.
@@ -191,7 +198,7 @@ def run(
         stages = tuple(stage for stage in stages if stage.name in {*only, *bases})
     continued = {stage.base for stage in stages}
     slot = plan.work / _SLOT
-    kept = plan.work / 'kept'
+    kept = plan.kept
     # the manifest each kept tree ended with, for the stage that continues it
     ended: dict[tuple[str, str], Mapping[str, manifest.Entry]] = {}
     differences = []

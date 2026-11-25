@@ -21,6 +21,7 @@ from .conftest import ENGINE, NOW, WIKI
 __all__ = [
     'test_matrix_command_strips_only_a_declared_notice',
     'test_run_that_would_compare_nothing_is_refused',
+    'test_failed_selfcheck_keeps_its_streams_and_trees',
 ]
 
 pytestmark = pytest.mark.skipif(
@@ -161,3 +162,46 @@ def test_run_that_would_compare_nothing_is_refused(
     assert message in capsys.readouterr().err
     assert not (tmp_path / 'work').exists()
     assert not out.exists()
+
+
+def test_failed_selfcheck_keeps_its_streams_and_trees(
+    tmp_path: pathlib.Path,
+    corpus: runner.Corpus,
+) -> None:
+    """A self-check that fails leaves what is needed to see why.
+
+    The side prints its hash seed, so its two seeded runs differ on every
+    command and the clean check fails. The command exits 1, the differing
+    streams of the failed check are saved beside the result file, and the
+    work folder keeps the trees its runs ended with.
+    """
+    sides = tmp_path / 'sides.toml'
+    seeded = "import os; print(os.environ.get('PYTHONHASHSEED'))"
+    sides.write_text(
+        f'[seeded]\n'
+        f'argv = {json.dumps([sys.executable, "-c", seeded])}\n'
+        f'notice = false\n',
+        encoding='utf-8',
+    )
+    corpora = tmp_path / 'corpora.toml'
+    corpora.write_text(
+        f'[example]\n'
+        f'checkout = {json.dumps(f"{corpus.checkout}")}\n'
+        f'root = {json.dumps(corpus.root)}\n',
+        encoding='utf-8',
+    )
+    out = tmp_path / 'out'
+    work = tmp_path / 'work'
+    argv = [
+        'selfcheck',
+        *('--sides', f'{sides}', '--side', 'seeded', '--corpora', f'{corpora}'),
+        *('--work', f'{work}', '--out', f'{out}', '--now', NOW),
+    ]
+    assert cli.main(argv) == 1
+    document = json.loads((out / 'example.json').read_text(encoding='utf-8'))
+    verdicts = {check['name']: check['passed'] for check in document['checks']}
+    assert verdicts['clean'] is False
+    stream = out / 'example' / 'clean' / 'pristine' / '000 seeded seed 2.out'
+    assert stream.read_bytes() == b'2\n'
+    tree = work / 'example' / 'failed' / 'clean' / 'pristine' / 'seeded seed 2' / 'tree'
+    assert (tree / corpus.root / '_index.md').is_file()

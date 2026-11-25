@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import pathlib
+import shutil
 import sys
 from collections.abc import Mapping
 from typing import Any
@@ -49,6 +50,8 @@ _SEEDS = ('1', '2')
 _EXTRA = 'parity_doctored.md'
 _COUNTS = f'{cache.CACHE}/word_counts.json'
 _SEARCH = f'{cache.CACHE}/search.db'
+# where the trees of a failed check are filed, below the work folder
+_FAILED = 'failed'
 
 
 @dataclasses.dataclass(frozen=True)
@@ -60,6 +63,8 @@ class Check:
         expected: The differences the harness must report, and no other.
         found: The differences it reported.
         report: The matrix run as JSON data.
+        streams: The streams of each case whose streams differ, as a
+            matrix run returns them.
 
     """
 
@@ -67,6 +72,7 @@ class Check:
     expected: tuple[Difference, ...]
     found: tuple[Difference, ...]
     report: Mapping[str, Any]
+    streams: Mapping[str, bytes]
 
     @property
     def passed(self: Check) -> bool:
@@ -87,8 +93,10 @@ def run(
     Args:
         corpus: The wiki to run on.
         base: The engine both sides run.
-        work: New folder for the snapshot and the clones, removed at the
-            end.
+        work: New folder for the snapshot and the clones. It is removed at
+            the end when every check passed. Otherwise it keeps the
+            snapshot and, under ``failed/<check>``, the trees of every run
+            of each failed check.
         now: RFC 3339 instant for ``WIKI_NOW``.
         seed: Seed of the matrix sample.
 
@@ -98,27 +106,44 @@ def run(
 
     """
     plan = runner.prepare(corpus, work=work, seed=seed)
-    result = [clean(plan, base, now=now)]
+    result = [clean(plan, base, now=now, keep=True)]
+    _settle(plan, result[-1])
     for name, kind, _ in CHECKS:
         if (kind == 'notice') and not base.notice:
             continue
-        result.append(doctored(plan, base, name, now=now))
-    runner.discard(plan)
+        result.append(doctored(plan, base, name, now=now, keep=True))
+        _settle(plan, result[-1])
+    if all(check.passed for check in result):
+        runner.discard(plan)
     return result
 
 
-def clean(plan: Plan, base: Side, *, now: str) -> Check:
+def clean(plan: Plan, base: Side, *, now: str, keep: bool = False) -> Check:
     """Run the whole matrix with ``base`` on both sides, under two hash seeds.
+
+    Args:
+        plan: The snapshot to run on.
+        base: The engine both sides run.
+        now: RFC 3339 instant for ``WIKI_NOW``.
+        keep: Whether to leave the tree of every run in the plan's
+            :attr:`~parity.runner.Plan.kept` folder.
 
     Returns:
         The check, which expects no difference.
 
     """
-    found = runner.run(plan, _seeded(base), now=now)
-    return Check('clean', (), found.differences, found.report)
+    found = runner.run(plan, _seeded(base), now=now, keep=keep)
+    return Check('clean', (), found.differences, found.report, found.streams)
 
 
-def doctored(plan: Plan, base: Side, name: str, *, now: str) -> Check:
+def doctored(
+    plan: Plan,
+    base: Side,
+    name: str,
+    *,
+    now: str,
+    keep: bool = False,
+) -> Check:
     """Run one stage with ``base`` against a doctored copy of itself.
 
     The doctored side changes one thing in the stage's last command.
@@ -128,6 +153,8 @@ def doctored(plan: Plan, base: Side, name: str, *, now: str) -> Check:
         base: The engine both sides run.
         name: Name of a row of :data:`CHECKS`.
         now: RFC 3339 instant for ``WIKI_NOW``.
+        keep: Whether to leave the tree of every run in the plan's
+            :attr:`~parity.runner.Plan.kept` folder.
 
     Returns:
         The check, which expects exactly the differences the one change
@@ -162,11 +189,27 @@ def doctored(plan: Plan, base: Side, name: str, *, now: str) -> Check:
         Difference(stage, changed.name, case.name, aspect, detail)
         for aspect, detail in _shows_as(name, kind, case, plan.corpus)
     )
-    found = runner.run(plan, [one, changed], now=now, only=[stage])
-    return Check(f'doctored {name}', expected, found.differences, found.report)
+    found = runner.run(plan, [one, changed], now=now, only=[stage], keep=keep)
+    return Check(
+        f'doctored {name}',
+        expected,
+        found.differences,
+        found.report,
+        found.streams,
+    )
 
 
 # ------ helper functions
+
+
+def _settle(plan: Plan, check: Check) -> None:
+    """Remove the trees a passed check kept, and file those of a failed one."""
+    if check.passed:
+        shutil.rmtree(plan.kept)
+        return
+    target = plan.work / _FAILED / check.name
+    target.parent.mkdir(exist_ok=True)
+    plan.kept.rename(target)
 
 
 def _seeded(base: Side) -> list[Side]:
