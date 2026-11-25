@@ -9,8 +9,8 @@ may include breaking changes, each listed under a Breaking heading.
 
 ### Added
 
-- A `WIKI_FREEZE_TIME` environment variable, a test seam rather than a setting:
-  an RFC 3339 instant, such as `2026-01-02T03:04:05Z`, that every clock read
+- A `WIKI_FREEZE_TIME` environment variable, a test switch, not a setting: an
+  RFC 3339 instant, such as `2026-01-02T03:04:05Z`, that every clock read
   returns in place of the current time, so two runs given one value write the
   same stamps whenever they run. While it is set, each command opens stderr with
   `WIKI_FREEZE_TIME is set: timestamps use its fixed instant, not the clock.`; a
@@ -33,19 +33,21 @@ may include breaking changes, each listed under a Breaking heading.
   the wiki with the git index in play, which git answers with a scan of its
   whole index per path. It now asks git first which of those paths an ignore
   pattern on disk matches, and puts only those to the index-aware check, which
-  still writes every note. Two repository shapes read differently. In a wiki
-  that holds a git submodule, a run whose scope takes in the submodule now notes
-  an ignored page outside it, where such a run drew no note before; an ignored
-  page inside the submodule still silences the notes of that run. And a page
-  ignored only by a `.gitignore` that a sparse checkout keeps in the index and
-  off disk draws no note.
+  still writes every note.
+- `wiki lint`, `wiki update` and `wiki update --check` note ignored pages
+  differently in two repository shapes. In a wiki that holds a git submodule, a
+  run whose scope takes in the submodule notes an ignored page outside it, where
+  such a run drew no note before; an ignored page inside the submodule still
+  silences the notes of that run. A page ignored only by a `.gitignore` that a
+  sparse checkout keeps in the index and off disk draws no note.
 - The first `wiki search` in a wiki, which builds the search index, and a search
   after many pages changed, as a branch switch or a merge leaves them, no longer
   scan the index once per page: the build grows with the count of pages rather
   than with its square, and stale rows are dropped in one pass. A query builds
   snippets for the pages it returns alone, rather than for each page that led
   the ranking at some point of its scan. The results, snippets and scores are
-  the same. The notices for pages a search cannot read now come in path order
+  the same.
+- The notices `wiki search` writes for pages it cannot read come in path order,
   rather than in an order that changed from run to run.
 - `wiki --help`, each command's help page and usage errors print as plain text,
   without boxes or markup.
