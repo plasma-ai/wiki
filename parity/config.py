@@ -47,9 +47,10 @@ def load_sides(path: pathlib.Path) -> dict[str, Side]:
 
     Each table is one side: ``argv`` is the command prefix, ``env`` an
     optional table of variables for that side only, ``notice`` whether
-    the side prints the ``WIKI_NOW`` notice (true unless stated), and
+    the side prints the ``WIKI_NOW`` notice (true unless stated),
     ``describe`` an optional whole command that prints what the side is
-    made of.
+    made of, and ``judge`` an optional whole command that answers what the
+    side's interpreter makes of an input.
     """
     data = tomllib.loads(path.read_text(encoding='utf-8'))
     result = {}
@@ -60,5 +61,6 @@ def load_sides(path: pathlib.Path) -> dict[str, Side]:
             env=dict(table.get('env', {})),
             notice=table.get('notice', True),
             describe=tuple(table.get('describe', ())),
+            judge=tuple(table.get('judge', ())),
         )
     return result

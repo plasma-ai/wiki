@@ -95,6 +95,8 @@ class Stage:
             side then runs on the tree and caches every side left there.
             ``None`` starts from the snapshot.
         cold: Whether the tree starts with its cache folder removed.
+        settings: Text the wiki's settings file holds when the stage
+            starts. ``None`` leaves the file as the tree has it.
 
     """
 
@@ -102,6 +104,7 @@ class Stage:
     cases: tuple[Case, ...]
     base: Optional[str] = None
     cold: bool = False
+    settings: Optional[str] = None
 
 
 @dataclasses.dataclass(frozen=True)

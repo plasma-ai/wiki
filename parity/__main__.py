@@ -2,15 +2,19 @@
 
 usage: python -m parity matrix --a NAME --b NAME [--sides FILE] --corpora FILE --work DIR --out DIR
        python -m parity selfcheck --side NAME [--sides FILE] --corpora FILE --work DIR --out DIR
+       python -m parity registry --side NAME [--sides FILE] --corpora FILE --work DIR --out DIR
        python -m parity oracle ensure [--side NAME]
        python -m parity oracle check [--skip NAME]
 
 ``matrix`` compares two sides over the matrix; ``selfcheck`` runs one side
-against itself, clean and doctored. Both exit 0 when every result is the
-expected one, and 1 otherwise. A run that would compare nothing -- no
-corpus, an unknown stage, a side that does not start -- exits 2 before it
-snapshots anything. A side is one the sides file declares, or a v1 side of
-``oracle.toml``.
+against itself, clean and doctored; ``registry`` runs one side against a
+stand-in on the fixtures of the registry's classifiers. Each exits 0 when
+every result is the expected one, and 1 otherwise. A run that would compare
+nothing -- no corpus, an unknown stage, a side that does not start, a
+registry file the harness cannot hold to its classifiers -- exits 2 before
+it snapshots anything. A side is one the sides file declares, or a v1 side
+of ``oracle.toml``. ``registry --release`` also exits 1 while an entry of
+the registry is not ready for a release.
 
 ``oracle ensure`` builds the oracle checkout and the venvs of its sides, and
 exits 2 when it refuses a checkout or a venv. ``oracle check`` holds
@@ -30,9 +34,9 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Mapping, Sequence
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
-from . import config, matrix, oracle, runner, selfcheck, side
+from . import config, matrix, oracle, registry, runner, selfcheck, side
 from .runner import Corpus
 from .side import Side
 
@@ -46,7 +50,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     """Run the harness and return its exit code."""
     parser = argparse.ArgumentParser(prog='python -m parity', description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
-    for name in ('matrix', 'selfcheck'):
+    for name in ('matrix', 'selfcheck', 'registry'):
         command = commands.add_parser(name)
         command.add_argument('--sides', type=pathlib.Path)
         command.add_argument('--corpora', type=pathlib.Path, required=True)
@@ -54,7 +58,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         command.add_argument('--work', type=pathlib.Path, required=True)
         command.add_argument('--out', type=pathlib.Path, required=True)
         command.add_argument('--now', default=_NOW)
-        command.add_argument('--seed', type=int, default=0)
+        if name == 'registry':
+            command.add_argument('--release', action='store_true')
+        else:
+            command.add_argument('--seed', type=int, default=0)
         if name == 'matrix':
             command.add_argument('--a', required=True)
             command.add_argument('--b', required=True)
@@ -84,12 +91,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     else:
         names = [options.side]
     try:
+        entries = registry.load()
         chosen = _sides(names, options.sides)
         header = _header(chosen, now=options.now)
     except ValueError as e:
         parser.error(f'{e}')
+    header['registry'] = {id: entry.status for id, entry in entries.items()}
     options.out.mkdir(parents=True, exist_ok=True)
     failed = False
+    if options.command == 'registry':
+        waits = registry.unready(entries)
+        for line in waits:
+            print(f'registry: {line}')
+        failed = options.release and bool(waits)
     for label in labels:
         corpus = corpora[label]
         work = options.work / label
@@ -180,6 +194,8 @@ def _matrix(
     print(f'{corpus.label}: {count} difference{"s" if count != 1 else ""}')
     for difference in result.differences:
         print(f'  {_line(difference)}')
+    for excused in result.excused:
+        print(f'  registered: {_line(excused)}')
     for name in _no_hits(result.report):
         print(f'  found nothing: {name}')
     return dict(result.report), not result.differences
@@ -192,20 +208,28 @@ def _selfcheck(
     work: pathlib.Path,
     options: argparse.Namespace,
 ) -> tuple[dict[str, Any], bool]:
-    """Run the self-check on one corpus and save the streams of a failed check."""
-    checks = selfcheck.run(
-        corpus,
-        base,
-        work=work,
-        now=options.now,
-        seed=options.seed,
-    )
+    """Run the self-check, or the registry check, on one corpus.
+
+    The streams of a failed check are saved.
+    """
+    if options.command == 'registry':
+        checks = selfcheck.registry(corpus, base, work=work, now=options.now)
+    else:
+        checks = selfcheck.run(
+            corpus,
+            base,
+            work=work,
+            now=options.now,
+            seed=options.seed,
+        )
     rows = []
     for check in checks:
         verdict = 'passed' if check.passed else 'FAILED'
         print(f'{corpus.label}: {check.name}: {verdict}')
         for difference in check.found:
             print(f'  {_line(difference)}')
+        for excused in check.excused:
+            print(f'  registered: {_line(excused)}')
         for name in _no_hits(check.report):
             print(f'  found nothing: {name}')
         if not check.passed:
@@ -215,6 +239,8 @@ def _selfcheck(
             'passed': check.passed,
             'expected': [dataclasses.asdict(item) for item in check.expected],
             'found': [dataclasses.asdict(item) for item in check.found],
+            'registered': [dataclasses.asdict(item) for item in check.registered],
+            'excused': [dataclasses.asdict(item) for item in check.excused],
             'run': check.report,
         }
         rows.append(row)
@@ -230,8 +256,8 @@ def _save(streams: Mapping[str, bytes], folder: pathlib.Path) -> None:
         target.write_bytes(stream)
 
 
-def _line(difference: runner.Difference) -> str:
-    """Return one difference as a line of the printed summary."""
+def _line(difference: Union[runner.Difference, runner.Excused]) -> str:
+    """Return one difference, or one excused command, as a line of the summary."""
     fields = dataclasses.astuple(difference)
     return ': '.join(field for field in fields if field)
 

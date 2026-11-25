@@ -52,6 +52,9 @@ class Side:
         identity: The identity record the side must write on every command
             (its engine, its version and its build id). Empty for a side
             that writes none.
+        judge: A whole command that answers what the side's interpreter
+            makes of an input, for the classifiers of the registry. Empty
+            for a side that has none.
 
     """
 
@@ -61,6 +64,7 @@ class Side:
     notice: bool = True
     describe: tuple[str, ...] = ()
     identity: Mapping[str, str] = dataclasses.field(default_factory=dict)
+    judge: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)

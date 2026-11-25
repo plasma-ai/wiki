@@ -38,6 +38,8 @@ class Record:
         changes: The manifest content the command changed, by path;
             ``None`` for a path that is gone.
         view: The caches after the command.
+        settings: The bytes of the wiki's settings file as the command
+            found it; ``None`` for a tree that holds none.
 
     """
 
@@ -45,6 +47,7 @@ class Record:
     touched: tuple[str, ...]
     changes: Mapping[str, Optional[tuple]]
     view: cache.View
+    settings: Optional[bytes] = None
 
 
 @dataclasses.dataclass(frozen=True)

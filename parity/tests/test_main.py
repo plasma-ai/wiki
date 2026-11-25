@@ -15,7 +15,7 @@ import sys
 
 import pytest
 
-from parity import __main__ as cli, oracle, runner, side
+from parity import __main__ as cli, oracle, registry, runner, side
 
 from .conftest import NOW
 
@@ -24,6 +24,7 @@ __all__ = [
     'test_matrix_command_strips_only_a_declared_notice',
     'test_run_that_would_compare_nothing_is_refused',
     'test_failed_selfcheck_keeps_its_streams_and_trees',
+    'test_registry_command_proves_the_classifiers',
 ]
 
 pytestmark = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
@@ -161,6 +162,7 @@ def test_matrix_command_strips_only_a_declared_notice(
         ('identity', 'is not the engine it names'),
         ('name', 'No side is named'),
         ('taken', 'names as v1 sides'),
+        ('registry', 'has the status'),
     ],
 )
 def test_run_that_would_compare_nothing_is_refused(
@@ -177,8 +179,9 @@ def test_run_that_would_compare_nothing_is_refused(
     Each would compare nothing and report no difference. A sides file that
     takes the name of a v1 side would pass something else off as the
     oracle, and so would a v1 side that runs another build than the one it
-    is expected to be. The command exits 2 with a message instead, before
-    it snapshots anything or writes a result file.
+    is expected to be. A registry file that breaks its rules could excuse
+    what nobody approved. The command exits 2 with a message instead,
+    before it snapshots anything or writes a result file.
     """
     sides = tmp_path / 'sides.toml'
     prefix = list(engine.argv)
@@ -204,6 +207,12 @@ def test_run_that_would_compare_nothing_is_refused(
         other = dataclasses.replace(engine, identity=expected)
         monkeypatch.setattr(oracle, 'side', lambda *_: other)
         name = 'oracle'
+    if broken == 'registry':
+        # the registry file holds an entry under a status it does not have
+        text = registry.PATH.read_text(encoding='utf-8')
+        changed = tmp_path / 'differences.toml'
+        changed.write_text(text.replace('"approved"', '"agreed"'), encoding='utf-8')
+        monkeypatch.setattr(registry, 'PATH', changed)
     argv = [
         'matrix',
         *('--sides', f'{sides}', '--a', name, '--b', name),
@@ -260,3 +269,51 @@ def test_failed_selfcheck_keeps_its_streams_and_trees(
     assert stream.read_bytes() == b'2\n'
     tree = work / 'example' / 'failed' / 'clean' / 'pristine' / 'seeded seed 2' / 'tree'
     assert (tree / corpus.root / '_index.md').is_file()
+
+
+def test_registry_command_proves_the_classifiers(
+    tmp_path: pathlib.Path,
+    corpus: runner.Corpus,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The registry check passes with v1, and says what a release waits for.
+
+    Every fixture of a classifier is excused under its entry or reported,
+    as its tree's check expects, and the result file holds both lists with
+    the status of every entry. An entry that names no test yet is printed
+    and fails the command only under ``--release``.
+    """
+    corpora = tmp_path / 'corpora.toml'
+    corpora.write_text(
+        f'[example]\n'
+        f'checkout = {json.dumps(f"{corpus.checkout}")}\n'
+        f'root = {json.dumps(corpus.root)}\n',
+        encoding='utf-8',
+    )
+    out = tmp_path / 'out'
+    argv = [
+        'registry',
+        *('--side', 'oracle', '--corpora', f'{corpora}'),
+        *('--work', f'{tmp_path / "work"}', '--out', f'{out}', '--now', NOW),
+    ]
+    assert cli.main(argv) == 0
+    waits = [
+        line for line in capsys.readouterr().out.splitlines() if 'names no' in line
+    ]
+    document = json.loads((out / 'example.json').read_text(encoding='utf-8'))
+    entries = registry.load()
+    assert document['registry'] == {id: entry.status for id, entry in entries.items()}
+    assert waits == [f'registry: {line}' for line in registry.unready(entries)]
+    checks = {check['name']: check for check in document['checks']}
+    assert all(check['passed'] for check in checks.values())
+    excused = {item['entry'] for check in checks.values() for item in check['excused']}
+    assert excused == {'D1', 'D2', 'D3'}
+    reported = {item['case'] for check in checks.values() for item in check['found']}
+    assert reported == {
+        'changed prefix',
+        'changed parameter message',
+        'supported construct',
+    }
+    # the snapshot and every clone are gone
+    assert not (tmp_path / 'work' / 'example').exists()
+    assert cli.main([*argv, '--release']) == (1 if waits else 0)

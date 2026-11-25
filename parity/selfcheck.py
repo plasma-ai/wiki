@@ -1,27 +1,39 @@
-"""The harness self-check: one side against itself, clean and doctored."""
+"""The harness self-check: one side against itself, clean and doctored.
+
+The registry has a check of its own: one side against a stand-in that prints
+what a second engine may print, on the fixtures of each classifier.
+"""
 
 from __future__ import annotations
 
 import dataclasses
 import json
 import pathlib
+import re
 import shutil
+import struct
 import sys
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Optional
 
-from . import cache, doctor, runner
+from . import cache, doctor, runner, standin
+from .classify import Excused
 from .compare import Difference
-from .matrix import Case
-from .runner import Corpus, Plan
-from .side import Side
+from .matrix import _ABSENT, Case, Stage
+from .runner import _SNAPSHOT, Corpus, Plan
+from .side import NOTICE, Side
 
 __all__ = [
     'CHECKS',
+    'TREES',
+    'FIXTURES',
     'Check',
+    'Fixture',
     'run',
     'clean',
     'doctored',
+    'registry',
+    'fixtures',
 ]
 
 #: the doctored checks: the name of each, what its doctored side changes
@@ -45,6 +57,19 @@ CHECKS = (
     ('identity', 'identity', 'full'),
 )
 
+#: what each tree of the registry check sets in the settings file the
+#: snapshot holds, by the name of the tree: one input of one classifier, so
+#: that every other setting of the wiki stays as it is
+TREES: Mapping[str, Mapping[str, Any]] = {
+    'snapshot': {},
+    'malformed': {},
+    'pattern': {'naming': {'pattern': '('}},
+    'warned': {'naming': {'pattern': '[[a]|.*'}},
+    'value': {'parity': float('nan')},
+    'directive': {'timestamp': {'format': '%Y-%j'}},
+    'zone': {'timestamp': {'timezone': 'Parity/Zone'}},
+}
+
 # the two sides of one engine differ only in their hash seed
 _SEEDS = ('1', '2')
 # the paths a doctored side acts on, relative to the wiki root
@@ -53,6 +78,39 @@ _COUNTS = f'{cache.CACHE}/word_counts.json'
 _SEARCH = f'{cache.CACHE}/search.db'
 # where the trees of a failed check are filed, below the work folder
 _FAILED = 'failed'
+# the name of the stand-in side, and of a stage of the registry check
+_STANDIN = 'stand-in'
+_STAGE = 'registry {tree}'
+# the tree whose settings file ends one character early
+_CUT = 'malformed'
+# the wiki-written prefixes a library's text follows
+_ERROR = 'Error: '
+_MALFORMED = 'Error: Malformed JSON in .wiki/settings.json: '
+_NAMING = 'Error: naming.pattern in .wiki/settings.json is not a valid regex: '
+_QUERY = """Error: Invalid FTS5 query '"': """
+# what a stand-in changes: a whole stream, the text behind a prefix, the
+# warning of `re` with its source line, and the frame of a usage error
+_WHOLE = r'(?s)\A.*\Z'
+_TAIL = r'(?m)^({}).*$'
+_WARNING = r'(?m)^.*: FutureWarning: .*\n  .*\n'
+_FRAME = r"Usage: .*\nTry '.*' for help\.\n\n(Error: .*\n)"
+_REFRAMED = "\n\nUsage: wiki [OPTIONS]\n\nFor more information, try '--help'.\n"
+# a refusal: nothing on stdout, one error line behind the notice, exit code 2
+_KEPT = rf'(?s)\A({re.escape(NOTICE.decode("ascii"))})?.*\Z'
+_REFUSED = {
+    'stdout': [_WHOLE, ''],
+    'stderr': [_KEPT, r'\1Error: Refused by the stand-in.\n'],
+    'exit': 2,
+}
+# a zone file that only the `tzdata` package holds: TZif, one type, UTC
+_ZONES = 'zones'
+_TZIF = (
+    b'TZif'
+    + bytes(16)
+    + struct.pack('>6L', 0, 0, 0, 0, 1, 4)
+    + struct.pack('>lBB', 0, 0, 0)
+    + b'UTC\x00'
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -60,12 +118,16 @@ class Check:
     """One part of the self-check.
 
     Attributes:
-        name: ``clean``, or ``doctored`` and the name of the check.
+        name: ``clean``, ``doctored`` and the name of the check, or
+            ``registry`` and the name of the tree.
         expected: The differences the harness must report, and no other.
         found: The differences it reported.
         report: The matrix run as JSON data.
         streams: The streams of each case whose streams differ, as a
             matrix run returns them.
+        registered: The commands whose differences the harness must excuse
+            under a registry entry, and no other.
+        excused: The commands it excused.
 
     """
 
@@ -74,11 +136,191 @@ class Check:
     found: tuple[Difference, ...]
     report: Mapping[str, Any]
     streams: Mapping[str, bytes]
+    registered: tuple[Excused, ...] = ()
+    excused: tuple[Excused, ...] = ()
 
     @property
     def passed(self: Check) -> bool:
-        """Return whether the harness reported exactly what it must."""
-        return sorted(self.expected) == sorted(self.found)
+        """Return whether the harness reported and excused exactly what it must."""
+        reported = sorted(self.expected) == sorted(self.found)
+        return reported and (sorted(self.registered) == sorted(self.excused))
+
+
+@dataclasses.dataclass(frozen=True)
+class Fixture:
+    """One command that a classifier of the registry is checked on.
+
+    Attributes:
+        name: Label of the fixture, and the name of its case.
+        entry: Id of the registry entry whose classifier it checks.
+        tree: Name of the tree it runs on, a key of :data:`TREES`.
+        args: The wiki arguments, without ``--path``.
+        edit: What the stand-in changes in the command's answer, as
+            :mod:`parity.standin` reads it.
+        codes: The exit codes the real side may end the command with.
+        notice: Whether the command reads the clock.
+        shows: For a negative fixture, a difference just outside the
+            entry's scope: the aspect and detail of each difference the
+            harness must report. Empty for a fixture the classifier must
+            excuse.
+
+    """
+
+    name: str
+    entry: str
+    tree: str
+    args: tuple[str, ...]
+    edit: Mapping[str, Any]
+    codes: frozenset[int]
+    notice: bool = True
+    shows: tuple[tuple[str, str], ...] = ()
+
+
+#: the fixtures of the registry: for each classifier, the differences it
+#: must excuse and at least one just outside its scope that it must not
+FIXTURES = (
+    # D1: the same error with a library's text in other words
+    Fixture(
+        name='pattern text',
+        entry='D1',
+        tree='snapshot',
+        args=('match', '('),
+        edit={'stderr': [_TAIL.format(re.escape(_ERROR)), r'\1unclosed group']},
+        codes=frozenset({2}),
+    ),
+    Fixture(
+        name='pattern warning',
+        entry='D1',
+        tree='snapshot',
+        args=('match', f'[[a]{_ABSENT}'),
+        edit={'stderr': [_WARNING, '']},
+        codes=frozenset({1}),
+    ),
+    Fixture(
+        name='query text',
+        entry='D1',
+        tree='snapshot',
+        args=('search', '"', '--raw'),
+        edit={'stderr': [_TAIL.format(re.escape(_QUERY)), r'\1unclosed string']},
+        codes=frozenset({2}),
+    ),
+    Fixture(
+        name='settings text',
+        entry='D1',
+        tree='malformed',
+        args=('lint',),
+        edit={'stderr': [_TAIL.format(re.escape(_MALFORMED)), r'\1EOF at column 11']},
+        codes=frozenset({2}),
+    ),
+    Fixture(
+        name='changed prefix',
+        entry='D1',
+        tree='malformed',
+        args=('update', '--check'),
+        edit={
+            'stderr': [
+                re.escape(_MALFORMED),
+                'Error: Malformed JSON in settings.json: ',
+            ]
+        },
+        codes=frozenset({2}),
+        shows=(('stderr', ''),),
+    ),
+    Fixture(
+        name='naming text',
+        entry='D1',
+        tree='pattern',
+        args=('lint',),
+        edit={'stderr': [_TAIL.format(re.escape(_NAMING)), r'\1unclosed group']},
+        codes=frozenset({2}),
+    ),
+    Fixture(
+        name='naming warning',
+        entry='D1',
+        tree='warned',
+        args=('lint',),
+        edit={'stderr': [_WARNING, '']},
+        codes=frozenset({0, 1}),
+    ),
+    # D2: the same usage error or help page in another layout
+    Fixture(
+        name='parser message',
+        entry='D2',
+        tree='snapshot',
+        args=('lint', '--parity'),
+        edit={'stderr': [_WHOLE, f"error: unexpected argument '--parity'{_REFRAMED}"]},
+        codes=frozenset({2}),
+        notice=False,
+    ),
+    Fixture(
+        name='parameter message',
+        entry='D2',
+        tree='snapshot',
+        args=('search', _ABSENT, '--limit', '0'),
+        edit={'stderr': [_FRAME, rf'\1{_REFRAMED}']},
+        codes=frozenset({2}),
+    ),
+    Fixture(
+        name='changed parameter message',
+        entry='D2',
+        tree='snapshot',
+        args=('map', '--depth', '-1'),
+        edit={'stderr': [_FRAME, f'Error: Invalid value: Reworded.{_REFRAMED}']},
+        codes=frozenset({2}),
+        shows=(('stderr', ''),),
+    ),
+    Fixture(
+        name='help page',
+        entry='D2',
+        tree='snapshot',
+        args=('lint', '--help'),
+        edit={'stdout': [_WHOLE, f'Check wiki health.{_REFRAMED}']},
+        codes=frozenset({0}),
+        notice=False,
+    ),
+    # D3: a refusal of input that v1 runs
+    Fixture(
+        name='regex construct',
+        entry='D3',
+        tree='snapshot',
+        args=('match', f'{_ABSENT}*+'),
+        edit=_REFUSED,
+        codes=frozenset({0, 1}),
+    ),
+    Fixture(
+        name='supported construct',
+        entry='D3',
+        tree='snapshot',
+        args=('match', f'{_ABSENT}+'),
+        edit=_REFUSED,
+        codes=frozenset({0, 1}),
+        shows=(('stderr', ''), ('exit', ''), ('unexpected', 'exit 2')),
+    ),
+    Fixture(
+        name='settings value',
+        entry='D3',
+        tree='value',
+        args=('lint',),
+        edit={**_REFUSED, 'stderr': [_KEPT, rf'\1{_MALFORMED}NaN at column 12\n']},
+        codes=frozenset({0, 1}),
+    ),
+    Fixture(
+        name='timestamp directive',
+        entry='D3',
+        tree='directive',
+        args=('lint',),
+        edit=_REFUSED,
+        codes=frozenset({0, 1}),
+    ),
+    Fixture(
+        name='named zone',
+        entry='D3',
+        tree='zone',
+        args=('lint',),
+        edit=_REFUSED,
+        codes=frozenset({0, 1}),
+    ),
+)
 
 
 def run(
@@ -137,7 +379,14 @@ def clean(plan: Plan, base: Side, *, now: str, keep: bool = False) -> Check:
 
     """
     found = runner.run(plan, _seeded(base), now=now, keep=keep)
-    return Check('clean', (), found.differences, found.report, found.streams)
+    return Check(
+        'clean',
+        (),
+        found.differences,
+        found.report,
+        found.streams,
+        excused=found.excused,
+    )
 
 
 def doctored(
@@ -200,6 +449,130 @@ def doctored(
         found.differences,
         found.report,
         found.streams,
+        excused=found.excused,
+    )
+
+
+def registry(
+    corpus: Corpus,
+    base: Side,
+    *,
+    work: pathlib.Path,
+    now: str,
+) -> list[Check]:
+    """Check the classifiers of the registry on ``corpus`` with one engine.
+
+    Args:
+        corpus: The wiki to run on. The fixtures bring their own inputs
+            and arguments, so any wiki proves them.
+        base: The engine both sides run: by itself as the reference, and
+            behind a stand-in. Its judge answers the classifiers.
+        work: New folder for the snapshot and the clones. It is removed at
+            the end when every check passed. Otherwise it keeps the
+            snapshot and, under ``failed/<check>``, the trees of every run
+            of each failed check.
+        now: RFC 3339 instant for ``WIKI_NOW``.
+
+    Returns:
+        One check per tree of :data:`TREES`.
+
+    """
+    plan = runner.prepare(corpus, work=work)
+    result = []
+    for tree in TREES:
+        result.append(fixtures(plan, base, tree, now=now, keep=True))
+        _settle(plan, result[-1])
+    if all(check.passed for check in result):
+        runner.discard(plan)
+    return result
+
+
+def fixtures(
+    plan: Plan,
+    base: Side,
+    tree: str,
+    *,
+    now: str,
+    keep: bool = False,
+) -> Check:
+    """Run the fixtures of one tree with ``base`` against a stand-in.
+
+    The stand-in runs ``base`` and answers each fixture's command as its
+    edit says. Both sides run with no zone file on the search path of
+    ``zoneinfo`` and with a ``tzdata`` package that holds one zone, so the
+    interpreter loads a zone an engine that reads zone files cannot.
+
+    Args:
+        plan: The snapshot to run on.
+        base: The engine both sides run.
+        tree: Name of a tree of :data:`TREES`.
+        now: RFC 3339 instant for ``WIKI_NOW``.
+        keep: Whether to leave the tree of every run in the plan's
+            :attr:`~parity.runner.Plan.kept` folder.
+
+    Returns:
+        The check, which expects each fixture excused under its entry, or
+        reported with exactly the differences a negative fixture shows.
+
+    """
+    chosen = [fixture for fixture in FIXTURES if fixture.tree == tree]
+    cases = tuple(
+        Case(
+            name=fixture.name,
+            args=fixture.args,
+            codes=fixture.codes,
+            notice=fixture.notice,
+        )
+        for fixture in chosen
+    )
+    name = _STAGE.format(tree=tree)
+    stage = Stage(name=name, cases=cases, settings=_settings(plan, tree))
+    # a zone the interpreter loads from the package, and no file to find it in
+    zones = plan.work / _ZONES
+    zone = zones / 'tzdata' / 'zoneinfo' / 'Parity' / 'Zone'
+    if not zone.exists():
+        zone.parent.mkdir(parents=True)
+        zone.write_bytes(_TZIF)
+        (zones / 'none').mkdir()
+    env = {'PYTHONPATH': f'{zones}', 'PYTHONTZPATH': f'{zones / "none"}'}
+    one, two = (
+        dataclasses.replace(seeded, env={**seeded.env, **env})
+        for seeded in _seeded(base)
+    )
+    edits = [
+        [runner.command(case, plan.root), fixture.edit]
+        for case, fixture in zip(cases, chosen)
+    ]
+    # -P keeps the harness's own modules off the wrapper's import path
+    argv = (
+        sys.executable,
+        '-P',
+        f'{standin.__file__}',
+        json.dumps(edits),
+        f'{len(two.argv)}',
+        *two.argv,
+    )
+    other = dataclasses.replace(two, name=_STANDIN, argv=argv)
+    expected = tuple(
+        Difference(stage.name, other.name, fixture.name, aspect, detail)
+        for fixture in chosen
+        for aspect, detail in fixture.shows
+    )
+    registered = tuple(
+        Excused(stage.name, other.name, fixture.name, fixture.entry)
+        for fixture in chosen
+        if not fixture.shows
+    )
+    staged = dataclasses.replace(plan, stages=(stage,))
+    found = runner.run(staged, [one, other], now=now, keep=keep)
+    return Check(
+        stage.name,
+        expected,
+        found.differences,
+        found.report,
+        found.streams,
+        registered=registered,
+        excused=found.excused,
     )
 
 
@@ -214,6 +587,26 @@ def _settle(plan: Plan, check: Check) -> None:
     target = plan.work / _FAILED / check.name
     target.parent.mkdir(exist_ok=True)
     plan.kept.rename(target)
+
+
+def _settings(plan: Plan, tree: str) -> Optional[str]:
+    """Return the text of the settings file ``tree`` starts with.
+
+    ``None`` for the tree that keeps the file the snapshot holds.
+    """
+    path = plan.work / _SNAPSHOT / plan.corpus.root / runner.WIKI_SETTINGS
+    text = path.read_text(encoding='utf-8')
+    if tree == _CUT:
+        return text.rstrip()[:-1]
+    if not TREES[tree]:
+        return None
+    held = json.loads(text)
+    for key, value in TREES[tree].items():
+        # a block keeps the members the tree does not set
+        if isinstance(value, dict) and isinstance(held.get(key), dict):
+            value = {**held[key], **value}
+        held[key] = value
+    return json.dumps(held, indent=2) + '\n'
 
 
 def _seeded(base: Side) -> list[Side]:
