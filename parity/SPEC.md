@@ -515,11 +515,14 @@ The supported set, as the judge decides it:
   counts where it is in force: an inline group that sets `i` puts the
   backreferences inside it outside the set, and one that clears it does the
   reverse. The flag `u` changes nothing in a text pattern and is inside the set.
-- **Outside the classifiers.** Three clauses of the entries have no classifier
-  code, so a difference of their kind is reported. The label of a `_merge` error
-  line (D1): the harness runs no `_merge` command. A pattern past the
-  compiled-size limits, and nesting past the depth limit (D3): both limits are
-  the second engine's regex library's, and the judge's walk does not hold them.
+- **Outside the classifiers.** Five clauses of the three entries have no
+  classifier code, so a difference of their kind is reported. Two are a test's
+  to hold: the text of a failed plugin download (D1), and typer's two completion
+  options, which a second engine does not have (D2). The label of a `_merge`
+  error line (D1) waits for a `_merge` command in the harness, which runs none.
+  A pattern past the compiled-size limits, and nesting past the depth limit
+  (D3), are limits of the second engine's regex library, and the judge's walk
+  does not hold them.
 
 ## Self-check
 
