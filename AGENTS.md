@@ -29,6 +29,11 @@ The `wiki/` Python package is organized into `cli/` (typer app), `core/`
 `_assets/` (wiki config templates and the git merge driver), with the pytest
 suite in `tests/`.
 
+`parity/` at the repository root is the parity harness, a development tool that
+runs two engines on clones of one tree and reports every difference between them
+(`parity/SPEC.md`). It is not part of the wheel or the sdist; its tests are in
+`tests/test_parity/`.
+
 A wiki is a folder tree of markdown pages indexed at every level by `_index.md`
 files, with `.wiki/settings.json` declaring the root. The tool owns the
 generated surfaces — `wiki update` regenerates index link blocks, frontmatter,
@@ -446,6 +451,24 @@ reads the `_merge` driver's exit code as the merge outcome, and the driver reads
 no clock. A new clock read calls `_now`, never `datetime.now`
 (`grep -rn --include='*.py' 'datetime\.now' wiki` shows the one call, in
 `_now`).
+
+### Parity Harness
+
+`parity/` compares two sides: each is an argv prefix that the harness runs under
+one built environment, on its own copy-on-write clone of one snapshot, at the
+same absolute path. `python -m parity matrix` compares two sides over the
+command matrix, and `python -m parity selfcheck` proves the harness with one
+side: clean under two hash seeds, then against a doctored copy for each
+comparison rule. `parity/SPEC.md` is the specification, and a change to a rule
+changes the spec and the matching doctored check in the same commit. Two sides
+that fail the same way agree on everything, so each matrix case names the exit
+codes it allows (`_case` in `parity/matrix.py`), and a search or match draws its
+word from the text the command reads; a new case states both. The harness treats
+a side as a black box, so it imports nothing from `wiki`. Corpus paths come only
+from the TOML file a run names: nothing committed names a private wiki, its
+paths, its sizes or its text, and result files stay outside the repository. The
+harness snapshots a checkout and runs only in clones, in a new work folder
+outside any wiki.
 
 ### Run Bracket
 
