@@ -241,10 +241,11 @@ def run(
                     exits,
                 )
                 runs.append(done)
+                if stage.name in continued:
+                    ended[(stage.name, name)] = last
                 if keep or (stage.name in continued):
                     (kept / stage.name).mkdir(parents=True, exist_ok=True)
                     slot.rename(kept / stage.name / name)
-                    ended[(stage.name, name)] = last
                 else:
                     shutil.rmtree(slot)
         folder = manifest_path(plan.corpus, cache.CACHE)
