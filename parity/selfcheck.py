@@ -42,6 +42,7 @@ CHECKS = (
     ('cache-mode', 'mode', 'write'),
     ('schema', 'schema', 'write'),
     ('notice', 'notice', 'full'),
+    ('identity', 'identity', 'full'),
 )
 
 # the two sides of one engine differ only in their hash seed
@@ -102,7 +103,8 @@ def run(
 
     Returns:
         The clean check, then one check per row of :data:`CHECKS`. The
-        ``notice`` row is left out for an engine that prints no notice.
+        ``notice`` row is left out for an engine that prints no notice, and
+        the ``identity`` row for one that writes no identity record.
 
     """
     plan = runner.prepare(corpus, work=work, seed=seed)
@@ -110,6 +112,8 @@ def run(
     _settle(plan, result[-1])
     for name, kind, _ in CHECKS:
         if (kind == 'notice') and not base.notice:
+            continue
+        if (kind == 'identity') and not base.identity:
             continue
         result.append(doctored(plan, base, name, now=now, keep=True))
         _settle(plan, result[-1])
@@ -242,7 +246,7 @@ def _shows_as(
     corpus: Corpus,
 ) -> list[tuple[str, str]]:
     """Return the aspect and detail of each difference a doctored command must show."""
-    if kind in ('stdout', 'stderr', 'notice'):
+    if kind in ('stdout', 'stderr', 'notice', 'identity'):
         return [(kind, '')]
     # the low bit flips in the one exit code the case allows
     if kind == 'exit':

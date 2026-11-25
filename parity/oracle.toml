@@ -1,0 +1,27 @@
+# The oracle: v1 at the commit every comparison is run against. The rules are
+# in SPEC.md, under Oracle. `python -m parity oracle ensure` builds the
+# checkout and the venvs this file names, and `python -m parity oracle check`
+# holds the file level with v1.
+
+# the oracle commit: the merge base of this branch and `base`
+commit = "d901e2bfec6e4f3117c4136eacf8a3496d90fdb5"
+# what `wiki --version` prints at that commit
+version = "1.9.0"
+# the branch v1 lives on
+base = "dev"
+# the branch that holds the oracle commit until `base` holds it
+pending = "stopgap-1.9.1"
+
+# the oracle side: the interpreter and the packages that define parity
+[sides.oracle]
+python = "3.14.6"
+unicode = "16.0.0"
+libyaml = "0.2.5"
+constraints = "constraints/oracle.txt"
+
+# the campaign side: the oracle commit as the consumers of 1.9.x run it
+[sides.campaign]
+python = "3.13.12"
+unicode = "15.1.0"
+libyaml = "0.2.5"
+constraints = "constraints/campaign.txt"

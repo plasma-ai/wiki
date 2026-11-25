@@ -81,11 +81,12 @@ class Difference:
         aspect: ``stdout``, ``stderr``, ``exit``, ``tree`` (manifest
             content), ``touched`` (the touched set), ``wrote`` (a read-only
             command touched a path outside the cache folder), ``cache``,
-            ``unexpected`` (an exit code the case does not allow) or
-            ``notice`` (a side that prints the notice printed none).
+            ``unexpected`` (an exit code the case does not allow),
+            ``notice`` (a side that prints the notice printed none) or
+            ``identity`` (a side did not prove it is the engine it names).
         detail: The path or the cache key that differs, or the exit code
             the case does not allow; empty for a stream, a pair of exit
-            codes or a notice.
+            codes, a notice or an identity.
 
     """
 
@@ -165,11 +166,14 @@ def _alone(plan: Stage, run: Run, *, folder: str) -> list[Difference]:
     state: _State = dict(run.baseline)
     for case, record in zip(plan.cases, run.records):
         state.update(record.changes)
-        # the command ran: it ended as its case is built to, under a fixed clock
+        # the command ran: it ended as its case is built to, under a fixed clock,
+        # on the engine the side names
         if record.outcome.code not in case.codes:
             found.append((case.name, 'unexpected', f'exit {record.outcome.code}'))
         if not record.outcome.notice:
             found.append((case.name, 'notice', ''))
+        if not record.outcome.identity:
+            found.append((case.name, 'identity', ''))
         # a read-only command writes nothing outside the caches
         if case.writes:
             continue

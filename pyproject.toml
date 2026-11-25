@@ -50,6 +50,9 @@ lint = [
     "ruff",
     "pre-commit",
 ]
+parity = [
+    "pytest-xdist",
+]
 security = [
     "safety",
 ]
@@ -212,6 +215,10 @@ ignore = [
     "S603",
     "S607",
 ]
+"parity/tests/**" = [
+    "F811",
+    "S101",
+]
 "tests/**" = [
     "F811",
     "S101",
@@ -246,7 +253,7 @@ include = ["wiki", "parity", "tests"]
 
 [tool.pytest.ini_options]
 # https://docs.pytest.org/en/stable/customize.html
-addopts = "--doctest-modules -n auto -m 'not online'"
+addopts = "--doctest-modules -n auto -m 'not online' --ignore=parity"
 markers = [
     "online: test makes real network calls (run with -m online)",
 ]

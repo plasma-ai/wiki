@@ -12,14 +12,24 @@ wheel or the sdist.
 ## Running It
 
 ```bash
+# build the oracle checkout and the venvs of the v1 sides
+python -m parity oracle ensure
+
+# hold the oracle file level with v1
+python -m parity oracle check
+
 # compare two sides over the matrix
-python -m parity matrix --sides SIDES --a NAME --b NAME \
+python -m parity matrix --a NAME --b NAME [--sides SIDES] \
     --corpora CORPORA --work DIR --out DIR
 
 # check the harness itself with one side
-python -m parity selfcheck --sides SIDES --side NAME \
+python -m parity selfcheck --side NAME [--sides SIDES] \
     --corpora CORPORA --work DIR --out DIR
 ```
+
+A side name is `oracle` or `campaign`, the two v1 sides that
+`parity/oracle.toml` names (Oracle, below), or a side that the `SIDES` file
+declares. `SIDES` may not declare a side under the name of a v1 side.
 
 `--corpus LABEL` (repeatable) picks corpora; the default is every corpus of the
 file. `--now` sets the fixed instant and `--seed` the seed of the matrix sample.
@@ -28,9 +38,10 @@ snapshot and every tree in the work folder.
 
 Both commands exit 0 when every result is the expected one and 1 otherwise. A
 run that would compare nothing exits 2 with a message, before it snapshots
-anything: a corpora file with no corpus, an unknown corpus label or stage name,
-or a side whose `--version` fails or prints nothing. An error of the harness
-itself is a Python traceback.
+anything: a corpora file with no corpus, an unknown corpus label, stage name or
+side name, a side whose `--version` fails or prints nothing, a side that does
+not prove its identity, or a v1 side the oracle rules refuse. An error of the
+harness itself is a Python traceback.
 
 The harness makes `<work>/<label>` for each corpus; it must not exist
 beforehand. `matrix` removes it at the end unless `--keep` is given. `selfcheck`
@@ -72,22 +83,96 @@ root = "wiki"
 
 Each corpus gets one result file, `<out>/<label>.json`. It records the host
 (platform, Python, SQLite, git, the system git config), the instant, each side's
-argv, variables, reported version and description, the sample, for every stage
-how many commands of each run ended with each exit code and which searches found
-nothing, and for every case the exit code, the size and sha256 of both streams,
-and the touched count on every run. `matrix` saves the streams of a case under
-`<out>/<label>/<stage>/` when they differ, and `selfcheck` saves those of a
-failed check under `<out>/<label>/<check>/<stage>/`. Result files hold corpus
-paths and text, so they stay outside the repository too.
+argv, variables, identity, reported version and description, the sample, for
+every stage how many commands of each run ended with each exit code and which
+searches found nothing, and for every case the exit code, the size and sha256 of
+both streams, and the touched count on every run. `matrix` saves the streams of
+a case under `<out>/<label>/<stage>/` when they differ, and `selfcheck` saves
+those of a failed check under `<out>/<label>/<check>/<stage>/`. Result files
+hold corpus paths and text, so they stay outside the repository too.
 
-The sections below are the rules of the harness, one part each: sides,
-snapshots, comparison, caches, the matrix and the self-check.
+The sections below are the rules of the harness, one part each: the oracle,
+sides, snapshots, comparison, caches, the matrix and the self-check.
+
+## Oracle
+
+The oracle is v1 at the commit that `parity/oracle.toml` names: the merge base
+of this branch and the branch v1 lives on. Every comparison against v1 runs v1
+from one checkout of that commit, and `python -m parity oracle ensure` is the
+only way that checkout is made.
+
+```toml
+commit = "<the oracle commit>"
+version = "<what wiki --version prints at that commit>"
+base = "<the branch v1 lives on>"
+pending = "<a branch that holds the commit until the base branch does>"
+
+[sides.oracle]
+python = "<the interpreter's version>"
+unicode = "<the version of its Unicode tables>"
+libyaml = "<the libyaml its PyYAML C loader is built on>"
+constraints = "constraints/oracle.txt"
+
+[[unmerged]]
+commit = "<a v1 commit this branch has not merged>"
+reason = "<why it waits>"
+```
+
+`pending` and `unmerged` are optional.
+
+- **Checkout.** A detached worktree at the oracle commit, beside the main
+  checkout: `worktrees/<repository>-oracle-<the commit's first seven digits>`.
+  When the oracle moves, the old checkout is removed with `git worktree remove`
+  once no branch names its commit.
+- **Sides.** v1 has two sides, and both run the oracle commit. `oracle` defines
+  parity. `campaign` is the commit as the consumers of 1.9.x run it: their
+  interpreter version and their package versions. Each side has a venv in the
+  checkout, `.venv/<side>`: a uv-managed interpreter of the named version, which
+  is the same build on every host; exactly the packages its constraints file
+  pins; and the checkout itself installed in place, so the side imports `wiki`
+  from the checkout.
+- **Pins.** A constraints file pins every package of its venv, one
+  `name==version` per line. `oracle.toml` names what a package pin cannot: the
+  interpreter, its Unicode tables, and the libyaml inside PyYAML's C loader.
+  Both sides pin the PyYAML built on libyaml 0.2.5, the loader build the
+  consumers run, so the loader is no difference between the two sides.
+- **Refusals.** `ensure`, and every run that names a v1 side, refuse a checkout
+  whose `HEAD` is not the oracle commit, and one with a changed, added or
+  deleted file under `wiki/` or `tests/`. They refuse a venv whose interpreter,
+  Unicode tables, libyaml, `wiki` version, `wiki` import path or set of
+  installed packages differs from what the side names. `ensure` builds such a
+  venv again from nothing, and refuses it if it still differs; a run never
+  builds.
+- **Inside a side's interpreter.** The checkout is installed in place, so a
+  side's interpreter can import every top-level folder of the oracle commit, a
+  `parity` folder among them. Harness code that runs there is a script run by
+  its path with `-P` (the launcher, and `facts.py`, which prints what the
+  interpreter is made of), never an import of `parity`.
+
+`python -m parity oracle check` holds `oracle.toml` level with v1, by three
+checks. It reads branches as the remote-tracking references hold them, so fetch
+first. It exits 1 when a check fails, and `--skip NAME` (repeatable) leaves one
+out.
+
+| Check     | Holds when                                                                                        |
+| --------- | ------------------------------------------------------------------------------------------------- |
+| `base`    | `commit` is the merge base of `HEAD` and the branch that holds v1.                                |
+| `level`   | Every commit of v1 is merged into `HEAD`, or `unmerged` lists it with a reason.                   |
+| `removed` | No path that `parity/removed.txt` lists, one per line, is tracked: a removed v1 path is not back. |
+
+- **Pending branch.** While `pending` names a branch that holds a commit the
+  base branch lacks, that branch holds v1: `base` takes the merge base with it,
+  and `level` counts the unmerged commits of both branches. Once the base branch
+  holds it, or the branch is gone, the base branch alone holds v1.
+- **Where they run.** `base` and `removed` depend on the tree alone and run on
+  every pull request. `level` changes when v1 gains a commit, so it runs where a
+  person or an agent reads it: at the start of a work session and at each gate.
 
 ## Sides
 
-A side has a name, an argv prefix, variables of its own, a `notice` flag, and an
-optional `describe` command. The harness appends the wiki arguments to the
-prefix. The environment is built from nothing:
+A side has a name, an argv prefix, variables of its own, a `notice` flag, an
+optional `describe` command, and an optional identity. The harness appends the
+wiki arguments to the prefix. The environment is built from nothing:
 
 | Variable              | Value                                                                            |
 | --------------------- | -------------------------------------------------------------------------------- |
@@ -121,6 +206,18 @@ The side's own variables are applied last. stdin is the null device.
   that side's clock was not fixed.
 - **Hash seed.** Outside the self-check a side has no `PYTHONHASHSEED` unless
   its table sets one.
+- **v1 sides.** The argv prefix of a v1 side is its venv's interpreter, `-P` and
+  `parity/launcher.py`. The launcher runs the command line of the `wiki` package
+  the interpreter imports, with `argv[0]` set to `wiki`. Its `describe` command
+  runs `parity/facts.py`.
+- **Identity.** A side with an identity gets `WIKI_TRACE=<file>` on every
+  command, a fresh file outside the slot. Before it runs the command, the side
+  appends one line of JSON to the file: `engine`, `version` and `build`. For a
+  v1 side the launcher writes it, with the engine `python`, the package's
+  version and the commit its checkout's `HEAD` holds, and takes the variable out
+  of the command's environment. A command that leaves anything but the expected
+  record, once, is an `identity` difference: the side is not the engine it
+  names.
 
 ## Snapshots
 
@@ -209,8 +306,9 @@ case, an aspect and a detail:
 | `wrote`      | a read-only command touched a path outside the caches | the path      |
 | `unexpected` | a command ended with an exit code its case forbids    | the exit code |
 | `notice`     | a side that declares the notice printed none          | empty         |
+| `identity`   | a side did not leave its identity record              | empty         |
 
-The last three rows are checked on each run by itself, and the run they name is
+The last four rows are checked on each run by itself, and the run they name is
 the one that breaks the rule. Paths are relative to the slot, so a page reads
 `tree/<root>/<page>`. The case is `(baseline)` for a difference before the first
 command and `(end)` for a tree that does not hold what its commands left.
@@ -315,9 +413,11 @@ corpus. It runs one engine on both sides.
 | `cache-mode` | changes the mode of `word_counts.json`                                 | `write` | `cache` (file list)                         |
 | `schema`     | adds a table to `search.db`, old times put back                        | `write` | `cache` (`search.db`: `schema`)             |
 | `notice`     | drops the first line of stderr                                         | `full`  | `notice`                                    |
+| `identity`   | changes the build id in the identity record                            | `full`  | `identity`                                  |
 
 The first six are one stdout byte, one stderr byte, one exit code, one file
 byte, one mode and one extra written file. The others prove the rules those six
 do not reach: the touched set by itself, the read-only rule, each part of the
-cache rule, and the notice. The `exit` check also proves the rule of allowed
-exit codes. The `notice` check is left out for a side that prints no notice.
+cache rule, the notice and the identity. The `exit` check also proves the rule
+of allowed exit codes. The `notice` check is left out for a side that prints no
+notice, and the `identity` check for a side that has no identity.

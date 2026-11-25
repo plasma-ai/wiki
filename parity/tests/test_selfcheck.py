@@ -12,24 +12,22 @@ import shutil
 
 import pytest
 
-from parity import matrix, runner, selfcheck
+from parity import matrix, runner, selfcheck, side
 
-from .conftest import ENGINE, NOW, WIKI
+from .conftest import NOW
 
 __all__ = [
     'test_one_engine_against_itself_shows_no_difference',
     'test_doctored_side_shows_exactly_its_difference',
 ]
 
-pytestmark = pytest.mark.skipif(
-    (WIKI is None) or (shutil.which('git') is None),
-    reason='requires the wiki console script and git',
-)
+pytestmark = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
 
 
 def test_one_engine_against_itself_shows_no_difference(
     tmp_path: pathlib.Path,
     corpus: runner.Corpus,
+    engine: side.Side,
 ) -> None:
     """The whole matrix is identical between two hash seeds of one engine.
 
@@ -38,7 +36,7 @@ def test_one_engine_against_itself_shows_no_difference(
     way no other result of the harness could be trusted.
     """
     plan = runner.prepare(corpus, work=tmp_path / 'work')
-    check = selfcheck.clean(plan, ENGINE, now=NOW)
+    check = selfcheck.clean(plan, engine, now=NOW)
     assert check.passed, check.found
     # every stage ran, and the commands did real work on the sampled wiki
     stages = {stage['name']: stage for stage in check.report['stages']}
@@ -61,15 +59,16 @@ def test_one_engine_against_itself_shows_no_difference(
 def test_doctored_side_shows_exactly_its_difference(
     tmp_path: pathlib.Path,
     corpus: runner.Corpus,
+    engine: side.Side,
     name: str,
 ) -> None:
-    """One changed byte, mode, code, file or cache entry is reported, alone.
+    """One changed byte, mode, code, file, cache entry or record is reported, alone.
 
     A missing report is a rule that does not fire; an extra one is a
     difference the harness invents. Both would make a clean run
     meaningless.
     """
     plan = runner.prepare(corpus, work=tmp_path / 'work')
-    check = selfcheck.doctored(plan, ENGINE, name, now=NOW)
+    check = selfcheck.doctored(plan, engine, name, now=NOW)
     assert check.expected, 'every doctored check expects a difference'
     assert sorted(check.found) == sorted(check.expected)

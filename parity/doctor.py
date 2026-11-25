@@ -27,14 +27,16 @@ __all__ = [
 ]
 
 #: what a doctored side changes: one stdout byte, one stderr byte, the exit
-#: code, the ``WIKI_NOW`` notice, one byte of a file, one file mode, one
-#: extra written file, one file written again with the same bytes, one word
-#: count, one search row, or the search schema
+#: code, the ``WIKI_NOW`` notice, the build id of the identity record, one
+#: byte of a file, one file mode, one extra written file, one file written
+#: again with the same bytes, one word count, one search row, or the search
+#: schema
 KINDS = (
     'stdout',
     'stderr',
     'exit',
     'notice',
+    'identity',
     'file',
     'mode',
     'extra',
@@ -49,6 +51,9 @@ COUNTS_KEY = '_index.md'
 INDEX_PATH = 'parity_doctored.md'
 #: the table the ``schema`` kind adds to ``search.db``
 SCHEMA_TABLE = 'parity_doctored'
+
+# the variable that names the file the real side appends its identity record to
+_TRACE = 'WIKI_TRACE'
 
 
 def main(argv: Sequence[str]) -> int:
@@ -71,6 +76,11 @@ def main(argv: Sequence[str]) -> int:
             code ^= 1
         elif kind == 'notice':
             stderr = stderr.partition(b'\n')[2]
+        elif kind == 'identity':
+            trace = pathlib.Path(os.environ[_TRACE])
+            record = json.loads(trace.read_bytes())
+            record['build'] = 'doctored'
+            trace.write_text(json.dumps(record) + '\n', encoding='utf-8')
         elif kind == 'file':
             content = pathlib.Path(path).read_bytes()
             _write_quietly(path, _flip(content))

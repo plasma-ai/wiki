@@ -1,0 +1,10 @@
+# Every package of the campaign side's venv (SPEC.md, Oracle).
+annotated-doc==0.0.4
+markdown-it-py==4.2.0
+mdurl==0.1.2
+pygments==2.20.0
+pyyaml==6.0.3
+rich==15.0.0
+shellingham==1.5.4
+typer==0.27.0
+typing-extensions==4.16.0

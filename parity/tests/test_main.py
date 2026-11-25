@@ -1,7 +1,8 @@
 """Test the ``parity.__main__`` module.
 
-Drives the harness command line as a gate does: sides and corpora come
-from TOML files, and the verdict is the exit code plus the result files.
+Drives the harness command line as a gate does: sides come from the oracle
+file or a TOML file, corpora from a TOML file, and the verdict is the exit
+code plus the result files.
 """
 
 from __future__ import annotations
@@ -13,27 +14,24 @@ import sys
 
 import pytest
 
-import wiki
-from parity import __main__ as cli, runner, side
+from parity import __main__ as cli, oracle, runner, side
 
-from .conftest import ENGINE, NOW, WIKI
+from .conftest import NOW
 
 __all__ = [
+    'test_v1_sides_run_as_the_oracle_names_them',
     'test_matrix_command_strips_only_a_declared_notice',
     'test_run_that_would_compare_nothing_is_refused',
     'test_failed_selfcheck_keeps_its_streams_and_trees',
 ]
 
-pytestmark = pytest.mark.skipif(
-    (WIKI is None) or (shutil.which('git') is None),
-    reason='requires the wiki console script and git',
-)
+pytestmark = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
 
-# a side that runs the engine and prints everything but the WIKI_NOW notice,
-# as a wrapper that fixes the clock by itself does
+# a side that runs the command it is given and prints everything but the
+# WIKI_NOW notice, as a wrapper that fixes the clock by itself does
 _RELAY = f"""
 import subprocess, sys
-result = subprocess.run([{f'{WIKI}'!r}, *sys.argv[1:]], capture_output=True)
+result = subprocess.run(sys.argv[1:], capture_output=True)
 notice = {side.NOTICE!r}
 stderr = result.stderr
 if stderr.startswith(notice):
@@ -45,7 +43,44 @@ sys.exit(result.returncode)
 
 
 # a describe command: what it prints comes from the side's own environment
-_DESCRIBE = "import os; print(os.environ['PYTHONPATH'], os.environ['WIKI_NOW'])"
+_DESCRIBE = "import os; print(os.environ['EXAMPLE'], os.environ['WIKI_NOW'])"
+
+
+def test_v1_sides_run_as_the_oracle_names_them(
+    tmp_path: pathlib.Path,
+    corpus: runner.Corpus,
+) -> None:
+    """The oracle and campaign sides need no sides file, and say what they are.
+
+    Both run the oracle commit, each under its own interpreter and pins,
+    and the example wiki reads the same to both. The result file records
+    the identity each side proved on every command and the facts of its
+    interpreter.
+    """
+    corpora = tmp_path / 'corpora.toml'
+    corpora.write_text(
+        f'[example]\n'
+        f'checkout = {json.dumps(f"{corpus.checkout}")}\n'
+        f'root = {json.dumps(corpus.root)}\n',
+        encoding='utf-8',
+    )
+    out = tmp_path / 'out'
+    argv = [
+        'matrix',
+        *('--a', 'oracle', '--b', 'campaign'),
+        *('--corpora', f'{corpora}', '--stage', 'write'),
+        *('--work', f'{tmp_path / "work"}', '--out', f'{out}', '--now', NOW),
+    ]
+    assert cli.main(argv) == 0
+    named = oracle.load()
+    document = json.loads((out / 'example.json').read_text(encoding='utf-8'))
+    for record in document['sides']:
+        build = named.builds[record['name']]
+        assert record['version'] == named.version
+        assert record['identity']['build'] == named.commit
+        facts = json.loads(record['describe'])
+        assert facts['python'] == build.python
+        assert facts['libyaml'] == build.libyaml
 
 
 @pytest.mark.parametrize(
@@ -56,6 +91,7 @@ _DESCRIBE = "import os; print(os.environ['PYTHONPATH'], os.environ['WIKI_NOW'])"
 def test_matrix_command_strips_only_a_declared_notice(
     tmp_path: pathlib.Path,
     corpus: runner.Corpus,
+    engine: side.Side,
     declared: bool,
     code: int,
 ) -> None:
@@ -71,14 +107,13 @@ def test_matrix_command_strips_only_a_declared_notice(
     sides = tmp_path / 'sides.toml'
     sides.write_text(
         f'[engine]\n'
-        f'argv = [{json.dumps(f"{WIKI}")}]\n'
+        f'argv = {json.dumps(engine.argv)}\n'
         f'notice = {json.dumps(declared)}\n'
-        f'env = {{ PYTHONPATH = {json.dumps(ENGINE.env["PYTHONPATH"])} }}\n'
+        f'env = {{ EXAMPLE = "engine" }}\n'
         f'describe = {json.dumps([sys.executable, "-c", _DESCRIBE])}\n'
         f'[relay]\n'
-        f'argv = [{json.dumps(sys.executable)}, {json.dumps(f"{relay}")}]\n'
-        f'notice = false\n'
-        f'env = {{ PYTHONPATH = {json.dumps(ENGINE.env["PYTHONPATH"])} }}\n',
+        f'argv = {json.dumps([sys.executable, f"{relay}", *engine.argv])}\n'
+        f'notice = false\n',
         encoding='utf-8',
     )
     corpora = tmp_path / 'corpora.toml'
@@ -99,9 +134,10 @@ def test_matrix_command_strips_only_a_declared_notice(
     # the result file names both sides, what they report as their version,
     # and what the one side that has a describe command says it is made of
     document = json.loads((out / 'example.json').read_text(encoding='utf-8'))
-    assert [item['version'] for item in document['sides']] == [wiki.__version__] * 2
+    version = oracle.load().version
+    assert [item['version'] for item in document['sides']] == [version] * 2
     described = [item['describe'] for item in document['sides']]
-    assert described == [f'{ENGINE.env["PYTHONPATH"]} {NOW}', None]
+    assert described == [f'engine {NOW}', None]
     (stage,) = document['stages']
     aspects = {difference['aspect'] for difference in stage['differences']}
     kept = out / 'example' / 'write' / '000 engine.err'
@@ -121,31 +157,31 @@ def test_matrix_command_strips_only_a_declared_notice(
         ('stage', 'invalid choice'),
         ('corpora', 'declares no corpus'),
         ('side', 'does not start'),
+        ('name', 'No side is named'),
+        ('taken', 'names as v1 sides'),
     ],
 )
 def test_run_that_would_compare_nothing_is_refused(
     tmp_path: pathlib.Path,
     corpus: runner.Corpus,
+    engine: side.Side,
     capsys: pytest.CaptureFixture[str],
     broken: str,
     message: str,
 ) -> None:
-    """A mistyped stage, an empty corpora file and a dead side are no pass.
+    """A mistyped stage or side, an empty corpora file and a dead side are no pass.
 
-    Each would compare nothing and report no difference. The command exits
-    2 with a message instead, before it snapshots anything or writes a
-    result file.
+    Each would compare nothing and report no difference, and a sides file
+    that takes the name of a v1 side would pass something else off as the
+    oracle. The command exits 2 with a message instead, before it snapshots
+    anything or writes a result file.
     """
     sides = tmp_path / 'sides.toml'
-    engine = [f'{WIKI}']
+    prefix = list(engine.argv)
     if broken == 'side':
-        engine = [sys.executable, '-c', 'import nonexistent_module']
-    sides.write_text(
-        f'[engine]\n'
-        f'argv = {json.dumps(engine)}\n'
-        f'env = {{ PYTHONPATH = {json.dumps(ENGINE.env["PYTHONPATH"])} }}\n',
-        encoding='utf-8',
-    )
+        prefix = [sys.executable, '-c', 'import nonexistent_module']
+    declared = 'oracle' if broken == 'taken' else 'engine'
+    sides.write_text(f'[{declared}]\nargv = {json.dumps(prefix)}\n', encoding='utf-8')
     corpora = tmp_path / 'corpora.toml'
     if broken != 'corpora':
         corpora.write_text(
@@ -157,9 +193,10 @@ def test_run_that_would_compare_nothing_is_refused(
     else:
         corpora.write_text('', encoding='utf-8')
     out = tmp_path / 'out'
+    name = 'enigne' if broken == 'name' else declared
     argv = [
         'matrix',
-        *('--sides', f'{sides}', '--a', 'engine', '--b', 'engine'),
+        *('--sides', f'{sides}', '--a', name, '--b', name),
         *('--corpora', f'{corpora}'),
         *('--stage', 'wirte' if broken == 'stage' else 'write'),
         *('--work', f'{tmp_path / "work"}', '--out', f'{out}', '--now', NOW),

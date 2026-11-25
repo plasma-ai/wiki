@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 import pathlib
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Mapping, Sequence
 
 __all__ = [
     'NOTICE',
+    'TRACE',
     'Side',
     'Outcome',
     'environment',
@@ -19,6 +22,8 @@ __all__ = [
 
 #: the stderr line an engine prints first when ``WIKI_NOW`` fixes its clock
 NOTICE = b'WIKI_NOW is set: timestamps use its fixed instant, not the clock.\n'
+#: the variable that names the file a side appends its identity record to
+TRACE = 'WIKI_TRACE'
 
 # the locale and zone every side runs under: a UTF-8 locale that macOS and
 # Linux both ship, and a POSIX zone string that needs no zone files and sits
@@ -44,6 +49,9 @@ class Side:
         describe: A whole command whose stdout says what the side is made
             of (its interpreter, its dependencies, its commit), for the
             result file. Empty for a side that has none.
+        identity: The identity record the side must write on every command
+            (its engine, its version and its build id). Empty for a side
+            that writes none.
 
     """
 
@@ -52,6 +60,7 @@ class Side:
     env: Mapping[str, str] = dataclasses.field(default_factory=dict)
     notice: bool = True
     describe: tuple[str, ...] = ()
+    identity: Mapping[str, str] = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -64,6 +73,9 @@ class Outcome:
         code: The exit code.
         notice: Whether stderr opened with the notice, on a side that
             prints it; always true on a side that prints none.
+        identity: Whether the command wrote the side's identity record, and
+            nothing else, on a side that has one; always true on a side
+            that has none.
 
     """
 
@@ -71,6 +83,7 @@ class Outcome:
     stderr: bytes
     code: int
     notice: bool = True
+    identity: bool = True
 
 
 def environment(side: Side, home: pathlib.Path, *, now: str) -> dict[str, str]:
@@ -126,17 +139,19 @@ def run(
 
     Returns:
         The streams and the exit code, with the notice line removed from
-        the head of stderr on a side that prints it.
+        the head of stderr on a side that prints it, and whether the side
+        proved its identity.
 
     """
-    result = subprocess.run(
-        [*side.argv, *args],
-        cwd=cwd,
-        env=env,
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        timeout=_TIMEOUT,
-    )
+    identity = True
+    if side.identity:
+        # a fresh file outside the tree, so the record is this command's alone
+        with tempfile.TemporaryDirectory() as folder:
+            trace = pathlib.Path(folder) / 'trace'
+            result = _spawn(side, args, cwd=cwd, env={**env, TRACE: f'{trace}'})
+            identity = _identified(trace, side.identity)
+    else:
+        result = _spawn(side, args, cwd=cwd, env=env)
     stderr = result.stderr
     notice = True
     if side.notice:
@@ -148,4 +163,37 @@ def run(
         stderr=stderr,
         code=result.returncode,
         notice=notice,
+        identity=identity,
     )
+
+
+# ------ helper functions
+
+
+def _spawn(
+    side: Side,
+    args: Sequence[str],
+    *,
+    cwd: pathlib.Path,
+    env: Mapping[str, str],
+) -> subprocess.CompletedProcess[bytes]:
+    """Run one wiki command on ``side`` to its end."""
+    return subprocess.run(
+        [*side.argv, *args],
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=_TIMEOUT,
+    )
+
+
+def _identified(trace: pathlib.Path, expected: Mapping[str, str]) -> bool:
+    """Return whether ``trace`` holds the record ``expected``, and no other."""
+    if not trace.is_file():
+        return False
+    try:
+        records = [json.loads(line) for line in trace.read_bytes().splitlines()]
+    except ValueError:
+        return False
+    return records == [dict(expected)]
