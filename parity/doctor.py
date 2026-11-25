@@ -22,13 +22,14 @@ __all__ = [
     'KINDS',
     'COUNTS_KEY',
     'INDEX_PATH',
+    'SCHEMA_TABLE',
     'main',
 ]
 
 #: what a doctored side changes: one stdout byte, one stderr byte, the exit
 #: code, the ``WIKI_NOW`` notice, one byte of a file, one file mode, one
 #: extra written file, one file written again with the same bytes, one word
-#: count, or one search row
+#: count, one search row, or the search schema
 KINDS = (
     'stdout',
     'stderr',
@@ -40,11 +41,14 @@ KINDS = (
     'rewrite',
     'counts',
     'index',
+    'schema',
 )
 #: the ``word_counts.json`` entry the ``counts`` kind changes
 COUNTS_KEY = '_index.md'
 #: the path of the rows the ``index`` kind adds to ``search.db``
 INDEX_PATH = 'parity_doctored.md'
+#: the table the ``schema`` kind adds to ``search.db``
+SCHEMA_TABLE = 'parity_doctored'
 
 
 def main(argv: Sequence[str]) -> int:
@@ -86,7 +90,18 @@ def main(argv: Sequence[str]) -> int:
             text = json.dumps(data, indent=2, sort_keys=True) + '\n'
             _write_quietly(path, text.encode('utf-8'))
         elif kind == 'index':
-            _add_search_rows(path)
+            _write_search(
+                path,
+                'INSERT INTO files(path, mtime_ns, size) VALUES (?, 0, 0)',
+                (INDEX_PATH,),
+            )
+            _write_search(
+                path,
+                'INSERT INTO notes_fts(body, path, folder) VALUES (?, ?, ?)',
+                ('doctored', INDEX_PATH, '.'),
+            )
+        elif kind == 'schema':
+            _write_search(path, f'CREATE TABLE {SCHEMA_TABLE} (value)')
     sys.stdout.buffer.write(stdout)
     sys.stderr.buffer.write(stderr)
     return code
@@ -111,20 +126,13 @@ def _write_quietly(path: str, content: bytes) -> None:
     os.utime(path, ns=(status.st_atime_ns, status.st_mtime_ns))
 
 
-def _add_search_rows(path: str) -> None:
-    """Add one row to each table of the search index and put its old times back."""
+def _write_search(path: str, sql: str, parameters: Sequence[str] = ()) -> None:
+    """Run one statement on the search index and put its old times back."""
     status = os.stat(path)
     connection = sqlite3.connect(path)
     try:
         with connection:
-            connection.execute(
-                'INSERT INTO files(path, mtime_ns, size) VALUES (?, 0, 0)',
-                (INDEX_PATH,),
-            )
-            connection.execute(
-                'INSERT INTO notes_fts(body, path, folder) VALUES (?, ?, ?)',
-                ('doctored', INDEX_PATH, '.'),
-            )
+            connection.execute(sql, parameters)
     finally:
         connection.close()
     os.utime(path, ns=(status.st_atime_ns, status.st_mtime_ns))

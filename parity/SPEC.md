@@ -202,24 +202,26 @@ command and `(end)` for a tree that does not hold what its commands left.
 The caches are compared before the first command and after every command in
 which either side wrote anything.
 
-- **File list.** The paths below `<root>/.wiki/cache` and their types must be
-  equal, and so must the bytes of its `.gitignore`.
+- **File list.** The paths below `<root>/.wiki/cache`, their types and their
+  modes must be equal, and so must the bytes of its `.gitignore`.
 - **`word_counts.json`.** The two files must hold the same keys with the same
   entries. A recorded `mtime` that equals the page's current mtime on its own
   side reads as "current"; any other recorded `mtime` is compared as it is. Two
   sides that wrote a page at different moments therefore agree, and a stale
   entry must be stale in the same way on both.
-- **Form.** The file's bytes must be the form v1 writes for the value they hold:
-  `json.dumps(value, indent=2, sort_keys=True)` and a newline. The two sides
-  must agree on whether that holds.
+- **Form.** The file's bytes must be the form the Python engine writes for the
+  value they hold: `json.dumps(value, indent=2, sort_keys=True)` and a newline.
+  The two sides must agree on whether that holds.
 - **Bytes.** Where the entries and the form agree, the bytes are compared too,
   as long as neither side has written a page in the stage and the stage started
   from the snapshot.
 - **`search.db`.** The harness reads a copy of the database and its write-ahead
-  files, never the files themselves. `meta` must be equal. `files` is compared
-  by path: `size` as it is, `mtime_ns` by the "current" rule. `notes_fts` is
-  compared by path over all seven columns, without rowids, so the order of
-  insertion does not count.
+  files, never the files themselves. `meta` must be equal, and so must every row
+  of `sqlite_master` (name, type, table and SQL text), which holds the tables,
+  their columns and the tokenizer of the index. `files` is compared by path:
+  `size` as it is, `mtime_ns` by the "current" rule. `notes_fts` is compared by
+  path over all seven columns, without rowids, so the order of insertion does
+  not count.
 
 ## Matrix
 
@@ -252,11 +254,11 @@ has five stages:
   page with tags (`search --tag`). A word is a whole run of five or more ASCII
   letters. Where the wiki holds no such word, the command takes a body word
   instead and the sample in the result file shows the gap.
-- **Found nothing.** Every search and match, but the two for a word no page
-  holds, is built to find something. One that exits 1 on every run is printed as
-  `found nothing` and listed under `no_hit` in its stage of the result file. It
-  is no difference, but a clean run with such a line compared less than the
-  matrix names.
+- **Found nothing.** Every search and match is built to find something, except
+  the two for a word no page holds and the two that are invalid. One that exits
+  1 on every run is printed as `found nothing` and listed under `no_hit` in its
+  stage of the result file. It is no difference, but a clean run with such a
+  line compared less than the matrix names.
 - **Where commands run.** From `<slot>/cwd` with `--path <root>`, except the
   group at the end of `pristine`, which runs from inside the wiki.
 - **Left out.** The matrix has no `--help` call and no usage error. Their layout
@@ -279,22 +281,24 @@ corpus. It runs one engine on both sides.
   reach another command's output. Each check runs that one stage and must report
   exactly the differences in the table, on that command, and no other.
 
-| Check     | The doctored side                                                      | Stage   | Must show as                                |
-| --------- | ---------------------------------------------------------------------- | ------- | ------------------------------------------- |
-| `stdout`  | changes one byte of stdout                                             | `full`  | `stdout`                                    |
-| `stderr`  | adds one byte to stderr                                                | `full`  | `stderr`                                    |
-| `exit`    | changes the exit code                                                  | `full`  | `exit`, `unexpected`                        |
-| `file`    | changes one byte of `.wiki/settings.json` in place, old times put back | `full`  | `tree`                                      |
-| `mode`    | changes the mode of `.wiki/settings.json`                              | `full`  | `tree`                                      |
-| `extra`   | writes one extra file                                                  | `full`  | `tree`, `touched`                           |
-| `rewrite` | writes `.wiki/settings.json` again with the same bytes                 | `full`  | `touched`                                   |
-| `stray`   | writes one extra file during a read-only command                       | `write` | `tree`, `touched`, `wrote`                  |
-| `counts`  | adds one to a word count in place, old times put back                  | `write` | `cache` (`word_counts.json`)                |
-| `index`   | adds a row to each table of `search.db`, old times put back            | `write` | `cache` (`search.db`: `files`, `notes_fts`) |
-| `notice`  | drops the first line of stderr                                         | `full`  | `notice`                                    |
+| Check        | The doctored side                                                      | Stage   | Must show as                                |
+| ------------ | ---------------------------------------------------------------------- | ------- | ------------------------------------------- |
+| `stdout`     | changes one byte of stdout                                             | `full`  | `stdout`                                    |
+| `stderr`     | adds one byte to stderr                                                | `full`  | `stderr`                                    |
+| `exit`       | changes the exit code                                                  | `full`  | `exit`, `unexpected`                        |
+| `file`       | changes one byte of `.wiki/settings.json` in place, old times put back | `full`  | `tree`                                      |
+| `mode`       | changes the mode of `.wiki/settings.json`                              | `full`  | `tree`                                      |
+| `extra`      | writes one extra file                                                  | `full`  | `tree`, `touched`                           |
+| `rewrite`    | writes `.wiki/settings.json` again with the same bytes                 | `full`  | `touched`                                   |
+| `stray`      | writes one extra file during a read-only command                       | `write` | `tree`, `touched`, `wrote`                  |
+| `counts`     | adds one to a word count in place, old times put back                  | `write` | `cache` (`word_counts.json`)                |
+| `index`      | adds a row to each table of `search.db`, old times put back            | `write` | `cache` (`search.db`: `files`, `notes_fts`) |
+| `cache-mode` | changes the mode of `word_counts.json`                                 | `write` | `cache` (file list)                         |
+| `schema`     | adds a table to `search.db`, old times put back                        | `write` | `cache` (`search.db`: `schema`)             |
+| `notice`     | drops the first line of stderr                                         | `full`  | `notice`                                    |
 
 The first six are one stdout byte, one stderr byte, one exit code, one file
 byte, one mode and one extra written file. The others prove the rules those six
-do not reach: the touched set by itself, the read-only rule, the two caches and
-the notice. The `exit` check also proves the rule of allowed exit codes. The
-`notice` check is left out for a side that prints no notice.
+do not reach: the touched set by itself, the read-only rule, each part of the
+cache rule, and the notice. The `exit` check also proves the rule of allowed
+exit codes. The `notice` check is left out for a side that prints no notice.

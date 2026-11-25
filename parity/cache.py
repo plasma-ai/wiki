@@ -43,18 +43,21 @@ class View:
     moments still compare equal; any other recorded mtime reads as itself.
 
     Attributes:
-        files: Kind of the cache folder (under the empty name) and of each
-            path below it.
+        files: Kind and mode of the cache folder (under the empty name)
+            and of each path below it.
         gitignore: Bytes of the folder's ``.gitignore``, if it has one.
         counts: Each key of ``word_counts.json`` mapped to its entry as
             JSON text; ``None`` when the file is absent.
-        counts_form: Whether the file's bytes are the JSON form v1 writes
-            for the value they hold.
+        counts_form: Whether the file's bytes are the JSON form the Python
+            engine writes for the value they hold.
         counts_raw: Digest of the file's bytes.
         search_signature: Identity of the ``search.db`` files the dump was
             read from, so an untouched database is not dumped twice.
         search_meta: Rows of ``meta``; ``None`` when the database is
             absent, and the error text for one that cannot be read.
+        search_schema: Each name of ``sqlite_master`` mapped to its type,
+            table and SQL text: the tables, their columns and the
+            tokenizer of the index.
         search_files: Each path of ``files`` mapped to its mtime and size
             as SQLite holds them.
         search_stamps: The same paths mapped to the compared mtime and size.
@@ -63,13 +66,14 @@ class View:
 
     """
 
-    files: Mapping[str, str]
+    files: Mapping[str, tuple]
     gitignore: Optional[bytes]
     counts: Optional[Mapping[str, str]]
     counts_form: Optional[bool]
     counts_raw: Optional[str]
     search_signature: tuple
     search_meta: Any
+    search_schema: Mapping[str, tuple]
     search_files: Mapping[str, tuple]
     search_stamps: Mapping[str, tuple]
     search_rows: Mapping[str, str]
@@ -97,10 +101,11 @@ def view(
     below = f'{CACHE}/'
     # the folder itself is listed, so an empty one differs from none
     files = {
-        relpath[len(below) :]: entry.kind
+        relpath[len(below) :]: (entry.kind, entry.mode)
         for relpath, entry in entries.items()
         if relpath.startswith(below) or (relpath == CACHE)
     }
+    regular = {name for name, (kind, _) in files.items() if kind == 'file'}
     # cache keys are NFC, so pages are looked up by their NFC path
     pages = {
         unicodedata.normalize('NFC', relpath): entry
@@ -108,13 +113,13 @@ def view(
         if entry.kind == 'file'
     }
     gitignore = None
-    if files.get('.gitignore') == 'file':
+    if '.gitignore' in regular:
         gitignore = (cache / '.gitignore').read_bytes()
     # word counts
     counts = None
     counts_form = None
     counts_raw = None
-    if files.get(_COUNTS) == 'file':
+    if _COUNTS in regular:
         raw = (cache / _COUNTS).read_bytes()
         counts, counts_form = _read_counts(raw, pages)
         counts_raw = hashlib.sha256(raw).hexdigest()
@@ -126,12 +131,13 @@ def view(
     )
     if (previous is not None) and (previous.search_signature == signature):
         search_meta = previous.search_meta
+        search_schema = previous.search_schema
         search_files = previous.search_files
         search_rows = previous.search_rows
-    elif files.get(_SEARCH) == 'file':
-        search_meta, search_files, search_rows = _read_search(cache)
+    elif _SEARCH in regular:
+        search_meta, search_schema, search_files, search_rows = _read_search(cache)
     else:
-        search_meta, search_files, search_rows = None, {}, {}
+        search_meta, search_schema, search_files, search_rows = None, {}, {}, {}
     search_stamps = {}
     for relpath, (mtime_ns, size) in search_files.items():
         page = pages.get(relpath)
@@ -146,6 +152,7 @@ def view(
         counts_raw=counts_raw,
         search_signature=signature,
         search_meta=search_meta,
+        search_schema=search_schema,
         search_files=search_files,
         search_stamps=search_stamps,
         search_rows=search_rows,
@@ -180,9 +187,11 @@ def compare(first: View, second: View, *, raw: bool) -> list[str]:
     if raw and (not counts) and (first.counts_raw != second.counts_raw):
         counts.append(f'{_COUNTS}: bytes')
     result.extend(counts)
-    # search index: meta as it is, then both tables by path
+    # search index: meta and the schema as they are, then both tables by path
     if first.search_meta != second.search_meta:
         result.append(f'{_SEARCH}: meta')
+    for name in _unequal(first.search_schema, second.search_schema):
+        result.append(f'{_SEARCH}: schema: {name}')
     for relpath in _unequal(first.search_stamps, second.search_stamps):
         result.append(f'{_SEARCH}: files: {relpath}')
     for relpath in _unequal(first.search_rows, second.search_rows):
@@ -216,8 +225,10 @@ def _read_counts(
     return result, form
 
 
-def _read_search(cache: pathlib.Path) -> tuple[Any, dict[str, tuple], dict[str, str]]:
-    """Return the ``meta`` rows, ``files`` rows and row digests of ``search.db``."""
+def _read_search(
+    cache: pathlib.Path,
+) -> tuple[Any, dict[str, tuple], dict[str, tuple], dict[str, str]]:
+    """Return the ``meta`` rows, schema, ``files`` rows and row digests of ``search.db``."""
     # read a copy: opening the database itself would write beside it
     with tempfile.TemporaryDirectory() as scratch:
         for name in _SEARCH_FAMILY:
@@ -226,6 +237,12 @@ def _read_search(cache: pathlib.Path) -> tuple[Any, dict[str, tuple], dict[str, 
         connection = sqlite3.connect(os.path.join(scratch, _SEARCH))
         try:
             meta = connection.execute('SELECT key, value FROM meta').fetchall()
+            schema = {
+                name: (kind, table, sql)
+                for name, kind, table, sql in connection.execute(
+                    'SELECT name, type, tbl_name, sql FROM sqlite_master'
+                )
+            }
             files = {
                 relpath: (mtime_ns, size)
                 for relpath, mtime_ns, size in connection.execute(
@@ -240,7 +257,7 @@ def _read_search(cache: pathlib.Path) -> tuple[Any, dict[str, tuple], dict[str, 
             for row in cursor:
                 rows.setdefault(row[0], []).append(row)
         except sqlite3.DatabaseError as e:
-            return f'{type(e).__name__}: {e}', {}, {}
+            return f'{type(e).__name__}: {e}', {}, {}, {}
         finally:
             connection.close()
     digests = {}
@@ -248,7 +265,7 @@ def _read_search(cache: pathlib.Path) -> tuple[Any, dict[str, tuple], dict[str, 
         text = repr(sorted(group, key=repr))
         digest = hashlib.sha256(text.encode('utf-8', 'surrogatepass'))
         digests[relpath] = digest.hexdigest()
-    return sorted(meta), files, digests
+    return sorted(meta), schema, files, digests
 
 
 def _unequal(first: Mapping[str, Any], second: Mapping[str, Any]) -> list[str]:

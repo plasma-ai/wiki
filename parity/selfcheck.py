@@ -38,6 +38,8 @@ CHECKS = (
     ('stray', 'extra', 'write'),
     ('counts', 'counts', 'write'),
     ('index', 'index', 'write'),
+    ('cache-mode', 'mode', 'write'),
+    ('schema', 'schema', 'write'),
     ('notice', 'notice', 'full'),
 )
 
@@ -151,14 +153,14 @@ def doctored(plan: Plan, base: Side, name: str, *, now: str) -> Check:
         f'{doctor.__file__}',
         kind,
         json.dumps(target),
-        f'{plan.root / _acts_on(kind)}',
+        f'{plan.root / _acts_on(name)}',
         f'{len(two.argv)}',
         *two.argv,
     )
     changed = dataclasses.replace(two, name=f'doctored {name}', argv=argv)
     expected = tuple(
         Difference(stage, changed.name, case.name, aspect, detail)
-        for aspect, detail in _shows_as(kind, case, plan.corpus)
+        for aspect, detail in _shows_as(name, kind, case, plan.corpus)
     )
     found = runner.run(plan, [one, changed], now=now, only=[stage])
     return Check(f'doctored {name}', expected, found.differences, found.report)
@@ -179,18 +181,23 @@ def _seeded(base: Side) -> list[Side]:
     ]
 
 
-def _acts_on(kind: str) -> str:
-    """Return the path a doctored side of ``kind`` acts on, below the wiki root."""
-    if kind == 'extra':
+def _acts_on(name: str) -> str:
+    """Return the path the doctored side of check ``name`` acts on, below the wiki root."""
+    if name in ('extra', 'stray'):
         return _EXTRA
-    if kind == 'counts':
+    if name in ('counts', 'cache-mode'):
         return _COUNTS
-    if kind == 'index':
+    if name in ('index', 'schema'):
         return _SEARCH
     return runner.WIKI_SETTINGS
 
 
-def _shows_as(kind: str, case: Case, corpus: Corpus) -> list[tuple[str, str]]:
+def _shows_as(
+    name: str,
+    kind: str,
+    case: Case,
+    corpus: Corpus,
+) -> list[tuple[str, str]]:
     """Return the aspect and detail of each difference a doctored command must show."""
     if kind in ('stdout', 'stderr', 'notice'):
         return [(kind, '')]
@@ -205,7 +212,13 @@ def _shows_as(kind: str, case: Case, corpus: Corpus) -> list[tuple[str, str]]:
             ('cache', f'search.db: files: {doctor.INDEX_PATH}'),
             ('cache', f'search.db: notes_fts: {doctor.INDEX_PATH}'),
         ]
-    relpath = runner.manifest_path(corpus, _acts_on(kind))
+    if kind == 'schema':
+        return [('cache', f'search.db: schema: {doctor.SCHEMA_TABLE}')]
+    target = _acts_on(name)
+    # a path of the cache folder is compared by the cache rule alone
+    if target.startswith(f'{cache.CACHE}/'):
+        return [('cache', f'file list: {target[len(cache.CACHE) + 1 :]}')]
+    relpath = runner.manifest_path(corpus, target)
     # a byte or a mode changed in place leaves the file's inode and mtime
     if kind in ('file', 'mode'):
         return [('tree', relpath)]
