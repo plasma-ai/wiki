@@ -22,6 +22,7 @@ from .conftest import ENGINE, NOW, WIKI, _needs_engine
 
 __all__ = [
     'test_matrix_command_strips_only_a_declared_notice',
+    'test_keep_leaves_the_snapshot_and_every_tree',
     'test_run_that_would_compare_nothing_is_refused',
     'test_harness_error_exits_2',
     'test_failed_selfcheck_keeps_its_streams_and_trees',
@@ -114,6 +115,34 @@ def test_matrix_command_strips_only_a_declared_notice(
         assert kept.read_bytes().startswith(side.NOTICE)
     # the snapshot and every clone are gone
     assert not (work / 'example').exists()
+
+
+@_needs_engine
+def test_keep_leaves_the_snapshot_and_every_tree(
+    tmp_path: pathlib.Path,
+    corpus: runner.Corpus,
+) -> None:
+    """A matrix run with ``--keep`` leaves its work folder in place.
+
+    Two sides of one engine agree on the ``write`` stage, so the command
+    exits 0, and the snapshot and the tree each side ended the stage with
+    are still there to look at.
+    """
+    sides = _sides_file(tmp_path)
+    corpora = _corpora_file(tmp_path, corpus)
+    out = tmp_path / 'out'
+    work = tmp_path / 'work'
+    argv = [
+        'matrix',
+        *('--sides', f'{sides}', '--a', 'engine', '--b', 'other'),
+        *('--corpora', f'{corpora}', '--stage', 'write', '--keep'),
+        *('--work', f'{work}', '--out', f'{out}', '--now', NOW),
+    ]
+    assert cli.main(argv) == 0
+    assert (work / 'example' / 'snapshot' / corpus.root).is_dir()
+    for name in ('engine', 'other'):
+        tree = work / 'example' / 'kept' / 'write' / name / 'tree'
+        assert (tree / corpus.root / '_index.md').is_file()
 
 
 @_needs_engine

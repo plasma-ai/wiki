@@ -328,10 +328,12 @@ corpus. It runs one engine on both sides.
 The first six are one stdout byte, one stderr byte, one exit code, one file
 byte, one mode and one extra written file. The others prove the rules those six
 do not reach: the touched set by itself, the read-only rule, four parts of the
-cache rule (a cache file's mode, one counts entry, the index rows and the index
-schema), and the notice. The `exit` check also proves the rule of allowed exit
-codes. The `notice` check is left out for a side that prints no notice. The
-other parts of the cache rule (the bytes of `.gitignore`, the form and the bytes
-of `word_counts.json`, and `meta`), a symlink's target, an unreadable file, and
-the `(baseline)` and `(end)` cases have no doctored check; the unit tests in
-`tests/test_parity` pin them.
+cache rule (a cache file's mode, one counts entry, an index row that one side
+lacks and the index schema), and the notice. The `exit` check also proves the
+rule of allowed exit codes. The `notice` check is left out for a side that
+prints no notice. The other parts of the cache rule (the bytes of `.gitignore`,
+the form and the bytes of `word_counts.json`, a recorded mtime that is not
+current, a recorded size, the text of an index row, and `meta`), each half of
+the touched rule, a deleted path, a symlink's target, an unreadable file, the
+`(baseline)` and `(end)` cases, and the runs after the second have no doctored
+check; the unit tests in `tests/test_parity` pin them.

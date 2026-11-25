@@ -1,9 +1,9 @@
 """Test the ``parity.cache`` module.
 
 The self-check doctors a real engine's caches for a file mode, a counts
-entry, the index rows and the index schema; this module carries the
-parts of the cache rule no doctored check reaches, on caches built by
-hand.
+entry, an index row one side lacks and the index schema; this module
+carries the parts of the cache rule no doctored check reaches, on caches
+built by hand.
 """
 
 from __future__ import annotations
@@ -21,6 +21,13 @@ __all__ = ['test_cache_rule_reports_its_difference']
 
 # when each side wrote its page, in nanoseconds: two different moments
 _STAMPS = (1_700_000_000_000_000_000, 1_700_000_001_000_000_000)
+# the one statement each rule of the search index changes ``search.db`` with
+_STATEMENTS = {
+    'meta': "UPDATE meta SET value = '2'",
+    'size': 'UPDATE files SET size = size + 1',
+    'stale-index': 'UPDATE files SET mtime_ns = mtime_ns - 1',
+    'row': "UPDATE notes_fts SET body = 'Four five six.'",
+}
 
 
 @pytest.mark.parametrize(
@@ -30,6 +37,7 @@ _STAMPS = (1_700_000_000_000_000_000, 1_700_000_001_000_000_000)
         ('none', True, ['word_counts.json: bytes']),
         ('gitignore', False, ['.gitignore']),
         ('form', False, ['word_counts.json: form']),
+        ('stale-counts', False, ['word_counts.json: page.md']),
         (
             'json',
             False,
@@ -40,6 +48,9 @@ _STAMPS = (1_700_000_000_000_000_000, 1_700_000_001_000_000_000)
             ],
         ),
         ('meta', False, ['search.db: meta']),
+        ('size', False, ['search.db: files: page.md']),
+        ('stale-index', False, ['search.db: files: page.md']),
+        ('row', False, ['search.db: notes_fts: page.md']),
         (
             'database',
             False,
@@ -53,7 +64,19 @@ _STAMPS = (1_700_000_000_000_000_000, 1_700_000_001_000_000_000)
             ],
         ),
     ],
-    ids=['current', 'bytes', 'gitignore', 'form', 'json', 'meta', 'database'],
+    ids=[
+        'current',
+        'bytes',
+        'gitignore',
+        'form',
+        'stale-counts',
+        'json',
+        'meta',
+        'size',
+        'stale-index',
+        'row',
+        'database',
+    ],
 )
 def test_cache_rule_reports_its_difference(
     tmp_path: pathlib.Path,
@@ -66,8 +89,11 @@ def test_cache_rule_reports_its_difference(
     Two sides wrote one page at different moments, and each cache records
     its own side's time, so the caches agree until their bytes are
     compared. One side then changes the bytes of ``.gitignore``, writes
-    the same counts in another JSON form, writes counts that are no JSON,
-    changes a ``meta`` row, or holds a ``search.db`` that is no database.
+    the same counts in another JSON form, records a time for the page
+    that is not the page's own (in the counts, then in the index),
+    writes counts that are no JSON, changes a ``meta`` row, the size the
+    index records for the page or the text of the page's index row, or
+    holds a ``search.db`` that is no database.
     """
     first = _side(tmp_path / 'first', stamp=_STAMPS[0])
     second = _side(tmp_path / 'second', stamp=_STAMPS[1])
@@ -122,13 +148,18 @@ def _change(root: pathlib.Path, rule: str) -> None:
     elif rule == 'form':
         data = json.loads(counts.read_text(encoding='utf-8'))
         counts.write_text(json.dumps(data), encoding='utf-8')
+    elif rule == 'stale-counts':
+        data = json.loads(counts.read_text(encoding='utf-8'))
+        data['page.md']['mtime'] -= 1
+        text = json.dumps(data, indent=2, sort_keys=True) + '\n'
+        counts.write_text(text, encoding='utf-8')
     elif rule == 'json':
         counts.write_bytes(b'{no json')
-    elif rule == 'meta':
+    elif rule in _STATEMENTS:
         connection = sqlite3.connect(folder / 'search.db')
         try:
             with connection:
-                connection.execute('UPDATE meta SET value = ?', ('2',))
+                connection.execute(_STATEMENTS[rule])
         finally:
             connection.close()
     elif rule == 'database':
