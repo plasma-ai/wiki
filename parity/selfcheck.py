@@ -97,7 +97,7 @@ def run(
             the end when every check passed. Otherwise it keeps the
             snapshot and, under ``failed/<check>``, the trees of every run
             of each failed check.
-        now: RFC 3339 instant for ``WIKI_NOW``.
+        now: RFC 3339 instant for ``WIKI_FREEZE_TIME``.
         seed: Seed of the matrix sample.
 
     Returns:
@@ -124,7 +124,7 @@ def clean(plan: Plan, base: Side, *, now: str, keep: bool = False) -> Check:
     Args:
         plan: The snapshot to run on.
         base: The engine both sides run.
-        now: RFC 3339 instant for ``WIKI_NOW``.
+        now: RFC 3339 instant for ``WIKI_FREEZE_TIME``.
         keep: Whether to leave the tree of every run in the plan's
             :attr:`~parity.runner.Plan.kept` folder.
 
@@ -152,7 +152,7 @@ def doctored(
         plan: The snapshot to run on.
         base: The engine both sides run.
         name: Name of a row of :data:`CHECKS`.
-        now: RFC 3339 instant for ``WIKI_NOW``.
+        now: RFC 3339 instant for ``WIKI_FREEZE_TIME``.
         keep: Whether to leave the tree of every run in the plan's
             :attr:`~parity.runner.Plan.kept` folder.
 

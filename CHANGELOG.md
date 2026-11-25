@@ -9,14 +9,14 @@ may include breaking changes, each listed under a Breaking heading.
 
 ### Added
 
-- A `WIKI_NOW` environment variable, a test seam rather than a setting: an RFC
-  3339 instant, such as `2026-01-02T03:04:05Z`, that every clock read returns in
-  place of the current time, so two runs given one value write the same stamps
-  whenever they run. While it is set, each command opens stderr with
-  `WIKI_NOW is set: timestamps use its fixed instant, not the clock.`; a value
-  of any other form fails the command with exit 2 before it does anything. Help,
-  `--version`, a command line that does not parse and the git merge driver never
-  read it.
+- A `WIKI_FREEZE_TIME` environment variable, a test seam rather than a setting:
+  an RFC 3339 instant, such as `2026-01-02T03:04:05Z`, that every clock read
+  returns in place of the current time, so two runs given one value write the
+  same stamps whenever they run. While it is set, each command opens stderr with
+  `WIKI_FREEZE_TIME is set: timestamps use its fixed instant, not the clock.`; a
+  value of any other form fails the command with exit 2 before it does anything.
+  Help, `--version`, a command line that does not parse and the git merge driver
+  never read it.
 
 ### Changed
 

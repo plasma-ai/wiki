@@ -29,8 +29,8 @@ pytestmark = pytest.mark.skipif(
     reason='requires the wiki console script and git',
 )
 
-# a side that runs the engine and prints everything but the WIKI_NOW notice,
-# as a wrapper that fixes the clock by itself does
+# a side that runs the engine and prints everything but the WIKI_FREEZE_TIME
+# notice, as a wrapper that fixes the clock by itself does
 _RELAY = f"""
 import subprocess, sys
 result = subprocess.run([{f'{WIKI}'!r}, *sys.argv[1:]], capture_output=True)
@@ -45,7 +45,7 @@ sys.exit(result.returncode)
 
 
 # a describe command: what it prints comes from the side's own environment
-_DESCRIBE = "import os; print(os.environ['PYTHONPATH'], os.environ['WIKI_NOW'])"
+_DESCRIBE = "import os; print(os.environ['PYTHONPATH'], os.environ['WIKI_FREEZE_TIME'])"
 
 
 @pytest.mark.parametrize(
@@ -59,7 +59,7 @@ def test_matrix_command_strips_only_a_declared_notice(
     declared: bool,
     code: int,
 ) -> None:
-    """A side's ``WIKI_NOW`` notice is dropped only where the side declares it.
+    """A ``WIKI_FREEZE_TIME`` notice is dropped only where a side declares it.
 
     The engine prints the notice and a wrapper side prints none, so the
     two are equal once the engine's notice is stripped. With the notice

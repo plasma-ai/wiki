@@ -168,7 +168,7 @@ def run(
         plan: The snapshot and its stages, from :func:`prepare`.
         sides: The sides; the first is the reference the others are
             compared against.
-        now: RFC 3339 instant for ``WIKI_NOW``.
+        now: RFC 3339 instant for ``WIKI_FREEZE_TIME``.
         only: Names of the stages to run; a stage named here brings the
             stage it continues from. ``None`` runs them all.
         keep: Whether to leave the tree of every run in the plan's

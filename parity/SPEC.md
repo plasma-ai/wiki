@@ -99,7 +99,7 @@ prefix. The environment is built from nothing:
 | `GIT_CONFIG_NOSYSTEM` | `1`                                                                              |
 | `LANG`                | `C.UTF-8`                                                                        |
 | `TZ`                  | `<+0545>-05:45`                                                                  |
-| `WIKI_NOW`            | the run's instant                                                                |
+| `WIKI_FREEZE_TIME`    | the run's instant                                                                |
 
 The side's own variables are applied last. stdin is the null device.
 
@@ -111,14 +111,14 @@ The side's own variables are applied last. stdin is the null device.
   runs. Those commands find the same empty global config as `$HOME/.gitconfig`,
   and they still read the system config, which no variable left to them can
   switch off. The result file records `git config --system --list`.
-- **Notice.** An engine prints one fixed line first on stderr when `WIKI_NOW`
-  fixes its clock. On a side with `notice = true` (the default) the harness
-  removes that line when it is the first line of stderr. A side that fixes its
-  clock through a wrapper prints no notice and sets `notice = false`. A notice
-  on a side that does not declare it is a stderr difference. Every matrix
-  command reads the clock variable, so a side that declares the notice must
-  print it on each one: a command without it is a `notice` difference, since
-  that side's clock was not fixed.
+- **Notice.** An engine prints one fixed line first on stderr when
+  `WIKI_FREEZE_TIME` fixes its clock. On a side with `notice = true` (the
+  default) the harness removes that line when it is the first line of stderr. A
+  side that fixes its clock through a wrapper prints no notice and sets
+  `notice = false`. A notice on a side that does not declare it is a stderr
+  difference. Every matrix command reads the clock variable, so a side that
+  declares the notice must print it on each one: a command without it is a
+  `notice` difference, since that side's clock was not fixed.
 - **Hash seed.** Outside the self-check a side has no `PYTHONHASHSEED` unless
   its table sets one.
 

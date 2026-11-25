@@ -27,8 +27,8 @@ from wiki.constants import (
     WIKI_CACHE,
     WIKI_CONFIG_DIR,
     WIKI_DIR,
+    WIKI_FREEZE_TIME,
     WIKI_INDEX,
-    WIKI_NOW,
     WIKI_SETTINGS,
 )
 from wiki.typing import Link, PathLike
@@ -54,17 +54,18 @@ _TIMEOUT_SECONDS = 10
 # stamped it: a run takes one stamp as it starts, and its writes land after
 _STAMP_GRACE = dt.timedelta(seconds=60)
 
-# the one form WIKI_NOW takes: an RFC 3339 date-time with a capital T and Z,
-# no leap second, and at most the microseconds the clock it replaces returns
+# the one form WIKI_FREEZE_TIME takes: an RFC 3339 date-time with a capital T
+# and Z, no leap second, and at most the microseconds the clock it replaces
+# returns
 _PINNED_INSTANT = re.compile(
     r'[0-9]{4}-[0-9]{2}-[0-9]{2}'
     r'T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\.[0-9]{1,6})?'
     r'(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])'
 )
 
-# the UTC years a WIKI_NOW instant may fall in: a zone shifts an instant by
-# under a day, so every rendering stays within the years 1000 to 9999, where
-# the calendar holds it and %Y is four digits on every platform
+# the UTC years a WIKI_FREEZE_TIME instant may fall in: a zone shifts an
+# instant by under a day, so every rendering stays within the years 1000 to
+# 9999, where the calendar holds it and %Y is four digits on every platform
 _PINNED_YEARS = (1001, 9998)
 
 # soft ceiling for a folded frontmatter desc: past it lint notes the page,
@@ -2677,8 +2678,8 @@ class Wiki:
         (``timestamp.timezone`` / ``timestamp.format``); when a timezone is
         configured without an authored format, the default format's literal
         trailing ``Z`` becomes ``%z``, so the stamp carries the zone's real
-        offset. A set ``WIKI_NOW`` fixes the instant rendered. Override in
-        subclasses for a different time source.
+        offset. A set ``WIKI_FREEZE_TIME`` fixes the instant rendered.
+        Override in subclasses for a different time source.
 
         Returns:
             Timestamp string like ``YYYY-MM-DDTHH:MM:SSZ``.
@@ -6908,22 +6909,22 @@ def _is_offline() -> bool:
 
 
 def _pinned_now() -> Optional[dt.datetime]:
-    """Return the instant ``WIKI_NOW`` fixes the clock at, if it is set.
+    """Return the instant ``WIKI_FREEZE_TIME`` fixes the clock at, if set.
 
     Raises:
-        ValueError: If ``WIKI_NOW`` is set to anything other than an RFC
-            3339 date-time (capital ``T`` and ``Z``, no leap second, at
+        ValueError: If ``WIKI_FREEZE_TIME`` is set to anything other than an
+            RFC 3339 date-time (capital ``T`` and ``Z``, no leap second, at
             most six fraction digits) that names a UTC instant in the
             years 1001 to 9998.
 
     """
-    value = os.environ.get(WIKI_NOW, '').strip()
+    value = os.environ.get(WIKI_FREEZE_TIME, '').strip()
     if not value:
         return None
     first, last = _PINNED_YEARS
     message = (
-        f'{WIKI_NOW} must be an RFC 3339 instant in the UTC years {first} to'
-        f' {last}, like 2026-01-02T03:04:05Z, got {value!r}.'
+        f'{WIKI_FREEZE_TIME} must be an RFC 3339 instant in the UTC years'
+        f' {first} to {last}, like 2026-01-02T03:04:05Z, got {value!r}.'
     )
     # NOTE: fromisoformat reads more forms than this one, and which ones turns
     # on the Python version (24:00:00, a 60-minute offset, a seventh fraction
@@ -6940,7 +6941,10 @@ def _pinned_now() -> Optional[dt.datetime]:
 
 
 def _now(zone: dt.tzinfo) -> dt.datetime:
-    """Return the current instant in ``zone``: the one ``WIKI_NOW`` fixes, else the clock's."""
+    """Return the current instant in ``zone``.
+
+    The instant is the one ``WIKI_FREEZE_TIME`` fixes, else the clock's.
+    """
     pinned = _pinned_now()
     if pinned is None:
         return dt.datetime.now(zone)

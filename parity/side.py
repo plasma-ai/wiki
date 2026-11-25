@@ -17,8 +17,8 @@ __all__ = [
     'run',
 ]
 
-#: the stderr line an engine prints first when ``WIKI_NOW`` fixes its clock
-NOTICE = b'WIKI_NOW is set: timestamps use its fixed instant, not the clock.\n'
+#: the stderr line an engine prints first when ``WIKI_FREEZE_TIME`` is set
+NOTICE = b'WIKI_FREEZE_TIME is set: timestamps use its fixed instant, not the clock.\n'
 
 # the locale and zone every side runs under: a UTF-8 locale that macOS and
 # Linux both ship, and a POSIX zone string that needs no zone files and sits
@@ -39,8 +39,9 @@ class Side:
         name: Label of the side in results.
         argv: Command prefix; the harness appends the wiki arguments.
         env: Variables set for this side only, over the fixed environment.
-        notice: Whether the side prints :data:`NOTICE` when ``WIKI_NOW`` is
-            set. A side that fixes its clock through a wrapper prints none.
+        notice: Whether the side prints :data:`NOTICE` when
+            ``WIKI_FREEZE_TIME`` is set. A side that fixes its clock through
+            a wrapper prints none.
         describe: A whole command whose stdout says what the side is made
             of (its interpreter, its dependencies, its commit), for the
             result file. Empty for a side that has none.
@@ -79,7 +80,7 @@ def environment(side: Side, home: pathlib.Path, *, now: str) -> dict[str, str]:
     Args:
         side: The side to run.
         home: Scratch home folder; it holds the global git config.
-        now: RFC 3339 instant for ``WIKI_NOW``.
+        now: RFC 3339 instant for ``WIKI_FREEZE_TIME``.
 
     Returns:
         The variables to run every command of the side under.
@@ -103,7 +104,7 @@ def environment(side: Side, home: pathlib.Path, *, now: str) -> dict[str, str]:
         'GIT_CONFIG_NOSYSTEM': '1',
         'LANG': _LANG,
         'TZ': _TZ,
-        'WIKI_NOW': now,
+        'WIKI_FREEZE_TIME': now,
     }
     env.update(side.env)
     return env

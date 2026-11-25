@@ -27,9 +27,9 @@ __all__ = [
 ]
 
 #: what a doctored side changes: one stdout byte, one stderr byte, the exit
-#: code, the ``WIKI_NOW`` notice, one byte of a file, one file mode, one
-#: extra written file, one file written again with the same bytes, one word
-#: count, one search row, or the search schema
+#: code, the ``WIKI_FREEZE_TIME`` notice, one byte of a file, one file mode,
+#: one extra written file, one file written again with the same bytes, one
+#: word count, one search row, or the search schema
 KINDS = (
     'stdout',
     'stderr',
