@@ -259,14 +259,15 @@ has five stages:
   start with a dash are not drawn.
 - **Words.** A search or a match compares more than "no match" only when it
   finds something, so each word comes from the text its command reads. The
-  sample reads the head of the pages, in a drawn order, until it holds: two
-  words of one page's body (the search terms, so the two-term search can find
-  that page); a body word of a page below the first sampled folder (the scoped
-  search); a word of a `desc` field (`match --field desc`); a word of a `name`
-  or `tags` field (`match --field name,tags`); and a body word and a tag of one
-  page with tags (`search --tag`). A word is a whole run of five or more ASCII
-  letters. Where the wiki holds no such word, the command takes a body word
-  instead and the sample in the result file shows the gap.
+  sample reads the head of the pages that carry a `name` field (the wiki writes
+  one on every page it manages), in a drawn order, until it holds: two words of
+  one page's body (the search terms, so the two-term search can find that page);
+  a body word of a page below the first sampled folder (the scoped search); a
+  word of a `desc` field (`match --field desc`); a word of a `name` or `tags`
+  field (`match --field name,tags`); and a body word and a tag of one page with
+  tags (`search --tag`). A word is a whole run of five or more ASCII letters.
+  Where the wiki holds no such word, the command takes a body word instead and
+  the sample in the result file shows the gap.
 - **Found nothing.** Every search and match is built to find something, except
   the two for a word no page holds and the two that are invalid. One that exits
   1 on every run is printed as `found nothing` and listed under `no_hit` in its

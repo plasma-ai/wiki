@@ -134,8 +134,9 @@ def sample(root: pathlib.Path, *, seed: int) -> Sample:
     The draw reads names and page text only, and is the same for one seed
     and one tree. Scopes are top-level folders and second-level folders;
     pages are Markdown files in folders that hold an index. The words come
-    from those pages, read in a drawn order until each kind is found: a
-    wiki with no tags at all is read to its last page.
+    from those pages that carry a ``name`` field, read in a drawn order
+    until each kind is found: a wiki with no tags at all is read to its
+    last page.
     """
     rng = random.Random(seed)
     tops = _folders(root, [''])
@@ -170,6 +171,9 @@ def sample(root: pathlib.Path, *, seed: int) -> Sample:
         if not missing:
             break
         fields, body = _head(root / page)
+        # the wiki names the pages it manages; search may not hold another
+        if 'name' not in fields:
+            continue
         words = _words(body)
         tags = _TAG.findall(fields.get('tags', ''))
         descs = _words(fields.get('desc', ''))

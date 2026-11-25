@@ -21,7 +21,8 @@ def test_sample_draws_plain_pages_and_the_words_their_commands_read(
     A symlinked page and a name that opens with a dash are not drawn. Body
     words feed the searches, and the field words come from the field their
     match reads. Part of a longer word is no word: the search index holds
-    the whole word, with its accent folded.
+    the whole word, with its accent folded. A page with no ``name`` field
+    gives no word: the wiki does not manage it, so search may not hold it.
     """
     root = tmp_path / 'wiki'
     (root / 'topic').mkdir(parents=True)
@@ -37,10 +38,11 @@ def test_sample_draws_plain_pages_and_the_words_their_commands_read(
     )
     (root / 'topic' / 'entry.md').write_text(page, encoding='utf-8')
     (root / 'topic' / '-dashed.md').write_text(page, encoding='utf-8')
+    (root / 'topic' / 'bare.md').write_text('Unmanaged prose.\n', encoding='utf-8')
     (root / 'linked.md').symlink_to(root / 'topic' / 'entry.md')
     drawn = matrix.sample(root, seed=0)
     assert drawn.scopes == ('topic',)
-    assert drawn.pages == ('topic/entry.md',)
+    assert set(drawn.pages) == {'topic/bare.md', 'topic/entry.md'}
     body = {'Heading', 'wrote', 'paragraphs'}
     assert set(drawn.terms) < body
     assert drawn.scoped in body
