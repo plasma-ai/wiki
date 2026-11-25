@@ -207,6 +207,11 @@ ignore = [
 "docs/conf.py" = [
     "I002",
 ]
+"parity/**" = [
+    "S404",
+    "S603",
+    "S607",
+]
 "tests/**" = [
     "F811",
     "S101",
@@ -237,7 +242,7 @@ suppress-none-returning = true
 suppress-dummy-args = true
 
 [tool.pyright]
-include = ["wiki", "tests"]
+include = ["wiki", "parity", "tests"]
 
 [tool.pytest.ini_options]
 # https://docs.pytest.org/en/stable/customize.html
