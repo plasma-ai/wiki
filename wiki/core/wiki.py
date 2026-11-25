@@ -507,6 +507,35 @@ class Wiki:
         return result
 
     @functools.cached_property
+    def _exclude_lookup(
+        self: Wiki,
+    ) -> tuple[dict[str, int], dict[str, int], list[tuple[int, re.Pattern[str]]]]:
+        """Return the ``exclude.patterns`` policy keyed for matching.
+
+        Splits :attr:`_exclude_policy` three ways, each entry carrying
+        its position in the list so a match can still name the first
+        pattern in list order: the anchored wildcard-free patterns by
+        their text, the floating ones (bare names) by their name -- see
+        :func:`wiki.util.glob.literal` -- and the patterns holding a
+        wildcard with their compiled regex, in list order. A text listed
+        twice keeps its first position.
+        """
+        anchored: dict[str, int] = {}
+        floating: dict[str, int] = {}
+        wildcards = []
+        for position, (pattern, compiled) in enumerate(self._exclude_policy):
+            literal = wiki.util.glob.literal(pattern)
+            if literal is None:
+                wildcards.append((position, compiled))
+                continue
+            text, floats = literal
+            if floats:
+                floating.setdefault(text, position)
+            else:
+                anchored.setdefault(text, position)
+        return anchored, floating, wildcards
+
+    @functools.cached_property
     def _links_policy(self: Wiki) -> list[tuple[str, pathlib.Path]]:
         """Return the ``links.external`` folders from ``settings.json``.
 
@@ -3638,22 +3667,40 @@ class Wiki:
         when no pattern matches. A pattern matches the entry's
         root-relative POSIX path or the relpath of any strict in-root
         ancestor -- excluding a directory excludes its whole subtree.
-        The root itself (empty relpath) is never tested.
+        The root itself (empty relpath) is never tested. When several
+        patterns match, the first in list order is the one named.
         """
         if not self._exclude_policy:
             return None
+        anchored, floating, wildcards = self._exclude_lookup
         # test the path and every strict in-root ancestor, so a pattern
-        # naming a directory covers everything inside it
+        # naming a directory covers everything inside it; the wildcard-free
+        # patterns are looked up by text, keeping the lowest position found
+        first = len(self._exclude_policy)
         candidates = []
         relative = self._relpath(path)
         while relative:
             candidates.append(relative)
-            relative = relative.rpartition('/')[0]
-        for pattern, compiled in self._exclude_policy:
+            if relative in anchored:
+                first = min(first, anchored[relative])
+            parent, sep, name = relative.rpartition('/')
+            if name in floating:
+                # NOTE: a bare name's regex reaches below the root through
+                #   the directory run '.+', which is never empty and never
+                #   spans a newline, so the name counts only under such a parent
+                if (not sep) or (parent and ('\n' not in parent)):
+                    first = min(first, floating[name])
+            relative = parent
+        # run the wildcard patterns listed before the best lookup
+        for position, compiled in wildcards:
+            if position > first:
+                break
             for candidate in candidates:
                 if compiled.match(candidate):
-                    return pattern
-        return None
+                    return self._exclude_policy[position][0]
+        if first == len(self._exclude_policy):
+            return None
+        return self._exclude_policy[first][0]
 
     def _is_gitignored(self: Wiki, path: pathlib.Path) -> bool:
         """Return ``True`` if the enclosing repo's gitignore fences ``path``.
