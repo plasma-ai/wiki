@@ -17,13 +17,27 @@ def snapshot(checkout: pathlib.Path, target: pathlib.Path) -> None:
     """Snapshot the checkout at ``checkout`` to the new path ``target``.
 
     Raises:
-        ValueError: If the checkout's ``.git`` is not a folder (a linked
-            worktree shares the live repository's state, so a copy of one
-            is no snapshot), or if the checkout is no repository and
-            ``target`` lies inside one (git would answer from that
-            repository).
+        ValueError: If :func:`validate` refuses the checkout or the target.
 
     """
+    validate(checkout, target)
+    clone(checkout, target)
+
+
+def validate(checkout: pathlib.Path, target: pathlib.Path) -> None:
+    """Refuse a checkout that cannot be snapshotted to ``target``; copy nothing.
+
+    Raises:
+        ValueError: If the checkout is not a folder (a symlink to one is
+            copied as a link to the live folder), if its ``.git`` is not a
+            folder (a linked worktree shares the live repository's state,
+            so a copy of one is no snapshot), or if the checkout is no
+            repository and ``target`` lies inside one (git would answer
+            from that repository).
+
+    """
+    if os.path.islink(checkout) or not os.path.isdir(checkout):
+        raise ValueError(f'Refusing to snapshot {checkout}: it is not a folder.')
     marker = checkout / '.git'
     if os.path.lexists(marker):
         if os.path.islink(marker) or not os.path.isdir(marker):
@@ -35,7 +49,6 @@ def snapshot(checkout: pathlib.Path, target: pathlib.Path) -> None:
                     f'Refusing to snapshot {checkout} into {target}:'
                     f' {parent} is a repository and the checkout is not.'
                 )
-    clone(checkout, target)
 
 
 def clone(source: pathlib.Path, target: pathlib.Path) -> None:

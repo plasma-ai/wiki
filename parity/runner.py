@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import logging
+import os
 import pathlib
 import shutil
 import time
@@ -115,18 +116,10 @@ def prepare(corpus: Corpus, *, work: pathlib.Path, seed: int = 0) -> Plan:
         The plan to hand to :func:`run`, and to :func:`discard` at the end.
 
     Raises:
-        ValueError: If a folder above ``work`` declares a wiki. A side runs
-            under a scratch home, so even the user's own ``~/.wiki`` reads
-            as one, and a command run from inside the snapshot's wiki
-            would be refused as nested in it.
+        ValueError: If :func:`validate` refuses the corpus or the folder.
 
     """
-    for parent in work.resolve().parents:
-        if (parent / WIKI_SETTINGS).is_file():
-            raise ValueError(
-                f'Work folder {work} lies below {parent}, which holds'
-                f' {WIKI_SETTINGS}; choose one outside it.'
-            )
+    validate(corpus, work=work)
     work.mkdir(parents=True)
     source = work / _SNAPSHOT
     snapshot.snapshot(corpus.checkout, source)
@@ -141,6 +134,32 @@ def prepare(corpus: Corpus, *, work: pathlib.Path, seed: int = 0) -> Plan:
         stages=matrix.stages(drawn),
         manifest={f'{_TREE}/{relpath}': entry for relpath, entry in entries.items()},
     )
+
+
+def validate(corpus: Corpus, *, work: pathlib.Path) -> None:
+    """Refuse a corpus that :func:`prepare` cannot snapshot into ``work``.
+
+    The check copies nothing and makes no folder, so a caller with several
+    corpora can refuse them all before it runs the first.
+
+    Raises:
+        ValueError: If a folder above ``work`` declares a wiki (a side runs
+            under a scratch home, so even the user's own ``~/.wiki`` reads
+            as one, and a command run from inside the snapshot's wiki
+            would be refused as nested in it), if ``work`` exists, or if
+            the checkout cannot be snapshotted (see
+            :func:`parity.snapshot.validate`).
+
+    """
+    for parent in work.resolve().parents:
+        if (parent / WIKI_SETTINGS).is_file():
+            raise ValueError(
+                f'Work folder {work} lies below {parent}, which holds'
+                f' {WIKI_SETTINGS}; choose one outside it.'
+            )
+    if os.path.lexists(work):
+        raise ValueError(f'Work folder {work} exists; the harness makes it new.')
+    return snapshot.validate(corpus.checkout, work / _SNAPSHOT)
 
 
 def run(

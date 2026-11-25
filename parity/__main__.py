@@ -7,20 +7,23 @@ usage: python -m parity matrix --sides FILE --a NAME --b NAME --corpora FILE --w
 against itself, clean and doctored. Both exit 0 when every result is the
 expected one, and 1 otherwise. A run that would compare nothing -- no
 corpus, an unknown corpus, stage or side, one side named twice, a sides or
-corpora file of the wrong shape, a side or a ``describe`` command that does
-not start -- exits 2 before it snapshots anything. An error of the harness
-itself prints its traceback and exits 2 as well, so exit 1 always means
-that a result is not the expected one.
+corpora file of the wrong shape, a ``--now`` no engine takes, a checkout
+or a work folder the harness refuses, a side or a ``describe`` command
+that does not start -- exits 2 before it snapshots anything. An error of
+the harness itself prints its traceback and exits 2 as well, so exit 1
+always means that a result is not the expected one.
 """
 
 from __future__ import annotations
 
 import argparse
 import dataclasses
+import datetime as dt
 import json
 import logging
 import pathlib
 import platform
+import re
 import sqlite3
 import subprocess
 import sys
@@ -39,6 +42,15 @@ __all__ = []
 
 # the instant every side's clock is fixed at, unless the caller names one
 _NOW = '2026-09-18T12:34:56Z'
+# the one form the engines take WIKI_FREEZE_TIME in: an RFC 3339 date-time
+# with a capital T, no leap second and at most six fraction digits
+_INSTANT = re.compile(
+    r'[0-9]{4}-[0-9]{2}-[0-9]{2}'
+    r'T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\.[0-9]{1,6})?'
+    r'(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])'
+)
+# the UTC years such an instant may fall in
+_YEARS = (1001, 9998)
 # what --help prints above the commands, with the exit codes a gate reads
 _DESCRIPTION = """\
 Run two wiki engines on the same trees and report what they do differently.
@@ -91,7 +103,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         command.add_argument('--out', type=pathlib.Path, required=True, help=out_help)
         # fixed instant option
         now_help = f'RFC 3339 instant every side runs at (default: {_NOW}).'
-        command.add_argument('--now', default=_NOW, help=now_help)
+        command.add_argument('--now', type=_instant, default=_NOW, help=now_help)
         # sample seed option
         seed_help = 'Seed of the matrix sample (default: 0).'
         command.add_argument('--seed', type=int, default=0, help=seed_help)
@@ -132,6 +144,39 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 # ------ helper functions
 
 
+def _instant(value: str) -> str:
+    """Return ``value``, a ``--now`` argument, if it is an instant the engines take.
+
+    An engine refuses any other value on every command, so both sides of
+    such a run would fail alike without running a wiki command; an empty
+    one leaves the clock unfixed. Surrounding whitespace, which an engine
+    strips, is refused too: the result file records the instant as given.
+
+    Raises:
+        argparse.ArgumentTypeError: If ``value`` is not an RFC 3339
+            date-time in the form ``WIKI_FREEZE_TIME`` takes, or names no
+            instant in the allowed UTC years.
+
+    """
+    first, last = _YEARS
+    message = (
+        f'The instant must be an RFC 3339 date-time in the UTC years {first}'
+        f' to {last}, like {_NOW}, got {value!r}.'
+    )
+    # NOTE: fromisoformat reads more forms than this one, and which ones turns
+    #   on the Python version: the pattern fixes the form, and fromisoformat
+    #   only checks the calendar date
+    if _INSTANT.fullmatch(value) is None:
+        raise argparse.ArgumentTypeError(message)
+    try:
+        instant = dt.datetime.fromisoformat(value).astimezone(dt.UTC)
+    except (ValueError, OverflowError):
+        raise argparse.ArgumentTypeError(message) from None
+    if not (first <= instant.year <= last):
+        raise argparse.ArgumentTypeError(message)
+    return value
+
+
 def _run(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
     """Run the parsed command on each corpus and return the exit code."""
     # read the sides and the corpora
@@ -158,6 +203,12 @@ def _run(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
     if unknown:
         parser.error(f'{options.sides} declares no side named {unknown!r}.')
     chosen = [sides[name] for name in names]
+    # refuse every corpus the harness cannot snapshot before the first one runs
+    try:
+        for label in labels:
+            runner.validate(corpora[label], work=options.work / label)
+    except ValueError as e:
+        parser.error(f'{e}')
     # probe every side before anything is snapshotted
     try:
         header = _header(chosen, now=options.now)

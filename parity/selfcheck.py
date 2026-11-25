@@ -177,7 +177,7 @@ def doctored(
     target = runner.command(case, plan.root)
     commands = [runner.command(other, plan.root) for other in planned.cases]
     if commands.count(target) != 1:
-        raise ValueError(f'Stage {stage} runs its last command more than once.')
+        raise ValueError(f'Stage {stage!r} runs its last command more than once.')
     # wrap the second side in the doctor
     one, two = _seeded(base)
     # -P keeps the harness's own modules off the wrapper's import path

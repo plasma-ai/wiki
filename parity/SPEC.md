@@ -30,10 +30,12 @@ Both commands exit 0 when every result is the expected one and 1 otherwise. A
 run that would compare nothing exits 2 with a message, before it snapshots
 anything: a corpora file with no corpus, an unknown corpus label, stage name or
 side name, the same side named as `--a` and `--b`, a sides or corpora file whose
-values have the wrong shape, a side or a `describe` command that cannot be
-started, or a side whose `--version` fails or prints nothing. An error of the
-harness itself prints a Python traceback and exits 2 as well, so exit 1 always
-means that a result is not the expected one.
+values have the wrong shape, a `--now` that is not an instant in the form
+`WIKI_FREEZE_TIME` takes, a checkout or a work folder the harness refuses (see
+Snapshots), a side or a `describe` command that cannot be started, or a side
+whose `--version` fails or prints nothing. An error of the harness itself prints
+a Python traceback and exits 2 as well, so exit 1 always means that a result is
+not the expected one.
 
 The harness makes `<work>/<label>` for each corpus; it must not exist
 beforehand. `matrix` removes it at the end unless `--keep` is given. `selfcheck`
@@ -148,13 +150,17 @@ Every tree a side runs on is a clone of that snapshot, placed at one path:
 - **Index.** A copy has new inodes, which makes every git index entry stale, and
   git would hash every tracked file on each call. Each clone therefore runs
   `git update-index -q --refresh` before the first command.
-- **Refusals.** A checkout whose `.git` is a file or a symlink is refused: a
-  linked worktree keeps its state in the main repository. A checkout with no
-  `.git` is refused when the work folder lies inside a repository, because git
-  would answer from that one. A work folder below a folder that holds
-  `.wiki/settings.json` is refused: every side runs under a scratch home, so
-  even the user's own `~/.wiki` reads as an enclosing wiki, and a command run
-  from inside the snapshot's wiki would fail the same way on both sides.
+- **Refusals.** Each corpus of a run is checked before the first one is
+  snapshotted. A checkout that is not a folder is refused, a symlink to one
+  included: the copy of a link would point at the live folder. A checkout whose
+  `.git` is a file or a symlink is refused: a linked worktree keeps its state in
+  the main repository. A checkout with no `.git` is refused when the work folder
+  lies inside a repository, because git would answer from that one. A work
+  folder below a folder that holds `.wiki/settings.json` is refused: every side
+  runs under a scratch home, so even the user's own `~/.wiki` reads as an
+  enclosing wiki, and a command run from inside the snapshot's wiki would fail
+  the same way on both sides. A `<work>/<label>` that exists is refused and left
+  as it stood.
 - **Swept folders.** A clone keeps its source's times, so its entries look old
   to a cleaner of temporary files. On a path the system sweeps, such as `/tmp`
   on macOS, a snapshot can lose old empty folders while a run is under way, and

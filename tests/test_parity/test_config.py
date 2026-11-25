@@ -18,6 +18,7 @@ __all__ = [
     'test_relative_checkout_is_read_against_the_file',
     'test_root_outside_the_checkout_is_refused',
     'test_file_of_the_wrong_shape_is_refused',
+    'test_key_outside_a_table_is_refused',
 ]
 
 # a valid command prefix, for the tables that break another key
@@ -87,5 +88,26 @@ def test_file_of_the_wrong_shape_is_refused(
     """
     path = tmp_path / 'file.toml'
     path.write_text(f'[example]\n{table}\n', encoding='utf-8')
-    with pytest.raises(ValueError, match=f'example: {message}'):
+    with pytest.raises(ValueError, match=f"'example': {message}"):
+        load(path)
+
+
+@pytest.mark.parametrize(
+    argnames='load',
+    argvalues=[config.load_sides, config.load_corpora],
+    ids=['sides', 'corpora'],
+)
+def test_key_outside_a_table_is_refused(
+    tmp_path: pathlib.Path,
+    load: Callable[[pathlib.Path], dict],
+) -> None:
+    """A top-level key that is no table is refused by name.
+
+    A file whose ``[name]`` header was left out holds its keys at the top
+    level, where each reads as a side or a corpus that is no table. The
+    error names the key, as it does for a key of the wrong type.
+    """
+    path = tmp_path / 'file.toml'
+    path.write_text('example = ["wiki"]\n', encoding='utf-8')
+    with pytest.raises(ValueError, match="'example': must be a table"):
         load(path)
