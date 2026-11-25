@@ -208,7 +208,10 @@ The side's own variables are applied last. stdin is the null device.
   on a side that does not declare it is a stderr difference. Every matrix
   command reads the clock variable, so a side that declares the notice must
   print it on each one: a command without it is a `notice` difference, since
-  that side's clock was not fixed.
+  that side's clock was not fixed. A command that the argument parser ends, with
+  a usage error or a help page, reads no clock. Its case says so, and a side
+  that declares the notice must then print none: one that does shows a `notice`
+  difference, and the line stays in its stderr.
 - **Hash seed.** Outside the self-check a side has no `PYTHONHASHSEED` unless
   its table sets one.
 - **v1 sides.** The argv prefix of a v1 side is its venv's interpreter, `-P` and
@@ -310,7 +313,7 @@ case, an aspect and a detail:
 | `cache`      | the caches differ                                     | cache and key |
 | `wrote`      | a read-only command touched a path outside the caches | the path      |
 | `unexpected` | a command ended with an exit code its case forbids    | the exit code |
-| `notice`     | a side that declares the notice printed none          | empty         |
+| `notice`     | a side broke the notice rule of Sides                 | empty         |
 | `identity`   | a side did not leave its identity record              | empty         |
 
 The last four rows are checked on each run by itself, and the run they name is

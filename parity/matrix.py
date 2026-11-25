@@ -69,6 +69,9 @@ class Case:
             for, however well the sides agree.
         hits: Whether the command is built to find something. Exit code 1
             on every run then means the case compared only "no match".
+        notice: Whether the command reads the clock. One that the argument
+            parser ends, with a usage error or a help page, does not, and
+            no side prints the clock notice on it.
 
     """
 
@@ -78,6 +81,7 @@ class Case:
     writes: bool = False
     codes: frozenset[int] = _DONE
     hits: bool = False
+    notice: bool = True
 
 
 @dataclasses.dataclass(frozen=True)

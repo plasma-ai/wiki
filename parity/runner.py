@@ -329,7 +329,13 @@ def _run_stage(
         cwd = slot / _CWD
         if case.inside is not None:
             cwd = plan.root / case.inside
-        outcome = side.run(runner, command(case, plan.root), cwd=cwd, env=env)
+        outcome = side.run(
+            runner,
+            command(case, plan.root),
+            cwd=cwd,
+            env=env,
+            notice=case.notice,
+        )
         after = manifest.scan(slot, skip=skip, previous=before)
         touched = manifest.touched(before, after)
         changes = manifest.changes(before, after)

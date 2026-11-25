@@ -1,7 +1,8 @@
 """Test the ``parity.side`` module.
 
 A side that runs its commands is covered by every matrix test; this module
-carries the rule for the identity record a command must leave.
+carries the rule for the identity record a command must leave, and the rule
+for the clock notice on a command that reads no clock.
 """
 
 from __future__ import annotations
@@ -17,7 +18,10 @@ from parity import side
 
 from .conftest import NOW
 
-__all__ = ['test_command_proves_its_identity_by_one_record']
+__all__ = [
+    'test_command_proves_its_identity_by_one_record',
+    'test_notice_is_owed_only_where_the_clock_is_read',
+]
 
 pytestmark = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
 
@@ -62,3 +66,35 @@ def test_command_proves_its_identity_by_one_record(
     outcome = side.run(relayed, ['--version'], cwd=home, env=env)
     assert outcome.code == 0
     assert outcome.identity is identified
+
+
+@pytest.mark.parametrize(
+    argnames=('args', 'reads', 'kept'),
+    argvalues=[
+        (['--version'], False, True),
+        (['--version'], True, False),
+        (['lint', '--path', 'absent'], True, True),
+        (['lint', '--path', 'absent'], False, False),
+    ],
+    ids=['none owed', 'owed and absent', 'owed', 'printed and not owed'],
+)
+def test_notice_is_owed_only_where_the_clock_is_read(
+    tmp_path: pathlib.Path,
+    engine: side.Side,
+    args: list[str],
+    reads: bool,
+    kept: bool,
+) -> None:
+    """The clock notice is expected on a command exactly when it reads the clock.
+
+    The engine prints the notice when a command starts, and the argument
+    parser ends ``--version`` before that. A notice that is owed is taken
+    off stderr. One that is printed where none is owed breaks the rule and
+    stays in stderr, so it still shows against a side that printed none.
+    """
+    home = tmp_path / 'home'
+    home.mkdir()
+    env = side.environment(engine, home, now=NOW)
+    outcome = side.run(engine, args, cwd=home, env=env, notice=reads)
+    assert outcome.notice is kept
+    assert outcome.stderr.startswith(side.NOTICE) is (not reads and not kept)
