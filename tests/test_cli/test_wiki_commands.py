@@ -201,8 +201,8 @@ _PINNED_CLOCK_NOTICE = (
     'WIKI_FREEZE_TIME is set: timestamps use its fixed instant, not the clock.\n'
 )
 
-# the one error an invalid WIKI_FREEZE_TIME gets, formatted with the value's
-# repr
+# the one error an invalid WIKI_FREEZE_TIME gets, formatted with the repr
+# of the value
 _PINNED_CLOCK_ERROR = (
     'Error: WIKI_FREEZE_TIME must be an RFC 3339 instant in the UTC years'
     ' 1001 to 9998, like 2026-01-02T03:04:05Z, got {now}.\n'
@@ -4634,10 +4634,10 @@ def test_invalid_wiki_freeze_time_fails_a_command_before_it_acts(
     The value takes one form -- an RFC 3339 date-time with a capital
     ``T`` and ``Z``, no leap second, and at most six fraction digits --
     so nothing reads it by a looser rule than the next reader's. Its
-    UTC year lies in 1001 to 9998, so no zone renders it outside the
-    calendar or below the four digits ``%Y`` pads to. A command that
-    never reads the clock refuses alike, and a refused update writes
-    nothing.
+    UTC year lies within the years ``_PINNED_YEARS`` allows, so no
+    zone renders it outside the calendar or below the four digits
+    ``%Y`` pads to. A command that never reads the clock refuses
+    alike, and a refused update writes nothing.
     """
     root = tmp_path / 'wiki'
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
@@ -4666,10 +4666,12 @@ def test_wiki_freeze_time_is_read_when_a_command_runs(
     valid value's notice precedes it.
     """
     monkeypatch.setenv(WIKI_FREEZE_TIME, 'now')
+    # typer answers these while it parses, with no notice
     for args in (('--version',), ('--help',), ('lint', '--help')):
         result = _wiki(tmp_path, *args)
         assert result.returncode == 0, (args, result.stdout + result.stderr)
         assert result.stderr == ''
+    # typer's own usage errors come before the read
     for args in (('lint', '--no-such-option'), ('read',)):
         usage = _wiki(tmp_path, *args)
         assert usage.returncode == 2, (args, usage.stdout + usage.stderr)
@@ -4677,11 +4679,11 @@ def test_wiki_freeze_time_is_read_when_a_command_runs(
     # lint itself refuses the pair of options, after the wrapper's read
     args = ('lint', '--full', '--count')
     refused = _wiki(tmp_path, *args)
-    assert refused.returncode == 2
+    assert refused.returncode == 2, refused.stdout + refused.stderr
     assert refused.stderr == _PINNED_CLOCK_ERROR.format(now=repr('now'))
     monkeypatch.setenv(WIKI_FREEZE_TIME, '2026-01-02T03:04:05Z')
     usage = _wiki(tmp_path, *args)
-    assert usage.returncode == 2
+    assert usage.returncode == 2, usage.stdout + usage.stderr
     assert usage.stderr.startswith(f'{_PINNED_CLOCK_NOTICE}Usage: wiki lint')
     assert '--full and --count are mutually exclusive.' in usage.stderr
 

@@ -26,8 +26,8 @@ if any(arg == '--cov' or arg.startswith('--cov=') for arg in sys.argv):
 # an ambient OFFLINE_MODE=true silently skips the download paths the config
 # tests exercise, and core validates the var fail-loud, so any other ambient
 # value breaks every in-process init/update_config test; an ambient
-# WIKI_FREEZE_TIME fixes every stamp the suite reads off the clock (see
-# _isolate_ambient_env)
+# WIKI_FREEZE_TIME fixes every stamp the suite reads off the
+# clock (see _isolate_ambient_env)
 _AMBIENT_ENV_VARS = [OFFLINE_MODE, WIKI_FREEZE_TIME]
 
 

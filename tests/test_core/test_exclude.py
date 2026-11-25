@@ -1316,6 +1316,16 @@ _CORNER_DEPTH = 5
 # fuzz rounds, and the patterns drawn in each
 _FUZZ_ROUNDS = 40
 _FUZZ_ROUND_SIZE = 8
+# share of fuzzed patterns that wrap a class body, and the longest body
+_FUZZ_CLASS_RATE = 0.8
+_FUZZ_CLASS_SIZE = 6
+# longest free-form fuzzed pattern
+_FUZZ_PATTERN_SIZE = 10
+# share of fuzzed path segments that are one character a class may hold
+_FUZZ_SINGLE_RATE = 0.5
+# deepest nesting of a fuzzed path, and its longest segment
+_FUZZ_DEPTH = 4
+_FUZZ_NAME_SIZE = 4
 # hand-written patterns, each one the settings accept
 _CORNER_PATTERNS = [
     # trailing slash, anchoring and floating
@@ -1626,9 +1636,9 @@ def _fuzz_cases(
     """Yield fuzzed policies, each with paths built from its patterns.
 
     Each round draws patterns, keeps the ones the settings accept, and
-    yields them as one list and one at a time. With ``classes``, four
-    draws in five wrap a class body, and half the path segments are
-    single characters a class is likely to hold.
+    yields them as one list and one at a time. With ``classes``, most
+    draws wrap a class body, and many path segments are single
+    characters a class is likely to hold.
     """
     for _ in range(_FUZZ_ROUNDS):
         drawn = [_fuzz_pattern(rng, classes) for _ in range(_FUZZ_ROUND_SIZE)]
@@ -1638,7 +1648,7 @@ def _fuzz_cases(
             path = _fuzz_match(rng, pattern)
             paths.update([path, f'a/{path}', f'{path}/b'])
         for _ in range(_FUZZ_ROUND_SIZE):
-            depth = rng.randint(1, 4)
+            depth = rng.randint(1, _FUZZ_DEPTH)
             paths.add('/'.join(_fuzz_name(rng, classes) for _ in range(depth)))
         walkable = _walkable(paths)
         yield patterns, walkable
@@ -1648,20 +1658,23 @@ def _fuzz_cases(
 
 def _fuzz_pattern(rng: random.Random, classes: bool) -> str:
     """Draw one pattern: free-form, or wrapped around a class body."""
-    if classes and (rng.random() < 0.8):
-        body = ''.join(rng.choice(_FUZZ_CLASS_CHARS) for _ in range(rng.randint(0, 6)))
+    if classes and (rng.random() < _FUZZ_CLASS_RATE):
+        size = rng.randint(0, _FUZZ_CLASS_SIZE)
+        body = ''.join(rng.choice(_FUZZ_CLASS_CHARS) for _ in range(size))
         head = rng.choice(['', 'a', '*'])
         close = rng.choice([']', ']', ']x', ''])
         tail = rng.choice(['', '*', '/b'])
         return f'{head}[{body}{close}{tail}'
-    return ''.join(rng.choice(_FUZZ_PATTERN_CHARS) for _ in range(rng.randint(1, 10)))
+    size = rng.randint(1, _FUZZ_PATTERN_SIZE)
+    return ''.join(rng.choice(_FUZZ_PATTERN_CHARS) for _ in range(size))
 
 
 def _fuzz_name(rng: random.Random, classes: bool) -> str:
     """Draw one path segment."""
-    if classes and (rng.random() < 0.5):
+    if classes and (rng.random() < _FUZZ_SINGLE_RATE):
         return rng.choice(_FUZZ_CLASS_CHARS + 'bcy`{1~+,é\n')
-    return ''.join(rng.choice(_FUZZ_NAME_CHARS) for _ in range(rng.randint(1, 4)))
+    size = rng.randint(1, _FUZZ_NAME_SIZE)
+    return ''.join(rng.choice(_FUZZ_NAME_CHARS) for _ in range(size))
 
 
 def _fuzz_match(rng: random.Random, pattern: str) -> str:
