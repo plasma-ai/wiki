@@ -44,10 +44,12 @@ def corpus(tmp_path_factory: pytest.TempPathFactory) -> runner.Corpus:
     is. READ-ONLY: the harness snapshots the checkout and runs only in
     its clones.
     """
+    # copy the example wiki
     checkout = tmp_path_factory.mktemp('parity') / 'checkout'
     root = checkout / 'hello'
     ignore = shutil.ignore_patterns('cache', '.obsidian')
     shutil.copytree(REPO_ROOT / 'examples' / 'hello', root, ignore=ignore)
+    # add the folders through the CLI
     home = checkout.parent / 'home'
     home.mkdir()
     env = side.environment(ENGINE, home, now=NOW)
@@ -55,6 +57,7 @@ def corpus(tmp_path_factory: pytest.TempPathFactory) -> runner.Corpus:
         args = ['new', folder, '--desc', f'About {folder}.', '--content', 'Text.']
         made = side.run(ENGINE, [*args, '--path', f'{root}'], cwd=home, env=env)
         assert made.code == 0, made.stderr
+    # write the pages and a non-Markdown file
     pages = {
         'guides/setup.md': (
             'desc: Installing the widget.\ntags: [install, widget]',
@@ -74,6 +77,7 @@ def corpus(tmp_path_factory: pytest.TempPathFactory) -> runner.Corpus:
         (root / relpath).write_text(text, encoding='utf-8')
     snippet = 'widget appears in plain code here\n'
     (root / 'core' / 'snippet.txt').write_text(snippet, encoding='utf-8')
+    # converge the wiki
     updated = side.run(ENGINE, ['update', '--path', f'{root}'], cwd=home, env=env)
     assert updated.code == 0, updated.stderr
     # commit under the suite's hermetic git environment

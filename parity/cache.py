@@ -254,7 +254,8 @@ def _read_search(
                 'SELECT path, title, desc, headings, tags, body, folder FROM notes_fts'
             )
             for row in cursor:
-                rows.setdefault(row[0], []).append(row)
+                relpath, *_ = row
+                rows.setdefault(relpath, []).append(row)
         except sqlite3.DatabaseError as e:
             return f'{type(e).__name__}: {e}', {}, {}, {}
         finally:

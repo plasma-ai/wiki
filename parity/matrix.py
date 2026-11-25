@@ -140,10 +140,10 @@ def sample(root: pathlib.Path, *, seed: int) -> Sample:
     until each kind is found: a wiki with no tags at all is read to its
     last page.
     """
-    rng = random.Random(seed)
+    generator = random.Random(seed)
     tops = _folders(root, [''])
     deeps = _folders(root, tops)
-    scopes = _draw(rng, tops, _TOP_SCOPES) + _draw(rng, deeps, _DEEP_SCOPES)
+    scopes = _draw(generator, tops, _TOP_SCOPES) + _draw(generator, deeps, _DEEP_SCOPES)
     # list every page of an indexed folder, in walk order
     candidates = []
     pending = ['']
@@ -159,17 +159,18 @@ def sample(root: pathlib.Path, *, seed: int) -> Sample:
             page = name.endswith('.md') and (name != _INDEX)
             if page and regular and not name.startswith('-'):
                 candidates.append(os.path.join(folder, name))
-    pages = _draw(rng, candidates, _PAGES)
+    pages = _draw(generator, candidates, _PAGES)
     # the kinds of word still to find; a scoped one only where a page can hold it
     inner = set()
     if scopes:
-        below = os.path.join(scopes[0], '')
+        scope, *_ = scopes
+        below = os.path.join(scope, '')
         inner = {page for page in candidates if page.startswith(below)}
     missing = {'terms', 'desc', 'label', 'tagged'}
     if inner:
         missing.add('scoped')
     drawn: dict[str, Any] = {}
-    for page in rng.sample(candidates, len(candidates)):
+    for page in generator.sample(candidates, len(candidates)):
         if not missing:
             break
         fields, body = _head(root / page)
@@ -183,15 +184,15 @@ def sample(root: pathlib.Path, *, seed: int) -> Sample:
         descs = _words(fields.get('desc', ''))
         labels = _words(f'{name}\n{field}')
         if ('terms' in missing) and words:
-            drawn['terms'] = _draw(rng, words, _TERMS)
+            drawn['terms'] = _draw(generator, words, _TERMS)
         if ('scoped' in missing) and words and (page in inner):
-            drawn['scoped'] = rng.choice(words)
+            drawn['scoped'] = generator.choice(words)
         if ('desc' in missing) and descs:
-            drawn['desc'] = rng.choice(descs)
+            drawn['desc'] = generator.choice(descs)
         if ('label' in missing) and labels:
-            drawn['label'] = rng.choice(labels)
+            drawn['label'] = generator.choice(labels)
         if ('tagged' in missing) and words and tags:
-            drawn['tagged'] = (rng.choice(words), rng.choice(tags))
+            drawn['tagged'] = (generator.choice(words), generator.choice(tags))
         missing -= set(drawn)
     terms = drawn.pop('terms', ())
     return Sample(scopes=scopes, pages=pages, terms=terms, **drawn)
@@ -210,8 +211,10 @@ def stages(sample: Sample) -> tuple[Stage, ...]:
     other = sample.terms[-1] if sample.terms else _ABSENT
     word, tag = sample.tagged or (term, other)
     scope = sample.scopes[0] if sample.scopes else None
-    # build the read-only commands, from a neutral folder and from inside
-    # the wiki
+    desc = sample.desc or term
+    label = sample.label or term
+    scoped = sample.scoped or term
+    # build the read-only commands, from a neutral folder and inside the wiki
     pristine = [
         _case(['lint']),
         _case(['lint', '--json']),
@@ -228,8 +231,7 @@ def stages(sample: Sample) -> tuple[Stage, ...]:
     pristine.append(_case(['update', '--check'], inside=''))
     if scope is not None:
         pristine.append(_case(['lint'], inside=scope))
-    # build the views, searches, matches and reads, on the caches the
-    # snapshot holds
+    # build the views, searches, matches and reads on the snapshot's caches
     query = [
         _case(['map']),
         _case(['map', '--depth', '0']),
@@ -255,8 +257,8 @@ def stages(sample: Sample) -> tuple[Stage, ...]:
         _case(['match', term, '--lineno']),
         _case(['match', term.upper(), '--ignore-case', '--lines']),
         _case(['match', term, '--all']),
-        _case(['match', sample.desc or term, '--field', 'desc']),
-        _case(['match', sample.label or term, '--field', 'name,tags', '--lines']),
+        _case(['match', desc, '--field', 'desc']),
+        _case(['match', label, '--field', 'name,tags', '--lines']),
         _case(['match', _ABSENT], codes=_NOTHING),
         _case(['match', '('], codes=_FAILS),
         _case(['read', _INDEX]),
@@ -264,7 +266,7 @@ def stages(sample: Sample) -> tuple[Stage, ...]:
     ]
     if scope is not None:
         query.append(_case(['map', scope]))
-        query.append(_case(['search', sample.scoped or term, scope, '--json']))
+        query.append(_case(['search', scoped, scope, '--json']))
         query.append(_case(['match', r'^#+ \S', scope, '--lineno']))
         query.append(_case(['read', scope]))
     for page in sample.pages:
@@ -358,11 +360,15 @@ def _words(text: str) -> list[str]:
     return sorted(words)
 
 
-def _draw(rng: random.Random, population: Sequence[str], count: int) -> tuple[str, ...]:
+def _draw(
+    generator: random.Random,
+    population: Sequence[str],
+    count: int,
+) -> tuple[str, ...]:
     """Return ``count`` members of ``population``, or all of a smaller one."""
     if len(population) <= count:
         return tuple(population)
-    return tuple(rng.sample(population, count))
+    return tuple(generator.sample(population, count))
 
 
 def _case(
@@ -385,8 +391,9 @@ def _case(
         name += f' [in {folder}]'
     hits = False
     if codes is None:
-        hits = args[0] in ('search', 'match')
-        reports = hits or (args[0] == 'lint') or ('--check' in args)
+        verb, *_ = args
+        hits = verb in ('search', 'match')
+        reports = hits or (verb == 'lint') or ('--check' in args)
         codes = _REPORTS if reports else _DONE
     return Case(
         name=name,

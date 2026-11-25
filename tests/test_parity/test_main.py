@@ -24,11 +24,13 @@ __all__ = [
     'test_failed_selfcheck_keeps_its_streams_and_trees',
 ]
 
+# the engine's console script, as the text a side's argv holds
+_WIKI_PATH = f'{WIKI}'
 # a side that runs the engine and prints everything but the WIKI_FREEZE_TIME
 # notice, as a wrapper that fixes the clock by itself does
 _RELAY = f"""
 import subprocess, sys
-result = subprocess.run([{f'{WIKI}'!r}, *sys.argv[1:]], capture_output=True)
+result = subprocess.run([{_WIKI_PATH!r}, *sys.argv[1:]], capture_output=True)
 notice = {side.NOTICE!r}
 stderr = result.stderr
 if stderr.startswith(notice):

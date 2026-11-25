@@ -172,7 +172,8 @@ def _run(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
         if options.command == 'matrix':
             document, passed = _matrix(corpus, chosen, work=work, options=options)
         else:
-            document, passed = _selfcheck(corpus, chosen[0], work=work, options=options)
+            base, *_ = chosen
+            document, passed = _selfcheck(corpus, base, work=work, options=options)
         document = {**header, **document}
         text = json.dumps(document, indent=2)
         (options.out / f'{label}.json').write_text(text + '\n', encoding='utf-8')

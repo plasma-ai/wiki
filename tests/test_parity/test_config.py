@@ -71,7 +71,7 @@ def test_root_outside_the_checkout_is_refused(
         (config.load_corpora, 'root = "wiki"', 'checkout must be a string'),
         (config.load_corpora, 'checkout = "checkout"', 'root must be a string'),
     ],
-    ids=['argv string', 'argv empty', 'env', 'describe', 'notice', 'checkout', 'root'],
+    ids=['argv-string', 'argv-empty', 'env', 'describe', 'notice', 'checkout', 'root'],
 )
 def test_file_of_the_wrong_shape_is_refused(
     tmp_path: pathlib.Path,

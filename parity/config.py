@@ -70,17 +70,17 @@ def load_sides(path: pathlib.Path) -> dict[str, Side]:
     result = {}
     for name, table in data.items():
         argv = table.get('argv')
-        if (not _strings(argv)) or (not argv):
+        if (not _is_string_list(argv)) or (not argv):
             raise ValueError(
                 f'Side {name}: argv must be a non-empty list of strings, got {argv!r}.'
             )
         env = table.get('env', {})
-        if (not isinstance(env, dict)) or (not _strings(list(env.values()))):
+        if (not isinstance(env, dict)) or (not _is_string_list(list(env.values()))):
             raise ValueError(
                 f'Side {name}: env must be a table of strings, got {env!r}.'
             )
         describe = table.get('describe', [])
-        if not _strings(describe):
+        if not _is_string_list(describe):
             raise ValueError(
                 f'Side {name}: describe must be a list of strings, got {describe!r}.'
             )
@@ -102,6 +102,6 @@ def load_sides(path: pathlib.Path) -> dict[str, Side]:
 # ------ helper functions
 
 
-def _strings(value: object) -> bool:
+def _is_string_list(value: object) -> bool:
     """Return whether ``value`` is a list that holds only strings."""
     return isinstance(value, list) and all(isinstance(item, str) for item in value)
