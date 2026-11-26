@@ -529,8 +529,9 @@ names the test with the check that holds it in the replay's place. A row for a
 test the replay holds is a finding too, so the table stays as short as the
 replay allows. The recorder also keeps the format calls of `test_format.py`,
 which the replay makes again in v1. A change to a recorded method's command
-line, to a row of the fidelity table or to the routing rules changes the spec
-and its test in `parity/tests/test_replay.py` in the same commit.
+line, to a row of the fidelity table or to a rule of the replay changes the spec
+and its test in `parity/tests/test_replay.py` in the same commit; a change to a
+rule the table's loader refuses on changes `parity/tests/test_routing.py`.
 
 ### Run Bracket
 

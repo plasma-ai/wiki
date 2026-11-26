@@ -63,8 +63,10 @@ _FUNNEL = 'on_notice'
 _DECORATORS = ('run_scoped',)
 # the units `read` slices by
 _UNITS = ('lines', 'words', 'chars')
-# the name the helper holds the console script under
+# the names the helper holds the console script and the module it starts
+# commands with under
 _WIKI = 'WIKI'
+_STARTER = 'subprocess'
 # the scratch home of one process of the run, below its temporary folder,
 # so the copies of a call hold whatever the call writes there
 _HOME = 'parity_home'
@@ -173,16 +175,23 @@ class _Recorder:
         }
         # state the call as a command line, and copy the trees it names
         try:
-            bound = inspect.signature(original).bind(wiki, *args, **kwargs)
+            signature = inspect.signature(original)
+            bound = signature.bind(wiki, *args, **kwargs)
             bound.apply_defaults()
             arguments = dict(list(bound.arguments.items())[1:])
-            options, positionals = _FORMS[method](arguments)
+            form, stated = _FORMS[method]
+            for name, value in arguments.items():
+                default = signature.parameters[name].default
+                if (name not in stated) and (value != default):
+                    raise _Unformed(f'no option states the argument {name}')
+            options, positionals = form(arguments)
             argv = [method, *options, '--path', record['root']]
             if positionals:
                 argv += ['--', *positionals]
             cwd = os.getcwd()
             env = dict(os.environ)
             trees = self._trees([cwd, record['root'], *argv, *env.values()])
+            self._inside(record['root'], 'wiki')
             record.update(argv=argv, cwd=cwd, env=env, trees=trees)
             self._copy(index, 'before', record)
         except (_Unformed, OSError, TypeError) as e:
@@ -227,9 +236,12 @@ class _Recorder:
     ) -> Any:
         """Run one command of the console script for the helper, recorded.
 
-        The command runs under a fixed clock unless the test fixes its
-        own. The notice the fixed clock adds to stderr is taken out of
-        what the test reads, and stays in the record.
+        The command runs under a fixed clock unless the test set the
+        variable itself. The notice the recorder's clock adds to stderr is
+        taken out of what the test reads, and stays in the record. A blank
+        value of the test leaves the clock running: the command runs as
+        the test started it, and no command line states the call, since a
+        replay would write the stamps of its own moment.
         """
         if (self.owner is not None) or not self.test:
             return run(argv, **kwargs)
@@ -238,7 +250,7 @@ class _Recorder:
         self.count += 1
         args = [f'{item}' for item in argv[1:]]
         env = dict(kwargs.get('env') or os.environ)
-        pinned = not env.get(CLOCK, '').strip()
+        pinned = CLOCK not in env
         if pinned:
             env[CLOCK] = _instant(dt.datetime.now(dt.UTC))
         cwd = f'{kwargs.get("cwd") or os.getcwd()}'
@@ -252,7 +264,10 @@ class _Recorder:
             'env': env,
         }
         try:
+            if not env[CLOCK].strip():
+                raise _Unformed('the test leaves the clock running')
             record['trees'] = self._trees([cwd, *args, *env.values()])
+            self._inside(cwd, 'working directory')
             self._copy(index, 'before', record)
         except (_Unformed, OSError) as e:
             record['unformed'] = f'{e}'
@@ -373,6 +388,20 @@ class _Recorder:
                 named.update(re.findall(rf'{prefix}([^{re.escape(os.sep)}]+)', part))
         return {'base': f'{self.base}', 'names': sorted(named)}
 
+    def _inside(self: _Recorder, path: str, what: str) -> None:
+        """Refuse a call whose ``what``, at ``path``, lies outside the temporary folder.
+
+        The replay runs the command at the call's own paths, on the trees
+        it put there. A path outside the temporary folder is one no copy
+        holds, and a command would run on whatever lies there.
+
+        Raises:
+            _Unformed: If ``path`` is not below the temporary folder.
+
+        """
+        if self.base not in pathlib.Path(os.path.realpath(path)).parents:
+            raise _Unformed(f"the call's {what} lies outside the temporary folder")
+
     def _close(self: _Recorder, index: int, record: dict[str, Any]) -> None:
         """Copy the trees as the call left them, and write the record.
 
@@ -405,9 +434,10 @@ class _Clock:
 
     The engine's own clock method reads ``WIKI_FREEZE_TIME``, so the call
     runs with the variable set to the instant it starts at, unless the
-    test set the variable itself. A test that has put its own clock
-    method in place keeps it, and the stamps the method returns say which
-    instant the call ran at.
+    test set the variable to an instant itself. The engine reads a blank
+    value as unset, and so does the clock. A test that has put its own
+    clock method in place keeps it, and the stamps the method returns say
+    which instant the call ran at.
     """
 
     def __init__(
@@ -574,6 +604,29 @@ def _parity_base(
     patch.undo()
 
 
+def pytest_collection_modifyitems(
+    config: pytest.Config,
+    items: list[pytest.Item],
+) -> None:
+    """Refuse to run tests whose commands the recorder cannot watch.
+
+    Raises:
+        pytest.UsageError: If the helper module does not hold the module
+            it starts commands with under its own name: every command of
+            the tests would then run with no record, and the replay would
+            pass without them.
+
+    """
+    if not items:
+        return
+    helper = importlib.import_module(config.stash[_RECORDER].plan['helper'])
+    if not isinstance(vars(helper).get(_STARTER), (ModuleType, _Spawner)):
+        raise pytest.UsageError(
+            f'{helper.__name__} does not start its commands through a module it'
+            f' holds as {_STARTER}; the recorder cannot watch them.'
+        )
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_setup(item: pytest.Item) -> None:
     """Start recording for the test, before its first fixture runs.
@@ -583,9 +636,9 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     """
     recorder = item.config.stash[_RECORDER]
     helper = importlib.import_module(recorder.plan['helper'])
-    module = vars(helper).get('subprocess')
-    if (module is not None) and not isinstance(module, _Spawner):
-        vars(helper)['subprocess'] = _Spawner(module, helper, recorder)
+    module = vars(helper)[_STARTER]
+    if not isinstance(module, _Spawner):
+        vars(helper)[_STARTER] = _Spawner(module, helper, recorder)
     recorder.start(item.nodeid)
 
 
@@ -719,15 +772,18 @@ def _new(arguments: Mapping[str, Any]) -> tuple[list[str], list[str]]:
 
 
 # the command line of each recorded method: its options and its positionals,
-# in the output mode that prints the most
+# in the output mode that prints the most, and the parameters they state
 _FORMS = {
-    'update': _update,
-    'lint': _lint,
-    'read': _read,
-    'search': _search,
-    'match': _match,
-    'map': _map,
-    'new': _new,
+    'update': (_update, ('name', 'check')),
+    'lint': (_lint, ('name',)),
+    'read': (_read, ('name', 'start', 'stop', 'on')),
+    'search': (_search, ('query', 'name', 'limit', 'tag', 'prefix', 'raw')),
+    'match': (_match, ('pattern', 'name', 'field', 'ignore_case', 'all_files')),
+    'map': (
+        _map,
+        ('name', 'depth', 'desc', 'desc_limit', 'category', 'markdown', 'words'),
+    ),
+    'new': (_new, ('name', 'desc', 'content')),
 }
 
 

@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import pathlib
+import posixpath
 import shutil
 import subprocess
 import sys
@@ -69,6 +70,17 @@ _BROKEN = ('failed', 'error', 'identity', 'untraced')
 _TIMEOUT = 600
 # the thread count the second engine also runs every call at
 _THREADS = 'WIKI_THREADS'
+# what the doctored side of a control changes behind one command, each with
+# the aspects it must show: on a stream, or on the path it acts on
+_DOCTORED = {
+    'stdout': ('stdout',),
+    'extra': ('tree', 'touched'),
+    'file': ('tree',),
+    'mode': ('tree',),
+    'rewrite': ('touched',),
+}
+# the file the `extra` kind writes, beside the file the other kinds act on
+_EXTRA = 'parity_doctored.md'
 
 
 @dataclasses.dataclass(frozen=True, order=True)
@@ -82,11 +94,13 @@ class Finding:
             (v1's command line does not do what the call did in its
             test); ``registered`` (a registry entry excused a call
             between two builds of v1); ``unneeded`` (the routing table
-            names a test the replay holds); ``format`` (a format call
-            that has no JSON form, or that gives another outcome when it
-            is made again); or ``control`` (a doctored replay did not
-            show what it must).
-        subject: The test, the format function or the control.
+            names a test the replay holds); ``unrecorded`` (the tests
+            ran commands, and the recorder recorded none); ``format`` (a
+            format call that has no JSON form, or that gives another
+            outcome when it is made again); or ``control`` (a doctored
+            replay did not show what it must).
+        subject: The test, the format function, the control, or the
+            number of commands.
         detail: What is wrong.
 
     """
@@ -211,7 +225,7 @@ def run(
         for call in recording.calls
         if (commands is None) or (call.command in commands)
     ]
-    played = _play(chosen, sides, home=recording.store.parent / 'home', jobs=jobs)
+    played = _play(chosen, sides, work=recording.store.parent, jobs=jobs)
     # gather what is not the expected result
     findings = [
         Finding(finding.kind, finding.subject)
@@ -249,6 +263,7 @@ def run(
         'counts': _counts(played, routed),
         'kinds': recording.kinds,
         'calls': rows,
+        'unrecorded': _unrecorded(recording),
     }
     return Result(
         findings=tuple(sorted(findings)),
@@ -288,12 +303,15 @@ def formats(
     """
     routed = frozenset(routed)
     work.mkdir(parents=True)
-    formed = [entry for entry in recording.formats if 'unformed' not in entry]
-    findings = [
-        Finding('format', entry['function'], entry['unformed'])
-        for entry in recording.formats
-        if ('unformed' in entry) and not _all_routed(entry['tests'], routed)
-    ]
+    # leave out the calls with no JSON form: of an argument, or of the outcome
+    formed = []
+    findings = []
+    for entry in recording.formats:
+        unformed = entry.get('unformed') or entry['outcome'].get('unformed')
+        if not unformed:
+            formed.append(entry)
+        elif not _all_routed(entry['tests'], routed):
+            findings.append(Finding('format', entry['function'], unformed))
     # write the calls, one per line, and make them again under each seed
     path = work / 'calls.jsonl'
     with open(path, 'w', encoding='utf-8') as handle:
@@ -356,8 +374,11 @@ def control(
     found pending changes under ``--check`` is replayed without the
     option, so the command writes what the call only listed. Each must
     come out unfaithful. ``side`` doctors a side: the first faithful
-    call is replayed against a wrapper that changes one byte of stdout,
-    which must show as exactly that difference.
+    call that may write is replayed against a wrapper that changes one
+    thing behind the command, once for each of five things: one byte of
+    stdout, one more file, and one byte, the mode and the inode of a
+    file the command leaves alone. Each must show as exactly the
+    differences of that change.
 
     Args:
         recording: The calls, from :func:`parity.record.run`.
@@ -366,12 +387,13 @@ def control(
         jobs: How many calls are replayed at once.
 
     Returns:
-        The findings, and the control as JSON data: how many calls it
+        The findings, and the control as JSON data: how many replays it
         doctored and how many the replay reported.
 
     """
-    home = recording.store.parent / 'home'
+    work = recording.store.parent
     formed = [call for call in recording.calls if not call.unformed]
+    doctored = reported = 0
     if name == 'argv':
         chosen = [
             dataclasses.replace(call, argv=_without(call.argv, _CHECK))
@@ -381,41 +403,40 @@ def control(
             and (_CHECK in _options(call.argv))
             and call.outcome.get('returned')
         ]
-        played = _play(chosen, [reference], home=home, jobs=jobs)
-        caught = [item for item in played if item.problems]
+        played = _play(chosen, [reference], work=work, jobs=jobs)
+        doctored = len(chosen)
+        reported = sum(1 for item in played if item.problems)
     else:
-        # take the first call that v1's command line replays faithfully
-        chosen = []
+        # take the first call that may write and that v1's command line
+        # replays faithfully, on trees that hold a file it leaves alone
         for call in formed:
-            (clean,) = _play([call], [reference], home=home, jobs=jobs)
-            if not (clean.unformed or clean.problems):
-                chosen.append(call)
-                break
-        caught = []
-        for call in chosen:
-            # -P keeps the harness's own modules off the wrapper's import path
-            argv = (
-                sys.executable,
-                '-P',
-                f'{doctor.__file__}',
-                'stdout',
-                json.dumps(list(call.argv)),
-                '',
-                f'{len(reference.argv)}',
-                *reference.argv,
-            )
-            changed = dataclasses.replace(reference, name='doctored stdout', argv=argv)
-            played = _play([call], [reference, changed], home=home, jobs=jobs)
-            aspects = [difference.aspect for difference in played[0].differences]
-            if aspects == ['stdout']:
-                caught.append(played[0])
+            if not _writes(call):
+                continue
+            (clean,) = _play([call], [reference], work=work, jobs=jobs)
+            if clean.unformed or clean.problems:
+                continue
+            spare = _spare(clean.passes[0])
+            if not spare:
+                continue
+            extra = posixpath.join(posixpath.dirname(spare), _EXTRA)
+            for kind, aspects in _DOCTORED.items():
+                # a stream has no path, and the new file goes beside the spare one
+                relpath = {'stdout': '', 'extra': extra}.get(kind, spare)
+                changed = _doctored(reference, kind, call, call.base / relpath)
+                sides = [reference, changed]
+                (played,) = _play([call], sides, work=work, jobs=jobs)
+                found = [(item.aspect, item.detail) for item in played.differences]
+                doctored += 1
+                if sorted(found) == sorted((aspect, relpath) for aspect in aspects):
+                    reported += 1
+            break
     findings = []
-    if not chosen:
+    if not doctored:
         findings.append(Finding('control', name, 'the recording has no call to doctor'))
-    elif len(caught) != len(chosen):
-        missed = len(chosen) - len(caught)
+    elif reported != doctored:
+        missed = doctored - reported
         findings.append(Finding('control', name, f'{missed} doctored calls passed'))
-    return findings, {'doctored': len(chosen), 'reported': len(caught)}
+    return findings, {'doctored': doctored, 'reported': reported}
 
 
 def unneeded(
@@ -453,6 +474,26 @@ def unneeded(
     ]
 
 
+def unrecorded(recording: Recording) -> list[Finding]:
+    """Return a finding if the tests ran commands and the recorder recorded none.
+
+    Some commands leave no record: one that git starts, and one a test
+    starts without the helper. A whole recording that holds no command
+    of the helper at all is another matter: the recorder did not watch
+    the helper, and the replay would pass with the CLI tests left out.
+
+    Args:
+        recording: A recording of every test, from
+            :func:`parity.record.run`.
+
+    """
+    count = sum(_unrecorded(recording).values())
+    if (not count) or any(call.source == 'cli' for call in recording.calls):
+        return []
+    s = 's' if count != 1 else ''
+    return [Finding('unrecorded', f'{count} command{s}')]
+
+
 def threaded(engine: Side) -> Side:
     """Return ``engine`` as a side that runs every command on one thread."""
     return dataclasses.replace(
@@ -465,21 +506,42 @@ def threaded(engine: Side) -> Side:
 # ------ helper functions
 
 
+def _unrecorded(recording: Recording) -> dict[str, int]:
+    """Return how many commands of each test reached a side and left no record.
+
+    The dispatcher counts every command a test sends to a side, and the
+    recorder every command the helper starts; the tests that show a gap
+    are listed with it.
+    """
+    recorded = collections.Counter(
+        call.test for call in recording.calls if call.source == 'cli'
+    )
+    result = {}
+    for row in recording.tests.report['tests']:
+        count = sum(row['calls'].values()) - recorded[row['id']]
+        if count:
+            result[row['id']] = count
+    return result
+
+
 def _play(
     calls: Sequence[Call],
     sides: Sequence[Side],
     *,
-    home: pathlib.Path,
+    work: pathlib.Path,
     jobs: Optional[int],
 ) -> list[_Played]:
     """Replay ``calls`` on every side, the calls of one process in order.
 
     Two calls of one process may name the same paths, so they run one
-    after the other; the calls of two processes share no path. ``home``
-    is the scratch home the reference side's judge runs under.
+    after the other; the calls of two processes share no path.
+    ``work`` is the folder of the recording: every call's trees are
+    placed below it, and it holds the scratch home the reference side's
+    judge runs under.
     """
     judge = None
     if (len(sides) > 1) and sides[0].judge:
+        home = work / 'home'
         home.mkdir(parents=True, exist_ok=True)
         judge = Judge(sides[0].judge, env=side.environment(sides[0], home, now=''))
     lock = threading.Lock()
@@ -489,7 +551,9 @@ def _play(
 
     def play(group: Sequence[Call]) -> list[_Played]:
         """Replay the calls of one process."""
-        return [_play_one(call, sides, judge=judge, lock=lock) for call in group]
+        return [
+            _play_one(call, sides, work=work, judge=judge, lock=lock) for call in group
+        ]
 
     played: list[_Played] = []
     workers = jobs or max(len(groups), 1)
@@ -503,12 +567,17 @@ def _play_one(
     call: Call,
     sides: Sequence[Side],
     *,
+    work: pathlib.Path,
     judge: Optional[Judge],
     lock: threading.Lock,
 ) -> _Played:
     """Replay one call on every side, and judge the replay."""
     if call.unformed:
         return _Played(call=call, unformed=call.unformed)
+    # NOTE: the trees are removed and placed again at the path the record
+    #   names, so a record names no path outside the recording's own folder
+    if work not in call.base.parents:
+        return _Played(call=call, unformed="the call's trees lie outside the recording")
     # read what the call left in its test, placed where the call ran
     _place(call.after, call.base)
     left = _compared(manifest.scan(call.base))
@@ -649,6 +718,50 @@ def _as_run(done: _Pass, root: Optional[str], others: Sequence[str]) -> Run:
             relpath: content for relpath, content in done.final.items() if kept(relpath)
         },
     )
+
+
+def _doctored(reference: Side, kind: str, call: Call, path: pathlib.Path) -> Side:
+    """Return ``reference`` as a side that changes one thing behind one command.
+
+    Args:
+        reference: The side that runs every command.
+        kind: What the side changes, one of :data:`parity.doctor.KINDS`.
+        call: The call whose command is doctored.
+        path: The file the kind acts on.
+
+    """
+    # -P keeps the harness's own modules off the wrapper's import path
+    argv = (
+        sys.executable,
+        '-P',
+        f'{doctor.__file__}',
+        kind,
+        json.dumps(list(call.argv)),
+        f'{path}',
+        f'{len(reference.argv)}',
+        *reference.argv,
+    )
+    return dataclasses.replace(reference, name=f'doctored {kind}', argv=argv)
+
+
+def _spare(done: _Pass) -> str:
+    """Return a file the command of ``done`` left alone, for a doctored side to act on.
+
+    The file is one the sides are compared on by the tree rules: outside
+    every cache and every repository's own folder.
+
+    Returns:
+        The path relative to the temporary folder; empty for trees that
+        hold no such file.
+
+    """
+    touched = set(manifest.touched(done.before, done.after))
+    for relpath, entry in sorted(done.after.items()):
+        if (entry.kind != 'file') or (relpath in touched):
+            continue
+        if _is_compared(relpath) and not _is_cache(relpath):
+            return relpath
+    return ''
 
 
 def _faithful(

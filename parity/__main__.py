@@ -584,6 +584,9 @@ def _replay(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int
                 jobs=options.jobs,
             )
             findings.extend(found)
+    # a whole recording holds the commands of the CLI tests' helper
+    if not options.test:
+        findings.extend(replay.unrecorded(recording))
     document['findings'] = [dataclasses.asdict(finding) for finding in findings]
     path = options.out / f'{_REPLAY}.json'
     path.write_text(json.dumps(document, indent=2) + '\n', encoding='utf-8')
@@ -598,6 +601,10 @@ def _replay(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int
     )
     for name, count in counts['commands'].items():
         print(f'{_REPLAY}: {name}: {count["replayed"]} of {count["calls"]} calls')
+    left = result.report['unrecorded']
+    if left:
+        total = sum(left.values())
+        print(f'{_REPLAY}: {total} commands of {len(left)} tests left no record')
     if 'formats' in document:
         made = document['formats']
         print(f'{_REPLAY}: {made["calls"]} format calls, {made["distinct"]} distinct')

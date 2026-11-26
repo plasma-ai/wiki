@@ -911,12 +911,19 @@ and `new`) and for the module the CLI tests' helper starts commands with.
   a dash is still a value. The wiki is named with `--path`. A command of the
   helper is recorded with its own arguments.
 - **Clock.** Each call runs under a fixed clock, and the record holds its
-  instant as `WIKI_FREEZE_TIME`. The recorder sets the variable for the call
-  unless the test set it. A test that puts its own clock method on the engine
-  keeps it: the recorder listens to the stamps it returns, and the instant is
-  the one that renders as that stamp under the wiki's zone and format. For a
-  command of the helper the recorder takes the notice line out of the stderr the
-  test reads, and the record keeps the stream as the command wrote it.
+  instant as `WIKI_FREEZE_TIME`. The recorder sets the variable for a call whose
+  test left it unset. A test that puts its own clock method on the engine keeps
+  it: the recorder listens to the stamps it returns, and the instant is the one
+  that renders as that stamp under the wiki's zone and format. For a command of
+  the helper the recorder takes the notice line of its own clock out of the
+  stderr the test reads, and the record keeps the stream as the command wrote
+  it. A command whose test set the variable runs as the test started it, notice
+  and all.
+- **Blank clock.** An engine reads a blank `WIKI_FREEZE_TIME` as unset. For a
+  call in process the recorder does the same, and sets the variable. A helper
+  command under a blank value is a test of that reading: it runs with the clock
+  running and prints no notice, and it is unformed, because a replay would write
+  the stamps of its own moment.
 - **Trees.** The trees of a call are top entries of the temporary folder of its
   pytest process: every entry the test has made or written by then, and every
   entry the call names in its arguments, its working directory, its wiki root or
@@ -929,13 +936,35 @@ and `new`) and for the module the CLI tests' helper starts commands with.
   working directory.
 - **Kinds.** For each test the recorder counts the notice kinds the engine
   emitted in process and the issue kinds `lint` returned.
+- **Commands with no record.** The recorder sees a command of the console script
+  only when the helper's own `subprocess.run` starts it. The merge driver that
+  git starts during a test's `git merge`, and a command a test starts by itself,
+  reach a side with no record, and the replay does not hold them: the CLI suite
+  does, by the tests' own assertions. The dispatcher counts every command of a
+  test, and the result file lists each test that ran more commands than the
+  recorder holds for it (`unrecorded`). A helper that does not hold the module
+  it starts commands with as `subprocess` ends the run before a test. A whole
+  recording that holds no helper command, though its tests ran commands, is an
+  `unrecorded` finding.
 
-A call has no command line, and is `unformed`, when an argument is no string or
-integer where the command takes one, when `read` is asked for a unit it has no
-option for, when the test's clock gave two stamps or a stamp that no instant
-renders as, when the call names the whole temporary folder, or when the helper
-did not capture a stream, or when a tree cannot be copied. A command that cannot
-be started on the trees is unformed too.
+A call has no command line, and is `unformed`, in these cases:
+
+- An argument is no string or integer where the command takes one, or the call
+  gives a parameter that no option of the command states.
+- `read` is asked for a unit it has no option for.
+- The test's clock gave two stamps, or a stamp that no instant renders as.
+- The test left the clock running for a helper command (Blank clock, above).
+- The call ran before the temporary folder was made, or it names the whole
+  temporary folder.
+- The wiki of an engine call, or the working directory of a helper command, lies
+  outside the temporary folder: no copy holds that path.
+- The helper did not capture a stream, or the command did not end.
+- A tree cannot be copied.
+
+The replay adds two cases: a command that cannot be started on the trees, and a
+record whose temporary folder lies outside the folder of the recording. The
+replay removes that folder and places the trees there, so it takes no path
+outside its own work from a record.
 
 ### Playing a Call
 
@@ -949,9 +978,12 @@ be started on the trees is unformed too.
   run side by side.
 - **Compared.** The scans cover the temporary folder of the process. Paths at or
   below a `.git` folder are left out: a copy leaves each index stale, and each
-  side refreshes it as it goes. The cache rule is applied to every wiki whose
-  cache folder a side holds before or after the command, and to the wiki of an
-  engine call.
+  side refreshes it as it goes. So the replay does not hold what a command
+  writes there, such as the merge driver that `init` registers in the
+  repository's config. The CLI suite does: its tests of `init` and `config`
+  assert on the config. The cache rule is applied to every wiki whose cache
+  folder a side holds before or after the command, and to the wiki of an engine
+  call.
 - **Exit codes and notice.** A replayed call brings no list of allowed exit
   codes and no notice rule of its own. Fidelity holds v1's side to the test, and
   the comparison holds the other sides to v1: a side prints the clock notice
@@ -1010,7 +1042,9 @@ reason = "<why the replay cannot hold the tests>"
 - **Cite.** A dropped row cites what it rests on: the id of a registry entry,
   the id of the test that replaces the dropped ones, or a part of v1 that a
   second engine does not have (`trust`, `hooks`, `frontmatter memo`,
-  `loader choice`, `Python API`). No other row cites.
+  `loader choice`, `Python API`). A test of the CLI suite that the replay cannot
+  hold cites itself: the suite holds it by its own assertions. No other row
+  cites.
 - **Refusals.** A table is refused when it holds a key other than `route`, a row
   that is no table, a field outside those above or of the wrong shape, a row
   with no test or no reason, a `to` outside the three, a dropped row that cites
@@ -1038,7 +1072,9 @@ calls are one record.
   themselves. A tuple, a set and a mapping are objects marked with the key `~`,
   each with its `items`; a set lists its members in the order of their JSON
   text. An outcome is `returned` with the value, or `raised` with the error's
-  type and text. A value with no such form makes the call a `format` finding.
+  type and text. A value with no such form, in an argument or in what the
+  function returned, makes the call a `format` finding unless every test that
+  made it is routed. Such a call is not made again.
 - **Made again.** With no second engine the replay makes every recorded call
   again, in a fresh interpreter of v1's side, under each of the two hash seeds
   (`parity/plugins/parity_values.py`). A call that gives another outcome there
@@ -1050,10 +1086,18 @@ calls are one record.
 With no second engine, and no `--test`, a replay ends with two controls on its
 own recording. Each doctors the replay and must be reported.
 
-| Control | Doctored                                                                                                     | Must show as                                  |
-| ------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------- |
-| `argv`  | the argument mapping: every `update` call that found pending changes under `--check` runs without the option | every one of those calls unfaithful           |
-| `side`  | one side: a wrapper changes one byte of stdout on the first faithful call                                    | exactly one `stdout` difference, on that call |
+| Control | Doctored                                                                                                              | Must show as                        |
+| ------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `argv`  | the argument mapping: every `update` call that found pending changes under `--check` runs without the option          | every one of those calls unfaithful |
+| `side`  | one side: a wrapper changes one thing behind the first faithful call that may write, in one replay for each row below | exactly the differences of that row |
+
+| The wrapper                                                              | Must show as                      |
+| ------------------------------------------------------------------------ | --------------------------------- |
+| changes one byte of stdout                                               | `stdout`                          |
+| writes one more file                                                     | `tree` and `touched` on that file |
+| changes one byte of a file the command leaves alone, and keeps its times | `tree` on that file               |
+| changes the mode of that file                                            | `tree` on that file               |
+| writes that file again with the same bytes                               | `touched` on that file            |
 
 A control that doctors no call, or that the replay does not report in full, is a
 `control` finding.
@@ -1067,6 +1111,7 @@ A run passes when it has no difference and no finding:
 | `unfaithful`                              | v1's command line does not do what a call of the test did.                |
 | `registered`                              | A registry entry excused a call between two builds of v1.                 |
 | `unneeded`                                | The routing table names a test the replay holds.                          |
+| `unrecorded`                              | The tests ran commands, and a whole recording holds none of the helper's. |
 | `format`                                  | A format call has no JSON form, or gives another outcome when made again. |
 | `control`                                 | A doctored replay was not reported.                                       |
 

@@ -48,6 +48,15 @@ tests = [
 to = "rust"
 reason = "The first update of the test runs under a clock that returns a date with no time, before the test gives the wiki a format with no time. WIKI_FREEZE_TIME renders an instant in the wiki's own format, so no value of it gives that stamp."
 
+# a test leaves the clock running for a command
+[[route]]
+tests = [
+    "tests/test_cli/test_wiki_commands.py::test_blank_wiki_freeze_time_leaves_the_clock_running",
+]
+to = "dropped"
+cite = "tests/test_cli/test_wiki_commands.py::test_blank_wiki_freeze_time_leaves_the_clock_running"
+reason = "The test sets WIKI_FREEZE_TIME to a blank value, which leaves the clock running, and reads the stamp its command writes. A replayed command would write the stamp of its own moment. The CLI suite runs the test on each engine with the test's own assertions."
+
 # a test drives the engine class in a way the command line has no form for
 [[route]]
 tests = [
