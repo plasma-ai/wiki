@@ -612,7 +612,7 @@ def carve(corpus: Corpus, folder: pathlib.Path) -> Corpus:
     root.parent.mkdir(parents=True)
     snapshot.clone(source, root)
     ignore = corpus.checkout / '.gitignore'
-    if ignore.is_file() and not (checkout / '.gitignore').exists():
+    if ignore.is_file():
         snapshot.clone(ignore, checkout / '.gitignore')
     fixtures._commit(checkout, f'the wiki of {corpus.label}')
     return Corpus(label=corpus.label, checkout=checkout, root=corpus.root)
