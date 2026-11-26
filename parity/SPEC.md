@@ -347,7 +347,10 @@ home and the neutral folder) before the first command and after each one.
 - **Touched set.** A path is touched when it was created or deleted, or when it
   is not a folder and its inode or mtime changed. The touched sets of a command
   must be equal. A file written again with the same bytes is touched and leaves
-  the manifest unchanged, so the two rules see different things.
+  the manifest unchanged, so the two rules see different things. The rule reads
+  nothing but the inode number and the mtime. So a file that is removed and
+  copied again with its source's mtime reads as untouched wherever the file
+  system gives it the freed inode number back, as Linux file systems do.
 - **Read-only commands.** `lint`, `update --check`, `read`, `match`, `map` and
   `search` may touch nothing outside `<root>/.wiki/cache`. This is checked on
   each side by itself. One path is allowed: where the wiki has no `.wiki` folder

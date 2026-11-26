@@ -120,3 +120,21 @@ tests = [
 to = "dropped"
 cite = "D6"
 reason = "The test's wiki holds a hook file, or the test runs `wiki trust`. A second engine refuses the wiki, merges it without the hook, and has no such command. Under v1 a command that imports the hook leaves a bytecode file beside it, named for the interpreter, and a read-only command leaves it outside the caches."
+
+# a test's error text turns on the process that prints it
+[[route]]
+tests = [
+    "tests/test_core/test_wiki.py::test_settings_reject_malformed_values[nested-past-recursion-limit]",
+]
+to = "dropped"
+cite = "D1"
+reason = "The test's settings file is nested past the interpreter's recursion limit. The text behind `Malformed JSON in .wiki/settings.json: ` is the JSON reader's, and under Python 3.14 it states how much of the stack the process had used. Where the test's process and a command differ in that, no command prints the call's text."
+
+# a test's command copies files over the copies it made before
+[[route]]
+tests = [
+    "tests/test_cli/test_wiki_commands.py::test_install_copies_skill_into_home",
+]
+to = "dropped"
+cite = "D10"
+reason = "The test runs `install` over the copy an earlier `install` left. v1 removes the folder and copies it again with the source's modification times. Where the file system hands a freed inode number out again, a copied file may get its old number back and read as untouched, so the touched sets of two runs of v1 differ. D10 gives `install` a comparison of its own, by the list of paths written."
