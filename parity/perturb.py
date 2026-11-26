@@ -772,10 +772,14 @@ def operators() -> tuple[Operator, ...]:
 class _Tree:
     """A wiki under perturbation: what it holds, and what was done to it.
 
-    The pages and indexes it deals are those the engine left: a page with a
-    closed block that carries a ``name``, and an index with such a block, a
-    delimiter and a row. A tree that runs out of them gets new ones, in the
-    form the engine writes with its default settings.
+    The pages, indexes and folders it deals are those the engine manages,
+    as far as the files say: a page with a closed block that carries a
+    ``name``, an index with such a block, a delimiter and a row, and a
+    folder whose index stands, each listed in the index above it, and that
+    folder in the one above, up to the root. A converged wiki lists what
+    it manages, and gives a file it excludes no row. A tree that runs out
+    of them gets new ones, in the form the engine writes with its default
+    settings.
     """
 
     def __init__(
@@ -804,52 +808,23 @@ class _Tree:
         # what the stages of a run name
         self.edited = ''
         self.tagged: tuple[str, ...] = ()
-        # how many names the perturbation has made, and the files it left
-        # with the late time
+        # how many names the perturbation has made, what it made, the folders
+        # it renamed (the new path and the old), and the files it left with
+        # the late time
         self._made = 0
+        self._own: set[str] = set()
+        self._renamed: list[tuple[str, str]] = []
         self._late: set[str] = set()
-        # the indexed folders; the pages and the indexes, each checked for
-        # the engine's form when it is drawn; those an operator has taken;
-        # and the files git tracks
-        self.folders: list[str] = []
+        # the targets of the rows each index held when it was first read
+        self._listings: dict[str, frozenset[str]] = {}
+        # the indexed folders, the pages and the indexes, each checked when
+        # it is drawn; those an operator has taken; and the files git tracks
+        self._folders: list[str] = []
         self._pages: list[str] = []
         self._indexes: list[str] = []
         self._taken: set[str] = set()
-        self._tracked: frozenset[str] = frozenset()
-        self.scan()
-
-    def scan(self: _Tree) -> None:
-        """List what the tree holds, as it stands now.
-
-        Dot folders, symlinks and a wiki declared inside the wiki are left
-        alone: no engine manages what lies there as part of this wiki. So
-        is a name that opens with a dash, which a command line would read
-        as an option.
-        """
-        self.folders = []
-        self._pages = []
-        self._indexes = []
-        pending = ['']
-        while pending:
-            folder = pending.pop()
-            names = sorted(os.listdir(self.root / folder))
-            for name in reversed(names):
-                path = self.root / folder / name
-                plain = os.path.isdir(path) and not os.path.islink(path)
-                declared = os.path.isfile(path / WIKI_SETTINGS)
-                if plain and not (name.startswith(('.', '-')) or declared):
-                    pending.append(posixpath.join(folder, name))
-            if _INDEX not in names:
-                continue
-            self.folders.append(folder)
-            self._indexes.append(posixpath.join(folder, _INDEX))
-            for name in names:
-                path = self.root / folder / name
-                regular = os.path.isfile(path) and not os.path.islink(path)
-                page = name.endswith('.md') and (name != _INDEX)
-                if page and regular and not name.startswith('-'):
-                    self._pages.append(posixpath.join(folder, name))
         self._tracked = self._list_tracked()
+        self._scan()
 
     def name(self: _Tree) -> str:
         """Return a name the perturbation has not made yet."""
@@ -868,32 +843,30 @@ class _Tree:
                 a link target.
 
         """
-        folders = list(self.folders)
+        folders = list(self._folders)
         if below:
             folders = [folder for folder in folders if folder and _spells(folder)]
-        folder = self._draw(generator, folders, self.folders, _led)
+        folder = self._draw(generator, folders, self._is_folder)
         if folder is None:
             folder = self.grow(generator)
         return folder
 
-    def page(self: _Tree, generator: random.Random, *, tracked: bool = False) -> str:
+    def page(self: _Tree, generator: random.Random, *, held: bool = False) -> str:
         """Take a page that no operator has taken, and return it.
 
         Args:
             generator: The generator to draw with.
-            tracked: Whether to take a page that git tracks, where one is
-                left.
+            held: Whether to take a page that git holds with the stamp it
+                has now, where one is left.
 
         """
         free = [page for page in self._pages if page not in self._taken]
         page = None
-        if tracked:
-            known = [page for page in free if page in self._tracked]
-            page = self._draw(generator, known, self._pages, _managed)
+        if held:
+            tracked = [page for page in free if page in self._tracked]
+            page = self._draw(generator, tracked, self.held)
         if page is None:
-            standing = set(self._pages)
-            free = [page for page in free if page in standing]
-            page = self._draw(generator, free, self._pages, _managed)
+            page = self._draw(generator, free, self._is_page)
         if page is None:
             page = self._add_page(generator)
         self._taken.add(page)
@@ -902,7 +875,7 @@ class _Tree:
     def any_page(self: _Tree, generator: random.Random) -> str:
         """Return a page whose path spells as a link target, taken or not."""
         pages = [page for page in self._pages if _spells(page)]
-        page = self._draw(generator, pages, self._pages, _managed)
+        page = self._draw(generator, pages, self._is_page)
         if page is None:
             page = self._add_page(generator)
         return page
@@ -926,15 +899,15 @@ class _Tree:
                 afterwards.
 
         """
+
+        def takes(index: str) -> bool:
+            """Return whether the engine manages the index and the operator can change it."""
+            if not self._is_index(index):
+                return False
+            return (rows is None) or bool(rows(self.read(index).split('\n')))
+
         free = [index for index in self._indexes if index not in self._taken]
-        generator.shuffle(free)
-        index = None
-        for candidate in free:
-            if not _rowed(self.root / candidate):
-                self._indexes.remove(candidate)
-            elif (rows is None) or rows(self.read(candidate).split('\n')):
-                index = candidate
-                break
+        index = self._draw(generator, free, takes)
         if index is None:
             index = posixpath.join(self.grow(generator), _INDEX)
         self._taken.add(index)
@@ -945,7 +918,7 @@ class _Tree:
     def any_index(self: _Tree, generator: random.Random) -> str:
         """Return an index whose path spells as a link target, taken or not."""
         indexes = [index for index in self._indexes if _spells(index)]
-        index = self._draw(generator, indexes, self._indexes, _rowed)
+        index = self._draw(generator, indexes, self._is_index)
         if index is None:
             index = posixpath.join(self.grow(generator), _INDEX)
         return index
@@ -953,22 +926,60 @@ class _Tree:
     def grow(self: _Tree, generator: random.Random) -> str:
         """Write a new folder below the root, with an index and a page, and return it."""
         folder = self.name()
+        index = posixpath.join(folder, _INDEX)
         page = posixpath.join(folder, self.name())
         row = f'[[{page}|{posixpath.basename(page)}]]: {_desc("page")}'
-        index = fixtures._index(folder, _desc('folder'), [row]).decode('utf-8')
+        indexed = fixtures._index(folder, _desc('folder'), [row]).decode('utf-8')
         text = fixtures._page(page, _desc('page'), _body('page')).decode('utf-8')
-        self.write(
-            posixpath.join(folder, _INDEX), index, generator=generator, late=False
-        )
+        self.write(index, indexed, generator=generator, late=False)
         self.write(f'{page}.md', text, generator=generator, late=False)
-        self.folders.append(folder)
-        self._indexes.append(posixpath.join(folder, _INDEX))
+        self._folders.append(folder)
+        self._indexes.append(index)
         self._pages.append(f'{page}.md')
+        self._own.update([folder, index, f'{page}.md'])
         return folder
 
-    def tracked(self: _Tree, relpath: str) -> bool:
-        """Return whether git tracks the file at ``relpath``."""
-        return relpath in self._tracked
+    def rename(self: _Tree, generator: random.Random) -> str:
+        """Rename a folder below the root, with all it holds, and return its new path."""
+        folders = [folder for folder in self._folders if folder]
+        folder = self._draw(generator, folders, self._is_folder)
+        if folder is None:
+            folder = self.grow(generator)
+        target = f'{folder}moved'
+        while os.path.lexists(self.root / target):
+            target += 'moved'
+        os.rename(self.root / folder, self.root / target)
+        # every path the tree lists below the folder moved with it
+        for listed in (self._folders, self._pages, self._indexes):
+            listed[:] = [_moved(relpath, folder, target) for relpath in listed]
+        self._own = {_moved(relpath, folder, target) for relpath in self._own}
+        self._listings = {
+            _moved(index, folder, target): rows
+            for index, rows in self._listings.items()
+        }
+        self._renamed.append((target, folder))
+        return target
+
+    def held(self: _Tree, relpath: str) -> bool:
+        """Return whether ``relpath`` is a page that git holds with the stamp it has now.
+
+        The engine restamps a page that differs from the one ``HEAD`` holds
+        while its ``updated`` stamp is still that one's. A checkout may
+        hold a page that was edited and stamped and not committed.
+        """
+        if (relpath not in self._tracked) or not self._is_page(relpath):
+            return False
+        result = subprocess.run(
+            ['git', '-C', f'{self.root}', 'show', f'HEAD:./{relpath}'],
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            return False
+        stamps = []
+        for text in (os.fsdecode(result.stdout), self.read(relpath)):
+            fields, _ = _split(text)
+            stamps.append([field for field in fields if _key(field) == 'updated'])
+        return bool(stamps[0]) and (stamps[0] == stamps[1])
 
     def read(self: _Tree, relpath: str) -> str:
         """Return the text of the file at ``relpath``."""
@@ -998,6 +1009,9 @@ class _Tree:
         if late or (relpath in self._late):
             self._late.add(relpath)
             late = True
+        # an index keeps listing what it listed before its first change
+        if posixpath.basename(relpath) == _INDEX:
+            self._listing(relpath)
         path = self.root / relpath
         path.parent.mkdir(parents=True, exist_ok=True)
         _write(path, text, late=late)
@@ -1019,25 +1033,34 @@ class _Tree:
 
     # ------ helper methods
 
-    def _draw(
-        self: _Tree,
-        generator: random.Random,
-        candidates: list[str],
-        listed: list[str],
-        formed: Callable[[pathlib.Path], bool],
-    ) -> Optional[str]:
-        """Draw one of ``candidates`` that has the engine's form.
+    def _scan(self: _Tree) -> None:
+        """List the indexed folders of the tree, their pages and their indexes.
 
-        A candidate without it leaves ``candidates`` and ``listed``, the
-        list it came from, so it is read once.
+        Dot folders, symlinks and a wiki declared inside the wiki are left
+        alone: no engine manages what lies there as part of this wiki. So
+        is a name that opens with a dash, which a command line would read
+        as an option.
         """
-        while candidates:
-            chosen = generator.choice(candidates)
-            if formed(self.root / chosen):
-                return chosen
-            candidates.remove(chosen)
-            listed.remove(chosen)
-        return None
+        pending = ['']
+        while pending:
+            folder = pending.pop()
+            names = sorted(os.listdir(self.root / folder))
+            for name in reversed(names):
+                path = self.root / folder / name
+                plain = os.path.isdir(path) and not os.path.islink(path)
+                declared = os.path.isfile(path / WIKI_SETTINGS)
+                if plain and not (name.startswith(('.', '-')) or declared):
+                    pending.append(posixpath.join(folder, name))
+            if _INDEX not in names:
+                continue
+            self._folders.append(folder)
+            self._indexes.append(posixpath.join(folder, _INDEX))
+            for name in names:
+                path = self.root / folder / name
+                regular = os.path.isfile(path) and not os.path.islink(path)
+                page = name.endswith('.md') and (name != _INDEX)
+                if page and regular and not name.startswith('-'):
+                    self._pages.append(posixpath.join(folder, name))
 
     def _list_tracked(self: _Tree) -> frozenset[str]:
         """Return the files of the wiki that git tracks, relative to its root."""
@@ -1051,12 +1074,91 @@ class _Tree:
         names = result.stdout.split(b'\0')
         return frozenset(os.fsdecode(name) for name in names if name)
 
+    def _draw(
+        self: _Tree,
+        generator: random.Random,
+        candidates: list[str],
+        takes: Callable[[str], bool],
+    ) -> Optional[str]:
+        """Draw one of ``candidates`` that passes the test ``takes``, if one does.
+
+        A candidate is read when it is drawn, so a tree is not read whole
+        to find the few files a perturbation changes.
+        """
+        while candidates:
+            chosen = generator.choice(candidates)
+            if takes(chosen):
+                return chosen
+            candidates.remove(chosen)
+        return None
+
+    def _is_page(self: _Tree, relpath: str) -> bool:
+        """Return whether ``relpath`` is a page the engine manages."""
+        if relpath in self._own:
+            return True
+        fields, _ = _split(self.read(relpath))
+        named = any(_key(field) == 'name' for field in fields)
+        return named and self._listed(relpath)
+
+    def _is_index(self: _Tree, relpath: str) -> bool:
+        """Return whether ``relpath`` is the index of a folder the engine manages, with a row."""
+        if relpath in self._own:
+            return True
+        text = self.read(relpath)
+        fields, _ = _split(text)
+        named = any(_key(field) == 'name' for field in fields)
+        rowed = bool(_rows(text.split('\n')))
+        return named and rowed and self._listed(posixpath.dirname(relpath))
+
+    def _is_folder(self: _Tree, relpath: str) -> bool:
+        """Return whether ``relpath`` is a folder the engine manages, whose index has a closed block."""
+        fields, _ = _split(self.read(posixpath.join(relpath, _INDEX)))
+        return bool(fields) and ((relpath in self._own) or self._listed(relpath))
+
+    def _listed(self: _Tree, relpath: str) -> bool:
+        """Return whether the indexes list the page or folder ``relpath``, up to the root.
+
+        The index of its folder held its row before the perturbation
+        changed that index, the index above held that folder's, and so on.
+        A row spells a path as it was before the perturbation renamed a
+        folder above it.
+        """
+        entry = relpath
+        while entry:
+            folder = posixpath.dirname(entry)
+            was = entry
+            for target, source in reversed(self._renamed):
+                was = _moved(was, target, source)
+            # a row names a page by its stem and a folder by its index
+            row = posixpath.join(was, '_index')
+            if entry == relpath and relpath.endswith('.md'):
+                row = was.removesuffix('.md')
+            if row not in self._listing(posixpath.join(folder, _INDEX)):
+                return False
+            entry = folder
+        return True
+
+    def _listing(self: _Tree, index: str) -> frozenset[str]:
+        """Return the targets of the rows ``index`` held when it was first read.
+
+        A page stays one the engine manages when an operator cuts the index
+        of its folder short, or takes its row out.
+        """
+        if index not in self._listings:
+            lines = []
+            if (self.root / index).is_file():
+                lines = self.read(index).split('\n')
+            targets = frozenset(_target(lines[at]) for at in _rows(lines))
+            self._listings[index] = targets
+        return self._listings[index]
+
     def _add_page(self: _Tree, generator: random.Random) -> str:
         """Write a new page into a folder whose index stands, and return it."""
         name = posixpath.join(self.folder(generator), self.name())
         text = fixtures._page(name, _desc('page'), _body('page')).decode('utf-8')
         self.write(f'{name}.md', text, generator=generator, late=False)
         self._pages.append(f'{name}.md')
+        self._own.add(f'{name}.md')
         return f'{name}.md'
 
 
@@ -1080,21 +1182,12 @@ def _example() -> Mapping[bytes, bytes]:
 
 
 def _rename_folder(tree: _Tree, generator: random.Random) -> None:
-    """Rename one indexed folder below the root, with all it holds.
+    """Rename one folder below the root, with all it holds.
 
     Every name below it is stale afterwards, and its row in the index
     above points at nothing.
     """
-    folders = [folder for folder in tree.folders if folder]
-    if not folders:
-        folders = [tree.grow(generator)]
-    folder = generator.choice(folders)
-    target = f'{folder}moved'
-    while os.path.lexists(tree.root / target):
-        target += 'moved'
-    os.rename(tree.root / folder, tree.root / target)
-    tree.note(target)
-    tree.scan()
+    tree.note(tree.rename(generator))
     tree.expect(notices=['link_add'], issues=['requires_update'])
 
 
@@ -1104,12 +1197,12 @@ def _dirty_edit(tree: _Tree, generator: random.Random) -> None:
     The first edit of a tree reads as made since the stamp; the seed draws
     the others.
     """
-    page = tree.page(generator, tracked=True)
+    page = tree.page(generator, held=True)
     late = (not tree.edited) or (generator.random() < 0.5)
     text = _ended(tree.read(page))
     tree.write(page, f'{text}\n{_body("paragraph")}\n', generator=generator, late=late)
     tree.edited = tree.edited or page
-    if late and tree.tracked(page):
+    if late and tree.held(page):
         tree.expect(notices=['restamp'], issues=['requires_update'])
 
 
@@ -1408,34 +1501,27 @@ def _add_row(
     tree.write(index, '\n'.join(lines), generator=generator)
 
 
-def _led(path: pathlib.Path) -> bool:
-    """Return whether the index of the folder ``path`` has a closed block."""
-    fields, _ = _split(_read(path / _INDEX))
-    return bool(fields)
-
-
-def _managed(path: pathlib.Path) -> bool:
-    """Return whether ``path`` is a page as the engine leaves one."""
-    fields, _ = _split(_read(path))
-    return any(_key(field) == 'name' for field in fields)
-
-
-def _rowed(path: pathlib.Path) -> bool:
-    """Return whether ``path`` is an index as the engine leaves one, with a row."""
-    text = _read(path)
-    fields, _ = _split(text)
-    named = any(_key(field) == 'name' for field in fields)
-    return named and bool(_rows(text.split('\n')))
+def _moved(relpath: str, source: str, target: str) -> str:
+    """Return ``relpath`` as it is spelled once the folder ``source`` is ``target``."""
+    if relpath == source:
+        return target
+    if relpath.startswith(f'{source}/'):
+        return f'{target}{relpath[len(source) :]}'
+    return relpath
 
 
 def _rows(lines: Sequence[str]) -> list[int]:
-    """Return where the rows of an index open: the lines above its delimiter that link down."""
+    """Return where the rows of an index open: the lines above its delimiter that link down.
+
+    A formatter may wrap a row behind its colon, so the desc need not
+    stand on the line that opens the row.
+    """
     if _DELIMITER not in lines:
         return []
     return [
         number
         for number, line in enumerate(lines[: lines.index(_DELIMITER)])
-        if line.startswith('[[') and (']]: ' in line)
+        if line.startswith('[[') and (']]:' in line)
     ]
 
 
@@ -1510,14 +1596,20 @@ def _ended(text: str) -> str:
 
 
 def _read(path: pathlib.Path) -> str:
-    """Return the text of the file at ``path``, with its line ends as they are."""
-    with open(path, encoding='utf-8', newline='') as handle:
+    """Return the text of the file at ``path``, as it is.
+
+    Line ends stay as they are, and so does a byte that is no valid UTF-8:
+    a file the wiki excludes may hold anything.
+    """
+    with open(path, encoding='utf-8', errors='surrogateescape', newline='') as handle:
         return handle.read()
 
 
 def _write(path: pathlib.Path, text: str, *, late: bool) -> None:
     """Write ``text`` to ``path`` as it is, at one of the two fixed times."""
-    with open(path, 'w', encoding='utf-8', newline='') as handle:
+    with open(
+        path, 'w', encoding='utf-8', errors='surrogateescape', newline=''
+    ) as handle:
         handle.write(text)
     moment = _LATE if late else _EARLY
     os.utime(path, (moment, moment))

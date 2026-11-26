@@ -623,14 +623,19 @@ files, and what the engines make of the edits is what the run compares.
 - **Every operator, every tree.** Each operator applies once or twice on every
   tree; the seed draws how often and where. The one operator that needs a
   repository is left out on a tree without one.
-- **What an operator draws.** A page or an index as the engine left it: a page
-  with a closed block that carries a `name`, and an index with such a block, a
-  delimiter and a row. The operators that rewrite a block, a body under a kept
-  stamp or a row each take a file that no other of them has taken. Those that
-  add a link to a body or a row to an index draw among all, and their changes
-  add up. A tree that runs short gets new pages and folders, in the form the
-  engine writes under its default settings. Dot folders, symlinks, a wiki
-  declared inside the wiki and names that open with a dash are never drawn.
+- **What an operator draws.** A page, an index or a folder that the engine
+  manages, as far as the files say: a page with a closed block that carries a
+  `name`, an index with such a block, a delimiter and a row, and a folder whose
+  index has a closed block. Each has its row in the index of its folder, and
+  that folder its row in the index above, up to the root: a converged wiki lists
+  what it manages, and a file that its settings exclude or that git ignores has
+  no row. The operators that rewrite a block, a body under a kept stamp or a row
+  each take a file that no other of them has taken. Those that add a link to a
+  body or a row to an index draw among all, and their changes add up. A tree
+  that runs short gets new pages and folders, in the form the engine writes
+  under its default settings. Dot folders, symlinks, a wiki declared inside the
+  wiki and names that open with a dash are never drawn. A file is read and
+  written with its line ends and its bytes as they are.
 - **Names.** A name the perturbation makes is `perturbed` and a number, which
   the default naming policy and one that asks for identifiers both take. The two
   invalid names end in `[`, which is link grammar and so denied by every policy.
@@ -682,35 +687,35 @@ files, and what the engines make of the edits is what the run compares.
 | `unindexed`  | the perturbed snapshot without any index     | `lint --json`, `update --check --full`, `update --full`, `update --check`, `lint --json`, `map`.                                                                                                                                                                                            |
 | `conflicted` | the perturbed snapshot with conflict markers | `lint --json`, `update --check` and `update`, which both must exit 2, `map`.                                                                                                                                                                                                                |
 
-| Operator            | Change                                                                                                                          | Notice kinds it names    | Issue kinds it names     |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | ------------------------ |
-| `rename-folder`     | renames an indexed folder below the root, with all it holds                                                                     | `link_add`               | `requires_update`        |
-| `truncate-index`    | cuts an index short, inside its block or before it                                                                              | `index_truncated`        | `truncated_index`        |
-| `dirty-edit`        | adds a paragraph to a page and leaves its stamp; where git tracks the page and the edit is late, the kinds are named            | `restamp`                | `requires_update`        |
-| `strip-frontmatter` | takes the block off a page                                                                                                      | `page_adopt`             | `bare_page`              |
-| `blank-stamps`      | leaves both stamps of a page with no value                                                                                      |                          | `requires_update`        |
-| `shuffle-keys`      | puts the fields of a page's block in another order                                                                              |                          | `requires_update`        |
-| `add-tags`          | gives a page two tags, one of them the perturbation's own, so a search by tag finds a page                                      |                          |                          |
-| `missing-desc`      | puts the placeholder `...` in place of a page's desc                                                                            | `desc_missing`           |                          |
-| `long-desc`         | gives a page a desc of more than 500 characters                                                                                 | `desc_long`              |                          |
-| `bare-file`         | adds a page with no block                                                                                                       | `page_adopt`, `link_add` | `bare_page`              |
-| `crlf-file`         | adds a page whose lines end in CR LF                                                                                            | `crlf_notice`            |                          |
-| `other-file`        | adds a file that is no page                                                                                                     | `link_add`               |                          |
-| `stale-link`        | adds a link to a page that does not exist to a body                                                                             | `link_stale`             |                          |
-| `directory-link`    | adds a link that names a folder, not its index, to a body                                                                       |                          | `directory_link`         |
-| `absolute-link`     | adds a link to a page by its absolute path, as the wiki stands when the commands run, to a body                                 |                          | `absolute_link`          |
-| `outside-link`      | adds a link that leaves the wiki to a body                                                                                      |                          | `outside_link`           |
-| `region-marker`     | adds the end of a region that never started to a body                                                                           |                          | `region_marker`          |
-| `invalid-page`      | adds a page whose name ends in `[`                                                                                              | `name_skip`              | `invalid_page_name`      |
-| `invalid-folder`    | adds a folder whose name ends in `[`, with a page inside                                                                        | `name_skip`              | `invalid_folder_name`    |
-| `drift-row`         | changes the desc of a row of an index: a row whose page has a desc of its own, which the engine writes over the row's           | `desc_overwrite`         | `requires_update`        |
-| `drop-row`          | takes a row out of an index: a row whose entry stands, so the engine adds it again                                              | `link_add`               | `requires_update`        |
-| `broken-row`        | adds a row for a page that does not exist to an index                                                                           | `link_prune`             | `broken_link`            |
-| `symlink-row`       | adds a symlink to a page, and a row for it                                                                                      | `symlink_skip`           | `symlink_link_target`    |
-| `excluded-row`      | adds a page, a row for it, and an exclude pattern that names the page to the wiki's settings, which it makes if absent          | `exclude_skip`           | `excluded_link_target`   |
-| `gitignored-row`    | adds a page, a row for it, and a pattern that names the page to the `.gitignore` at the top of the checkout; needs a repository | `gitignore_skip`         | `gitignored_link_target` |
-| `delete-indexes`    | deletes every index; staged, on `unindexed`                                                                                     | `index_create`           | `missing_index`          |
-| `conflict-markers`  | ends a page and an index in the lines a merge leaves around a conflict; staged, on `conflicted`                                 |                          | `conflict_markers`       |
+| Operator            | Change                                                                                                                                                       | Notice kinds it names    | Issue kinds it names     |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------ | ------------------------ |
+| `rename-folder`     | renames an indexed folder below the root, with all it holds                                                                                                  | `link_add`               | `requires_update`        |
+| `truncate-index`    | cuts an index short, inside its block or before it                                                                                                           | `index_truncated`        | `truncated_index`        |
+| `dirty-edit`        | adds a paragraph to a page and leaves its stamp: a page that git holds with that stamp, where one is left, and then the first edit of a tree names the kinds | `restamp`                | `requires_update`        |
+| `strip-frontmatter` | takes the block off a page                                                                                                                                   | `page_adopt`             | `bare_page`              |
+| `blank-stamps`      | leaves both stamps of a page with no value                                                                                                                   |                          | `requires_update`        |
+| `shuffle-keys`      | puts the fields of a page's block in another order                                                                                                           |                          | `requires_update`        |
+| `add-tags`          | gives a page two tags, one of them the perturbation's own, so a search by tag finds a page                                                                   |                          |                          |
+| `missing-desc`      | puts the placeholder `...` in place of a page's desc                                                                                                         | `desc_missing`           |                          |
+| `long-desc`         | gives a page a desc of more than 500 characters                                                                                                              | `desc_long`              |                          |
+| `bare-file`         | adds a page with no block                                                                                                                                    | `page_adopt`, `link_add` | `bare_page`              |
+| `crlf-file`         | adds a page whose lines end in CR LF                                                                                                                         | `crlf_notice`            |                          |
+| `other-file`        | adds a file that is no page                                                                                                                                  | `link_add`               |                          |
+| `stale-link`        | adds a link to a page that does not exist to a body                                                                                                          | `link_stale`             |                          |
+| `directory-link`    | adds a link that names a folder, not its index, to a body                                                                                                    |                          | `directory_link`         |
+| `absolute-link`     | adds a link to a page by its absolute path, as the wiki stands when the commands run, to a body                                                              |                          | `absolute_link`          |
+| `outside-link`      | adds a link that leaves the wiki to a body                                                                                                                   |                          | `outside_link`           |
+| `region-marker`     | adds the end of a region that never started to a body                                                                                                        |                          | `region_marker`          |
+| `invalid-page`      | adds a page whose name ends in `[`                                                                                                                           | `name_skip`              | `invalid_page_name`      |
+| `invalid-folder`    | adds a folder whose name ends in `[`, with a page inside                                                                                                     | `name_skip`              | `invalid_folder_name`    |
+| `drift-row`         | changes the desc of a row of an index: a row whose page has a desc of its own, which the engine writes over the row's                                        | `desc_overwrite`         | `requires_update`        |
+| `drop-row`          | takes a row out of an index: a row whose entry stands, so the engine adds it again                                                                           | `link_add`               | `requires_update`        |
+| `broken-row`        | adds a row for a page that does not exist to an index                                                                                                        | `link_prune`             | `broken_link`            |
+| `symlink-row`       | adds a symlink to a page, and a row for it                                                                                                                   | `symlink_skip`           | `symlink_link_target`    |
+| `excluded-row`      | adds a page, a row for it, and an exclude pattern that names the page to the wiki's settings, which it makes if absent                                       | `exclude_skip`           | `excluded_link_target`   |
+| `gitignored-row`    | adds a page, a row for it, and a pattern that names the page to the `.gitignore` at the top of the checkout; needs a repository                              | `gitignore_skip`         | `gitignored_link_target` |
+| `delete-indexes`    | deletes every index; staged, on `unindexed`                                                                                                                  | `index_create`           | `missing_index`          |
+| `conflict-markers`  | ends a page and an index in the lines a merge leaves around a conflict; staged, on `conflicted`                                                              |                          | `conflict_markers`       |
 
 ### Kinds
 
