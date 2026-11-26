@@ -80,6 +80,9 @@ uv run --no-sync python -m parity suite --work <dir> --out <dir>
 # record the calls of v1's core and CLI tests and replay them as commands
 uv run --no-sync python -m parity replay --work <dir> --out <dir>
 
+# write the fixture families and run the matrix on each
+uv run --no-sync python -m parity fixtures --work <dir> --out <dir>
+
 # run pre-commit
 uv run --no-sync pre-commit run [--all-files]
 
@@ -545,6 +548,23 @@ input outside the supported set is a finding unless the table drops its test
 under D3. A new v1 test or kind, and new input of a recorded call, therefore
 fails the `parity` job until the table or the list accounts for it. The inputs
 of a test that records no call are not judged.
+
+`python -m parity fixtures` writes the fixture families (`parity/fixtures.py`)
+and runs each as a corpus: the stages of the matrix, then the family's own,
+whose commands name its pages. A family is one converged base wiki with the
+family's own files added raw, so the read-only commands report on input no
+engine wrote and `update` has to take it in. The generator writes the same
+bytes, modes, times and commit on every host. A new fixture goes into the family
+it belongs to, or into a new one, with its row in the spec's table. Keep every
+folder of a family's first two levels one a command can be scoped to, because
+the matrix sample draws them; a folder the wiki excludes or refuses lies deeper.
+A family whose wiki `update` refuses runs its own stage alone, and each of its
+cases states the exit codes it allows. The family `linux` and the three refused
+trees need a file system that keeps case and bytes, so on macOS they are left
+out. The refused trees show what registry entry D4 says v1 does on a name that
+is no valid UTF-8; the tests in `parity/tests/test_fixtures.py` hold v1 to that
+on Linux, so a change in v1 there changes the spec's table and, as a change to
+the registry does, the entry.
 
 ### Run Bracket
 

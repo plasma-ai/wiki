@@ -11,6 +11,7 @@ from . import (
     dispatch,
     doctor,
     facts,
+    fixtures,
     homes,
     judge,
     kinds,

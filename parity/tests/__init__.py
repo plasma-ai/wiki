@@ -6,6 +6,7 @@ from .test_compare import *
 from .test_config import *
 from .test_dispatch import *
 from .test_doctor import *
+from .test_fixtures import *
 from .test_kinds import *
 from .test_main import *
 from .test_manifest import *
