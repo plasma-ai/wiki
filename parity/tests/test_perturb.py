@@ -11,6 +11,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import pathlib
+import shutil
 import sys
 
 import pytest
@@ -21,7 +22,9 @@ from .conftest import NOW, _git, _needs_git
 
 __all__ = [
     'test_one_seed_gives_one_perturbation',
+    'test_operators_draw_only_what_the_indexes_list',
     'test_perturbed_trees_show_the_kinds_their_changes_name',
+    'test_page_stamped_since_its_commit_names_no_restamp',
     'test_stages_of_a_perturbation_run_on_its_three_trees',
     'test_kind_list_that_disagrees_with_the_operators_is_refused',
     'test_kind_that_no_tree_shows_is_a_finding',
@@ -97,6 +100,39 @@ def test_one_seed_gives_one_perturbation(tmp_path: pathlib.Path) -> None:
 
 
 @_needs_git
+def test_operators_draw_only_what_the_indexes_list(tmp_path: pathlib.Path) -> None:
+    """A file with no row in the index of its folder is never changed.
+
+    A wiki gives a page it excludes no row, and a change made there would
+    show nothing. Such a page has the engine's form here, and a second one
+    holds a byte that is no valid UTF-8: under no seed does an operator
+    change either, add to their folder's rows for them, or end on the byte.
+    """
+    (corpus,), _ = perturb.trees(tmp_path / 'trees', names=['control'])
+    root = corpus.checkout / corpus.root
+    unlisted = {
+        'unlisted.md': fixtures._page('core/unlisted', 'A desc.', 'A body.'),
+        'raw.md': b'---\nname: core/raw\ndesc: A desc.\n---\n\n\xff\n',
+    }
+    for name, content in unlisted.items():
+        (root / 'core' / name).write_bytes(content)
+    for seed in range(12):
+        checkout = tmp_path / f'{seed}'
+        shutil.copytree(corpus.checkout, checkout, symlinks=True)
+        done = perturb.apply(checkout, root=corpus.root, seed=seed, stands=root)
+        changed = {
+            pathlib.PurePosixPath(relpath).name
+            for paths in done.applied.values()
+            for relpath in paths
+        }
+        # a renamed folder takes the two files along, as they are
+        for name, content in unlisted.items():
+            (path,) = (checkout / corpus.root).rglob(name)
+            assert path.read_bytes() == content
+            assert name not in changed
+
+
+@_needs_git
 def test_perturbed_trees_show_the_kinds_their_changes_name(
     tmp_path: pathlib.Path,
     corpus: runner.Corpus,
@@ -139,6 +175,34 @@ def test_perturbed_trees_show_the_kinds_their_changes_name(
             detail='the tree unindexed does not show it',
         )
     ]
+
+
+@_needs_git
+def test_page_stamped_since_its_commit_names_no_restamp(
+    tmp_path: pathlib.Path,
+    corpus: runner.Corpus,
+    engine: side.Side,
+) -> None:
+    """An edit names a restamp only on a page git holds with the stamp it has.
+
+    v1 restamps a page that differs from the committed one while its stamp
+    is still that one's. Here every page of the checkout was stamped again
+    and not committed, as a checkout in use may hold one. No change names
+    a restamp, v1 makes none, and the perturbation has no finding.
+    """
+    checkout = tmp_path / 'checkout'
+    shutil.copytree(corpus.checkout, checkout, symlinks=True)
+    for page in (checkout / corpus.root).rglob('*.md'):
+        text = page.read_text(encoding='utf-8')
+        stamped = text.replace('\nupdated: 2026', '\nupdated: 2027')
+        assert stamped != text
+        page.write_text(stamped, encoding='utf-8')
+    stamped = dataclasses.replace(corpus, checkout=checkout)
+    plan, done = perturb.prepare(stamped, work=tmp_path / 'work', seed=5, loop=True)
+    assert 'restamp' not in done.expected[perturb.EDITED]['notices']
+    findings, shown = perturb.check(plan, done, engine, now=NOW)
+    assert findings == []
+    assert 'restamp' not in shown[perturb.EDITED]['notices']
 
 
 @_needs_git
