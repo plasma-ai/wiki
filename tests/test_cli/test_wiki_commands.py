@@ -415,9 +415,10 @@ def test_home_directory_is_never_a_wiki(
     The store shares its path with a declared root's marker, so a home
     directory holding one would enclose every wiki beneath it and refuse
     every command. Pointing ``WIKI_CONFIG_DIR`` elsewhere leaves that
-    store in place -- the fleet-isolation case -- so the exemption
-    cannot key on the active config home alone. Init is refused there
-    too: a wiki at ``$HOME`` would write its policy into the store.
+    store in place -- the case of a process isolated under its own config
+    home -- so the exemption cannot key on the active config home alone.
+    Init is refused there too: a wiki at ``$HOME`` would write its policy
+    into the store.
     """
     home = tmp_path / 'home'
     (home / '.wiki').mkdir(parents=True)
@@ -445,9 +446,9 @@ def test_home_directory_is_never_a_wiki(
 def test_init_quiet_suppresses_chatter(tmp_path: pathlib.Path) -> None:
     """``init --quiet`` suppresses the Obsidian hint and non-error output.
 
-    A wrapping tool (e.g. fractal init) needs to place its own next-step
-    guidance last; --quiet keeps stdout empty while warnings still reach
-    stderr and the wiki is fully scaffolded.
+    A wrapping tool (e.g. another init command) needs to place its own
+    next-step guidance last; --quiet keeps stdout empty while warnings
+    still reach stderr and the wiki is fully scaffolded.
     """
     root = tmp_path / 'wiki'
     result = _wiki(tmp_path, 'init', '--path', str(root), '--quiet')
@@ -1155,9 +1156,9 @@ def test_update_cli_refuses_nested_wiki(tmp_path: pathlib.Path) -> None:
     A wiki copy dropped inside another wiki (a backup, a vendored
     snapshot) would be absorbed by the sweep -- every nested ``name:``
     rewritten against the outer root -- so update exits nonzero with
-    the enclosure message instead of rewriting anything. Embedders tell
+    the enclosure message instead of rewriting anything. A caller tells
     this refusal apart by the message's opening phrase on stderr, and
-    rely on it writing nothing, so both are pinned.
+    relies on it writing nothing, so both are pinned.
     """
     root = tmp_path / 'wiki'
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
@@ -3468,7 +3469,7 @@ def test_merge_orders_rows_by_the_wikis_hook(
 def test_merge_leaves_an_index_another_class_wrote(tmp_path: pathlib.Path) -> None:
     """Rows the current branch's index holds in another class's order stay as merged.
 
-    An embedder's update may order categories its own way with no hook in
+    A subclass's update may order categories its own way with no hook in
     the wiki (``ref`` ahead of ``guide`` here), so the driver's own class
     would re-sort a current index into a stale one. It sorts only when it
     leaves ours' pre-merge index as written.

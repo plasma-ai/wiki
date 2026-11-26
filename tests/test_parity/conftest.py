@@ -40,7 +40,7 @@ def corpus(tmp_path_factory: pytest.TempPathFactory) -> runner.Corpus:
     nested folder and a non-Markdown file, so the matrix has folders to
     scope to and pages to read. Every page has a desc and one has tags,
     so each search and match of the matrix has something to find. It is
-    built with the real CLI and then committed, as a campaign checkout
+    built with the real CLI and then committed, as a wiki kept under git
     is. READ-ONLY: the harness snapshots the checkout and runs only in
     its clones.
     """

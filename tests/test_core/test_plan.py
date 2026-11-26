@@ -105,8 +105,8 @@ def test_update_preserves_concurrent_edit(
     """An edit landing between plan and apply survives the update.
 
     ``update`` snapshots every file while planning and writes corrected
-    content afterwards; an edit another writer (e.g. a sibling fractal
-    node) lands inside that window must not be silently reverted to the
+    content afterwards; an edit another writer (e.g. a concurrent
+    process) lands inside that window must not be silently reverted to the
     plan-time snapshot.
     """
     _make_wiki(tmp_path, folders={'notes': ['readme']})
@@ -219,7 +219,7 @@ def test_update_survives_page_deleted_mid_plan(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A page deleted while update plans (a concurrent node) never crashes.
+    """A page deleted while update plans (by a concurrent writer) never crashes.
 
     In ``_read_child_labels``, reading pages without the ``None`` guard
     its folder branch has would let a page vanishing between enumeration

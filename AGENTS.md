@@ -467,9 +467,9 @@ case names the exit codes it allows (`_case` in `parity/matrix.py`), and a
 search or match draws its word from the text the command reads; a new case
 states both. The harness treats a side as a black box, so it imports nothing
 from `wiki`. Corpus paths come only from the TOML file a run names: nothing
-committed names a private wiki, its paths, its sizes or its text, and result
-files stay outside the repository. The harness snapshots a checkout and runs
-only in clones, in a new work folder outside any wiki.
+committed names a wiki the harness ran on, its paths, its sizes or its text, and
+result files stay outside the repository. The harness snapshots a checkout and
+runs only in clones, in a new work folder outside any wiki.
 
 ### Run Bracket
 

@@ -81,7 +81,7 @@ rather than authoring or auditing page by page yourself:
   `.wiki/settings.json` exclude whole subtrees from indexing — never walked,
   scaffolded, or linted, though `wiki read` still serves them. The enclosing git
   repository's ignore rules fence the same way, with no configuration: what the
-  repo ignores is not wiki content, so a stray driver output beside tracked
+  repo ignores is not wiki content, so a stray script output beside tracked
   pages is never adopted, minted an `_index.md`, or linked — delete or fence
   residue rather than letting update sweep it in. A wiki whose own root and root
   `_index.md` are both gitignored is exempt.
@@ -301,7 +301,7 @@ rather than authoring or auditing page by page yourself:
   sorts the rows into the order `wiki update` writes, with the wiki's own class
   (a trusted hook's `category_order` included) when that class leaves ours'
   index as written — a check that sees a category order only where ours' rows
-  span two or more categories, so an embedder's own order can still be re-sorted
+  span two or more categories, so a subclass's own order can still be re-sorted
   into this class's — so a clean merge in which each side only added, deleted or
   retitled entries passes `update --check` and `lint` as merged. A side missing
   its `***` entirely (formatter damage) can't be split into regions, so it

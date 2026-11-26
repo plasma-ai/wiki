@@ -329,7 +329,7 @@ subtree when driven by an old version — upgrade, delete the stray
 The enclosing git repository's ignore rules are a second exclusion source
 needing no configuration: a path the repo's gitignore fences is excluded
 from indexing exactly like a pattern match — never walked, adopted, or
-linked — so a driver's stray output beside tracked content cannot be swept
+linked — so a script's stray output beside tracked content cannot be swept
 into the corpus by the next update. Matching is pattern-pure (a
 force-tracked file matching a fence is still fenced), and a wiki whose own
 root and root ``_index.md`` are both ignored is exempt, so a deliberately
