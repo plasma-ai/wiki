@@ -1351,15 +1351,20 @@ result file lists it with its outcome, and it is no finding of the replay.
 ## Container
 
 macOS keeps no two names that differ only in case and no name that is no valid
-UTF-8, and link verdicts turn on the file system. The container is the Linux of
-the CI runners on a host that is none. `python -m parity container` builds its
-image from `parity/Dockerfile` and runs one command in a fresh container.
+UTF-8, and link verdicts turn on the file system. The container is a Linux on a
+host that is none: the Ubuntu release of the CI runners, not their image.
+`python -m parity container` builds its image from `parity/Dockerfile` and runs
+one command in a fresh container.
 
-- **Image.** The image of the CI runners' release, with git, uv, gawk, mawk and
-  the system zone files, and a user of its own, because v1's tests of unreadable
-  files need a user that is not root. It holds no file of the repository, so it
-  is built with no context. Its tag is a digest of the Dockerfile: a changed
-  Dockerfile builds a new image.
+- **Image.** The Ubuntu release of the CI runners, with that release's own git,
+  uv, gawk, mawk and the system zone files, and a user of its own, because v1's
+  tests of unreadable files need a user that is not root. The git version and
+  the processor architecture are the image's and the host's, not the runners':
+  every result file records the git it ran. It holds no file of the repository,
+  so it is built with no context. Its tag is a digest of the Dockerfile: a
+  changed Dockerfile builds a new image. The base image and the packages are
+  named by release, not by digest, so two hosts may hold other builds under one
+  tag.
 - **Clone.** A container reads the repository of the checkout the harness lies
   in, and never writes it. It clones that repository to its own file system,
   takes the remote-tracking branches as the host holds them, and checks out one

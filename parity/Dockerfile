@@ -1,7 +1,8 @@
-# The Linux container of the parity harness (SPEC.md, Container): the image of
-# the CI runners, with the tools the harness and v1 start. The checkout is
-# cloned in when a container starts, so the image holds no file of the
-# repository and `python -m parity container` builds it with no context.
+# The Linux container of the parity harness (SPEC.md, Container): the Ubuntu
+# release of the CI runners, with the tools the harness and v1 start, each in
+# that release's own version. The checkout is cloned in when a container
+# starts, so the image holds no file of the repository and
+# `python -m parity container` builds it with no context.
 FROM ubuntu:26.04
 COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /usr/local/bin/
 RUN apt-get update \

@@ -2,9 +2,10 @@
 
 macOS keeps no two names that differ in case only, and no name that is no
 valid UTF-8, so the trees that hold such names exist only on Linux. The
-container is the Linux of the CI runners on a host that is none: a clone of
-the repository at one commit, on the container's own file system, with the
-harness's environment installed. Whatever runs there runs as in CI.
+container is a Linux on a host that is none: a clone of the repository at
+one commit, on the container's own file system, with the harness's
+environment installed. It has the Ubuntu release of the CI runners; its git
+and its processor architecture are its own.
 """
 
 from __future__ import annotations

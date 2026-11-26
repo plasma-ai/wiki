@@ -572,9 +572,10 @@ there changes the spec's table and, as a change to the registry does, the entry.
 `python -m parity container` runs one command in the Linux container
 (`parity/container.py`, `parity/Dockerfile`): the Ubuntu release of the CI
 runners, with a clone of the repository at `HEAD` on the container's own file
-system. The clone holds what is committed, so commit before a run. Nothing a
-side runs on is mounted from the host. A change to the container changes the
-spec's Container section in the same commit.
+system. Its git and its processor architecture are not the runners', so a result
+there stands for Linux, not for CI. The clone holds what is committed, so commit
+before a run. Nothing a side runs on is mounted from the host. A change to the
+container changes the spec's Container section in the same commit.
 
 ### Run Bracket
 
