@@ -802,9 +802,8 @@ def _fixtures(parser: argparse.ArgumentParser, options: argparse.Namespace) -> i
     options.out.mkdir(parents=True, exist_ok=True)
     failed = False
     for corpus in corpora:
-        plan = runner.prepare(
-            corpus, work=work / _RUNS / corpus.label, seed=options.seed
-        )
+        folder = work / _RUNS / corpus.label
+        plan = runner.prepare(corpus, work=folder, seed=options.seed)
         result = runner.run(plan, sides, now=options.now)
         runner.discard(plan)
         document = {**header, **result.report}

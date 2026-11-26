@@ -187,8 +187,10 @@ def generate(
             f'No fixture family is named {unknown!r}; the families are'
             f' {sorted(known)!r}.'
         )
-    folder.mkdir(parents=True)
-    lacks = lacking(folder)
+    # ask the file system before anything is made: the nearest folder that
+    # exists lies on the one the new folder will lie on
+    held = next(parent for parent in folder.resolve().parents if parent.is_dir())
+    lacks = lacking(held)
     if names is None:
         chosen = [
             family
@@ -200,11 +202,11 @@ def generate(
         for family in chosen:
             missing = sorted(family.needs & lacks)
             if missing:
-                folder.rmdir()
                 raise ValueError(
                     f'Fixture family {family.name!r} needs a file system that'
-                    f' keeps {missing!r}, and the one at {folder} does not.'
+                    f' keeps {missing!r}, and the one at {held} does not.'
                 )
+    folder.mkdir(parents=True)
     result = []
     for family in chosen:
         checkout = folder / family.name

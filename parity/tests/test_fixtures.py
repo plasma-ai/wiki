@@ -84,7 +84,7 @@ def test_family_the_file_system_cannot_hold_is_left_out_or_refused(
 
     Unnamed, the families the file system cannot hold are left out, and so
     are the trees a second engine refuses. A family that is named and
-    cannot be written is refused, and no folder is left behind.
+    cannot be written is refused before any folder is made.
     """
     lacks = fixtures.lacking(tmp_path)
     families = fixtures.families()
@@ -102,11 +102,11 @@ def test_family_the_file_system_cannot_hold_is_left_out_or_refused(
     unwritable = [family.name for family in families if family.needs & lacks]
     for name in unwritable:
         with pytest.raises(ValueError, match='needs a file system'):
-            fixtures.generate(tmp_path / 'named', names=[name])
-        assert not (tmp_path / 'named').exists()
+            fixtures.generate(tmp_path / 'new' / 'named', names=[name])
+        assert not (tmp_path / 'new').exists()
     with pytest.raises(ValueError, match='No fixture family is named'):
-        fixtures.generate(tmp_path / 'named', names=['nmaes'])
-    assert not (tmp_path / 'named').exists()
+        fixtures.generate(tmp_path / 'new' / 'named', names=['nmaes'])
+    assert not (tmp_path / 'new').exists()
 
 
 def test_folder_the_generator_cannot_use_is_refused(tmp_path: pathlib.Path) -> None:
