@@ -278,9 +278,9 @@ def report(trial: Trial, changed: Mapping[int, Sequence[str]]) -> dict[str, Any]
     """Return one trial as JSON data, in the form ``matrix`` writes a corpus.
 
     The first run is the document itself. ``rerun`` holds the stages of the
-    second run and the cause of everything the first one showed, or null,
-    and ``names`` the count of the scan and its hits, each with the
-    properties that differ for its code points.
+    second run and the cause of each difference between the sides, or null
+    where no second run was needed, and ``names`` the count of the scan and
+    its hits, each with the properties that differ for its code points.
     """
     rerun = None
     if trial.again is not None:
