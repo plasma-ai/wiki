@@ -38,7 +38,7 @@ python -m parity suite [--engine NAME] [--sides SIDES] --work DIR --out DIR
 python -m parity replay [--engine NAME] [--sides SIDES] --work DIR --out DIR
 
 # write the fixture families and run the matrix on each
-python -m parity fixtures [--engine NAME] [--sides SIDES] --work DIR --out DIR
+python -m parity fixtures [--engine NAME] [--sides SIDES] [--every] --work DIR --out DIR
 
 # run a command in the Linux container
 python -m parity container [--commit COMMIT] [--out DIR] COMMAND [ARG ...]
@@ -157,17 +157,20 @@ differs or is unfaithful under `<out>/replay/`.
 each as `matrix` runs a corpus. It exits 0 when no family shows a difference,
 and 1 otherwise. It exits 2 with a message, before it writes a family: on an
 `--engine` that is the v1 side itself or that no file declares, on a family the
-generator does not have, on a named family that the file system of the work
-folder cannot hold, on a side that cannot be started or does not prove its
+generator does not have, on a family named twice, on a tree a second engine
+refuses (Refused Trees, below), on a named family that the file system of the
+work folder cannot hold, on a side that cannot be started or does not prove its
 identity, and on a work folder that exists, lies inside a repository or lies
 below a folder that holds `.wiki/settings.json`. `--family NAME` (repeatable)
 picks families; the default is every family the file system can hold, and the
-run names the ones it leaves out. `--now` and `--seed` are those of `matrix`. It
-makes `<work>/fixtures`, which must not exist beforehand, and removes it when
-the run passed; a failed run leaves the checkouts it wrote under
-`<work>/fixtures/trees/`. Each family gets a result file, `<out>/<family>.json`,
-in the form `matrix` writes for a corpus, and the streams of a case that differs
-are saved under `<out>/<family>/<stage>/`.
+run names the ones it leaves out. `--every` leaves none out: the run exits 2
+where the file system cannot hold a family, and CI runs the families this way.
+`--now` and `--seed` are those of `matrix`. It makes `<work>/fixtures`, which
+must not exist beforehand, and removes it when the run passed; a failed run
+leaves the checkouts it wrote under `<work>/fixtures/trees/`. Each family gets a
+result file, `<out>/<family>.json`, in the form `matrix` writes for a corpus,
+and the streams of a case that differs are saved under
+`<out>/<family>/<stage>/`.
 
 `container` runs one command in the Linux container (Container, below) and exits
 with that command's exit code. It exits 2 with a message when it is given no
@@ -510,15 +513,19 @@ writes the families and runs each as a corpus. The generator is
 - **Depth.** The matrix sample draws folders of the first two levels for its
   scoped commands, so each of those is a folder a command can be scoped to. A
   folder the wiki excludes or refuses lies at the third level or below.
-- **Same on every host.** A family has the same bytes and modes on every host,
-  every path has one fixed modification time, and the tree is committed under a
-  fixed identity and date, so the commit is the same too. A family may be a
-  plain folder with no repository.
+- **Same on every host.** A family has the same bytes on every host, and every
+  path has one fixed modification time. Files and folders are made under one
+  fixed umask, so their modes are the same too; a symlink has the mode its
+  platform gives one. The tree is committed under a fixed identity and date, so
+  the commit is the same wherever git stores the names as they are written. On
+  macOS git composes a decomposed name, so the commit of `names` there is
+  another than on Linux. A family may be a plain folder with no repository.
 - **File system.** A family may need a file system that keeps two names which
   differ only in case, or a name that is no valid UTF-8. The generator asks the
   file system of the work folder. With no `--family`, a family it cannot hold is
   left out: the run prints its name, and every result file lists it under
-  `left_out`. A named family that cannot be written ends the run with exit 2.
+  `left_out`. A named family that cannot be written ends the run with exit 2,
+  and so does any family that cannot be written under `--every`.
 - **Stages.** A family runs the stages of the matrix (Matrix), then stages of
   its own, whose commands name its pages. The stage `fixture` starts from the
   snapshot: `lint --json`, `update --check --full`, a `read` of each page the
@@ -546,17 +553,20 @@ writes the families and runs each as a corpus. The generator is
 
 ### Refused Trees
 
-The generator also writes three trees that are no differential fixtures: each
+The generator also writes four trees that are no differential fixtures: each
 holds one name that is no valid UTF-8 where v1 reads it as text, and a second
-engine refuses the tree (registry entry D4). They are written only when
-`--family` or a test names them, and need a file system that keeps bytes. The
-tests in `parity/tests/test_fixtures.py` hold v1 to this table on Linux:
+engine refuses the tree (registry entry D4). Only the tests write them: no run
+compares on them, and `fixtures` exits 2 when `--family` names one. They need a
+file system that keeps bytes. The tests in `parity/tests/test_fixtures.py` hold
+v1 to this table on Linux. What the entry says of v1 holds on the first two
+trees; on the other two v1 runs, and the refusal is the second engine's own.
 
-| Tree              | The name                                    | v1                                                                                                                                                                                                                                                                                              |
-| ----------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `refused-page`    | a page of a managed folder                  | `update` exits 0: it gives the page no row, and writes the page's `name` with the byte spelled as the escape `\udcXX`. `lint` then reports that block as invalid YAML, in a JSON document that holds the byte itself and so is no valid UTF-8. `search` exits 2 with the text of a codec error. |
-| `refused-folder`  | a managed folder                            | The same for the page inside it. `update` exits 2 with the codec error where it would write the folder's index, with the pages before it already written.                                                                                                                                       |
-| `refused-pattern` | a page that only an exclude pattern removes | The pattern is matched against the name as text, and every command runs as on a wiki without the page.                                                                                                                                                                                          |
+| Tree              | The name                                    | v1                                                                                                                                                                                                                                                                                                                                                           |
+| ----------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `refused-page`    | a page of a managed folder                  | `update` exits 0: it gives the page no row, and writes the page's `name` with the byte spelled as the escape `\udcXX`. `lint` then reports that block as invalid YAML, in a JSON document that holds the byte itself and so is no valid UTF-8. `search` exits 2 with the text of a codec error.                                                              |
+| `refused-folder`  | a managed folder                            | The same for the page inside it. `update` exits 2 with the codec error where it would write the folder's index, with the pages before it already written.                                                                                                                                                                                                    |
+| `refused-pattern` | a page that only an exclude pattern removes | The pattern is matched against the name as text, and every command runs as on a wiki without the page.                                                                                                                                                                                                                                                       |
+| `refused-file`    | a file of a managed folder that is no page  | `update` exits 0: it names the skip, gives the file no row, and changes no file, because a file that is no page gets no `name`. A second `update --check` finds nothing to do, and `search` runs. `lint` exits 1 on every run with one issue, the invalid name, and no invalid YAML, in a JSON document that holds the byte itself and so is no valid UTF-8. |
 
 ## Registry
 

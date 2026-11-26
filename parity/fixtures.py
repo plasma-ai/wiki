@@ -9,8 +9,11 @@ read-only commands report on input an engine did not write, and ``update``
 has to take it in.
 
 A family is a corpus of the matrix with stages of its own, whose commands
-name the family's pages. The same generator gives the same bytes, modes,
-modification times and commit on every host.
+name the family's pages. The generator gives the same bytes and modification
+times on every host, and the same modes under any umask; a symlink has the
+mode its platform gives one. A repository family has the same commit wherever
+git stores the names as they are written: on macOS git composes a decomposed
+name, so the commit of the names family is another there.
 """
 
 from __future__ import annotations
@@ -41,6 +44,8 @@ _ROOT = 'wiki'
 _WRITTEN = 1_767_323_045
 # that instant as the default timestamp policy renders it
 _STAMP = '2026-01-02T03:04:05Z'
+# the umask every path of a family is made under, whatever the caller's
+_UMASK = 0o022
 # the identity and the dates of a family's one commit
 _COMMIT = {
     'GIT_AUTHOR_NAME': 'parity',
@@ -175,18 +180,22 @@ def generate(
 
     Raises:
         ValueError: If :func:`validate` refuses ``folder``, if no family
-            has one of the names, or if the file system cannot hold a named
-            family.
+            has one of the names, if a name is given twice, or if the file
+            system cannot hold a named family.
 
     """
     validate(folder)
     known = {family.name: family for family in families()}
-    unknown = [name for name in names or () if name not in known]
+    given = list(names or ())
+    unknown = [name for name in given if name not in known]
     if unknown:
         raise ValueError(
             f'No fixture family is named {unknown!r}; the families are'
             f' {sorted(known)!r}.'
         )
+    twice = sorted({name for name in given if given.count(name) > 1})
+    if twice:
+        raise ValueError(f'Fixture families are named twice: {twice!r}.')
     # ask the file system before anything is made: the nearest folder that
     # exists lies on the one the new folder will lie on
     held = next(parent for parent in folder.resolve().parents if parent.is_dir())
@@ -367,6 +376,12 @@ def families() -> tuple[Family, ...]:
             needs=frozenset({'bytes'}),
             entry='D4',
         ),
+        Family(
+            name='refused-file',
+            tree=lambda: _refused('file'),
+            needs=frozenset({'bytes'}),
+            entry='D4',
+        ),
     )
 
 
@@ -381,16 +396,21 @@ def _write(family: Family, checkout: pathlib.Path) -> None:
 
     """
     base = os.fsencode(checkout)
-    os.mkdir(base)
     tree = family.tree()
-    for relpath, content in tree.items():
-        path = os.path.join(base, relpath)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        if isinstance(content, Link):
-            os.symlink(os.fsencode(content.target), path)
-        else:
-            with open(path, 'wb') as handle:
-                handle.write(content)
+    # make every path under one umask, so its mode is not the caller's choice
+    previous = os.umask(_UMASK)
+    try:
+        os.mkdir(base)
+        for relpath, content in tree.items():
+            path = os.path.join(base, relpath)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            if isinstance(content, Link):
+                os.symlink(os.fsencode(content.target), path)
+            else:
+                with open(path, 'wb') as handle:
+                    handle.write(content)
+    finally:
+        os.umask(previous)
     # give every path one modification time, the folders after what they hold
     # NOTE: a walk lists a symlink to a folder among the folders
     for folder, folders, names in os.walk(base, topdown=False):
@@ -856,8 +876,8 @@ def _refused(placement: str) -> _Tree:
     """Return a tree with one name that is no valid UTF-8 where v1 reads it.
 
     ``placement`` is ``page`` (a page of a managed folder), ``folder`` (a
-    managed folder) or ``pattern`` (a page that only an exclude pattern
-    keeps out).
+    managed folder), ``pattern`` (a page that only an exclude pattern
+    keeps out) or ``file`` (a file of a managed folder that is no page).
     """
     settings = {'exclude': {'patterns': ['raw-*']}} if placement == 'pattern' else {}
     tree = _base('refused', 'A name v1 reads as text.', settings=settings)
@@ -865,6 +885,7 @@ def _refused(placement: str) -> _Tree:
         'page': b'caf' + _E9 + b'.md',
         'folder': b'dir' + _FF + b'/inner.md',
         'pattern': b'raw-' + _E9 + b'.md',
+        'file': b'data' + _E9 + b'.bin',
     }
     tree[_path('refused', names[placement])] = b'# odd\n\nA refuseword page.\n'
     return tree

@@ -1,10 +1,11 @@
 """Test the ``parity.fixtures`` module.
 
 The runs of the families are covered through the command line; this module
-carries what the generator owes a run: the same checkouts every time, a
-refusal of what it cannot write, and stages of a family's own. It also holds
-v1 to what the registry says of it on a name that is no valid UTF-8, on the
-file systems that keep such a name.
+carries what the generator owes a run: the same checkouts every time, a base
+that is converged, a refusal of what it cannot write, and stages of a
+family's own. It also records what v1 does on a name that is no valid UTF-8,
+beside what the registry says of it, on the file systems that keep such a
+name.
 """
 
 from __future__ import annotations
@@ -20,23 +21,19 @@ import pytest
 
 from parity import fixtures, manifest, runner, side
 
-from .conftest import NOW, _needs_git
+from .conftest import NOW, _needs_bytes, _needs_git
 
 __all__ = [
     'test_families_are_written_alike_every_time',
+    'test_base_of_every_family_is_converged',
     'test_family_the_file_system_cannot_hold_is_left_out_or_refused',
     'test_folder_the_generator_cannot_use_is_refused',
     'test_family_runs_its_own_stages_after_the_matrix',
     'test_v1_takes_a_managed_name_that_is_not_utf8_as_text',
     'test_v1_leaves_a_name_that_is_not_utf8_to_an_exclude_pattern',
+    'test_v1_skips_a_file_that_is_no_page_under_a_name_that_is_not_utf8',
 ]
 
-# gates the tests of names only a file system that keeps bytes holds: Linux
-# has one, and a run there that cannot write them fails instead of skipping
-_needs_bytes = pytest.mark.skipif(
-    sys.platform != 'linux',
-    reason='needs names that are no valid UTF-8',
-)
 # a side that prints one variable of the control family's second stage
 _ECHO = (
     sys.executable,
@@ -46,6 +43,8 @@ _ECHO = (
 # the text the Python engine writes for the bytes of each refused name
 _PAGE = 'refused/caf\\udce9'
 _FOLDER = 'refused/dir\\udcff'
+# a umask that takes every permission from the group and from others
+_PRIVATE = 0o077
 
 
 @_needs_git
@@ -53,11 +52,15 @@ def test_families_are_written_alike_every_time(tmp_path: pathlib.Path) -> None:
     """Two runs of the generator give the same trees and the same commits.
 
     Every family has the same bytes, modes and modification times at each
-    path, and a repository family the same commit, so a result on a family
-    can be had again on another host.
+    path, and a repository family the same commit, whatever umask the
+    generator runs under.
     """
     first = fixtures.generate(tmp_path / 'one')
-    second = fixtures.generate(tmp_path / 'two')
+    previous = os.umask(_PRIVATE)
+    try:
+        second = fixtures.generate(tmp_path / 'two')
+    finally:
+        os.umask(previous)
     assert [corpus.label for corpus in first] == [corpus.label for corpus in second]
     assert len(first) > 1
     for one, two in zip(first, second):
@@ -75,6 +78,33 @@ def test_families_are_written_alike_every_time(tmp_path: pathlib.Path) -> None:
         assert commits[0] == commits[1], one.label
     # a family outside any repository has no commit
     assert [corpus.label for corpus in first if not _head(corpus.checkout)] == ['plain']
+
+
+@_needs_git
+def test_base_of_every_family_is_converged(
+    tmp_path: pathlib.Path,
+    engine: side.Side,
+) -> None:
+    """v1 finds nothing to update and nothing to report on the base wiki.
+
+    Every family adds its own files to this wiki, so whatever a command
+    reports or writes on a family comes from those files.
+    """
+    family = fixtures.Family(
+        name='base',
+        tree=lambda: fixtures._base('extra', 'A folder of the base.'),
+    )
+    checkout = tmp_path / 'base'
+    fixtures._write(family, checkout)
+    home = tmp_path / 'home'
+    home.mkdir()
+    env = side.environment(engine, home, now=NOW)
+    expected = {'update': b'Nothing to update.\n', 'lint': b'No issues found.\n'}
+    for args in (['update', '--check'], ['lint'], ['update']):
+        argv = [*args, '--path', f'{checkout / "wiki"}']
+        done = side.run(engine, argv, cwd=home, env=env)
+        assert done.code == 0, done.stderr
+        assert done.stdout == expected[args[0]]
 
 
 def test_family_the_file_system_cannot_hold_is_left_out_or_refused(
@@ -160,8 +190,8 @@ def test_family_runs_its_own_stages_after_the_matrix(tmp_path: pathlib.Path) -> 
 @_needs_git
 @_needs_bytes
 @pytest.mark.parametrize(
-    ('family', 'page', 'name', 'kind', 'updated'),
-    [
+    argnames=('family', 'page', 'name', 'kind', 'code'),
+    argvalues=[
         ('refused-page', b'refused/caf\xe9.md', _PAGE, 'invalid_page_name', 0),
         (
             'refused-folder',
@@ -180,7 +210,7 @@ def test_v1_takes_a_managed_name_that_is_not_utf8_as_text(
     page: bytes,
     name: str,
     kind: str,
-    updated: int,
+    code: int,
 ) -> None:
     """v1 drops the entry's row, still writes its name, and then rejects it.
 
@@ -204,7 +234,7 @@ def test_v1_takes_a_managed_name_that_is_not_utf8_as_text(
 
     # the entry gets no row, and its page a name that spells the byte out
     done = wiki('update')
-    assert done.code == updated, done.stderr
+    assert done.code == code, done.stderr
     path = os.fsencode(root) + b'/' + page
     with open(path, 'rb') as handle:
         block = handle.read().split(b'\n---\n')[0]
@@ -214,7 +244,7 @@ def test_v1_takes_a_managed_name_that_is_not_utf8_as_text(
     assert b'caf' not in index
     assert b'dir' not in index
     # a folder of such a name ends the update before its index is written
-    if updated:
+    if code:
         assert b"codec can't encode character '\\udcff'" in done.stderr
         assert not os.path.lexists(os.path.join(os.path.dirname(path), b'_index.md'))
     # the name the engine wrote is one no YAML reader takes; the report names
@@ -259,6 +289,57 @@ def test_v1_leaves_a_name_that_is_not_utf8_to_an_exclude_pattern(
     with open(path, 'rb') as handle:
         assert handle.read() == before
     assert b'raw-' not in (root / 'refused' / '_index.md').read_bytes()
+
+
+@_needs_git
+@_needs_bytes
+def test_v1_skips_a_file_that_is_no_page_under_a_name_that_is_not_utf8(
+    tmp_path: pathlib.Path,
+    engine: side.Side,
+) -> None:
+    """v1 leaves such a file out, writes nothing, and reports it on every lint.
+
+    The registry's entry covers every managed name, and what it says of v1
+    holds for a page and a folder only. A file that is no page gets no
+    ``name``, so there is no block for a YAML reader to reject: ``update``
+    names the skip, exits 0 and changes no file, a second one finds
+    nothing to do, and a search runs. ``lint`` reports the name each time,
+    in a JSON document that holds the byte itself and so is no valid
+    UTF-8.
+    """
+    (corpus,) = fixtures.generate(tmp_path / 'trees', names=['refused-file'])
+    root = corpus.checkout / corpus.root
+    home = tmp_path / 'home'
+    home.mkdir()
+    env = side.environment(engine, home, now=NOW)
+
+    def wiki(*args: str) -> side.Outcome:
+        return side.run(engine, [*args, '--path', f'{root}'], cwd=home, env=env)
+
+    def held() -> dict[str, tuple]:
+        skip = frozenset({'.git', f'{corpus.root}/.wiki/cache'})
+        entries = manifest.scan(corpus.checkout, skip=skip)
+        return {relpath: entry.content for relpath, entry in entries.items()}
+
+    # the update names the skip and changes no file
+    before = held()
+    assert f'{corpus.root}/refused/data\udce9.bin' in before
+    done = wiki('update')
+    assert done.code == 0, done.stderr
+    assert b'Skipped 1 invalid name' in done.stdout + done.stderr
+    assert held() == before
+    again = wiki('update', '--check')
+    assert again.code == 0, again.stderr
+    assert b'Nothing to update.' in again.stdout
+    found = wiki('search', 'sound')
+    assert found.code == 0, found.stderr
+    # the report names the path by its bytes, and no block as one no reader takes
+    listed = wiki('lint', '--json')
+    assert listed.code == 1
+    with pytest.raises(UnicodeDecodeError):
+        listed.stdout.decode('utf-8')
+    report = json.loads(listed.stdout.decode('utf-8', 'surrogateescape'))
+    assert [issue['kind'] for issue in report['issues']] == ['invalid_page_name']
 
 
 # ------ helper functions

@@ -18,6 +18,7 @@ import pytest
 
 from parity import (
     __main__ as cli,
+    fixtures,
     kinds,
     matrix,
     oracle,
@@ -31,7 +32,7 @@ from parity import (
     terminal,
 )
 
-from .conftest import NOW, _needs_git
+from .conftest import NOW, _needs_bytes, _needs_git
 
 __all__ = [
     'test_v1_sides_run_as_the_oracle_names_them',
@@ -54,6 +55,7 @@ __all__ = [
     'test_replay_that_would_prove_nothing_is_refused',
     'test_fixtures_command_runs_the_families_on_v1_and_on_an_engine',
     'test_failed_family_keeps_its_streams_and_its_checkouts',
+    'test_difference_at_a_path_that_is_not_utf8_is_listed',
     'test_fixtures_run_that_would_compare_nothing_is_refused',
 ]
 
@@ -104,6 +106,20 @@ _WORDY = """
 import subprocess, sys
 result = subprocess.run(sys.argv[1:], capture_output=True)
 sys.stdout.buffer.write(result.stdout + b'more\\n')
+sys.stderr.buffer.write(result.stderr)
+sys.exit(result.returncode)
+"""
+
+# a side that runs the command it is given and leaves a file in the wiki
+# whose name is no valid UTF-8
+_STRAY = """
+import os, subprocess, sys
+result = subprocess.run(sys.argv[1:], capture_output=True)
+if '--path' in sys.argv:
+    root = os.fsencode(sys.argv[sys.argv.index('--path') + 1])
+    with open(os.path.join(root, b'stray-\\xe9.txt'), 'wb'):
+        pass
+sys.stdout.buffer.write(result.stdout)
 sys.stderr.buffer.write(result.stderr)
 sys.exit(result.returncode)
 """
@@ -1177,12 +1193,45 @@ def test_failed_family_keeps_its_streams_and_its_checkouts(
 
 
 @_needs_git
+@_needs_bytes
+def test_difference_at_a_path_that_is_not_utf8_is_listed(
+    tmp_path: pathlib.Path,
+    engine: side.Side,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A difference at a path no stream can print is listed, byte by escape.
+
+    An engine that leaves a file whose name is no valid UTF-8 differs from
+    v1 at that path. The run reports it as any difference, exit 1, with
+    the byte spelled as an escape in the summary and in the result file.
+    """
+    relay = [sys.executable, '-c', _STRAY, *engine.argv]
+    sides = _sides_file(tmp_path, engine, argv=relay)
+    out = tmp_path / 'out'
+    work = tmp_path / 'work'
+    argv = ['fixtures', '--family', 'nested', '--sides', f'{sides}']
+    argv += ['--engine', 'engine']
+    argv += ['--work', f'{work}', '--out', f'{out}', '--now', NOW]
+    assert cli.main(argv) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert any(line.endswith('wiki/stray-\\udce9.txt') for line in lines)
+    document = json.loads((out / 'nested.json').read_text(encoding='utf-8'))
+    (stage,) = document['stages']
+    details = {difference['detail'] for difference in stage['differences']}
+    assert any(detail.endswith('wiki/stray-\udce9.txt') for detail in details)
+
+
+@_needs_git
 @pytest.mark.parametrize(
     argnames=('broken', 'message'),
     argvalues=[
         ('reference', "--engine names 'oracle'"),
         ('unknown', 'No side is named'),
         ('family', 'No fixture family is named'),
+        ('twice', 'named twice'),
+        ('entry', "a second engine refuses, by registry entry: {'refused-page': 'D4'}"),
+        ('both', '--every runs every family'),
+        ('every', 'needs a file system'),
         ('work', 'exists'),
         ('repository', 'inside the repository'),
     ],
@@ -1196,10 +1245,14 @@ def test_fixtures_run_that_would_compare_nothing_is_refused(
     """A fixtures run that would compare nothing is refused before it writes.
 
     An engine that is v1 itself or that no file declares, a family the
-    generator does not have, and a work folder that exists or lies in a
+    generator does not have or is given twice, a tree a second engine
+    refuses, every family and some at once, every family on a file system
+    that cannot hold one, and a work folder that exists or lies in a
     repository: the command exits 2 with a message, writes no family and
     no result file, and leaves a work folder that was there as it stood.
     """
+    if broken == 'every' and not fixtures.lacking(tmp_path):
+        pytest.skip('the file system holds every family')
     out = tmp_path / 'out'
     work = tmp_path / 'work'
     if broken == 'work':
@@ -1207,10 +1260,19 @@ def test_fixtures_run_that_would_compare_nothing_is_refused(
     elif broken == 'repository':
         (work / '.git').mkdir(parents=True)
     seconds = {'reference': 'oracle', 'unknown': 'absent'}
-    family = 'nseted' if broken == 'family' else 'nested'
-    argv = ['fixtures', '--family', family, '--work', f'{work}', '--out', f'{out}']
+    families = {
+        'family': ['nseted'],
+        'twice': ['nested', 'nested'],
+        'entry': ['nested', 'refused-page'],
+        'every': [],
+    }
+    argv = ['fixtures', '--work', f'{work}', '--out', f'{out}']
+    for family in families.get(broken, ['nested']):
+        argv += ['--family', family]
     if broken in seconds:
         argv += ['--engine', seconds[broken]]
+    if broken in ('both', 'every'):
+        argv += ['--every']
     held = sorted(tmp_path.rglob('*'))
     with pytest.raises(SystemExit) as raised:
         cli.main(argv)

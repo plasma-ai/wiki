@@ -12,6 +12,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -22,6 +23,12 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 NOW = '2026-01-02T03:04:05Z'
 # gates the tests that need git: the oracle checkout and the committed corpus
 _needs_git = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
+# gates the tests of names only a file system that keeps bytes holds: Linux
+# has one, and a run there that cannot write them fails instead of skipping
+_needs_bytes = pytest.mark.skipif(
+    sys.platform != 'linux',
+    reason='needs names that are no valid UTF-8',
+)
 # gates the tests that rely on a permission denial
 _needs_unprivileged = pytest.mark.skipif(
     os.geteuid() == 0,

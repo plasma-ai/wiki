@@ -5,7 +5,7 @@ usage: python -m parity matrix --a NAME --b NAME [--registered] [--sides FILE] -
        python -m parity registry --side NAME [--sides FILE] --corpora FILE --work DIR --out DIR
        python -m parity suite [--engine NAME] [--sides FILE] --work DIR --out DIR
        python -m parity replay [--engine NAME] [--sides FILE] --work DIR --out DIR
-       python -m parity fixtures [--engine NAME] [--sides FILE] --work DIR --out DIR
+       python -m parity fixtures [--engine NAME] [--sides FILE] [--every] --work DIR --out DIR
        python -m parity oracle ensure [--side NAME]
        python -m parity oracle check [--skip NAME]
        python -m parity container [--commit COMMIT] [--out DIR] COMMAND [ARG ...]
@@ -51,8 +51,9 @@ two hash seeds; with one it compares v1 with that side, and with that side
 on one thread. A family the file system of the work folder cannot hold is
 left out and named. It exits 0 when no family shows a difference, and 1
 otherwise. It exits 2, before it writes a family, on an unknown side or
-family, on a family the file system cannot hold when ``--family`` names it,
-and on a work folder the harness refuses.
+family, on a family named twice, on a tree a second engine refuses, on a
+family the file system cannot hold when ``--family`` names it or ``--every``
+is given, and on a work folder the harness refuses.
 
 The registry lists what a second engine may do differently from v1, and two
 builds of v1 have nothing registered between them. ``matrix`` therefore
@@ -271,6 +272,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         ' system of the work folder can hold).'
     )
     command.add_argument('--family', action='append', help=family_help)
+    # every family option
+    every_help = 'Refuse a work folder whose file system cannot hold every family.'
+    command.add_argument('--every', action='store_true', help=every_help)
     # work folder option
     work_help = 'Folder the harness makes one new folder in.'
     command.add_argument('--work', type=pathlib.Path, required=True, help=work_help)
@@ -768,10 +772,23 @@ def _fixtures(parser: argparse.ArgumentParser, options: argparse.Namespace) -> i
     # refuse the work folder and the families, and probe every side, before
     # a family is written
     work = options.work.resolve() / _FIXTURES
-    known = [family.name for family in fixtures.families()]
-    unknown = [name for name in options.family or () if name not in known]
+    known = {family.name: family for family in fixtures.families()}
+    named = options.family
+    if options.every:
+        if named is not None:
+            parser.error('--every runs every family, and --family names some.')
+        named = [name for name, family in known.items() if not family.entry]
+    unknown = [name for name in named or () if name not in known]
     if unknown:
-        parser.error(f'No fixture family is named {unknown!r}; they are {known!r}.')
+        parser.error(f'No fixture family is named {unknown!r}; they are {[*known]!r}.')
+    # a tree a second engine refuses is no corpus: v1's own commands fail on
+    # some, and the matrix holds a failure against the side
+    refused = {name: known[name].entry for name in named or () if known[name].entry}
+    if refused:
+        parser.error(
+            f'No run compares on a tree a second engine refuses, by registry'
+            f' entry: {refused!r}.'
+        )
     try:
         fixtures.validate(work)
         header = _header(chosen, now=options.now)
@@ -781,7 +798,7 @@ def _fixtures(parser: argparse.ArgumentParser, options: argparse.Namespace) -> i
     # write the families: v1 against itself under two hash seeds, or v1
     # against the engine, which also runs on one thread
     try:
-        corpora = fixtures.generate(work / _TREES, names=options.family)
+        corpora = fixtures.generate(work / _TREES, names=named)
     except ValueError as e:
         parser.error(f'{e}')
     reference, *engines = chosen
@@ -794,7 +811,7 @@ def _fixtures(parser: argparse.ArgumentParser, options: argparse.Namespace) -> i
         for family in fixtures.families()
         if (not family.entry) and (family.name not in written)
     ]
-    if options.family is None:
+    if named is None:
         for name in left:
             print(f'{_FIXTURES}: left out, the file system cannot hold it: {name}')
         header['left_out'] = left
@@ -978,9 +995,14 @@ def _save(streams: Mapping[str, bytes], folder: pathlib.Path) -> None:
 
 
 def _line(difference: Union[Difference, Excused, replay.Finding]) -> str:
-    """Return one difference, excused command or finding as a line of the summary."""
+    """Return one difference, excused command or finding as a line of the summary.
+
+    A path may hold bytes that are no valid UTF-8, which a string carries as
+    lone surrogates and no stream prints: the line spells each as an escape.
+    """
     fields = dataclasses.astuple(difference)
-    return ': '.join(field for field in fields if field)
+    line = ': '.join(field for field in fields if field)
+    return line.encode('utf-8', 'backslashreplace').decode('utf-8')
 
 
 def _no_hits(report: Mapping[str, Any]) -> list[str]:

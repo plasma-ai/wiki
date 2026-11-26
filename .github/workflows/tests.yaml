@@ -60,7 +60,7 @@ jobs:
           --work "$RUNNER_TEMP/replay-work" --out "$RUNNER_TEMP/replay-out"
       - name: Run the fixture families through the harness
         run: >-
-          uv run --no-sync python -m parity fixtures
+          uv run --no-sync python -m parity fixtures --every
           --work "$RUNNER_TEMP/fixtures-work" --out "$RUNNER_TEMP/fixtures-out"
       - name: Keep the output of a failed run of the harness
         if: failure()

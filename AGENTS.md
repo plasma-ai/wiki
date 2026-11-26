@@ -556,18 +556,22 @@ of a test that records no call are not judged.
 and runs each as a corpus: the stages of the matrix, then the family's own,
 whose commands name its pages. A family is one converged base wiki with the
 family's own files added raw, so the read-only commands report on input no
-engine wrote and `update` has to take it in. The generator writes the same
-bytes, modes, times and commit on every host. A new fixture goes into the family
-it belongs to, or into a new one, with its row in the spec's table. Keep every
-folder of a family's first two levels one a command can be scoped to, because
-the matrix sample draws them; a folder the wiki excludes or refuses lies deeper.
-A family whose wiki `update` refuses runs its own stage alone, and each of its
-cases states the exit codes it allows. The family `linux` and the three refused
-trees need a file system that keeps case and bytes, so on macOS they are left
-out: run them in the container. The refused trees show what registry entry D4
-says v1 does on a name that is no valid UTF-8; the tests in
-`parity/tests/test_fixtures.py` hold v1 to that on Linux, so a change in v1
-there changes the spec's table and, as a change to the registry does, the entry.
+engine wrote and `update` has to take it in. The generator writes the same bytes
+and times on every host and the same modes under any umask; a symlink's mode is
+the platform's, and the commit of `names` differs on macOS, where git composes a
+decomposed name. A new fixture goes into the family it belongs to, or into a new
+one, with its row in the spec's table. Keep every folder of a family's first two
+levels one a command can be scoped to, because the matrix sample draws them; a
+folder the wiki excludes or refuses lies deeper. A family whose wiki `update`
+refuses runs its own stage alone, and each of its cases states the exit codes it
+allows. The family `linux` and the four refused trees need a file system that
+keeps case and bytes, so on macOS they are left out: run them in the container.
+CI runs `fixtures --every`, which fails where a family would be left out. The
+refused trees show what v1 does on a name that is no valid UTF-8 where registry
+entry D4 has a second engine refuse the tree. Only the tests in
+`parity/tests/test_fixtures.py` write them, and they hold v1 to the spec's table
+on Linux, so a change in v1 there changes the table and, as a change to the
+registry does, the entry.
 
 `python -m parity container` runs one command in the Linux container
 (`parity/container.py`, `parity/Dockerfile`): the Ubuntu release of the CI
