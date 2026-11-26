@@ -573,7 +573,8 @@ def _replay(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int
         lines = [json.dumps(entry) + '\n' for entry in recording.formats]
         _save({'formats.jsonl': ''.join(lines).encode('utf-8')}, options.out / _REPLAY)
         differing = document['formats']['differing']
-        findings.extend(replay.unneeded(routes, result.report, differing))
+        visible = [test for test in routes if test not in explained]
+        findings.extend(replay.unneeded(visible, result.report, differing))
         document['controls'] = {}
         for name in replay.CONTROLS if not options.test else ():
             found, document['controls'][name] = replay.control(

@@ -89,13 +89,25 @@ to = "dropped"
 cite = "loader choice"
 reason = "The test takes PyYAML's C loader away, and the pure-Python loader gives the error another text or another line. A command, and a format call made again, run under the C loader the side is built with."
 
-# a test puts a hook file in the wiki
+# a test puts a hook file in the wiki, or runs `wiki trust`
 [[route]]
 tests = [
     "tests/test_cli/test_wiki_commands.py::test_lint_error_keeps_the_notes_before_it",
     "tests/test_cli/test_wiki_commands.py::test_match_resolution_failure_exits_two",
+    "tests/test_cli/test_wiki_commands.py::test_merge_orders_rows_by_the_wikis_hook[hook-exits]",
+    "tests/test_cli/test_wiki_commands.py::test_merge_orders_rows_by_the_wikis_hook[import-fails]",
+    "tests/test_cli/test_wiki_commands.py::test_merge_orders_rows_by_the_wikis_hook[merge-raises]",
+    "tests/test_cli/test_wiki_commands.py::test_merge_orders_rows_by_the_wikis_hook[sort-raises]",
+    "tests/test_cli/test_wiki_commands.py::test_merge_orders_rows_by_the_wikis_hook[trusted]",
+    "tests/test_cli/test_wiki_commands.py::test_merge_settles_the_stamps_of_a_managed_page[hook-exits]",
+    "tests/test_cli/test_wiki_commands.py::test_merge_settles_the_stamps_of_a_managed_page[untrusted-hook]",
     "tests/test_cli/test_wiki_commands.py::test_trust_gates_hook_execution",
+    "tests/test_cli/test_wiki_commands.py::test_trust_refuses_non_wiki_path",
+    "tests/test_cli/test_wiki_commands.py::test_trust_store_does_not_mark_home_as_wiki_root",
+    "tests/test_cli/test_wiki_commands.py::test_trust_store_exemption_survives_symlinked_home",
+    "tests/test_cli/test_wiki_commands.py::test_untrusted_hook_refusal_exits_two",
+    "tests/test_cli/test_wiki_commands.py::test_wiki_freeze_time_stamps_the_trust_record",
 ]
 to = "dropped"
 cite = "D6"
-reason = "The wiki holds a hook file, and a read-only command of v1 that imports it leaves a bytecode file beside it, outside the caches."
+reason = "The test's wiki holds a hook file, or the test runs `wiki trust`. A second engine refuses the wiki, merges it without the hook, and has no such command. Under v1 a command that imports the hook leaves a bytecode file beside it, named for the interpreter, and a read-only command leaves it outside the caches."

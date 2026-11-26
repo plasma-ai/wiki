@@ -427,10 +427,12 @@ def unneeded(
 
     A test whose calls all replay as their commands, with no difference,
     has its place in the replay, and a row of the routing table would
-    give it a second one.
+    give it a second one. A row that rests on a registry entry is not
+    judged this way: its tests differ against a second engine only.
 
     Args:
-        routed: The ids the routing table names.
+        routed: The ids the routing table names in rows that rest on no
+            registry entry.
         report: The report of a replay of every call, from :func:`run`.
         differing: The tests that made a format call which gave another
             outcome when it was made again, from :func:`formats`.

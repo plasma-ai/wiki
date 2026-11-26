@@ -1022,7 +1022,8 @@ reason = "<why the replay cannot hold the tests>"
   entry's difference, and it is listed in the result file only.
 - **Unneeded rows.** Where every call is replayed, a row for a test whose calls
   all replay as their commands, with no difference, is an `unneeded` finding:
-  the replay holds that test.
+  the replay holds that test. A row that cites a registry entry is not judged
+  this way: two builds of v1 do not show the entry's difference.
 
 ### Format Calls
 

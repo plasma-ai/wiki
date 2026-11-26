@@ -46,6 +46,7 @@ __all__ = [
     'test_suite_that_would_prove_nothing_is_refused',
     'test_replay_command_records_and_replays_v1s_tests',
     'test_failed_replay_keeps_its_output_and_trees',
+    'test_row_for_a_test_the_replay_holds_fails_the_replay',
     'test_replay_that_would_prove_nothing_is_refused',
 ]
 
@@ -856,6 +857,43 @@ def test_failed_replay_keeps_its_output_and_trees(
     }
     assert list((out / 'replay').glob('* oracle seed 2.err'))
     assert list((work / 'replay' / 'record' / 'store').rglob('before'))
+
+
+@_needs_git
+@pytest.mark.parametrize(
+    argnames=('row', 'code'),
+    argvalues=[('to = "rust"', 1), ('to = "dropped"\ncite = "D6"', 0)],
+    ids=['unneeded', 'registered'],
+)
+def test_row_for_a_test_the_replay_holds_fails_the_replay(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    row: str,
+    code: int,
+) -> None:
+    """A routing row for a test the replay holds is reported, not kept.
+
+    The table routes the tests of the file that no command repeats, and
+    one more whose calls all replay as their commands. That row would
+    take a test out of the replay for nothing, so the command exits 1
+    and names it. A row that rests on a registry entry is left alone:
+    its tests differ against a second engine, which this run has none
+    of.
+    """
+    committed = routing.PATH.read_text(encoding='utf-8')
+    held = f'{_CORE_TESTS}::test_read_line_slicing'
+    extra = f'[[route]]\ntests = ["{held}"]\n{row}\nreason = "None."\n'
+    table = tmp_path / 'routing.toml'
+    table.write_text(f'{committed}\n{extra}', encoding='utf-8')
+    monkeypatch.setattr(routing, 'PATH', table)
+    out = tmp_path / 'out'
+    argv = ['replay', '--test', _CORE_TESTS, '--jobs', '0']
+    argv += ['--work', f'{tmp_path / "work"}', '--out', f'{out}']
+    assert cli.main(argv) == code
+    lines = capsys.readouterr().out.splitlines()
+    line = f'  unneeded: {held}: every call of the test replays as its command'
+    assert (line in lines) == bool(code)
 
 
 @_needs_git
