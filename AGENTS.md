@@ -80,6 +80,12 @@ uv run --no-sync python -m parity suite --work <dir> --out <dir>
 # record the calls of v1's core and CLI tests and replay them as commands
 uv run --no-sync python -m parity replay --work <dir> --out <dir>
 
+# write the fixture families and run the matrix on each
+uv run --no-sync python -m parity fixtures --work <dir> --out <dir>
+
+# run a command in the Linux container, on a clone of HEAD (needs Docker)
+uv run --no-sync python -m parity container -- <command>
+
 # run pre-commit
 uv run --no-sync pre-commit run [--all-files]
 
@@ -545,6 +551,35 @@ input outside the supported set is a finding unless the table drops its test
 under D3. A new v1 test or kind, and new input of a recorded call, therefore
 fails the `parity` job until the table or the list accounts for it. The inputs
 of a test that records no call are not judged.
+
+`python -m parity fixtures` writes the fixture families (`parity/fixtures.py`)
+and runs each as a corpus: the stages of the matrix, then the family's own,
+whose commands name its pages. A family is one converged base wiki with the
+family's own files added raw, so the read-only commands report on input no
+engine wrote and `update` has to take it in. The generator writes the same bytes
+and times on every host and the same modes under any umask; a symlink's mode is
+the platform's, and the commit of `names` differs on macOS, where git composes a
+decomposed name. A new fixture goes into the family it belongs to, or into a new
+one, with its row in the spec's table. Keep every folder of a family's first two
+levels one a command can be scoped to, because the matrix sample draws them; a
+folder the wiki excludes or refuses lies deeper. A family whose wiki `update`
+refuses runs its own stage alone, and each of its cases states the exit codes it
+allows. The family `linux` and the four refused trees need a file system that
+keeps case and bytes, so on macOS they are left out: run them in the container.
+CI runs `fixtures --every`, which fails where a family would be left out. The
+refused trees show what v1 does on a name that is no valid UTF-8 where registry
+entry D4 has a second engine refuse the tree. Only the tests in
+`parity/tests/test_fixtures.py` write them, and they hold v1 to the spec's table
+on Linux, so a change in v1 there changes the table and, as a change to the
+registry does, the entry.
+
+`python -m parity container` runs one command in the Linux container
+(`parity/container.py`, `parity/Dockerfile`): the Ubuntu release of the CI
+runners, with a clone of the repository at `HEAD` on the container's own file
+system. Its git and its processor architecture are not the runners', so a result
+there stands for Linux, not for CI. The clone holds what is committed, so commit
+before a run. Nothing a side runs on is mounted from the host. A change to the
+container changes the spec's Container section in the same commit.
 
 ### Run Bracket
 

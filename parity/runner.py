@@ -47,12 +47,17 @@ class Corpus:
         label: Neutral label of the corpus.
         checkout: The repository checkout, or a plain folder, to snapshot.
         root: The wiki root, relative to the checkout.
+        stages: Stages of the corpus's own, which run after the matrix's:
+            a fixture family names its own pages there.
+        alone: Whether the corpus's own stages run without the matrix's.
 
     """
 
     label: str
     checkout: pathlib.Path
     root: str
+    stages: tuple[Stage, ...] = ()
+    alone: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -64,7 +69,7 @@ class Plan:
         work: Folder of the snapshot and of every clone.
         seed: Seed of the sample.
         sample: The folders, pages and words the stages name.
-        stages: The stages of the matrix, in order.
+        stages: The stages of the matrix, then the corpus's own, in order.
         manifest: The manifest of the snapshot, keyed as a clone of it is.
 
     """
@@ -130,12 +135,15 @@ def prepare(corpus: Corpus, *, work: pathlib.Path, seed: int = 0) -> Plan:
     drawn = matrix.sample(source / corpus.root, seed=seed)
     # hash the snapshot once: every clone of it starts from these digests
     entries = manifest.scan(source, skip=frozenset({'.git'}))
+    stages = corpus.stages
+    if not corpus.alone:
+        stages = (*matrix.stages(drawn), *stages)
     return Plan(
         corpus=corpus,
         work=work,
         seed=seed,
         sample=drawn,
-        stages=matrix.stages(drawn),
+        stages=stages,
         manifest={f'{_TREE}/{relpath}': entry for relpath, entry in entries.items()},
     )
 
@@ -350,7 +358,7 @@ def _run_stage(
         snapshot.clone(origin, slot)
     if stage.settings is not None:
         (plan.root / WIKI_SETTINGS).write_text(stage.settings, encoding='utf-8')
-    env = side.environment(runner, slot / _HOME, now=now)
+    env = {**side.environment(runner, slot / _HOME, now=now), **stage.env}
     snapshot.refresh(slot / _TREE, env=env)
     if stage.cold and (plan.root / CACHE).exists():
         shutil.rmtree(plan.root / CACHE)

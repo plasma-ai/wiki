@@ -10,7 +10,7 @@ import os
 import pathlib
 import random
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Optional
 
 __all__ = []
@@ -99,6 +99,8 @@ class Stage:
         cold: Whether the tree starts with its cache folder removed.
         settings: Text the wiki's settings file holds when the stage
             starts. ``None`` leaves the file as the tree has it.
+        env: Variables every side runs the stage's commands under, set
+            over the side's own.
 
     """
 
@@ -107,6 +109,7 @@ class Stage:
     base: Optional[str] = None
     cold: bool = False
     settings: Optional[str] = None
+    env: Mapping[str, str] = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass(frozen=True)

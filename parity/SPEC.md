@@ -36,6 +36,12 @@ python -m parity suite [--engine NAME] [--sides SIDES] --work DIR --out DIR
 
 # record the calls of v1's tests and replay them as command lines
 python -m parity replay [--engine NAME] [--sides SIDES] --work DIR --out DIR
+
+# write the fixture families and run the matrix on each
+python -m parity fixtures [--engine NAME] [--sides SIDES] [--every] --work DIR --out DIR
+
+# run a command in the Linux container
+python -m parity container [--commit COMMIT] [--out DIR] COMMAND [ARG ...]
 ```
 
 A side name is `oracle` or `campaign`, the two v1 sides that
@@ -147,10 +153,34 @@ run passed. It writes `<out>/replay.json`, what pytest printed as
 `<out>/replay/formats.jsonl`, and both streams of every run of each call that
 differs or is unfaithful under `<out>/replay/`.
 
+`fixtures` takes no corpus: it writes its own (Fixture Families, below) and runs
+each as `matrix` runs a corpus. It exits 0 when no family shows a difference,
+and 1 otherwise. It exits 2 with a message, before it writes a family: on an
+`--engine` that is the v1 side itself or that no file declares, on a family the
+generator does not have, on a family named twice, on a tree a second engine
+refuses (Refused Trees, below), on a named family that the file system of the
+work folder cannot hold, on a side that cannot be started or does not prove its
+identity, and on a work folder that exists, lies inside a repository or lies
+below a folder that holds `.wiki/settings.json`. `--family NAME` (repeatable)
+picks families; the default is every family the file system can hold, and the
+run names the ones it leaves out. `--every` leaves none out: the run exits 2
+where the file system cannot hold a family, and CI runs the families this way.
+`--now` and `--seed` are those of `matrix`. It makes `<work>/fixtures`, which
+must not exist beforehand, and removes it when the run passed; a failed run
+leaves the checkouts it wrote under `<work>/fixtures/trees/`. Each family gets a
+result file, `<out>/<family>.json`, in the form `matrix` writes for a corpus,
+and the streams of a case that differs are saved under
+`<out>/<family>/<stage>/`.
+
+`container` runs one command in the Linux container (Container, below) and exits
+with that command's exit code. It exits 2 with a message when it is given no
+command, when `--commit` names no commit, and when Docker is not installed or
+its daemon does not answer.
+
 The sections below are the rules of the harness, one part each: the oracle,
-sides, snapshots, comparison, caches, the matrix, the registry, the self-check,
-the CLI suite and the replay, with the account a whole replay gives of v1's
-tests and kinds.
+sides, snapshots, comparison, caches, the matrix, the fixture families, the
+registry, the self-check, the CLI suite, the replay, with the account a whole
+replay gives of v1's tests and kinds, and the container.
 
 ## Oracle
 
@@ -465,6 +495,78 @@ has five stages:
   the wiki refuses on both sides (a name its policy rejects, a folder its
   settings exclude) compares only the refusal, so it is an `unexpected`
   difference and the run does not pass; another `--seed` draws another sample.
+
+## Fixture Families
+
+A fixture family is a checkout the harness writes from nothing: a small wiki
+that holds one kind of input the corpora lack. `python -m parity fixtures`
+writes the families and runs each as a corpus. The generator is
+`parity/fixtures.py`.
+
+- **Base.** Every family starts from one converged wiki, as the Python engine
+  leaves one: three folders with their indexes and pages, of which one is named
+  for the family and holds an index and one page.
+- **Own files.** The family's own files lie in its folder, as a person adds
+  them: with no row in any index, and most with no name and no stamp. So the
+  read-only commands report on input that no engine wrote, and `update` has to
+  take it in.
+- **Depth.** The matrix sample draws folders of the first two levels for its
+  scoped commands, so each of those is a folder a command can be scoped to. A
+  folder the wiki excludes or refuses lies at the third level or below.
+- **Same on every host.** A family has the same bytes on every host, and every
+  path has one fixed modification time. Files and folders are made under one
+  fixed umask, so their modes are the same too; a symlink has the mode its
+  platform gives one. The tree is committed under a fixed identity and date, so
+  the commit is the same wherever git stores the names as they are written. On
+  macOS git composes a decomposed name, so the commit of `names` there is
+  another than on Linux. A family may be a plain folder with no repository.
+- **File system.** A family may need a file system that keeps two names which
+  differ only in case, or a name that is no valid UTF-8. The generator asks the
+  file system of the work folder. With no `--family`, a family it cannot hold is
+  left out: the run prints its name, and every result file lists it under
+  `left_out`. A named family that cannot be written ends the run with exit 2,
+  and so does any family that cannot be written under `--every`.
+- **Stages.** A family runs the stages of the matrix (Matrix), then stages of
+  its own, whose commands name its pages. The stage `fixture` starts from the
+  snapshot: `lint --json`, `update --check --full`, a `read` of each page the
+  family names, `update --full`, `update --check`, `lint --json`, `lint --full`,
+  `map`, the same pages again, and a `match --lines` and a `search --json` for a
+  word that the family's own pages hold.
+- **Alone.** The matrix is built for a wiki that `update` takes: a refusal there
+  is an `unexpected` difference. A family whose wiki `update` refuses runs its
+  own stage alone, and each of its cases names the exit codes it allows.
+- **Sides.** With no `--engine` both sides are v1, under `PYTHONHASHSEED=1` and
+  `PYTHONHASHSEED=2`, and a command the registry excuses fails the run, as in
+  the self-check. With one, the runs are v1, the engine, and the engine with
+  `WIKI_THREADS=1`, and what the registry excuses passes.
+
+| Family           | Holds                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `frontmatter`    | A page for each way a block fails to be a mapping of fields: empty, a sequence, a scalar, a key that is no scalar, a key twice, a key that is an alias, a key twice in a nested mapping, collections nested 101 deep, and one page for each error of the YAML reader (a colon in a plain value, a key with no space, a reserved first character, a tab line, an open flow sequence, a value with no key, an anchor twice, an alias to nothing, a control character, an escape past the last code point, a lone surrogate escape, a byte order mark on a later line, a second document, an open quote). Well-formed blocks that only the line readers and writers meet: folded and literal scalars, quoted keys, comments with a document end, `title: null`, a tag and an anchor. Files whose trouble lies around the block: no closing fence, a byte order mark first, an indented fence, CR LF line ends, no block, and a rule that reads as a fence. Three indexes: one with a block no reader takes, one with no bytes, one with no delimiter. |
+| `names`          | Names that are not ASCII, in both normal forms, and names the naming policy rejects. A page beside a folder of its name. Symlinks to a page, to a folder, to nothing and out of the wiki. A page `X.md` beside a file, a symlink and a gitignored file named `X`, and `readme.md` beside `Readme`. Links that spell a page as its file is, and in another case. Whether a sibling or such a link is found turns on the file system, so the family's results differ between hosts, and the sides must agree on each.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `nested`         | Two wikis declared inside the wiki: one with a root index and a page, one with a page and no index. It runs alone. v1 reports each inner root, serves its pages, and exits 2 on `update`, on `update --check` and on a command run from inside an inner wiki.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `stamps-zone`    | A timestamp policy with a named zone and a format of literal text, every supported directive but `%%`, and `%z`. Pages with stamps in that form, in the default form, in no form, on one field only and in quotes, and a page with no block.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `stamps-literal` | The same pages under a format with literal text and `%%`, and no zone.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `control`        | A page whose file name and body hold a color sequence, a title sequence that a bell ends, a unit separator and a delete; a page whose desc holds the same as YAML escapes; and an index whose rows hold a unit separator before a row, behind its colon, inside its desc and at its end. Its own stage runs twice: `fixture` under the built environment, and `fixture forced` with `NO_COLOR=1`, `CLICOLOR_FORCE=1` and `TERM=dumb` on every side.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `plain`          | A wiki outside any repository, with 5,001 files in a folder an exclude pattern names. An engine lists them all for git, which ends outside a repository before it has read the list.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `linux`          | Two pages and two folders that differ in case only, with links in each case and in a third. Three names that are no valid UTF-8, each where no engine reads it as a name: in a folder an exclude pattern names, in a gitignored folder, and as a gitignored file in a managed folder. It needs a file system that keeps case and bytes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+
+### Refused Trees
+
+The generator also writes four trees that are no differential fixtures: each
+holds one name that is no valid UTF-8 where v1 reads it as text, and a second
+engine refuses the tree (registry entry D4). Only the tests write them: no run
+compares on them, and `fixtures` exits 2 when `--family` names one. They need a
+file system that keeps bytes. The tests in `parity/tests/test_fixtures.py` hold
+v1 to this table on Linux. What the entry says of v1 holds on the first two
+trees; on the other two v1 runs, and the refusal is the second engine's own.
+
+| Tree              | The name                                    | v1                                                                                                                                                                                                                                                                                                                                                           |
+| ----------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `refused-page`    | a page of a managed folder                  | `update` exits 0: it gives the page no row, and writes the page's `name` with the byte spelled as the escape `\udcXX`. `lint` then reports that block as invalid YAML, in a JSON document that holds the byte itself and so is no valid UTF-8. `search` exits 2 with the text of a codec error.                                                              |
+| `refused-folder`  | a managed folder                            | The same for the page inside it. `update` exits 2 with the codec error where it would write the folder's index, with the pages before it already written.                                                                                                                                                                                                    |
+| `refused-pattern` | a page that only an exclude pattern removes | The pattern is matched against the name as text, and every command runs as on a wiki without the page.                                                                                                                                                                                                                                                       |
+| `refused-file`    | a file of a managed folder that is no page  | `update` exits 0: it names the skip, gives the file no row, and changes no file, because a file that is no page gets no `name`. A second `update --check` finds nothing to do, and `search` runs. `lint` exits 1 on every run with one issue, the invalid name, and no invalid YAML, in a JSON document that holds the byte itself and so is no valid UTF-8. |
 
 ## Registry
 
@@ -1255,3 +1357,36 @@ A run passes when it has no difference and no finding:
 
 A test that is skipped, or fails as its mark expects, records no call. The
 result file lists it with its outcome, and it is no finding of the replay.
+
+## Container
+
+macOS keeps no two names that differ only in case and no name that is no valid
+UTF-8, and link verdicts turn on the file system. The container is a Linux on a
+host that is none: the Ubuntu release of the CI runners, not their image.
+`python -m parity container` builds its image from `parity/Dockerfile` and runs
+one command in a fresh container.
+
+- **Image.** The Ubuntu release of the CI runners, with that release's own git,
+  uv, gawk, mawk and the system zone files, and a user of its own, because v1's
+  tests of unreadable files need a user that is not root. The git version and
+  the processor architecture are the image's and the host's, not the runners':
+  every result file records the git it ran. It holds no file of the repository,
+  so it is built with no context. Its tag is a digest of the Dockerfile: a
+  changed Dockerfile builds a new image. The base image and the packages are
+  named by release, not by digest, so two hosts may hold other builds under one
+  tag.
+- **Clone.** A container reads the repository of the checkout the harness lies
+  in, and never writes it. It clones that repository to its own file system,
+  takes the remote-tracking branches as the host holds them, and checks out one
+  commit: `HEAD` of that checkout, or the commit `--commit` names. So the clone
+  holds what is committed, and an edit that is not committed does not reach it.
+- **File system.** The clone, the oracle checkout that `oracle ensure` makes
+  beside it, and every work folder below `/work` lie on the container's own file
+  system, which keeps case and bytes. Nothing a side runs on is mounted from the
+  host.
+- **Environment.** The container installs the harness's dependency group, then
+  becomes the command, which runs from the clone's root with the streams of the
+  caller. The command builds the oracle with `oracle ensure`, as CI does.
+- **Kept.** One volume, `wiki-parity-cache`, holds what uv downloads, so a
+  second container starts fast. `--out DIR` gives the container a folder of the
+  host as `/out`. Everything else is gone when the command ends.

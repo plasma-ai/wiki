@@ -5,8 +5,10 @@ usage: python -m parity matrix --a NAME --b NAME [--registered] [--sides FILE] -
        python -m parity registry --side NAME [--sides FILE] --corpora FILE --work DIR --out DIR
        python -m parity suite [--engine NAME] [--sides FILE] --work DIR --out DIR
        python -m parity replay [--engine NAME] [--sides FILE] --work DIR --out DIR
+       python -m parity fixtures [--engine NAME] [--sides FILE] [--every] --work DIR --out DIR
        python -m parity oracle ensure [--side NAME]
        python -m parity oracle check [--skip NAME]
+       python -m parity container [--commit COMMIT] [--out DIR] COMMAND [ARG ...]
 
 ``matrix`` compares two sides over the matrix; ``selfcheck`` runs one side
 against itself, clean and doctored; ``registry`` runs one side against a
@@ -43,6 +45,16 @@ on input outside the supported set, and the account holds; it exits 1
 otherwise. It exits 2 as ``suite`` does, and on a routing table or a kind
 list that breaks its rules.
 
+``fixtures`` writes the fixture families and runs the matrix, and each
+family's own stages, on each. With no ``--engine`` both sides are v1, under
+two hash seeds; with one it compares v1 with that side, and with that side
+on one thread. A family the file system of the work folder cannot hold is
+left out and named. It exits 0 when no family shows a difference, and 1
+otherwise. It exits 2, before it writes a family, on an unknown side or
+family, on a family named twice, on a tree a second engine refuses, on a
+family the file system cannot hold when ``--family`` names it or ``--every``
+is given, and on a work folder the harness refuses.
+
 The registry lists what a second engine may do differently from v1, and two
 builds of v1 have nothing registered between them. ``matrix`` therefore
 counts a command the registry excuses as a result that is not the expected
@@ -51,6 +63,11 @@ one, unless ``--registered`` says side ``b`` is a second engine.
 ``oracle ensure`` builds the oracle checkout and the venvs of its sides, and
 exits 2 when it refuses a checkout or a venv. ``oracle check`` holds
 ``oracle.toml`` level with v1 and exits 1 when a check fails.
+
+``container`` runs a command in the Linux container: a clone of the
+repository at ``HEAD``, or at the commit ``--commit`` names, on a file system
+that keeps case and bytes. It exits with the exit code of the command, and
+with 2 when Docker does not answer or the commit is none.
 
 An error of the harness itself prints its traceback and exits 2 as well, so
 exit 1 always means that a result is not the expected one.
@@ -77,7 +94,9 @@ from typing import Any, Optional, Union
 
 from . import (
     config,
+    container,
     dispatch,
+    fixtures,
     homes,
     kinds,
     oracle,
@@ -117,8 +136,8 @@ _YEARS = (1001, 9998)
 _DESCRIPTION = """\
 Run two wiki engines on the same trees and report what they do differently.
 
-matrix, selfcheck, registry, suite and replay exit 0 when every result is the
-expected one, and 1 otherwise. A run that would compare nothing exits 2 with a message,
+matrix, selfcheck, registry, suite, replay and fixtures exit 0 when every result
+is the expected one, and 1 otherwise. A run that would compare nothing exits 2 with a message,
 before it snapshots anything or runs a test. oracle ensure exits 2 when it
 refuses a checkout or a venv, and oracle check exits 1 when a check fails. An
 error of the harness itself prints its traceback and exits 2.
@@ -127,6 +146,13 @@ error of the harness itself prints its traceback and exits 2.
 _SUITE = 'suite'
 # the same for the replay
 _REPLAY = 'replay'
+# the same for the fixture families, whose result files carry their names
+_FIXTURES = 'fixtures'
+# the folders of the checkouts and of the runs, below the fixtures' folder
+_TREES = 'trees'
+_RUNS = 'runs'
+# the command that runs another in the Linux container
+_CONTAINER = 'container'
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -232,6 +258,35 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # jobs option
         jobs_help = "How many processes run the tests (default: v1's pytest settings)."
         command.add_argument('--jobs', type=int, help=jobs_help)
+    summary = 'Write the fixture families and run the matrix on each.'
+    command = commands.add_parser(_FIXTURES, help=summary, description=summary)
+    # engine name option
+    engine_help = 'Name of the side compared against v1 (default: v1 against itself).'
+    command.add_argument('--engine', help=engine_help)
+    # sides file option
+    sides_help = 'TOML file with one table per side, beside the v1 sides.'
+    command.add_argument('--sides', type=pathlib.Path, help=sides_help)
+    # family name option
+    family_help = (
+        'Name of a family to run (repeatable; default: every family the file'
+        ' system of the work folder can hold).'
+    )
+    command.add_argument('--family', action='append', help=family_help)
+    # every family option
+    every_help = 'Refuse a work folder whose file system cannot hold every family.'
+    command.add_argument('--every', action='store_true', help=every_help)
+    # work folder option
+    work_help = 'Folder the harness makes one new folder in.'
+    command.add_argument('--work', type=pathlib.Path, required=True, help=work_help)
+    # output folder option
+    out_help = 'Folder for the result files and the saved streams.'
+    command.add_argument('--out', type=pathlib.Path, required=True, help=out_help)
+    # fixed instant option
+    now_help = f'RFC 3339 instant every side runs at (default: {_NOW}).'
+    command.add_argument('--now', type=_instant, default=_NOW, help=now_help)
+    # sample seed option
+    seed_help = 'Seed of the matrix sample (default: 0).'
+    command.add_argument('--seed', type=int, default=0, help=seed_help)
     summary = 'Build the oracle checkout, or hold oracle.toml level with v1.'
     command = commands.add_parser('oracle', help=summary, description=summary)
     actions = command.add_subparsers(dest='action', required=True)
@@ -251,6 +306,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         default=[],
         help=skip_help,
     )
+    summary = 'Run a command in the Linux container, in a clone of the repository.'
+    command = commands.add_parser(_CONTAINER, help=summary, description=summary)
+    # commit option
+    commit_help = 'Commit the clone is checked out at (default: HEAD).'
+    command.add_argument('--commit', help=commit_help)
+    # output folder option
+    out_help = 'Folder of the host that the container writes as /out.'
+    command.add_argument('--out', type=pathlib.Path, help=out_help)
+    # command argument
+    argv_help = "The command and its arguments, run from the clone's root."
+    command.add_argument('argv', nargs=argparse.REMAINDER, help=argv_help)
     # parse arguments
     options = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -307,6 +373,10 @@ def _run(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
         return _suite(parser, options)
     if options.command == _REPLAY:
         return _replay(parser, options)
+    if options.command == _FIXTURES:
+        return _fixtures(parser, options)
+    if options.command == _CONTAINER:
+        return _container(parser, options)
     # read the registry
     try:
         entries = registry.load()
@@ -679,6 +749,117 @@ def _replay(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int
     return 0
 
 
+def _fixtures(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
+    """Write the fixture families, run each, and return the exit code."""
+    # read the registry and the sides
+    try:
+        entries = registry.load()
+        declared = {}
+        if options.sides is not None:
+            declared = config.load_sides(options.sides)
+    except ValueError as e:
+        parser.error(f'{e}')
+    # resolve the sides: v1, and the engine if the run names one
+    names = [suite.REFERENCE]
+    if options.engine is not None:
+        if options.engine == suite.REFERENCE:
+            parser.error(f'--engine names {options.engine!r}, the side v1 runs as.')
+        names.append(options.engine)
+    try:
+        chosen = _sides(names, declared, path=options.sides)
+    except ValueError as e:
+        parser.error(f'{e}')
+    # refuse the work folder and the families, and probe every side, before
+    # a family is written
+    work = options.work.resolve() / _FIXTURES
+    known = {family.name: family for family in fixtures.families()}
+    named = options.family
+    if options.every:
+        if named is not None:
+            parser.error('--every runs every family, and --family names some.')
+        named = [name for name, family in known.items() if not family.entry]
+    unknown = [name for name in named or () if name not in known]
+    if unknown:
+        parser.error(f'No fixture family is named {unknown!r}; they are {[*known]!r}.')
+    # a tree a second engine refuses is no corpus: v1's own commands fail on
+    # some, and the matrix holds a failure against the side
+    refused = {name: known[name].entry for name in named or () if known[name].entry}
+    if refused:
+        parser.error(
+            f'No run compares on a tree a second engine refuses, by registry'
+            f' entry: {refused!r}.'
+        )
+    try:
+        fixtures.validate(work)
+        header = _header(chosen, now=options.now)
+    except ValueError as e:
+        parser.error(f'{e}')
+    header['registry'] = {id: entry.status for id, entry in entries.items()}
+    # write the families: v1 against itself under two hash seeds, or v1
+    # against the engine, which also runs on one thread
+    try:
+        corpora = fixtures.generate(work / _TREES, names=named)
+    except ValueError as e:
+        parser.error(f'{e}')
+    reference, *engines = chosen
+    sides = selfcheck._seeded(reference)
+    if engines:
+        sides = [reference, engines[0], replay.threaded(engines[0])]
+    written = [corpus.label for corpus in corpora]
+    left = [
+        family.name
+        for family in fixtures.families()
+        if (not family.entry) and (family.name not in written)
+    ]
+    if named is None:
+        for name in left:
+            print(f'{_FIXTURES}: left out, the file system cannot hold it: {name}')
+        header['left_out'] = left
+    # run each family and write its result file
+    options.out.mkdir(parents=True, exist_ok=True)
+    failed = False
+    for corpus in corpora:
+        folder = work / _RUNS / corpus.label
+        plan = runner.prepare(corpus, work=folder, seed=options.seed)
+        result = runner.run(plan, sides, now=options.now)
+        runner.discard(plan)
+        document = {**header, **result.report}
+        text = json.dumps(document, indent=2)
+        (options.out / f'{corpus.label}.json').write_text(text + '\n', encoding='utf-8')
+        _save(result.streams, options.out / corpus.label)
+        # print the differences and the searches that found nothing
+        count = len(result.differences)
+        s = 's' if count != 1 else ''
+        print(f'{corpus.label}: {count} difference{s}')
+        for difference in result.differences:
+            line = _line(difference)
+            print(f'  {line}')
+        for excused in result.excused:
+            line = _line(excused)
+            print(f'  registered: {line}')
+        for name in _no_hits(result.report):
+            print(f'  found nothing: {name}')
+        # two builds of v1 have nothing registered between them
+        if result.differences or (result.excused and not engines):
+            failed = True
+    if failed:
+        return 1
+    shutil.rmtree(work)
+    return 0
+
+
+def _container(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
+    """Run a command in the Linux container and return its exit code."""
+    # a `--` that parts the command from the options is not part of it
+    command = options.argv
+    if command[:1] == ['--']:
+        command = command[1:]
+    try:
+        return container.run(command, commit=options.commit, out=options.out)
+    except ValueError as e:
+        parser.error(f'{e}')
+
+
 def _sides(
     names: Sequence[str],
     declared: Mapping[str, Side],
@@ -814,9 +995,14 @@ def _save(streams: Mapping[str, bytes], folder: pathlib.Path) -> None:
 
 
 def _line(difference: Union[Difference, Excused, replay.Finding]) -> str:
-    """Return one difference, excused command or finding as a line of the summary."""
+    """Return one difference, excused command or finding as a line of the summary.
+
+    A path may hold bytes that are no valid UTF-8, which a string carries as
+    lone surrogates and no stream prints: the line spells each as an escape.
+    """
     fields = dataclasses.astuple(difference)
-    return ': '.join(field for field in fields if field)
+    line = ': '.join(field for field in fields if field)
+    return line.encode('utf-8', 'backslashreplace').decode('utf-8')
 
 
 def _no_hits(report: Mapping[str, Any]) -> list[str]:

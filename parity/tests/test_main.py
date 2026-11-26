@@ -18,7 +18,9 @@ import pytest
 
 from parity import (
     __main__ as cli,
+    fixtures,
     kinds,
+    matrix,
     oracle,
     ported,
     registry,
@@ -30,7 +32,7 @@ from parity import (
     terminal,
 )
 
-from .conftest import NOW, _needs_git
+from .conftest import NOW, _needs_bytes, _needs_git
 
 __all__ = [
     'test_v1_sides_run_as_the_oracle_names_them',
@@ -51,6 +53,10 @@ __all__ = [
     'test_row_for_a_test_the_replay_holds_fails_the_replay',
     'test_whole_replay_accounts_for_v1s_tests_and_kinds',
     'test_replay_that_would_prove_nothing_is_refused',
+    'test_fixtures_command_runs_the_families_on_v1_and_on_an_engine',
+    'test_failed_family_keeps_its_streams_and_its_checkouts',
+    'test_difference_at_a_path_that_is_not_utf8_is_listed',
+    'test_fixtures_run_that_would_compare_nothing_is_refused',
 ]
 
 # a side that runs the command it is given and prints everything but the
@@ -93,6 +99,29 @@ import os, sys
 if 'read' in sys.argv[2:]:
     os.makedirs(sys.argv[1], exist_ok=True)
 os.execv(sys.argv[2], sys.argv[2:])
+"""
+
+# a side that runs the command it is given and adds a line to what it prints
+_WORDY = """
+import subprocess, sys
+result = subprocess.run(sys.argv[1:], capture_output=True)
+sys.stdout.buffer.write(result.stdout + b'more\\n')
+sys.stderr.buffer.write(result.stderr)
+sys.exit(result.returncode)
+"""
+
+# a side that runs the command it is given and leaves a file in the wiki
+# whose name is no valid UTF-8
+_STRAY = """
+import os, subprocess, sys
+result = subprocess.run(sys.argv[1:], capture_output=True)
+if '--path' in sys.argv:
+    root = os.fsencode(sys.argv[sys.argv.index('--path') + 1])
+    with open(os.path.join(root, b'stray-\\xe9.txt'), 'wb'):
+        pass
+sys.stdout.buffer.write(result.stdout)
+sys.stderr.buffer.write(result.stderr)
+sys.exit(result.returncode)
 """
 
 # two of v1's CLI tests: they call `map`, `init` and `read`
@@ -1067,6 +1096,189 @@ def test_replay_that_would_prove_nothing_is_refused(
         cli.main(argv)
     assert raised.value.code == 2
     assert message in capsys.readouterr().err
+    assert not out.exists()
+
+
+@_needs_git
+@pytest.mark.parametrize(
+    argnames=('second', 'families'),
+    argvalues=[(None, ['control', 'nested']), ('campaign', ['nested'])],
+    ids=['v1 alone', 'second engine'],
+)
+def test_fixtures_command_runs_the_families_on_v1_and_on_an_engine(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    second: Optional[str],
+    families: list[str],
+) -> None:
+    """The fixture families pass with v1 alone, and with v1's other build.
+
+    The command writes the families it is told to and runs each: the
+    matrix and then the family's own stages, or those alone for a family
+    whose wiki ``update`` refuses. With no engine both sides are v1 under
+    two hash seeds; with one, v1 is compared with it and with it on one
+    thread. Each family gets a result file, and the work folder is gone.
+    """
+    out = tmp_path / 'out'
+    work = tmp_path / 'work'
+    argv = ['fixtures', '--work', f'{work}', '--out', f'{out}', '--now', NOW]
+    for name in families:
+        argv += ['--family', name]
+    if second is not None:
+        argv += ['--engine', second]
+    assert cli.main(argv) == 0
+    lines = capsys.readouterr().out.splitlines()
+    sides = ['oracle']
+    runs = ['oracle seed 1', 'oracle seed 2']
+    if second is not None:
+        sides = ['oracle', second]
+        runs = ['oracle', second, f'{second} on one thread']
+    stages = {}
+    for name in families:
+        assert f'{name}: 0 differences' in lines
+        document = json.loads((out / f'{name}.json').read_text(encoding='utf-8'))
+        assert [item['name'] for item in document['sides']] == sides
+        stages[name] = [stage['name'] for stage in document['stages']]
+        own = [stage for stage in document['stages'] if stage['name'] == 'fixture']
+        (stage,) = own
+        assert stage['runs'] == runs
+        assert stage['differences'] == []
+        assert all(len(case['runs']) == len(runs) for case in stage['cases'])
+    assert stages['nested'] == ['fixture']
+    if 'control' in stages:
+        assert stages['control'][:5] == list(matrix.STAGES)
+        assert stages['control'][5:] == ['fixture', 'fixture forced']
+    assert not (work / 'fixtures').exists()
+
+
+@_needs_git
+def test_failed_family_keeps_its_streams_and_its_checkouts(
+    tmp_path: pathlib.Path,
+    engine: side.Side,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A family that shows a difference fails the run and leaves it to be read.
+
+    An engine that prints one line more than v1 differs on every command.
+    The command exits 1, prints each difference under its family, saves
+    the streams of every run of a command that differs, and keeps the
+    checkouts it wrote, so the family can be run again by hand.
+    """
+    relay = [sys.executable, '-c', _WORDY, *engine.argv]
+    sides = _sides_file(tmp_path, engine, argv=relay)
+    out = tmp_path / 'out'
+    work = tmp_path / 'work'
+    argv = [
+        'fixtures',
+        '--family',
+        'nested',
+        '--sides',
+        f'{sides}',
+        '--engine',
+        'engine',
+    ]
+    argv += ['--work', f'{work}', '--out', f'{out}', '--now', NOW]
+    assert cli.main(argv) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert '  fixture: engine: map: stdout' in lines
+    assert '  fixture: engine on one thread: map: stdout' in lines
+    document = json.loads((out / 'nested.json').read_text(encoding='utf-8'))
+    (stage,) = document['stages']
+    assert {difference['aspect'] for difference in stage['differences']} == {'stdout'}
+    saved = sorted(path.name for path in (out / 'nested' / 'fixture').iterdir())
+    assert '000 engine.out' in saved
+    assert '000 oracle.out' in saved
+    checkout = work / 'fixtures' / 'trees' / 'nested'
+    assert (checkout / 'wiki' / '.wiki' / 'settings.json').is_file()
+
+
+@_needs_git
+@_needs_bytes
+def test_difference_at_a_path_that_is_not_utf8_is_listed(
+    tmp_path: pathlib.Path,
+    engine: side.Side,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A difference at a path no stream can print is listed, byte by escape.
+
+    An engine that leaves a file whose name is no valid UTF-8 differs from
+    v1 at that path. The run reports it as any difference, exit 1, with
+    the byte spelled as an escape in the summary and in the result file.
+    """
+    relay = [sys.executable, '-c', _STRAY, *engine.argv]
+    sides = _sides_file(tmp_path, engine, argv=relay)
+    out = tmp_path / 'out'
+    work = tmp_path / 'work'
+    argv = ['fixtures', '--family', 'nested', '--sides', f'{sides}']
+    argv += ['--engine', 'engine']
+    argv += ['--work', f'{work}', '--out', f'{out}', '--now', NOW]
+    assert cli.main(argv) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert any(line.endswith('wiki/stray-\\udce9.txt') for line in lines)
+    document = json.loads((out / 'nested.json').read_text(encoding='utf-8'))
+    (stage,) = document['stages']
+    details = {difference['detail'] for difference in stage['differences']}
+    assert any(detail.endswith('wiki/stray-\udce9.txt') for detail in details)
+
+
+@_needs_git
+@pytest.mark.parametrize(
+    argnames=('broken', 'message'),
+    argvalues=[
+        ('reference', "--engine names 'oracle'"),
+        ('unknown', 'No side is named'),
+        ('family', 'No fixture family is named'),
+        ('twice', 'named twice'),
+        ('entry', "a second engine refuses, by registry entry: {'refused-page': 'D4'}"),
+        ('both', '--every runs every family'),
+        ('every', 'needs a file system'),
+        ('work', 'exists'),
+        ('repository', 'inside the repository'),
+    ],
+)
+def test_fixtures_run_that_would_compare_nothing_is_refused(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    broken: str,
+    message: str,
+) -> None:
+    """A fixtures run that would compare nothing is refused before it writes.
+
+    An engine that is v1 itself or that no file declares, a family the
+    generator does not have or is given twice, a tree a second engine
+    refuses, every family and some at once, every family on a file system
+    that cannot hold one, and a work folder that exists or lies in a
+    repository: the command exits 2 with a message, writes no family and
+    no result file, and leaves a work folder that was there as it stood.
+    """
+    if broken == 'every' and not fixtures.lacking(tmp_path):
+        pytest.skip('the file system holds every family')
+    out = tmp_path / 'out'
+    work = tmp_path / 'work'
+    if broken == 'work':
+        (work / 'fixtures').mkdir(parents=True)
+    elif broken == 'repository':
+        (work / '.git').mkdir(parents=True)
+    seconds = {'reference': 'oracle', 'unknown': 'absent'}
+    families = {
+        'family': ['nseted'],
+        'twice': ['nested', 'nested'],
+        'entry': ['nested', 'refused-page'],
+        'every': [],
+    }
+    argv = ['fixtures', '--work', f'{work}', '--out', f'{out}']
+    for family in families.get(broken, ['nested']):
+        argv += ['--family', family]
+    if broken in seconds:
+        argv += ['--engine', seconds[broken]]
+    if broken in ('both', 'every'):
+        argv += ['--every']
+    held = sorted(tmp_path.rglob('*'))
+    with pytest.raises(SystemExit) as raised:
+        cli.main(argv)
+    assert raised.value.code == 2
+    assert message in capsys.readouterr().err
+    assert sorted(tmp_path.rglob('*')) == held
     assert not out.exists()
 
 
