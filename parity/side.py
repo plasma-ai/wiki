@@ -46,6 +46,9 @@ class Side:
         identity: The identity record the side must write on every command
             (its engine, its version and its build id). Empty for a side
             that writes none.
+        judge: A whole command that answers what the side's interpreter
+            makes of an input, for the classifiers of the registry. Empty
+            for a side that has none.
 
     """
 
@@ -55,6 +58,7 @@ class Side:
     describe: tuple[str, ...] = ()
     notice: bool = True
     identity: Mapping[str, str] = dataclasses.field(default_factory=dict)
+    judge: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -65,8 +69,10 @@ class Outcome:
         stdout: The bytes written to stdout.
         stderr: The bytes written to stderr, without the notice line.
         code: The exit code.
-        notice: Whether stderr opened with the notice, on a side that
-            prints it; always true on a side that prints none.
+        notice: Whether the side kept the notice rule: stderr opened with
+            the notice on a command that reads the clock, and without it
+            on a command that does not. Always true on a side that prints
+            none.
         identity: Whether the command wrote the side's identity record, and
             nothing else, on a side that has one; always true on a side
             that has none.
@@ -123,6 +129,7 @@ def run(
     *,
     cwd: pathlib.Path,
     env: Mapping[str, str],
+    notice: bool = True,
 ) -> Outcome:
     """Run one wiki command on ``side`` and capture it.
 
@@ -131,10 +138,12 @@ def run(
         args: Wiki arguments, appended to the side's prefix.
         cwd: Working directory of the command.
         env: Full environment, from :func:`environment`.
+        notice: Whether the command reads the clock, so that a side which
+            prints the notice prints it here.
 
     Returns:
         The streams and the exit code, with the notice line removed from
-        the head of stderr on a side that prints it, and whether the side
+        the head of stderr where the side owes it, and whether the side
         proved its identity.
 
     """
@@ -148,16 +157,16 @@ def run(
     else:
         result = _spawn(side, args, cwd=cwd, env=env)
     stderr = result.stderr
-    notice = True
+    kept = True
     if side.notice:
-        notice = stderr.startswith(NOTICE)
-        if notice:
+        kept = stderr.startswith(NOTICE) == notice
+        if kept and notice:
             stderr = stderr[len(NOTICE) :]
     return Outcome(
         stdout=result.stdout,
         stderr=stderr,
         code=result.returncode,
-        notice=notice,
+        notice=kept,
         identity=identity,
     )
 

@@ -1,0 +1,173 @@
+# The registry of differences: every difference from v1 that a comparison may
+# excuse. The rules are in SPEC.md, under Registry. Each entry has a scope, a
+# reason, a status (`proposed` or `approved`), the numbers of the plan's
+# questions whose Decision lines approve it, and a check:
+#
+# - `classifier`: harness code recognizes the difference in a comparison and
+#   excuses it (`parity/classify.py`), with fixtures the self-check runs;
+# - `test`: the tests that `tests` names pin it, and a difference of its kind
+#   anywhere else is unregistered;
+# - `none`: nothing checks it, for the reason `unchecked` gives.
+#
+# An entry with a classifier may name tests too, for the clauses a test pins.
+# `tests` is empty until the test exists.
+
+[D1]
+scope = """
+The tail of an error message that a library wrote: `re` text for an invalid \
+user regex, SQLite text, the JSON text after `Malformed JSON in <name>: `, and \
+the text of a failed plugin download in `init` and `config`. Also the label of \
+a `_merge` error line, `error:` where v1 prints the Python exception class \
+name, and `re`'s `FutureWarning` lines, which v1 prints with its install path \
+and the Rust engine does not print. The stream and the exit code still match, \
+and so does the wiki-written prefix where there is one. The `re` and JSON \
+clauses apply only when the oracle's own `re.compile` or `json.loads` raises \
+on the input.\
+"""
+reason = """
+The SQLite text belongs to the library version. The `re` and JSON texts are \
+cost choices: matching them means porting the parsers' error order and \
+positions, and CPython changed the JSON sentences itself in 3.13.\
+"""
+status = "approved"
+question = [7]
+check = "classifier"
+tests = []
+
+[D2]
+scope = """
+The layout of `--help`, the framing lines of a usage error, and the message \
+line of a usage error the argument parser detects. Help sentences, options, \
+defaults, exit code 2, the stream and an empty stdout still match. A \
+parameter error raised by wiki's own code keeps v1's message text. typer's \
+`--install-completion` and `--show-completion` are unknown options, exit 2.\
+"""
+reason = """
+The layout already differs across the typer versions v1 allows, so there is \
+no single target, and no v1 test or consumer reads the parser's usage \
+sentences.\
+"""
+status = "approved"
+question = [7]
+check = "classifier"
+tests = []
+
+[D3]
+scope = """
+Input the Rust engine refuses with a clear error where v1 would run it: a \
+user regex outside the supported set or past the size limits; a \
+`timestamp.format` directive outside the supported set; a named time zone on \
+a host with no system zone files, which v1 can load from the `tzdata` \
+package; and a settings file that holds `NaN`, `Infinity`, a lone surrogate \
+escape, or nesting of 128 levels or more, refused under the \
+`Malformed JSON in <name>: ` prefix. "Outside" is decided from the oracle \
+side only.\
+"""
+reason = """
+Running the input on a different regex or time library would give silently \
+different verdicts. The engine cannot see the interpreter's packages. A Rust \
+string cannot hold a lone surrogate, and v1's own depth limit depends on the \
+C stack.\
+"""
+status = "approved"
+question = [7, 10]
+check = "classifier"
+tests = []
+
+[D4]
+scope = """
+A managed file or folder name that is not valid UTF-8 is refused with exit 2 \
+before any write, naming the path. So is a non-UTF-8 name that only an \
+exclude pattern would remove. Linux only.\
+"""
+reason = """
+v1 drops a managed entry's index row but still walks it, and writes its \
+`name:` in a form its own YAML loader then rejects.\
+"""
+status = "approved"
+question = [7]
+check = "test"
+tests = []
+
+[D5]
+scope = """
+A bug in the Rust engine prints Rust's panic message and exits 101, where a \
+v1 bug prints a Python exception text.\
+"""
+reason = "The two are not comparable."
+status = "approved"
+question = [7]
+check = "none"
+unchecked = """
+The forced-panic test covers the exit code, and a panic in any corpus run \
+fails the gate.\
+"""
+
+[D6]
+scope = """
+A wiki with `.wiki/wiki.py` is refused by every command but `_merge`, which \
+merges it without the hook, and `wiki trust` is not a command.\
+"""
+reason = "The Rust engine never runs Python."
+status = "approved"
+question = [2, 7]
+check = "test"
+tests = []
+
+[D7]
+scope = """
+Where v1's answer depends on its interpreter (the Unicode tables behind name \
+rules, whitespace, `\\w` and NFC; the PyYAML loader build), the Rust engine \
+follows the pinned oracle.\
+"""
+reason = """
+v1 has no single answer: it already differs from itself across the \
+interpreters in use.\
+"""
+status = "approved"
+question = [7]
+check = "none"
+unchecked = """
+Against the pinned oracle the entry produces no difference. The campaign \
+side is compared with the oracle on all corpora instead.\
+"""
+
+[D8]
+scope = "Outcomes while another process edits the tree during a run."
+reason = "They depend on timing in v1 too. The safety rules are tested instead."
+status = "approved"
+question = [7]
+check = "none"
+unchecked = "The race tests of the Rust engine cover the safety rules."
+
+[D9]
+scope = """
+The plugin download in `init` and `config` runs the system `curl`. Behind a \
+proxy that only the system settings name it fails with a warning that names \
+the URL, and on a host with no `curl` it is skipped with a warning that names \
+`curl`. Both exit 0, as any failed download does.\
+"""
+reason = """
+Reading the system proxy settings, or carrying a network and TLS library in \
+every source build, is a high price for one optional download.\
+"""
+status = "approved"
+question = [7, 14]
+check = "test"
+tests = []
+
+[D10]
+scope = """
+The files `install` writes are the installing version's own skill text, and \
+`install --link` points at the checkout the binary was built from. In a \
+binary installed from a wheel, `--link` is refused with exit 2 before any \
+write, naming plain `install`.\
+"""
+reason = """
+v1 has no single answer: it installs whatever its own package holds, at its \
+own path. A wheel holds no skill folder to link.\
+"""
+status = "approved"
+question = [7]
+check = "test"
+tests = []

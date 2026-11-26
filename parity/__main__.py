@@ -1,19 +1,29 @@
 """Command-line interface for ``parity``.
 
-usage: python -m parity matrix --a NAME --b NAME [--sides FILE] --corpora FILE --work DIR --out DIR
+usage: python -m parity matrix --a NAME --b NAME [--registered] [--sides FILE] --corpora FILE --work DIR --out DIR
        python -m parity selfcheck --side NAME [--sides FILE] --corpora FILE --work DIR --out DIR
+       python -m parity registry --side NAME [--sides FILE] --corpora FILE --work DIR --out DIR
        python -m parity oracle ensure [--side NAME]
        python -m parity oracle check [--skip NAME]
 
 ``matrix`` compares two sides over the matrix; ``selfcheck`` runs one side
-against itself, clean and doctored. Both exit 0 when every result is the
-expected one, and 1 otherwise. A run that would compare nothing -- no
-corpus, an unknown corpus, stage or side, one side named twice, a sides or
-corpora file of the wrong shape, a ``--now`` no engine takes, a checkout
-or a work folder the harness refuses, a side or a ``describe`` command
-that does not start, a side that does not prove its identity, a v1 side
-the oracle rules refuse -- exits 2 before it snapshots anything. A side is
-one the sides file declares, or a v1 side of ``oracle.toml``.
+against itself, clean and doctored; ``registry`` runs one side against a
+stand-in on the fixtures of the registry's classifiers. Each exits 0 when
+every result is the expected one, and 1 otherwise. A run that would compare
+nothing -- no corpus, an unknown corpus, stage or side, one side named
+twice, a sides or corpora file of the wrong shape, a ``--now`` no engine
+takes, a checkout or a work folder the harness refuses, a side or a
+``describe`` command that does not start, a side that does not prove its
+identity, a v1 side the oracle rules refuse, a registry file the harness
+cannot hold to its classifiers -- exits 2 before it snapshots anything. A
+side is one the sides file declares, or a v1 side of ``oracle.toml``.
+``registry --release`` also exits 1 while an entry of the registry is not
+ready for a release.
+
+The registry lists what a second engine may do differently from v1, and two
+builds of v1 have nothing registered between them. ``matrix`` therefore
+counts a command the registry excuses as a result that is not the expected
+one, unless ``--registered`` says side ``b`` is a second engine.
 
 ``oracle ensure`` builds the oracle checkout and the venvs of its sides, and
 exits 2 when it refuses a checkout or a venv. ``oracle check`` holds
@@ -39,9 +49,10 @@ import sys
 import tempfile
 import traceback
 from collections.abc import Mapping, Sequence
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
-from . import config, oracle, runner, selfcheck, side, snapshot
+from . import config, oracle, registry, runner, selfcheck, side, snapshot
+from .classify import Excused
 from .compare import Difference
 from .matrix import STAGES
 from .oracle import CHECKS
@@ -65,11 +76,11 @@ _YEARS = (1001, 9998)
 _DESCRIPTION = """\
 Run two wiki engines on the same trees and report what they do differently.
 
-matrix and selfcheck exit 0 when every result is the expected one, and 1
-otherwise. A run that would compare nothing exits 2 with a message, before it
-snapshots anything. oracle ensure exits 2 when it refuses a checkout or a
-venv, and oracle check exits 1 when a check fails. An error of the harness
-itself prints its traceback and exits 2.
+matrix, selfcheck and registry exit 0 when every result is the expected one,
+and 1 otherwise. A run that would compare nothing exits 2 with a message,
+before it snapshots anything. oracle ensure exits 2 when it refuses a checkout
+or a venv, and oracle check exits 1 when a check fails. An error of the
+harness itself prints its traceback and exits 2.
 """
 
 
@@ -85,6 +96,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     summaries = {
         'matrix': 'Compare two sides over the command matrix.',
         'selfcheck': 'Check the harness with one side, clean and doctored.',
+        'registry': 'Check the classifiers of the registry with one side.',
     }
     for name, summary in summaries.items():
         command = commands.add_parser(name, help=summary, description=summary)
@@ -111,9 +123,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # fixed instant option
         now_help = f'RFC 3339 instant every side runs at (default: {_NOW}).'
         command.add_argument('--now', type=_instant, default=_NOW, help=now_help)
-        # sample seed option
-        seed_help = 'Seed of the matrix sample (default: 0).'
-        command.add_argument('--seed', type=int, default=0, help=seed_help)
+        if name == 'registry':
+            # release flag
+            release_help = 'Also fail while an entry is not ready for a release.'
+            command.add_argument('--release', action='store_true', help=release_help)
+        else:
+            # sample seed option
+            seed_help = 'Seed of the matrix sample (default: 0).'
+            command.add_argument('--seed', type=int, default=0, help=seed_help)
         if name == 'matrix':
             # reference side option
             a_help = 'Name of the side the other is compared against.'
@@ -121,6 +138,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # compared side option
             b_help = 'Name of the side compared against the first.'
             command.add_argument('--b', required=True, help=b_help)
+            # second engine flag
+            registered_help = 'Pass what the registry excuses: b is a second engine.'
+            command.add_argument(
+                '--registered',
+                action='store_true',
+                help=registered_help,
+            )
             # stage name option
             stage_help = 'Name of a stage to run (repeatable; default: every stage).'
             command.add_argument(
@@ -134,7 +158,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             command.add_argument('--keep', action='store_true', help=keep_help)
         else:
             # side name option
-            side_help = 'Name of the side to run against itself.'
+            side_help = 'Name of the side to run against itself or a stand-in.'
             command.add_argument('--side', required=True, help=side_help)
     summary = 'Build the oracle checkout, or hold oracle.toml level with v1.'
     command = commands.add_parser('oracle', help=summary, description=summary)
@@ -207,6 +231,11 @@ def _run(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
     """Run the parsed command and return the exit code."""
     if options.command == 'oracle':
         return _oracle(parser, options)
+    # read the registry
+    try:
+        entries = registry.load()
+    except ValueError as e:
+        parser.error(f'{e}')
     # read the sides and the corpora
     try:
         declared = {}
@@ -244,9 +273,16 @@ def _run(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
         header = _header(chosen, now=options.now)
     except ValueError as e:
         parser.error(f'{e}')
+    header['registry'] = {id: entry.status for id, entry in entries.items()}
     # run each corpus and write its result file
     options.out.mkdir(parents=True, exist_ok=True)
     failed = False
+    # list the entries that are not ready for a release
+    if options.command == 'registry':
+        waits = registry.unready(entries)
+        for line in waits:
+            print(f'registry: {line}')
+        failed = options.release and bool(waits)
     for label in labels:
         corpus = corpora[label]
         work = options.work / label
@@ -328,7 +364,11 @@ def _matrix(
     work: pathlib.Path,
     options: argparse.Namespace,
 ) -> tuple[dict[str, Any], bool]:
-    """Run the matrix on one corpus and save the streams that differ."""
+    """Run the matrix on one corpus and save the streams that differ.
+
+    The run passes with no difference, and with no excused command unless
+    ``--registered`` lets the registry's differences pass.
+    """
     plan = runner.prepare(corpus, work=work, seed=options.seed)
     result = runner.run(
         plan=plan,
@@ -347,9 +387,13 @@ def _matrix(
     for difference in result.differences:
         line = _line(difference)
         print(f'  {line}')
+    for excused in result.excused:
+        line = _line(excused)
+        print(f'  registered: {line}')
     for name in _no_hits(result.report):
         print(f'  found nothing: {name}')
-    return dict(result.report), not result.differences
+    passed = (not result.differences) and (options.registered or not result.excused)
+    return dict(result.report), passed
 
 
 def _selfcheck(
@@ -359,14 +403,20 @@ def _selfcheck(
     work: pathlib.Path,
     options: argparse.Namespace,
 ) -> tuple[dict[str, Any], bool]:
-    """Run the self-check on one corpus and save the streams of a failed check."""
-    checks = selfcheck.run(
-        corpus=corpus,
-        base=base,
-        work=work,
-        now=options.now,
-        seed=options.seed,
-    )
+    """Run the self-check, or the registry check, on one corpus.
+
+    The streams of a failed check are saved.
+    """
+    if options.command == 'registry':
+        checks = selfcheck.registry(corpus, base, work=work, now=options.now)
+    else:
+        checks = selfcheck.run(
+            corpus=corpus,
+            base=base,
+            work=work,
+            now=options.now,
+            seed=options.seed,
+        )
     rows = []
     for check in checks:
         # print the verdict and what the check found
@@ -375,6 +425,9 @@ def _selfcheck(
         for difference in check.found:
             line = _line(difference)
             print(f'  {line}')
+        for excused in check.excused:
+            line = _line(excused)
+            print(f'  registered: {line}')
         for name in _no_hits(check.report):
             print(f'  found nothing: {name}')
         if not check.passed:
@@ -385,6 +438,8 @@ def _selfcheck(
             'passed': check.passed,
             'expected': [dataclasses.asdict(item) for item in check.expected],
             'found': [dataclasses.asdict(item) for item in check.found],
+            'registered': [dataclasses.asdict(item) for item in check.registered],
+            'excused': [dataclasses.asdict(item) for item in check.excused],
             'run': check.report,
         }
         rows.append(row)
@@ -400,8 +455,8 @@ def _save(streams: Mapping[str, bytes], folder: pathlib.Path) -> None:
         target.write_bytes(stream)
 
 
-def _line(difference: Difference) -> str:
-    """Return one difference as a line of the printed summary."""
+def _line(difference: Union[Difference, Excused]) -> str:
+    """Return one difference, or one excused command, as a line of the summary."""
     fields = dataclasses.astuple(difference)
     return ': '.join(field for field in fields if field)
 

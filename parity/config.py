@@ -58,16 +58,18 @@ def load_sides(path: pathlib.Path) -> dict[str, Side]:
 
     Each table is one side: ``argv`` is the command prefix, ``env`` an
     optional table of variables for that side only, ``describe`` an
-    optional whole command that prints what the side is made of, and
+    optional whole command that prints what the side is made of,
     ``notice`` whether the side prints the ``WIKI_FREEZE_TIME`` notice
-    (true unless stated).
+    (true unless stated), and ``judge`` an optional whole command that
+    answers what the side's interpreter makes of an input.
 
     Raises:
         ValueError: If the file is not TOML, if a top-level value is not a
             table, or if a side's ``argv`` is not a non-empty list of
             strings, its ``env`` not a table of strings, its ``describe``
-            not a list of strings, or its ``notice`` not a boolean. Every
-            side of the file is checked, whether or not the run names it.
+            or its ``judge`` not a list of strings, or its ``notice`` not a
+            boolean. Every side of the file is checked, whether or not the
+            run names it.
 
     """
     data = tomllib.loads(path.read_text(encoding='utf-8'))
@@ -96,12 +98,18 @@ def load_sides(path: pathlib.Path) -> dict[str, Side]:
             raise ValueError(
                 f'Side {name!r}: notice must be true or false, got {notice!r}.'
             )
+        judge = table.get('judge', [])
+        if not _is_string_list(judge):
+            raise ValueError(
+                f'Side {name!r}: judge must be a list of strings, got {judge!r}.'
+            )
         result[name] = Side(
             name=name,
             argv=tuple(argv),
             env=dict(env),
             describe=tuple(describe),
             notice=notice,
+            judge=tuple(judge),
         )
     return result
 

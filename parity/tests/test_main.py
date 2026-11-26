@@ -16,7 +16,7 @@ from typing import Optional
 
 import pytest
 
-from parity import __main__ as cli, oracle, runner, selfcheck, side
+from parity import __main__ as cli, oracle, registry, runner, selfcheck, side
 
 from .conftest import NOW, _needs_git
 
@@ -24,10 +24,12 @@ __all__ = [
     'test_v1_sides_run_as_the_oracle_names_them',
     'test_matrix_command_strips_only_a_declared_notice',
     'test_keep_leaves_the_snapshot_and_every_tree',
+    'test_matrix_command_passes_an_excused_command_only_when_told',
     'test_run_that_would_compare_nothing_is_refused',
     'test_harness_error_exits_2',
     'test_oracle_check_tells_a_failed_check_from_a_run_that_cannot_start',
     'test_failed_selfcheck_keeps_its_streams_and_trees',
+    'test_registry_command_proves_the_classifiers',
 ]
 
 # a side that runs the command it is given and prints everything but the
@@ -39,6 +41,17 @@ notice = {side.NOTICE!r}
 stderr = result.stderr
 if stderr.startswith(notice):
     stderr = stderr[len(notice):]
+sys.stdout.buffer.write(result.stdout)
+sys.stderr.buffer.write(stderr)
+sys.exit(result.returncode)
+"""
+
+# a side that runs the command it is given and words the text of `re` its
+# own way, as a second engine may
+_WORDED = """
+import subprocess, sys
+result = subprocess.run(sys.argv[1:], capture_output=True)
+stderr = result.stderr.replace(b'unterminated subpattern', b'unclosed group')
 sys.stdout.buffer.write(result.stdout)
 sys.stderr.buffer.write(stderr)
 sys.exit(result.returncode)
@@ -180,6 +193,46 @@ def test_keep_leaves_the_snapshot_and_every_tree(
 
 @_needs_git
 @pytest.mark.parametrize(
+    argnames=('options', 'code'),
+    argvalues=[([], 1), (['--registered'], 0)],
+    ids=['two builds of v1', 'second engine'],
+)
+def test_matrix_command_passes_an_excused_command_only_when_told(
+    tmp_path: pathlib.Path,
+    corpus: runner.Corpus,
+    engine: side.Side,
+    capsys: pytest.CaptureFixture[str],
+    options: list[str],
+    code: int,
+) -> None:
+    """A difference the registry lists passes only against a second engine.
+
+    The second side words the text of an invalid pattern its own way, which
+    the registry excuses in a second engine. Between two builds of v1
+    nothing is registered, so the command lists the excused command and
+    exits 1, and exits 0 only where ``--registered`` says what the second
+    side is.
+    """
+    sides = tmp_path / 'sides.toml'
+    worded = [sys.executable, '-c', _WORDED, *engine.argv]
+    sides.write_text(f'[worded]\nargv = {json.dumps(worded)}\n', encoding='utf-8')
+    corpora = _corpora_file(tmp_path, corpus)
+    out = tmp_path / 'out'
+    work = tmp_path / 'work'
+    argv = [
+        'matrix',
+        *('--sides', f'{sides}', '--a', 'oracle', '--b', 'worded'),
+        *('--corpora', f'{corpora}', '--stage', 'query'),
+        *('--work', f'{work}', '--out', f'{out}', '--now', NOW),
+    ]
+    assert cli.main([*argv, *options]) == code
+    lines = capsys.readouterr().out.splitlines()
+    assert 'example: 0 differences' in lines
+    assert '  registered: query: worded: match (: D1' in lines
+
+
+@_needs_git
+@pytest.mark.parametrize(
     argnames=('broken', 'message'),
     argvalues=[
         # the command line
@@ -193,6 +246,8 @@ def test_keep_leaves_the_snapshot_and_every_tree(
         ('corpora', 'declares no corpus.'),
         ('argv', 'argv must be'),
         ('taken', 'names as v1 sides'),
+        # the registry file
+        ('registry', 'has the status'),
         # the checkout and the work folder
         ('worktree', '.git is not a folder'),
         ('work', 'the harness makes it new'),
@@ -214,6 +269,7 @@ def test_keep_leaves_the_snapshot_and_every_tree(
         'corpora',
         'argv',
         'taken',
+        'registry',
         'worktree',
         'work',
         'side',
@@ -244,8 +300,9 @@ def test_run_that_would_compare_nothing_is_refused(
     with itself, or two sides that fail alike, and report no difference.
     A sides file that takes the name of a v1 side would pass something
     else off as the oracle, and so would a v1 side that runs another
-    build than the one it is expected to be. The command exits 2 with a
-    message instead, before it snapshots anything or writes a result
+    build than the one it is expected to be. A registry file that breaks
+    its rules could excuse what nobody approved. The command exits 2 with
+    a message instead, before it snapshots anything or writes a result
     file, and leaves a work folder that was there as it stood.
     """
     # a working side beside the one a case breaks
@@ -275,6 +332,12 @@ def test_run_that_would_compare_nothing_is_refused(
         other = dataclasses.replace(engine, identity=expected)
         monkeypatch.setattr(oracle, 'side', lambda *_: other)
         first = 'oracle'
+    # the registry file holds an entry under a status it does not have
+    if broken == 'registry':
+        text = registry.PATH.read_text(encoding='utf-8')
+        changed = tmp_path / 'differences.toml'
+        changed.write_text(text.replace('"approved"', '"agreed"'), encoding='utf-8')
+        monkeypatch.setattr(registry, 'PATH', changed)
     # the corpora file, the checkout and the work folder
     corpora = _corpora_file(tmp_path, corpus)
     out = tmp_path / 'out'
@@ -415,6 +478,51 @@ def test_failed_selfcheck_keeps_its_streams_and_trees(
     assert stream.read_bytes() == f'{seed}\n'.encode()
     tree = work / 'example' / 'failed' / 'clean' / 'pristine' / run / 'tree'
     assert (tree / corpus.root / '_index.md').is_file()
+
+
+@_needs_git
+def test_registry_command_proves_the_classifiers(
+    tmp_path: pathlib.Path,
+    corpus: runner.Corpus,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The registry check passes with v1, and says what a release waits for.
+
+    Every fixture of a classifier is excused under its entry or reported,
+    as its tree's check expects, and the result file holds both lists with
+    the status of every entry. An entry that names no test yet is printed
+    and fails the command only under ``--release``.
+    """
+    corpora = _corpora_file(tmp_path, corpus)
+    out = tmp_path / 'out'
+    work = tmp_path / 'work'
+    argv = [
+        'registry',
+        *('--side', 'oracle', '--corpora', f'{corpora}'),
+        *('--work', f'{work}', '--out', f'{out}', '--now', NOW),
+    ]
+    assert cli.main(argv) == 0
+    waits = [
+        line for line in capsys.readouterr().out.splitlines() if 'names no' in line
+    ]
+    document = json.loads((out / 'example.json').read_text(encoding='utf-8'))
+    entries = registry.load()
+    assert document['registry'] == {id: entry.status for id, entry in entries.items()}
+    assert waits == [f'registry: {line}' for line in registry.unready(entries)]
+    checks = {check['name']: check for check in document['checks']}
+    assert all(check['passed'] for check in checks.values())
+    excused = {item['entry'] for check in checks.values() for item in check['excused']}
+    assert excused == {'D1', 'D2', 'D3'}
+    reported = {item['case'] for check in checks.values() for item in check['found']}
+    assert reported == {
+        'changed prefix',
+        'changed parameter message',
+        'supported construct',
+        'unnamed field',
+    }
+    # the snapshot and every clone are gone
+    assert not (work / 'example').exists()
+    assert cli.main([*argv, '--release']) == (1 if waits else 0)
 
 
 # ------ helpers

@@ -468,15 +468,23 @@ side: clean under two hash seeds, then against a doctored copy for each check in
 the spec's table; the unit tests in `parity/tests` pin the rules no doctored
 check reaches. `parity/SPEC.md` is the specification, and a change to a rule
 changes the spec and the matching doctored check or unit test in the same
-commit. Two sides that fail the same way agree on everything, so each matrix
-case names the exit codes it allows (`_case` in `parity/matrix.py`), and a
-search or match draws its word from the text the command reads; a new case
-states both. The harness treats a side as a black box, so it imports nothing
-from `wiki` and nothing from `tests/`: its own tests run v1 as a side. Corpus
-paths come only from the TOML file a run names: nothing committed names a
-private wiki, its paths, its sizes or its text, and result files stay outside
-the repository. The harness snapshots a checkout and runs only in clones, in a
-new work folder outside any wiki.
+commit. `parity/differences.toml` is the registry of differences, the one list
+of what a comparison may excuse. A classifier (`parity/classify.py`) recognizes
+an entry's difference, and `python -m parity registry` proves each one with one
+side against a stand-in: on fixtures inside the entry's scope and on one just
+outside it, which must still be reported. The registry is for a second engine:
+between two builds of v1 nothing is registered, so `matrix` fails on an excused
+command unless `--registered` is given. A change to the registry or to a
+classifier changes the entry, the spec and the fixtures in the same commit, and
+its pull request names the question whose Decision line approves it. Two sides
+that fail the same way agree on everything, so each matrix case names the exit
+codes it allows (`_case` in `parity/matrix.py`), and a search or match draws its
+word from the text the command reads; a new case states both. The harness treats
+a side as a black box, so it imports nothing from `wiki` and nothing from
+`tests/`: its own tests run v1 as a side. Corpus paths come only from the TOML
+file a run names: nothing committed names a private wiki, its paths, its sizes
+or its text, and result files stay outside the repository. The harness snapshots
+a checkout and runs only in clones, in a new work folder outside any wiki.
 
 The oracle is v1 at the commit `parity/oracle.toml` names, the merge base of
 this branch and `dev`. `python -m parity oracle ensure` builds its checkout, a
@@ -488,9 +496,9 @@ side runs through `parity/launcher.py` and proves on every command that it is
 the oracle commit. Never edit the oracle checkout, and never sync or install
 into its venvs by hand: the harness refuses a checkout or a venv that is not
 what the file names. `python -m parity oracle check` holds the file level with
-v1; run it after `git fetch origin` when a work session starts. The two scripts
-the harness runs inside a side's interpreter, `launcher.py` and `facts.py`,
-import nothing from `parity`.
+v1; run it after `git fetch origin` when a work session starts. The three
+scripts the harness runs inside a side's interpreter, `launcher.py`, `facts.py`
+and `judge.py`, import nothing from `parity`.
 
 ### Run Bracket
 

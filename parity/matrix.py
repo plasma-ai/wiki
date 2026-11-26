@@ -71,6 +71,9 @@ class Case:
         writes: Whether the command may write outside the cache folder.
         hits: Whether the command is built to find something. Exit code 1
             on every run then means the case compared only "no match".
+        notice: Whether the command reads the clock. One that the argument
+            parser ends, with a usage error or a help page, does not, and
+            no side prints the clock notice on it.
 
     """
 
@@ -80,6 +83,7 @@ class Case:
     codes: frozenset[int] = _DONE
     writes: bool = False
     hits: bool = False
+    notice: bool = True
 
 
 @dataclasses.dataclass(frozen=True)
@@ -93,6 +97,8 @@ class Stage:
             side then runs on the tree and caches every side left there.
             ``None`` starts from the snapshot.
         cold: Whether the tree starts with its cache folder removed.
+        settings: Text the wiki's settings file holds when the stage
+            starts. ``None`` leaves the file as the tree has it.
 
     """
 
@@ -100,6 +106,7 @@ class Stage:
     cases: tuple[Case, ...]
     base: Optional[str] = None
     cold: bool = False
+    settings: Optional[str] = None
 
 
 @dataclasses.dataclass(frozen=True)

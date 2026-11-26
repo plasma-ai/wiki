@@ -32,6 +32,8 @@ class Record:
         changes: The manifest content the command changed, by path;
             ``None`` for a path that is gone.
         view: The caches after the command.
+        settings: The bytes of the wiki's settings file as the command
+            found it; ``None`` for a tree that holds none.
 
     """
 
@@ -39,6 +41,7 @@ class Record:
     touched: tuple[str, ...]
     changes: Mapping[str, Optional[tuple]]
     view: View
+    settings: Optional[bytes] = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -76,8 +79,9 @@ class Difference:
             content), ``touched`` (the touched set), ``wrote`` (a read-only
             command touched a path outside the cache folder), ``cache``,
             ``unexpected`` (an exit code the case does not allow),
-            ``notice`` (a side that prints the notice printed none) or
-            ``identity`` (a side did not prove it is the engine it names).
+            ``notice`` (a side that prints the notice printed none, or
+            printed one on a command that reads no clock) or ``identity``
+            (a side did not prove it is the engine it names).
         detail: The path or the cache key that differs, or the exit code
             the case does not allow; empty for a stream, a pair of exit
             codes, a notice or an identity.

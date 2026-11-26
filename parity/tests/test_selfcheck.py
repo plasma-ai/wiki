@@ -9,20 +9,38 @@ rules no doctored check reaches.
 
 from __future__ import annotations
 
+import dataclasses
 import pathlib
+import sys
+from typing import Optional
 
 import pytest
 
 from parity import matrix, runner, selfcheck, side
+from parity.matrix import Case
 
 from .conftest import NOW, _needs_git
 
 __all__ = [
     'test_one_engine_against_itself_shows_no_difference',
     'test_doctored_side_shows_exactly_its_difference',
+    'test_excused_command_fails_a_check',
 ]
 
 pytestmark = _needs_git
+
+# a side that runs the command it is given and, under the hash seed 2, words
+# the text of `re` its own way
+_WORDED = """
+import os, subprocess, sys
+result = subprocess.run(sys.argv[1:], capture_output=True)
+stderr = result.stderr
+if os.environ['PYTHONHASHSEED'] == '2':
+    stderr = stderr.replace(b'unterminated subpattern', b'unclosed group')
+sys.stdout.buffer.write(result.stdout)
+sys.stderr.buffer.write(stderr)
+sys.exit(result.returncode)
+"""
 
 
 def test_one_engine_against_itself_shows_no_difference(
@@ -73,3 +91,40 @@ def test_doctored_side_shows_exactly_its_difference(
     check = selfcheck.doctored(plan, engine, name, now=NOW)
     assert check.expected, 'every doctored check expects a difference'
     assert sorted(check.found) == sorted(check.expected)
+
+
+@pytest.mark.parametrize(
+    argnames='name',
+    argvalues=[None, 'stdout'],
+    ids=['clean', 'doctored'],
+)
+def test_excused_command_fails_a_check(
+    tmp_path: pathlib.Path,
+    corpus: runner.Corpus,
+    engine: side.Side,
+    name: Optional[str],
+) -> None:
+    """A command the registry excuses fails a check of one engine against itself.
+
+    The side words a library's text by its hash seed, which the registry
+    excuses in a second engine. One engine has nothing registered against
+    itself: the clean check fails though it reports no difference, and a
+    doctored check fails though it reports exactly its own.
+    """
+    plan = runner.prepare(corpus, work=tmp_path / 'work')
+    # put an invalid pattern before the commands of the stage a check doctors
+    (full,) = (stage for stage in plan.stages if stage.name == 'full')
+    invalid = Case(name='match (', args=('match', '('), codes=frozenset({2}))
+    full = dataclasses.replace(full, cases=(invalid, *full.cases))
+    staged = dataclasses.replace(plan, stages=(full,))
+    worded = dataclasses.replace(
+        engine,
+        argv=(sys.executable, '-c', _WORDED, *engine.argv),
+    )
+    if name is None:
+        check = selfcheck.clean(staged, worded, now=NOW)
+    else:
+        check = selfcheck.doctored(staged, worded, name, now=NOW)
+    assert sorted(check.found) == sorted(check.expected)
+    assert [(item.case, item.entry) for item in check.excused] == [('match (', 'D1')]
+    assert not check.passed

@@ -12,8 +12,9 @@ import time
 from collections.abc import Mapping, Sequence
 from typing import Any, Optional
 
-from . import cache, compare, manifest, matrix, side, snapshot
+from . import cache, classify, compare, manifest, matrix, side, snapshot
 from .cache import CACHE
+from .classify import Excused, Judge
 from .compare import Difference, Record, Run
 from .manifest import Entry
 from .matrix import Case, Sample, Stage
@@ -91,17 +92,20 @@ class Result:
     """What one matrix run found.
 
     Attributes:
-        differences: Every difference between the sides.
+        differences: Every difference between the sides that no entry of
+            the registry explains.
         report: The run as JSON data: the sample, and each case's exit
             code, stream digests and touched count on every run.
         streams: The streams of each case whose streams differ, by a file
             name that carries the stage, the case number and the run.
+        excused: The commands whose differences a registry entry explains.
 
     """
 
     differences: tuple[Difference, ...]
     report: Mapping[str, Any]
     streams: Mapping[str, bytes]
+    excused: tuple[Excused, ...] = ()
 
 
 def prepare(corpus: Corpus, *, work: pathlib.Path, seed: int = 0) -> Plan:
@@ -174,6 +178,8 @@ def run(
 
     Every side runs every stage on its own clone of the snapshot, one side
     at a time at the same absolute path, so absolute paths in output match.
+    A difference that an entry of the registry explains is excused, by the
+    word of the first side's judge where the entry needs it.
 
     Args:
         plan: The snapshot and its stages, from :func:`prepare`.
@@ -214,7 +220,14 @@ def run(
     kept = plan.kept
     # the manifest each kept tree ended with, for the stage that continues it
     ended: dict[tuple[str, str], Mapping[str, Entry]] = {}
+    # build the judge: the reference side's interpreter, under the variables
+    # its commands get
+    judge = None
+    if sides and sides[0].judge:
+        env = side.environment(sides[0], slot / _HOME, now=now)
+        judge = Judge(sides[0].judge, env=env)
     differences = []
+    excused = []
     streams = {}
     report = []
     for stage in stages:
@@ -263,9 +276,11 @@ def run(
         # compare the runs of the stage
         folder = manifest_path(plan.corpus, CACHE)
         found = compare.stage(stage, runs, folder=folder)
+        found, explained = classify.apply(stage, runs, found, judge=judge)
         differences.extend(found)
+        excused.extend(explained)
         streams.update(_differing_streams(stage, runs))
-        report.append(_stage_report(stage, runs, found))
+        report.append(_stage_report(stage, runs, found, explained))
     # remove the kept trees and build the report
     if kept.exists() and not keep:
         shutil.rmtree(kept)
@@ -275,7 +290,12 @@ def run(
         'sample': dataclasses.asdict(plan.sample),
         'stages': report,
     }
-    return Result(differences=tuple(differences), report=document, streams=streams)
+    return Result(
+        differences=tuple(differences),
+        report=document,
+        streams=streams,
+        excused=tuple(excused),
+    )
 
 
 def discard(plan: Plan) -> None:
@@ -328,6 +348,8 @@ def _run_stage(
         (slot / _CWD).mkdir()
     else:
         snapshot.clone(origin, slot)
+    if stage.settings is not None:
+        (plan.root / WIKI_SETTINGS).write_text(stage.settings, encoding='utf-8')
     env = side.environment(runner, slot / _HOME, now=now)
     snapshot.refresh(slot / _TREE, env=env)
     if stage.cold and (plan.root / CACHE).exists():
@@ -343,7 +365,11 @@ def _run_stage(
         cwd = slot / _CWD
         if case.inside is not None:
             cwd = plan.root / case.inside
-        outcome = side.run(runner, command(case, plan.root), cwd=cwd, env=env)
+        settings = None
+        if (plan.root / WIKI_SETTINGS).is_file():
+            settings = (plan.root / WIKI_SETTINGS).read_bytes()
+        args = command(case, plan.root)
+        outcome = side.run(runner, args, cwd=cwd, env=env, notice=case.notice)
         after = manifest.scan(slot, skip=skip, previous=before)
         touched = manifest.touched(before, after)
         changes = manifest.changes(before, after)
@@ -355,6 +381,7 @@ def _run_stage(
             touched=tuple(touched),
             changes=changes,
             view=view,
+            settings=settings,
         )
         records.append(record)
         before = after
@@ -411,6 +438,7 @@ def _stage_report(
     stage: Stage,
     runs: Sequence[Run],
     found: Sequence[Difference],
+    explained: Sequence[Excused],
 ) -> dict[str, Any]:
     """Return one stage as JSON data."""
     # record what every run did on each case
@@ -440,6 +468,7 @@ def _stage_report(
             if case.hits and all(run.records[index].outcome.code == 1 for run in runs)
         ],
         'differences': [dataclasses.asdict(difference) for difference in found],
+        'excused': [dataclasses.asdict(item) for item in explained],
     }
 
 

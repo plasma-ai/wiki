@@ -3,8 +3,9 @@
 The harness runs two engines on the same tree, with the same clock, environment
 and arguments, and reports everything they do differently: a byte of either
 stream, an exit code, a byte or a mode of any file, a file that one of them
-touched, and a cache entry. It excuses nothing. A run with no difference is the
-proof that the two engines are interchangeable on that tree.
+touched, and a cache entry. It excuses only what the registry of differences
+lists (Registry, below). A run with no other difference is the proof that the
+two engines are interchangeable on that tree.
 
 The harness is a development tool. It lives in `parity/` and is not part of the
 wheel or the sdist.
@@ -19,12 +20,16 @@ python -m parity oracle ensure
 python -m parity oracle check
 
 # compare two sides over the matrix
-python -m parity matrix --a NAME --b NAME [--sides SIDES] \
+python -m parity matrix --a NAME --b NAME [--registered] [--sides SIDES] \
     --corpora CORPORA --work DIR --out DIR
 
 # check the harness itself with one side
 python -m parity selfcheck --side NAME [--sides SIDES] \
     --corpora CORPORA --work DIR --out DIR
+
+# check the classifiers of the registry with one side
+python -m parity registry --side NAME [--sides SIDES] \
+    --corpora CORPORA --work DIR --out DIR [--release]
 ```
 
 A side name is `oracle` or `campaign`, the two v1 sides that
@@ -36,27 +41,29 @@ its main checkout are, whichever sides a run names. So the harness needs git on
 `PATH`, and its folder must lie in a checkout of the repository.
 
 `--corpus LABEL` (repeatable) picks corpora; the default is every corpus of the
-file. `--now` sets the fixed instant and `--seed` the seed of the matrix sample.
-`matrix` also takes `--stage NAME` (repeatable) and `--keep`, which leaves the
-snapshot and every tree in the work folder.
+file. `--now` sets the fixed instant. `matrix` and `selfcheck` take `--seed`,
+the seed of the matrix sample. `matrix` also takes `--stage NAME` (repeatable)
+and `--keep`, which leaves the snapshot and every tree in the work folder.
 
-Both commands exit 0 when every result is the expected one and 1 otherwise. A
-run that would compare nothing exits 2 with a message, before it snapshots
-anything: a corpora file with no corpus, an unknown corpus label, stage name or
-side name, the same side named as `--a` and `--b`, a sides or corpora file whose
-values have the wrong shape, a `--now` that is not an instant in the form
-`WIKI_FREEZE_TIME` takes, a checkout or a work folder the harness refuses (see
-Snapshots), a side or a `describe` command that cannot be started, a side whose
-`--version` fails or prints nothing, a side that does not prove its identity, or
-a v1 side the oracle rules refuse. An error of the harness itself prints a
-Python traceback and exits 2 as well, so exit 1 always means that a result is
-not the expected one.
+The three commands exit 0 when every result is the expected one and 1 otherwise.
+For `matrix` that is no difference, and no command the registry excuses unless
+`--registered` is given (Registry, Second engine). A run that would compare
+nothing exits 2 with a message, before it snapshots anything: a corpora file
+with no corpus, an unknown corpus label, stage name or side name, the same side
+named as `--a` and `--b`, a sides or corpora file whose values have the wrong
+shape, a `--now` that is not an instant in the form `WIKI_FREEZE_TIME` takes, a
+checkout or a work folder the harness refuses (see Snapshots), a side or a
+`describe` command that cannot be started, a side whose `--version` fails or
+prints nothing, a side that does not prove its identity, a v1 side the oracle
+rules refuse, or a registry file that breaks a rule of Registry. An error of the
+harness itself prints a Python traceback and exits 2 as well, so exit 1 always
+means that a result is not the expected one.
 
 The harness makes `<work>/<label>` for each corpus; it must not exist
 beforehand. `matrix` removes it at the end unless `--keep` is given. `selfcheck`
-removes it when every check passed; otherwise it leaves the snapshot and, under
-`failed/<check>/<stage>/<run>/`, the slot of every run of each failed check. An
-error of the harness itself leaves the folder as it stood.
+and `registry` remove it when every check passed; otherwise they leave the
+snapshot and, under `failed/<check>/<stage>/<run>/`, the slot of every run of
+each failed check. An error of the harness itself leaves the folder as it stood.
 
 `SIDES` is a TOML file with one table per side:
 
@@ -69,6 +76,7 @@ argv = ["/path/to/python", "-P", "/path/to/wrapper.py"]
 notice = false
 env = { EXAMPLE = "1" }
 describe = ["/path/to/python", "-P", "/path/to/describe.py"]
+judge = ["/path/to/python", "-P", "/path/to/judge.py"]
 ```
 
 `describe` is optional. It is a whole command, run once under the side's
@@ -77,6 +85,10 @@ file. Both sides of a release may report the same version, so this is where a
 result file says what each side is made of: the interpreter, the versions of the
 dependencies, and the commit or the path of the package. A `describe` that fails
 ends the run with exit 2.
+
+`judge` is optional too. It is a whole command that answers what the side's
+interpreter makes of an input, as `parity/judge.py` does (Registry,
+Classifiers).
 
 `CORPORA` is a TOML file with one table per corpus. The harness reads corpus
 paths from this file only. Labels are neutral (`corpus-a`), and the file that
@@ -92,16 +104,20 @@ root = "wiki"
 
 Each corpus gets one result file, `<out>/<label>.json`. It records the host
 (platform, Python, SQLite, git, the system git config), the instant, each side's
-argv, variables, identity, reported version and description, the sample, for
-every stage how many commands of each run ended with each exit code and which
-searches found nothing, and for every case the exit code, the size and sha256 of
-both streams, and the touched count on every run. `matrix` saves the streams of
-a case under `<out>/<label>/<stage>/` when they differ, and `selfcheck` saves
-those of a failed check under `<out>/<label>/<check>/<stage>/`. Result files
+argv, variables, identity, reported version and description, the status of every
+registry entry, the sample, for every stage how many commands of each run ended
+with each exit code, which searches found nothing and which commands a registry
+entry excused, and for every case the exit code, the size and sha256 of both
+streams, and the touched count on every run. `matrix` saves the streams of a
+case under `<out>/<label>/<stage>/` when they differ, an excused case included,
+and `selfcheck` and `registry` save those of a failed check under
+`<out>/<label>/<check>/<stage>/`. `selfcheck` and `registry` both write
+`<out>/<label>.json`, so each takes an `--out` folder of its own. Result files
 hold corpus paths and text, so they stay outside the repository too.
 
 The sections below are the rules of the harness, one part each: the oracle,
-sides, snapshots, comparison, caches, the matrix and the self-check.
+sides, snapshots, comparison, caches, the matrix, the registry and the
+self-check.
 
 ## Oracle
 
@@ -160,8 +176,9 @@ reason = "<why it waits>"
 - **Inside a side's interpreter.** The checkout is installed in place, so a
   side's interpreter can import every top-level folder of the oracle commit, a
   `parity` folder among them. Harness code that runs there is a script run by
-  its path with `-P` (the launcher, and `facts.py`, which prints what the
-  interpreter is made of), never an import of `parity`.
+  its path with `-P` (the launcher; `facts.py`, which prints what the
+  interpreter is made of; and `judge.py`, which answers the classifiers), never
+  an import of `parity`.
 
 `python -m parity oracle check` holds `oracle.toml` level with v1, by three
 checks. It reads branches as the remote-tracking references hold them, so fetch
@@ -186,8 +203,9 @@ so exit 1 always means that a check failed.
 ## Sides
 
 A side has a name, an argv prefix, variables of its own, a `notice` flag, an
-optional `describe` command, and an optional identity. The harness appends the
-wiki arguments to the prefix. The environment is built from nothing:
+optional `describe` command, an optional `judge` command, and an optional
+identity. The harness appends the wiki arguments to the prefix. The environment
+is built from nothing:
 
 | Variable              | Value                                                                            |
 | --------------------- | -------------------------------------------------------------------------------- |
@@ -218,13 +236,16 @@ The side's own variables are applied last. stdin is the null device.
   `notice = false`. A notice on a side that does not declare it is a stderr
   difference. Every matrix command reads the clock variable, so a side that
   declares the notice must print it on each one: a command without it is a
-  `notice` difference, since that side's clock was not fixed.
+  `notice` difference, since that side's clock was not fixed. A command that the
+  argument parser ends, with a usage error or a help page, reads no clock. Its
+  case says so, and a side that declares the notice must then print none: one
+  that does shows a `notice` difference, and the line stays in its stderr.
 - **Hash seed.** Outside the self-check a side has no `PYTHONHASHSEED` unless
   its table sets one.
 - **v1 sides.** The argv prefix of a v1 side is its venv's interpreter, `-P` and
   `parity/launcher.py`. The launcher runs the command line of the `wiki` package
   the interpreter imports, with `argv[0]` set to `wiki`. Its `describe` command
-  runs `parity/facts.py`.
+  runs `parity/facts.py`, and its `judge` command `parity/judge.py`.
 - **Identity.** A side with an identity gets `WIKI_TRACE=<file>` on every
   command, a fresh file outside the slot. Before it runs the command, the side
   appends one line of JSON to the file: `engine`, `version` and `build`. For a
@@ -324,7 +345,7 @@ case, an aspect and a detail:
 | `cache`      | the caches differ                                     | cache and key |
 | `wrote`      | a read-only command touched a path outside the caches | the path      |
 | `unexpected` | a command ended with an exit code its case forbids    | the exit code |
-| `notice`     | a side that declares the notice printed none          | empty         |
+| `notice`     | a side broke the notice rule of Sides                 | empty         |
 | `identity`   | a side did not leave its identity record              | empty         |
 
 The last four rows are checked on each run by itself, and the run they name is
@@ -405,6 +426,151 @@ has five stages:
   settings exclude) compares only the refusal, so it is an `unexpected`
   difference and the run does not pass; another `--seed` draws another sample.
 
+## Registry
+
+`parity/differences.toml` is the registry of differences: the one list of what a
+second engine may do differently from v1. A comparison excuses a difference only
+when an entry explains it, and every other difference fails the run.
+
+```toml
+[D1]
+scope = "<what differs, and what must still match>"
+reason = "<why the difference is registered and not matched>"
+status = "approved"
+question = [7]
+check = "classifier"
+tests = []
+```
+
+- **Status.** `proposed` or `approved`. An approved entry cites in `question`
+  the numbers of the questions whose Decision lines approve it. A proposed entry
+  is excused like an approved one, and holds a release.
+- **Check.** `classifier`: harness code recognizes the difference in a
+  comparison (Classifiers, below). `test`: the tests that `tests` names pin it,
+  and a difference of its kind anywhere else is unregistered. `none`: nothing
+  checks it, and `unchecked` says why. An entry with a classifier names tests
+  too where a test pins one of its clauses. `tests` is empty until the test
+  exists.
+- **Refusals.** Every run reads the file first, and exits 2 on an entry that is
+  not a table, an entry with a missing field, a field under another name than
+  those above, a field of the wrong shape (`question` is a list of numbers and
+  `tests` a list of strings; every other field is a string), a status or a check
+  outside those above, an approved entry that cites no question, or an unchecked
+  entry that gives no reason. The entries with the check `classifier` must be
+  exactly the entries the harness has a classifier for.
+- **Second engine.** The registry lists what a second engine may do differently
+  from v1. Two builds of v1 have nothing registered between them: the campaign
+  side against the oracle, or one release against the next. A `matrix` run
+  therefore fails on a command the registry excuses, and lists it as
+  `registered`, unless `--registered` says that side `b` is a second engine. The
+  self-check and its doctored checks run one engine and fail the same way.
+- **Release.** `python -m parity registry --release` also exits 1 while an entry
+  is proposed, or names no test where tests check it. Without `--release` the
+  command prints the same lines and they do not fail it.
+
+### Classifiers
+
+A classifier is the part of the harness that recognizes one registered
+difference. It exists only for an entry whose difference can appear on input the
+harness did not choose: D1, D2 and D3.
+
+- **Reference.** The first run of a stage is the reference, and the classifiers
+  take it for v1. Each later run is judged against it.
+- **Whole commands.** A classifier reads one command as the two runs ran it: the
+  arguments, both streams, both exit codes, what the later run touched, and the
+  bytes of `<root>/.wiki/settings.json` as the reference's command found them.
+  Every difference between the two runs on that command is excused together, or
+  none is. The result lists the command once, under the entry's id, as
+  `registered`.
+- **Never excused.** A difference before the first command or after the last
+  (`(baseline)`, `(end)`), and the rules a run breaks by itself: `wrote`,
+  `notice` and `identity`. `unexpected` is excused in one case only: the exit
+  codes differ, and the entry that explains the command covers that.
+- **Judge.** Whether v1's own library raises on an input, and whether an input
+  is outside the supported set, is decided by the reference side's interpreter
+  and by nothing else. `parity/judge.py` runs there, under the variables the
+  side's commands get, and answers one JSON request per line. A reference side
+  with no judge leaves every such question unanswered, and the difference stays
+  a difference.
+
+| Entry | Excuses                                                             | Holds when                                                                                                                                                                                                                                                                                                       |
+| ----- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D1    | `stderr` alone                                                      | After v1's `FutureWarning` lines are dropped, the two streams are equal, or they are equal up to the end of one wiki-written prefix and each then ends with one line of text. The lines dropped are those whose message the judge's `re` gives for a pattern of the command, each with the source line below it. |
+| D2    | `stderr` alone, or `stdout` alone                                   | `stderr`: both sides exit 2 with an empty stdout, and v1's stderr is a usage error. `stdout`: the arguments hold `--help`, both sides exit 0, v1's stdout opens with `Usage: ` and the other side's is not empty.                                                                                                |
+| D3    | every aspect that compares two runs, and the refusal's `unexpected` | v1 exits 0 or 1. The other side exits 2, touches nothing, prints nothing on stdout and one `Error: ` line on stderr. The judge calls an input of the command unsupported. A refusal of a settings field names the field.                                                                                         |
+
+- **D1, prefixes.** A text may follow four prefixes. `Error: ` on a `match`
+  command, where the judge's `re.compile` raises on the pattern and v1's text is
+  what it raises with.
+  `Error: naming.pattern in .wiki/settings.json is not a valid regex: `, held
+  the same way for the pattern of the settings file.
+  `Error: Malformed JSON in .wiki/settings.json: `, where the judge's
+  `json.loads` raises on the file's text.
+  `Error: Invalid FTS5 query <the query's repr>: `, which needs no judge: the
+  text behind it is SQLite's.
+- **D1, one line.** A text runs from the prefix to the end of its line, and that
+  line ends the stream on both sides. A line behind it is not a library's text,
+  so the command is reported. That holds for v1's side too: a text that carries
+  a line break of the input (`re`'s for a pattern such as `[z-<newline>]`,
+  SQLite's for a query that names a column across a line break) is reported and
+  not excused.
+- **D1, patterns.** The pattern of a `match` command is its first positional
+  argument, compiled with the flag `i` under `--ignore-case`. The pattern of the
+  settings file is its `naming.pattern`.
+- **D2, usage errors.** v1 prints `Usage:`, a `Try '... --help' for help.` line,
+  an empty line and `Error: <message>`. A message that opens with
+  `Invalid value: ` was raised by wiki's own code: the other side's stderr,
+  without its empty lines and the lines that open with `Usage:`, `Try '` or
+  `For more information`, must be `Error: <message>` and nothing else. Any other
+  message is the parser's own, and the other side's stderr only has to hold
+  something.
+- **D2, help.** The classifier excuses the layout of a help page. That its
+  commands, options, defaults and sentences are v1's is a test's to check.
+- **D3, inputs.** The settings file's text, its `naming.pattern`,
+  `timestamp.format` and `timestamp.timezone`, and the pattern of a `match`
+  command. A value of the JSON text that only Python's reader takes must be
+  refused under the `Error: Malformed JSON in .wiki/settings.json: ` prefix.
+- **D3, the refusal's line.** v1 reads the three settings fields only in the
+  commands that use them, so a tree whose field is outside the set would
+  otherwise excuse any one-line error of any command. A refusal of a field must
+  hold the field's name as v1's own settings errors spell it (`naming.pattern`,
+  `timestamp.format`, `timestamp.timezone`), and the field must be one the judge
+  calls unsupported. The line that refuses the pattern of a `match` command is
+  not held to any words: the input is that command's own argument.
+
+The supported set, as the judge decides it:
+
+| Input              | Inside the set                                                                                                                                                                                                                                                                                        | Outside it                                                                                                                                |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| A regex            | Literals and escapes, `.`, character classes, the digit, word and space classes with their negations, `^`, `$`, `\A`, `\Z`, `\b`, `\B`, capturing, non-capturing and named groups, alternation, greedy and lazy quantifiers, lookahead, lookbehind, backreferences, and the flags `i`, `m`, `s`, `x`. | Possessive quantifiers, atomic groups, conditional groups, the flag `a`, a backreference compared without case, and any other parse node. |
+| `timestamp.format` | `%Y`, `%m`, `%d`, `%H`, `%M`, `%S`, `%z`, `%%` and literal text.                                                                                                                                                                                                                                      | Any other `%` directive, and a `%` at the end.                                                                                            |
+| A named zone       | A zone with a file on `zoneinfo.TZPATH`.                                                                                                                                                                                                                                                              | A zone with none, which v1 loads only where the `tzdata` package is installed.                                                            |
+| The settings text  | Every value a strict JSON reader takes.                                                                                                                                                                                                                                                               | `NaN`, `Infinity`, `-Infinity`, a surrogate escape outside a pair, and arrays and objects nested 128 deep or more, counted from the text. |
+
+- **Regex walk.** The judge walks the tree `re._parser.parse` returns. A flag
+  counts where it is in force: an inline group that sets `i` puts the
+  backreferences inside it outside the set, and one that clears it does the
+  reverse. The flag `u` changes nothing in a text pattern and is inside the set.
+- **Spellings the walk cannot see.** The judge decides from the parse tree, so a
+  spelling the parser folds into a supported node is inside the set: a comment
+  group `(?#...)`, which leaves no node; a named character `\N{...}`, which is a
+  literal; and `\z`, which Python 3.14 reads as `\Z` and Python 3.13 refuses as
+  a bad escape. A second engine that refuses one of them is reported.
+- **Outside the classifiers.** Five clauses of the three entries have no
+  classifier code, so a difference of their kind is reported. Two are a test's
+  to hold: the text of a failed plugin download (D1), and typer's two completion
+  options, which a second engine does not have (D2). The label of a `_merge`
+  error line (D1) waits for a `_merge` command in the harness, which runs none.
+  A pattern past the compiled-size limits, and nesting past the depth limit
+  (D3), are limits of the second engine's regex library, and the judge's walk
+  does not hold them.
+- **No entry.** One library text has no clause in any entry. `init --settings`
+  with text that is not JSON ends in a parameter error of wiki's own code,
+  `Invalid value: --settings must be valid JSON (<text>).`, whose `<text>` is
+  what Python's `json` raises with. D2 holds a message that opens with
+  `Invalid value: ` byte for byte, and D1 covers JSON text only behind the
+  malformed-settings prefix, so another text there is reported.
+
 ## Self-Check
 
 A result of the harness counts only after the self-check passes on the same
@@ -416,6 +582,9 @@ corpus. It runs one engine on both sides.
   one thing in one command: the last command of one stage, so the change cannot
   reach another command's output. Each check runs that one stage and must report
   exactly the differences in the table, on that command, and no other.
+- **Nothing registered.** One engine has nothing registered against itself. A
+  clean or doctored check fails when a classifier excuses any command, whatever
+  it reports.
 
 | Check        | The doctored side                                                      | Stage   | Must show as                                |
 | ------------ | ---------------------------------------------------------------------- | ------- | ------------------------------------------- |
@@ -447,3 +616,62 @@ size, the text of an index row, and `meta`), each half of the touched rule, a
 deleted path, a symlink's target, an unreadable file, the `(baseline)` and
 `(end)` cases, the runs after the second, and an identity record left twice or
 not at all have no doctored check; the unit tests in `parity/tests` pin them.
+
+### Registry Check
+
+`python -m parity registry` proves the classifiers the way the doctored checks
+prove the comparison rules. It runs one engine against a stand-in: a wrapper
+(`parity/standin.py`) that runs the same engine and rewrites the streams and the
+exit code of the commands it is told to, so it prints what a second engine may
+print. A result against a second engine counts only after this check passes with
+the same harness and the same oracle. The fixtures bring their own inputs and
+arguments, so one corpus proves them.
+
+- **Fixtures.** Each classifier has fixtures it must excuse, and at least one
+  negative fixture: a difference just outside the entry's scope, which the
+  harness must report as unregistered, with exactly the differences in the
+  table. A fixture is one command.
+- **Trees.** Each tree is one stage: a clone of the snapshot whose settings file
+  holds what the snapshot's holds, with the one member the tree sets. Every
+  other setting of the wiki stays, so each tree changes one input of one
+  classifier. `snapshot` keeps the file as it is, and `malformed` holds its text
+  without the last character.
+- **Zones.** Both sides run with `PYTHONTZPATH` set to an empty folder and with
+  a `tzdata` package on `PYTHONPATH` that holds the one zone `Parity/Zone`. v1
+  then loads a zone that has no zone file, which is the case D3 registers.
+- **Stand-in.** An edit whose expression matches nothing fails the stand-in: a
+  stand-in that prints the real side's words would prove nothing.
+
+| Fixture                     | Entry | Tree        | Command                        | The stand-in                             | Must show as                             |
+| --------------------------- | ----- | ----------- | ------------------------------ | ---------------------------------------- | ---------------------------------------- |
+| `pattern text`              | D1    | `snapshot`  | `match (`                      | prints another text after `Error: `      | registered                               |
+| `pattern warning`           | D1    | `snapshot`  | `match` with a nested set      | drops the `FutureWarning` lines          | registered                               |
+| `query text`                | D1    | `snapshot`  | `search '"' --raw`             | prints another text after the query      | registered                               |
+| `settings text`             | D1    | `malformed` | `lint`                         | prints another text after the prefix     | registered                               |
+| `changed prefix`            | D1    | `malformed` | `update --check`               | changes the wiki-written prefix          | `stderr`                                 |
+| `naming text`               | D1    | `pattern`   | `lint`                         | prints another text after the prefix     | registered                               |
+| `naming warning`            | D1    | `warned`    | `lint`                         | drops the `FutureWarning` lines          | registered                               |
+| `parser message`            | D2    | `snapshot`  | `lint` with an unknown option  | prints the usage error in another layout | registered                               |
+| `parameter message`         | D2    | `snapshot`  | `search --limit 0`             | keeps the message line in another layout | registered                               |
+| `changed parameter message` | D2    | `snapshot`  | `map --depth -1`               | changes the message line                 | `stderr`                                 |
+| `help page`                 | D2    | `snapshot`  | `lint --help`                  | prints another page                      | registered                               |
+| `regex construct`           | D3    | `snapshot`  | `match` with a possessive `*+` | refuses                                  | registered                               |
+| `supported construct`       | D3    | `snapshot`  | `match` with a greedy `+`      | refuses                                  | `stderr`, `exit`, `unexpected`           |
+| `settings value`            | D3    | `value`     | `lint`                         | refuses under the malformed-JSON prefix  | registered                               |
+| `timestamp directive`       | D3    | `directive` | `lint`                         | refuses in a line that names the field   | registered                               |
+| `unnamed field`             | D3    | `directive` | `map`                          | refuses in a line that names no field    | `stdout`, `stderr`, `exit`, `unexpected` |
+| `named zone`                | D3    | `zone`      | `lint`                         | refuses in a line that names the field   | registered                               |
+
+| Tree        | Sets in the settings file                  |
+| ----------- | ------------------------------------------ |
+| `snapshot`  | nothing                                    |
+| `malformed` | nothing: the text ends one character early |
+| `pattern`   | a `naming.pattern` that does not compile   |
+| `warned`    | a `naming.pattern` with a nested set       |
+| `value`     | a member with the value `NaN`              |
+| `directive` | a `timestamp.format` with `%j`             |
+| `zone`      | the `timestamp.timezone` `Parity/Zone`     |
+
+A refusal of the stand-in is an empty stdout, one `Error: ` line behind the
+notice, and exit code 2. The command it refuses is one that writes nothing on
+v1, so the stand-in leaves the tree as a refusal does.

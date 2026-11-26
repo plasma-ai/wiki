@@ -69,10 +69,20 @@ def test_root_outside_the_checkout_is_refused(
         (config.load_sides, f'{_ARGV}\nenv = {{ A = 1 }}', 'env must be a table'),
         (config.load_sides, f'{_ARGV}\ndescribe = "wiki"', 'describe must be a list'),
         (config.load_sides, f'{_ARGV}\nnotice = "false"', 'notice must be true or'),
+        (config.load_sides, f'{_ARGV}\njudge = "python"', 'judge must be a list'),
         (config.load_corpora, 'root = "wiki"', 'checkout must be a string'),
         (config.load_corpora, 'checkout = "checkout"', 'root must be a string'),
     ],
-    ids=['argv-string', 'argv-empty', 'env', 'describe', 'notice', 'checkout', 'root'],
+    ids=[
+        'argv-string',
+        'argv-empty',
+        'env',
+        'describe',
+        'notice',
+        'judge',
+        'checkout',
+        'root',
+    ],
 )
 def test_file_of_the_wrong_shape_is_refused(
     tmp_path: pathlib.Path,
