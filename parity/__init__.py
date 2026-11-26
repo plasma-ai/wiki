@@ -20,6 +20,7 @@ from . import (
     manifest,
     matrix,
     oracle,
+    perturb,
     ported,
     record,
     registry,
@@ -31,5 +32,6 @@ from . import (
     snapshot,
     standin,
     suite,
+    tap,
     terminal,
 )

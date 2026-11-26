@@ -10,9 +10,10 @@ from __future__ import annotations
 import dataclasses
 import json
 import pathlib
+import shutil
 import sys
 from collections.abc import Sequence
-from typing import Optional
+from typing import Any, Optional
 
 import pytest
 
@@ -22,6 +23,7 @@ from parity import (
     kinds,
     matrix,
     oracle,
+    perturb,
     ported,
     registry,
     routing,
@@ -32,7 +34,7 @@ from parity import (
     terminal,
 )
 
-from .conftest import NOW, _needs_bytes, _needs_git
+from .conftest import NOW, REPO_ROOT, _needs_bytes, _needs_git
 
 __all__ = [
     'test_v1_sides_run_as_the_oracle_names_them',
@@ -57,6 +59,12 @@ __all__ = [
     'test_failed_family_keeps_its_streams_and_its_checkouts',
     'test_difference_at_a_path_that_is_not_utf8_is_listed',
     'test_fixtures_run_that_would_compare_nothing_is_refused',
+    'test_perturb_command_runs_a_loop_and_a_corpus',
+    'test_fresh_seeds_are_printed_before_a_tree_runs',
+    'test_failed_perturbation_keeps_its_result_and_its_streams',
+    'test_whole_perturbation_run_holds_the_kind_list',
+    'test_tree_that_ends_in_an_error_leaves_the_other_results',
+    'test_perturbation_run_that_would_compare_nothing_is_refused',
 ]
 
 # a side that runs the command it is given and prints everything but the
@@ -1273,6 +1281,333 @@ def test_fixtures_run_that_would_compare_nothing_is_refused(
         argv += ['--engine', seconds[broken]]
     if broken in ('both', 'every'):
         argv += ['--every']
+    held = sorted(tmp_path.rglob('*'))
+    with pytest.raises(SystemExit) as raised:
+        cli.main(argv)
+    assert raised.value.code == 2
+    assert message in capsys.readouterr().err
+    assert sorted(tmp_path.rglob('*')) == held
+    assert not out.exists()
+
+
+@_needs_git
+@pytest.mark.parametrize(
+    argnames=('mode', 'second'),
+    argvalues=[('loop', None), ('corpus', 'campaign')],
+    ids=['loop', 'corpus'],
+)
+def test_perturb_command_runs_a_loop_and_a_corpus(
+    tmp_path: pathlib.Path,
+    corpus: runner.Corpus,
+    capsys: pytest.CaptureFixture[str],
+    mode: str,
+    second: Optional[str],
+) -> None:
+    """A perturbed tree passes with v1 alone, and with v1's other build.
+
+    A loop runs each seed on each small tree it is told to, through the
+    short stage and the stages of the two trees made from it, and gives
+    the tree one result file with a row for each seed. A corpus runs once,
+    under the seed the command names, through the matrix and the same two
+    stages; its result file holds the seed, what the perturbation did and
+    the kinds its trees showed. Either way the work folder is gone.
+    """
+    out = tmp_path / 'out'
+    work = tmp_path / 'work'
+    argv = ['perturb', mode, '--work', f'{work}', '--out', f'{out}', '--now', NOW]
+    if mode == 'loop':
+        argv += ['--family', 'hello', '--seed', '3', '--seed', '4', '--jobs', '2']
+    else:
+        argv += ['--corpora', f'{_corpora_file(tmp_path, corpus)}', '--seed', '3']
+    if second is not None:
+        argv += ['--engine', second]
+    assert cli.main(argv) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert not (work / 'perturb').exists()
+    if mode == 'loop':
+        assert lines[:2] == [
+            'hello seed 3: 0 differences',
+            'hello seed 4: 0 differences',
+        ]
+        assert lines[-1].startswith('perturb: 2 seeds on 1 tree: 0 of 2 failed')
+        document = json.loads((out / 'hello.json').read_text(encoding='utf-8'))
+        assert [item['name'] for item in document['sides']] == ['oracle']
+        rows = [
+            {key: row[key] for key in ('seed', 'differences', 'findings', 'excused')}
+            for row in document['seeds']
+        ]
+        assert rows == [
+            {'seed': seed, 'differences': 0, 'findings': 0, 'excused': 0}
+            for seed in (3, 4)
+        ]
+        assert sorted(path.name for path in out.iterdir()) == [
+            'hello.json',
+            'perturb.json',
+        ]
+        return
+    assert 'example seed 3: 0 differences' in lines
+    document = json.loads((out / 'example.json').read_text(encoding='utf-8'))
+    assert [item['name'] for item in document['sides']] == ['oracle', second]
+    assert document['seed'] == 3
+    assert [stage['name'] for stage in document['stages']] == [
+        *matrix.STAGES,
+        'unindexed',
+        'conflicted',
+    ]
+    (stage,) = [stage for stage in document['stages'] if stage['name'] == 'conflicted']
+    assert stage['runs'] == ['oracle', second, f'{second} on one thread']
+    assert stage['exits']['oracle'] == stage['exits'][second]
+    assert stage['exits']['oracle']['2'] == 2
+    assert document['findings'] == []
+    assert list(document['kinds']) == [perturb.EDITED, 'unindexed', 'conflicted']
+    applied = document['perturbation']['applied']
+    assert [name for name, paths in applied.items() if not paths] == []
+
+
+@_needs_git
+def test_fresh_seeds_are_printed_before_a_tree_runs(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A run that draws its seeds names them first, and records each.
+
+    A fresh seed is known nowhere else until its tree has run, so a run
+    that ended in an error could not be run again. The seeds a loop draws
+    are those its rows and its result file hold.
+    """
+    out = tmp_path / 'out'
+    argv = ['perturb', 'loop', '--family', 'hello', '--fresh', '2', '--jobs', '2']
+    argv += ['--work', f'{tmp_path / "work"}', '--out', f'{out}', '--now', NOW]
+    assert cli.main(argv) == 0
+    first, *lines = capsys.readouterr().out.splitlines()
+    label, _, drawn = first.rpartition(': ')
+    assert label == 'perturb: fresh seeds'
+    seeds = [int(seed) for seed in drawn.split()]
+    assert len(set(seeds)) == 2
+    assert lines[:2] == [f'hello seed {seed}: 0 differences' for seed in seeds]
+    document = json.loads((out / 'hello.json').read_text(encoding='utf-8'))
+    assert [row['seed'] for row in document['seeds']] == seeds
+    document = json.loads((out / 'perturb.json').read_text(encoding='utf-8'))
+    assert document['seeds'] == seeds
+
+
+@_needs_git
+def test_failed_perturbation_keeps_its_result_and_its_streams(
+    tmp_path: pathlib.Path,
+    engine: side.Side,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A tree that differs under a seed fails the loop and leaves it to be read.
+
+    An engine that prints one line more than v1 differs on every command.
+    The command exits 1 and prints each difference under its tree and
+    seed. The seed that failed gets a whole result file, with what the
+    perturbation did, and the streams of every run of a command that
+    differs; the tree's own file counts the differences in the seed's row.
+    """
+    relay = [sys.executable, '-c', _WORDY, *engine.argv]
+    sides = _sides_file(tmp_path, engine, argv=relay)
+    out = tmp_path / 'out'
+    work = tmp_path / 'work'
+    argv = ['perturb', 'loop', '--family', 'hello', '--seed', '3']
+    argv += ['--sides', f'{sides}', '--engine', 'engine']
+    argv += ['--work', f'{work}', '--out', f'{out}', '--now', NOW]
+    assert cli.main(argv) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert '  conflicted: engine: update: stdout' in lines
+    assert '  unindexed: engine on one thread: map: stdout' in lines
+    assert lines[-1].startswith('perturb: 1 seed on 1 tree: 1 of 1 failed')
+    document = json.loads((out / 'hello.json').read_text(encoding='utf-8'))
+    (row,) = document['seeds']
+    assert row['seed'] == 3
+    assert row['differences'] > 0
+    whole = json.loads((out / 'hello' / '3.json').read_text(encoding='utf-8'))
+    assert whole['seed'] == 3
+    assert whole['perturbation']['applied']['dirty-edit']
+    aspects = {
+        difference['aspect']
+        for stage in whole['stages']
+        for difference in stage['differences']
+    }
+    assert aspects == {'stdout'}
+    saved = sorted(path.name for path in (out / 'hello' / '3' / 'edited').iterdir())
+    assert '000 engine.out' in saved
+    assert '000 oracle.out' in saved
+
+
+@_needs_git
+def test_whole_perturbation_run_holds_the_kind_list(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A run of every tree fails on a kind of the perturbation that none shows.
+
+    Here the one small tree is the example wiki outside any repository, so
+    no change names the kinds that need one, and no tree shows them. A
+    run that names no tree holds the kind list to what its trees showed:
+    it exits 1 and names each such kind.
+    """
+
+    def plain(
+        folder: pathlib.Path, **kwargs: object
+    ) -> tuple[list[runner.Corpus], list]:
+        """Write the example wiki as a folder with no repository."""
+        ignore = shutil.ignore_patterns('cache', '.obsidian')
+        source = REPO_ROOT / 'examples' / 'hello'
+        shutil.copytree(source, folder / 'plain' / 'hello', ignore=ignore)
+        tree = runner.Corpus(label='plain', checkout=folder / 'plain', root='hello')
+        return [tree], []
+
+    monkeypatch.setattr(perturb, 'trees', plain)
+    out = tmp_path / 'out'
+    argv = ['perturb', 'loop', '--seed', '3']
+    argv += ['--work', f'{tmp_path / "work"}', '--out', f'{out}', '--now', NOW]
+    assert cli.main(argv) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert [line for line in lines if line.startswith('  ')] == [
+        '  kind: notice gitignore_skip: no tree of the run shows it',
+        '  kind: notice restamp: no tree of the run shows it',
+        '  kind: issue gitignored_link_target: no tree of the run shows it',
+    ]
+    assert lines[-1].startswith('perturb: 1 seed on 1 tree: 0 of 1 failed')
+    document = json.loads((out / 'perturb.json').read_text(encoding='utf-8'))
+    assert document['trees'] == ['plain']
+    assert document['seeds'] == [3]
+    assert [finding['subject'] for finding in document['findings']] == [
+        'notice gitignore_skip',
+        'notice restamp',
+        'issue gitignored_link_target',
+    ]
+
+
+@_needs_git
+def test_tree_that_ends_in_an_error_leaves_the_other_results(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tree that ends in an error under one seed costs the loop no other result.
+
+    A copy or a tap that fails ends one tree under one seed, and a loop
+    of many seeds runs for hours. The seed that ended in an error is
+    printed and recorded with the error, every other seed has its row, and
+    the command exits 2: the run is not a whole one.
+    """
+    run = perturb.run
+
+    def flaky(tree: runner.Corpus, seed: int, **kwargs: Any) -> perturb.Trial:
+        """Run the tree under the seed, unless the seed is the one that fails."""
+        if seed == 4:
+            raise RuntimeError('cp failed (exit 1)')
+        return run(tree, seed, **kwargs)
+
+    monkeypatch.setattr(perturb, 'run', flaky)
+    out = tmp_path / 'out'
+    work = tmp_path / 'work'
+    argv = ['perturb', 'loop', '--family', 'hello', '--jobs', '1']
+    argv += ['--seed', '4', '--seed', '3']
+    argv += ['--work', f'{work}', '--out', f'{out}', '--now', NOW]
+    assert cli.main(argv) == 2
+    captured = capsys.readouterr()
+    lines = captured.out.splitlines()
+    assert lines[:2] == [
+        'hello seed 4: error: RuntimeError: cp failed (exit 1)',
+        'hello seed 3: 0 differences',
+    ]
+    assert lines[-1].startswith(
+        'perturb: 2 seeds on 1 tree: 0 of 2 failed, 1 ended in an error'
+    )
+    assert 'RuntimeError: cp failed (exit 1)' in captured.err
+    document = json.loads((out / 'hello.json').read_text(encoding='utf-8'))
+    first, second = document['seeds']
+    assert first == {'seed': 4, 'error': 'RuntimeError: cp failed (exit 1)'}
+    assert (second['seed'], second['differences']) == (3, 0)
+    document = json.loads((out / 'perturb.json').read_text(encoding='utf-8'))
+    assert (document['failed'], document['errors']) == (0, 1)
+    assert (work / 'perturb').is_dir()
+
+
+@_needs_git
+@pytest.mark.parametrize(
+    argnames=('broken', 'message'),
+    argvalues=[
+        ('reference', "--engine names 'oracle'"),
+        ('unknown', 'No side is named'),
+        ('family', 'No tree of the loop is named'),
+        ('both', '--every runs every tree'),
+        ('fresh', '--fresh must be at least 1'),
+        ('drawn', '--fresh draws the seeds'),
+        ('corpus', 'no --corpora file declares one'),
+        ('named', '--corpora names the trees of the loop'),
+        ('label', 'declares no corpus named'),
+        ('twice', '--corpus names a corpus twice'),
+        ('rootless', 'is not a folder'),
+        ('jobs', '--jobs must be at least 1'),
+        ('kinds', 'no operator names it'),
+        ('seeds', 'seeds must be a list'),
+        ('work', 'exists'),
+        ('repository', 'inside the repository'),
+    ],
+)
+def test_perturbation_run_that_would_compare_nothing_is_refused(
+    tmp_path: pathlib.Path,
+    corpus: runner.Corpus,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    broken: str,
+    message: str,
+) -> None:
+    """A perturbation run that would compare nothing is refused before it writes.
+
+    An engine that is v1 itself or that no file declares, a tree the loop
+    does not have, every tree and some at once, fresh seeds that are none
+    or come with named ones, a corpus with no file to declare it or that
+    its file does not declare, trees named twice over, a corpus named
+    twice, a corpus whose wiki root is no folder behind one whose root is,
+    no tree at a time, a kind list that disagrees with the operators, a
+    seed list that breaks a rule, and a work folder that exists or lies in
+    a repository: the command exits 2 with a message, writes no tree and no
+    result file, and leaves a work folder that was there as it stood.
+    """
+    out = tmp_path / 'out'
+    work = tmp_path / 'work'
+    if broken == 'work':
+        (work / 'perturb').mkdir(parents=True)
+    elif broken == 'repository':
+        (work / '.git').mkdir(parents=True)
+    elif broken == 'kinds':
+        listed = tmp_path / 'kinds.toml'
+        text = kinds.PATH.read_text(encoding='utf-8')
+        home = f'write_skip = "{kinds.PERTURBATION}"'
+        listed.write_text(text.replace('write_skip = ', f'{home} #'), encoding='utf-8')
+        monkeypatch.setattr(kinds, 'PATH', listed)
+    elif broken == 'seeds':
+        listed = tmp_path / 'seeds.toml'
+        listed.write_text('seeds = []\n', encoding='utf-8')
+        monkeypatch.setattr(perturb, 'PATH', listed)
+    corpora = _corpora_file(tmp_path, corpus)
+    if broken == 'rootless':
+        checkout = json.dumps(f'{corpus.checkout}')
+        with open(corpora, 'a', encoding='utf-8') as handle:
+            handle.write(f'[rootless]\ncheckout = {checkout}\nroot = "nowhere"\n')
+    extra = {
+        'reference': ['--family', 'hello', '--engine', 'oracle'],
+        'unknown': ['--family', 'hello', '--engine', 'absent'],
+        'family': ['--family', 'nested'],
+        'both': ['--family', 'hello', '--every'],
+        'fresh': ['--fresh', '0'],
+        'drawn': ['--fresh', '2', '--seed', '3'],
+        'corpus': ['--corpus', 'example'],
+        'named': ['--corpora', f'{corpora}', '--family', 'hello'],
+        'label': ['--corpora', f'{corpora}', '--corpus', 'absent'],
+        'twice': ['--corpora', f'{corpora}', '--corpus', 'example'] * 2,
+        'rootless': ['--corpora', f'{corpora}', '--seed', '3'],
+        'jobs': ['--family', 'hello', '--seed', '3', '--jobs', '0'],
+        'seeds': ['--family', 'hello'],
+    }
+    argv = ['perturb', 'loop', '--work', f'{work}', '--out', f'{out}']
+    argv += extra.get(broken, ['--family', 'hello', '--seed', '3'])
     held = sorted(tmp_path.rglob('*'))
     with pytest.raises(SystemExit) as raised:
         cli.main(argv)

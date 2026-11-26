@@ -72,3 +72,29 @@ jobs:
             ${{ runner.temp }}/replay-out
             ${{ runner.temp }}/fixtures-out
           if-no-files-found: ignore
+  perturbation:
+    name: perturbation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
+      - name: Install harness test dependencies
+        run: uv sync --only-group parity
+      - name: Build the oracle checkout
+        run: uv run --no-sync python -m parity oracle ensure
+      - name: Run the perturbation loop through the harness
+        run: >-
+          uv run --no-sync python -m parity perturb loop --every
+          --work "$RUNNER_TEMP/perturb-work" --out "$RUNNER_TEMP/perturb-out"
+      - name: Keep the output of a failed run of the harness
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: perturbation-out
+          path: ${{ runner.temp }}/perturb-out
+          if-no-files-found: ignore
