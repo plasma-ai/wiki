@@ -50,3 +50,7 @@ jobs:
         run: uv run --no-sync python -m parity oracle ensure
       - name: Run harness tests
         run: uv run --no-sync pytest parity
+      - name: Run v1's CLI tests through the harness
+        run: >-
+          uv run --no-sync python -m parity suite
+          --work "$RUNNER_TEMP/suite-work" --out "$RUNNER_TEMP/suite-out"
