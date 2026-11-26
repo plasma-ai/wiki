@@ -603,7 +603,7 @@ def test_repair_frontmatter_survives_backslash_timestamp() -> None:
 
     The created/updated stamps mirror the ``name:`` callable-repl safety: a
     user ``timestamp.format`` may render a literal ``\1`` that would otherwise
-    abort update on any node.
+    abort update.
     """
     fm = '---\nname: pg\ndesc: A page.\ncreated:\nupdated:\n---\n'
     out = format.repair_frontmatter(fm, name='pg', now='2026\\1-ts')
@@ -2911,18 +2911,18 @@ def test_update_detects_bom_prefixed_frontmatter(tmp_path: pathlib.Path) -> None
 def test_names_with_colon_write_quoted_yaml(tmp_path: pathlib.Path) -> None:
     """A name containing ``': '`` is written as valid, quoted YAML.
 
-    ``name: Fractal: Notes`` is not YAML (a mapping value inside a plain
+    ``name: Project: Notes`` is not YAML (a mapping value inside a plain
     scalar), breaking the Obsidian front-matter-title plugin the tool
     installs to render ``name:``. The writer must quote such values --
     the readers already unquote -- and the round trip must converge.
     """
     wiki = Wiki(tmp_path)
-    wiki.init(name='Fractal: Notes')
+    wiki.init(name='Project: Notes')
     text = (tmp_path / '_index.md').read_text(encoding='utf-8')
-    assert "name: 'Fractal: Notes'" in text
-    assert '# Fractal: Notes' in text
+    assert "name: 'Project: Notes'" in text
+    assert '# Project: Notes' in text
     # the reader round-trips the unquoted value and update converges
-    assert wiki._root_name == 'Fractal: Notes'
+    assert wiki._root_name == 'Project: Notes'
     assert wiki.update() == []
 
     # a folder named with ': ' quotes the path-joined child names too

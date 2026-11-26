@@ -53,7 +53,7 @@ def _isolate_ambient_env() -> Iterator[None]:
     """Strip a live deployment's exported env for the whole session.
 
     An offline host exports ``OFFLINE_MODE`` for every tool that reads it (a
-    CI job, or a shell set up for fractal, which honors the same switch).
+    CI job, or a shell set up for another tool that honors the same switch).
     Inherited by the suite, ``true`` skips the stubbed downloads the config
     tests assert on, and a value outside true/false makes every in-process
     ``init``/``update_config`` call raise ``ValueError``. A shell set up

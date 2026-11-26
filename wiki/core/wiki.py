@@ -138,8 +138,8 @@ class Wiki:
     for a folder-based wiki with ``_index.md`` files.
 
     Instances are one-shot: policy (settings, naming, timestamps) and
-    the root display name are cached per instance, so hosted embedders
-    construct a fresh ``Wiki`` per operation rather than holding one
+    the root display name are cached per instance, so a long-lived host
+    constructs a fresh ``Wiki`` per operation rather than holding one
     across mutations of the wiki.
 
     Each operation a host calls from outside a run is one run of the
@@ -625,7 +625,7 @@ class Wiki:
         The enclosing git repository's ignore rules are an exclusion
         source beside ``exclude.patterns``: what the repo fences out of
         version control is not wiki content, so indexing must not adopt
-        it -- a driver's stray output beside its evidence would
+        it -- a script's stray output beside tracked pages would
         otherwise gain frontmatter, a minted ``_index.md``, and a parent
         link row from the very update run for a red lint. Matching is
         pattern-pure (``--no-index``), so a fenced file that was
@@ -6953,9 +6953,8 @@ def _now(zone: dt.tzinfo) -> dt.datetime:
 def _encloses_wiki_error(nested: pathlib.Path) -> ValueError:
     """Build the path-encloses-a-wiki error, naming the nested root.
 
-    Embedders tell this refusal from other failures by its opening phrase,
-    ``Path encloses the wiki at``, so a change to it is a change to their
-    checks.
+    A caller tells this refusal from other failures by its opening phrase,
+    ``Path encloses the wiki at``, so a change to it is a breaking change.
     """
     return ValueError(
         f'Path encloses the wiki at: {nested}; run the command from that declared root.'
