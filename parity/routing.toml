@@ -1,6 +1,6 @@
-# The routing table: the tests of v1 that the replay cannot hold, and the
-# check that holds each one in its place. The rules are in SPEC.md, under
-# Replay.
+# The routing table: the tests of v1 that neither the CLI suite nor the replay
+# holds, and the check that holds each one in their place. The rules are in
+# SPEC.md, under Replay.
 
 # a test changes the tree, or makes a read fail, while its call runs
 [[route]]
@@ -138,3 +138,229 @@ tests = [
 to = "dropped"
 cite = "D10"
 reason = "The test runs `install` over the copy an earlier `install` left. v1 removes the folder and copies it again with the source's modification times. Where the file system hands a freed inode number out again, a copied file may get its old number back and read as untouched, so the touched sets of two runs of v1 differ. D10 gives `install` a comparison of its own, by the list of paths written."
+
+# a test's command runs on a timestamp format outside the supported set
+[[route]]
+tests = [
+    "tests/test_cli/test_wiki_commands.py::test_wiki_freeze_time_fixes_every_stamp[fraction]",
+]
+to = "dropped"
+cite = "D3"
+reason = "The wiki's timestamp.format holds %f, which is outside the supported set. v1 renders it, and a second engine refuses the settings file."
+
+# a test calls a function of the CLI in process, and the engine's own tests take its place
+[[route]]
+tests = [
+    "tests/test_cli/test_utils.py::test_resolve_wiki_corroboration_notices",
+    "tests/test_cli/test_utils.py::test_resolve_wiki_root",
+    "tests/test_cli/test_utils.py::test_resolve_wiki_root_fallback_nominations",
+    "tests/test_cli/test_utils.py::test_resolve_wiki_root_falls_back_to_declared_subdir",
+    "tests/test_cli/test_utils.py::test_resolve_wiki_root_prefers_declared_marker",
+    "tests/test_cli/test_utils.py::test_resolver_refuses_ambiguous_root",
+]
+to = "rust"
+reason = "The test calls the function that finds a wiki's root from a path or from the working directory, in process. A command finds the root the same way, and the tests of a second engine run commands from each of those places."
+
+[[route]]
+tests = [
+    "tests/test_cli/test_utils.py::test_interrupt_reports_and_exits_130",
+]
+to = "rust"
+reason = "The test runs the command wrapper in a script of its own and interrupts it. The terminal table interrupts a real command, and a second engine tests what an interrupt does to its own process."
+
+[[route]]
+tests = [
+    "tests/test_cli/test_utils.py::test_configure_git_merge_driver",
+    "tests/test_cli/test_utils.py::test_merge_driver_maps_indexes_at_the_root_and_pages_in_the_wiki",
+    "tests/test_cli/test_utils.py::test_merge_driver_maps_nothing_when_git_cannot_place_the_wiki",
+    "tests/test_cli/test_utils.py::test_merge_driver_reads_gitattributes_without_the_index_lock",
+    "tests/test_cli/test_utils.py::test_merge_driver_skips_dirty_gitattributes",
+    "tests/test_cli/test_utils.py::test_merge_driver_tolerates_undecodable_git_output",
+    "tests/test_cli/test_utils.py::test_merge_driver_wiring_ignores_ambient_git_dir",
+    "tests/test_cli/test_wiki_commands.py::test_merge_driver_no_op_without_git",
+]
+to = "rust"
+reason = "The test calls the function that registers the merge driver in a repository, in process. The init and config commands call it, and the tests of a second engine run those commands in repositories of the same shapes."
+
+[[route]]
+tests = [
+    "tests/test_cli/test_cmd/test_wiki.py::test_merge_rewrite_replaces_the_index_whole_or_not_at_all",
+    "tests/test_core/test_wiki.py::test_canonicalize_index_puts_the_h1_and_rows_in_form[in-form]",
+    "tests/test_core/test_wiki.py::test_canonicalize_index_puts_the_h1_and_rows_in_form[no-delimiter]",
+    "tests/test_core/test_wiki.py::test_canonicalize_index_puts_the_h1_and_rows_in_form[out-of-order]",
+    "tests/test_core/test_wiki.py::test_canonicalize_index_puts_the_h1_and_rows_in_form[repeated-target-nfd]",
+    "tests/test_core/test_wiki.py::test_canonicalize_index_puts_the_h1_and_rows_in_form[repeated-target]",
+    "tests/test_core/test_wiki.py::test_canonicalize_index_puts_the_h1_and_rows_in_form[retitled]",
+]
+to = "rust"
+reason = "The test calls the index rewrite of the merge driver in process, once with a write that fails. A second engine's merge driver has the same rewrite, and its tests hold the same texts and the failed write."
+
+[[route]]
+tests = [
+    "tests/test_core/test__search.py::test_search_builds_deduped_match_expressions",
+]
+to = "rust"
+reason = "The test calls the private function that turns a query into an expression of the search index. The replay holds the answers of a search, and the tests of a second engine hold its expressions."
+
+# a test calls a helper function of v1 that a second engine has a counterpart of
+[[route]]
+tests = [
+    "tests/test_util/test_dict.py::test_merge",
+    "tests/test_util/test_dict.py::test_merge_copies_by_default",
+    "tests/test_util/test_dict.py::test_merge_inplace",
+    "tests/test_util/test_filesystem.py::test_write_atomic_failure_discards_temp",
+    "tests/test_util/test_filesystem.py::test_write_atomic_preserves_mode",
+    "tests/test_util/test_filesystem.py::test_write_atomic_unencodable_discards_temp",
+    "tests/test_util/test_filesystem.py::test_write_atomic_writes_lf_bytes",
+    "tests/test_util/test_git.py::test_optional_lock_setting_reaches_git",
+    "wiki/util/dict.py::wiki.util.dict.merge",
+]
+to = "rust"
+reason = "The test calls a helper of v1 in process: the merge of two JSON objects, the atomic write of a file, or the environment a git child runs under. A second engine has its own helper for each, with its own tests."
+
+# a test holds the repository or v1's own test suite, not the engine
+[[route]]
+tests = [
+    "tests/test_env_hermeticity.py::test_ambient_env_neutralized",
+    "tests/test_repo_hygiene.py::test_bundled_plugin_manifest_agrees_with_its_install",
+    "tests/test_repo_hygiene.py::test_gitignore_spares_tracked_lookalike_paths",
+    "tests/test_repo_hygiene.py::test_package_data_ships_in_build",
+    "tests/test_repo_hygiene.py::test_version_strings_agree",
+]
+to = "rust"
+reason = "The test reads the repository's own files (the version in each place that states it, the files the build ships, the ignore file, the bundled plugin's manifest) or holds v1's test suite to an environment no variable of the host reaches. The repository of a second engine has other version files, another build and another test suite, and holds each with a test of its own."
+
+# a test calls a function that a second engine answers through its probe
+[[route]]
+tests = [
+    "tests/test_core/test_wiki.py::test_naming_policy_knobs",
+    "tests/test_core/test_wiki.py::test_validate_name",
+    "tests/test_core/test_wiki.py::test_validate_name_strict_via_settings",
+]
+to = "probe"
+reason = "The test asks the engine object whether a name is valid under the wiki's naming settings. No command answers that by itself."
+
+[[route]]
+tests = [
+    "tests/test_core/test_wiki.py::test_timestamp_format_configurable",
+    "tests/test_core/test_wiki.py::test_timestamp_timezone_configurable",
+]
+to = "probe"
+reason = "The test reads a stamp from the engine's private clock method. A command writes the same stamp into a page, and the probe renders it by itself."
+
+[[route]]
+tests = [
+    "tests/test_util/test_glob.py::test_translate_matching",
+    "wiki/util/glob.py::wiki.util.glob.literal",
+    "wiki/util/glob.py::wiki.util.glob.translate",
+]
+to = "probe"
+reason = "The test calls the function that turns an exclude pattern into a regex, and matches paths with the result. The probe gives the verdict of a pattern on a path."
+
+[[route]]
+tests = [
+    "tests/test_util/test_markdown.py::test_find_heading",
+    "tests/test_util/test_markdown.py::test_mask_code",
+    "tests/test_util/test_markdown.py::test_mask_comments",
+    "tests/test_util/test_markdown.py::test_mask_indented_code",
+    "wiki/util/markdown.py::wiki.util.markdown.find_heading",
+    "wiki/util/markdown.py::wiki.util.markdown.mask_code",
+    "wiki/util/markdown.py::wiki.util.markdown.mask_comments",
+    "wiki/util/markdown.py::wiki.util.markdown.mask_indented_code",
+]
+to = "probe"
+reason = "The test calls a function that masks a part of a Markdown text, or that finds its heading."
+
+[[route]]
+tests = [
+    "tests/test_util/test_str.py::test_format_words",
+    "wiki/util/str.py::wiki.util.str.format_words",
+]
+to = "probe"
+reason = "The test calls the function that abbreviates a word count."
+
+# a test calls a setup method, which the recorder has no command line for yet
+[[route]]
+tests = [
+    "tests/test_core/test_config.py::test_init_rejects_bad_offline_mode_before_scaffolding",
+    "tests/test_core/test_exclude.py::test_init_rejects_invalid_exclude_seed",
+    "tests/test_core/test_links.py::test_init_rejects_invalid_links_seed",
+    "tests/test_core/test_wiki.py::test_init_creates_structure",
+    "tests/test_core/test_wiki.py::test_init_refuses_legacy_layout_before_writing",
+    "tests/test_core/test_wiki.py::test_init_rejects_bad_settings_before_writing",
+    "tests/test_core/test_wiki.py::test_init_rejects_invalid_wiki_name",
+    "tests/test_core/test_wiki.py::test_init_scaffolds_settings",
+    "tests/test_core/test_wiki.py::test_init_seeds_custom_settings",
+]
+to = "replay"
+target = "init"
+reason = "The test calls the engine's init method and nothing the recorder records. The replay holds the test once the recorder states an init call as a command line."
+
+[[route]]
+tests = [
+    "tests/test_core/test_config.py::test_update_config_bundled_plugin_survives_existing_staged_dir",
+    "tests/test_core/test_config.py::test_update_config_installs_bundled_plugin",
+    "tests/test_core/test_config.py::test_update_config_installs_plugin",
+    "tests/test_core/test_config.py::test_update_config_is_idempotent",
+    "tests/test_core/test_config.py::test_update_config_keeps_notices_off_warnings",
+    "tests/test_core/test_config.py::test_update_config_offline_mode",
+    "tests/test_core/test_config.py::test_update_config_offline_warns",
+    "tests/test_core/test_config.py::test_update_config_preserves_existing",
+    "tests/test_core/test_config.py::test_update_config_refuses_a_checksum_mismatch",
+    "tests/test_core/test_config.py::test_update_config_rejects_bad_offline_mode",
+    "tests/test_core/test_config.py::test_update_config_rejects_type_mismatch",
+    "tests/test_core/test_config.py::test_update_config_reports_malformed_enabled_list",
+    "tests/test_core/test_config.py::test_update_config_reports_malformed_target_json",
+    "tests/test_core/test_config.py::test_update_config_seeds_missing_config_dir",
+    "tests/test_core/test_config.py::test_update_config_seeds_the_link_format_once",
+]
+to = "replay"
+target = "config"
+reason = "The test calls the engine's update_config method and nothing the recorder records. The replay holds the test once the recorder states an update_config call as a command line. Most of these tests put a function of their own in place of the plugin download, and a command downloads for itself, so such a test needs another home then."
+
+# a test drives v1's Python package, which a second engine does not have
+[[route]]
+tests = [
+    "tests/test_cli/test_main.py::test_cli_subpackage_imports_fresh",
+    "tests/test_cli/test_utils.py::test_resolve_wiki_default_class",
+    "tests/test_core/test_event.py::test_event_rejects_unknown_payload_field",
+    "tests/test_import.py::test_import",
+]
+to = "dropped"
+cite = "Python API"
+reason = "The test imports v1's Python package, hands the CLI's resolver an engine class of its own, or makes an event object with a field the event does not have."
+
+# a test loads the engine class of a wiki's hook file, or a subclass of its own
+[[route]]
+tests = [
+    "tests/test_cli/test_utils.py::test_load_wiki_class",
+    "tests/test_cli/test_utils.py::test_load_wiki_class_refuses_untrusted_hook",
+    "tests/test_core/test_wiki.py::test_canonicalize_index_puts_the_h1_and_rows_in_form[category-order]",
+]
+to = "dropped"
+cite = "hooks"
+reason = "The test loads the engine class that a hook file names, or orders index rows with a subclass that sets a category order. A second engine loads no class."
+
+# a test calls the functions of the trust store
+[[route]]
+tests = [
+    "tests/test_cli/test_utils.py::test_config_home_inside_a_wiki_is_refused",
+    "tests/test_cli/test_utils.py::test_is_trusted_ignores_malformed_store",
+    "tests/test_cli/test_utils.py::test_trust_reads_refuse_a_tampered_store",
+    "tests/test_cli/test_utils.py::test_trust_refuses_a_symlinked_config_home",
+    "tests/test_cli/test_utils.py::test_trust_root_bounds_the_wait_for_a_held_lock",
+    "tests/test_cli/test_utils.py::test_trust_root_concurrent_writes_keep_every_entry",
+    "tests/test_cli/test_utils.py::test_trust_root_records_resolved_root",
+    "tests/test_cli/test_utils.py::test_trust_root_refuses_a_corrupt_store",
+    "tests/test_cli/test_utils.py::test_trust_root_refuses_hard_linked_store",
+    "tests/test_cli/test_utils.py::test_trust_root_refuses_symlinked_store",
+    "tests/test_cli/test_utils.py::test_trust_root_skips_rewrite_when_already_trusted",
+    "tests/test_cli/test_utils.py::test_trust_root_tightens_and_guards_the_lock",
+    "tests/test_cli/test_utils.py::test_trust_root_tightens_store_permissions",
+    "tests/test_cli/test_utils.py::test_trust_root_writes_over_a_blank_store",
+    "tests/test_cli/test_utils.py::test_trust_store_refuses_non_regular_files",
+    "tests/test_cli/test_utils.py::test_trust_store_refuses_unsafe_modes",
+]
+to = "dropped"
+cite = "trust"
+reason = "The test calls the functions that read and write the trust store, in process. A second engine runs no hook, so it keeps no trust store."

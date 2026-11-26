@@ -527,11 +527,24 @@ compares another scenario. A call with no command line and a call v1's command
 line does not repeat are findings, never skips, unless `parity/routing.toml`
 names the test with the check that holds it in the replay's place. A row for a
 test the replay holds is a finding too, so the table stays as short as the
-replay allows. The recorder also keeps the format calls of `test_format.py`,
-which the replay makes again in v1. A change to a recorded method's command
-line, to a row of the fidelity table or to a rule of the replay changes the spec
-and its test in `parity/tests/test_replay.py` in the same commit; a change to a
-rule the table's loader refuses on changes `parity/tests/test_routing.py`.
+replay allows. The recorder also keeps the format calls of the format tests
+(`test_format.py` and the two tests of `test_update.py` that `parity/record.py`
+names), which the replay makes again in v1. A change to a recorded method's
+command line, to a row of the fidelity table or to a rule of the replay changes
+the spec and its test in `parity/tests/test_replay.py` in the same commit; a
+change to a rule the table's loader refuses on changes
+`parity/tests/test_routing.py`.
+
+A whole replay of v1 alone ends with an account of v1 itself. Every test v1
+collects has one home (`parity/homes.py`): the CLI suite, the replay, the format
+calls, or a row of the routing table, so a test of v1 that calls nothing the
+harness can run on a second engine needs a row. Every notice and issue kind of
+the engine has one home in `parity/kinds.toml` (`parity/kinds.py`): a test whose
+replayed call shows the kind, or the perturbation. And a call that v1 runs on
+input outside the supported set is a finding unless the table drops its test
+under D3. A new v1 test or kind, and new input of a recorded call, therefore
+fails the `parity` job until the table or the list accounts for it. The inputs
+of a test that records no call are not judged.
 
 ### Run Bracket
 

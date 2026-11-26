@@ -34,9 +34,14 @@ refuses.
 call they made again as a command line, on the trees the call found. With
 no ``--engine`` it replays every call on v1 under two hash seeds, makes the
 recorded format calls again and runs its controls; with one it replays the
-calls of the ported commands on v1 and on that side. It exits 0 when the
-sides differ in nothing and v1's command lines do what the calls did in
-their tests, and 1 otherwise. It exits 2 as ``suite`` does.
+calls of the ported commands on v1 and on that side. With no ``--engine``
+and no ``--test`` it ends with an account of v1 itself: every test v1
+collects has a home, and the kind list gives every notice and issue kind
+one. It exits 0 when the sides differ in nothing, v1's command lines do
+what the calls did in their tests, no call that is not routed for it runs
+on input outside the supported set, and the account holds; it exits 1
+otherwise. It exits 2 as ``suite`` does, and on a routing table or a kind
+list that breaks its rules.
 
 The registry lists what a second engine may do differently from v1, and two
 builds of v1 have nothing registered between them. ``matrix`` therefore
@@ -73,6 +78,8 @@ from typing import Any, Optional, Union
 from . import (
     config,
     dispatch,
+    homes,
+    kinds,
     oracle,
     ported,
     record,
@@ -481,10 +488,12 @@ def _suite(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
 
 def _replay(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
     """Record the calls of v1's tests, replay them, and return the exit code."""
-    # read the registry, the routing table, the ported commands and the sides
+    # read the registry, the routing table, the kind list, the ported commands
+    # and the sides
     try:
         entries = registry.load()
         routes = routing.load(entries=entries)
+        listed = kinds.load()
         commands = ported.load()
         declared = {}
         if options.sides is not None:
@@ -531,7 +540,9 @@ def _replay(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int
     _save({'pytest.txt': recording.tests.log}, options.out / _REPLAY)
     # replay every call on v1 under two hash seeds, or the calls of the ported
     # commands on v1 and on the engine, which also runs each on one thread
-    explained = [test for test, route in routes.items() if route.cite in entries]
+    explained = {
+        test: route.cite for test, route in routes.items() if route.cite in entries
+    }
     if engines:
         sides = [reference, engines[0], replay.threaded(engines[0])]
         result = replay.run(
@@ -573,8 +584,8 @@ def _replay(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int
         lines = [json.dumps(entry) + '\n' for entry in recording.formats]
         _save({'formats.jsonl': ''.join(lines).encode('utf-8')}, options.out / _REPLAY)
         differing = document['formats']['differing']
-        visible = [test for test in routes if test not in explained]
-        findings.extend(replay.unneeded(visible, result.report, differing))
+        formatted = [test for entry in recording.formats for test in entry['tests']]
+        findings.extend(replay.unneeded(routes, result.report, differing, formatted))
         document['controls'] = {}
         for name in replay.CONTROLS if not options.test else ():
             found, document['controls'][name] = replay.control(
@@ -587,6 +598,26 @@ def _replay(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int
     # a whole recording holds the commands of the CLI tests' helper
     if not options.test:
         findings.extend(replay.unrecorded(recording))
+    # a whole replay of v1 alone accounts for every test and every kind of v1
+    if not (engines or options.test):
+        collected = homes.collect(named, dispatcher, work=work / 'collect')
+        found, document['homes'] = homes.check(
+            collected,
+            recording,
+            result.report,
+            document['formats'],
+            routes,
+            folder=named.folder,
+            ported=commands,
+        )
+        findings.extend(found)
+        found, document['kind_list'] = kinds.check(
+            listed,
+            recording,
+            result.report,
+            routes,
+        )
+        findings.extend(found)
     document['findings'] = [dataclasses.asdict(finding) for finding in findings]
     path = options.out / f'{_REPLAY}.json'
     path.write_text(json.dumps(document, indent=2) + '\n', encoding='utf-8')
@@ -613,6 +644,23 @@ def _replay(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int
             f'{_REPLAY}: control {name}: {count["reported"]} of'
             f' {count["doctored"]} doctored calls reported'
         )
+    count = len(result.report['outside'])
+    print(f'{_REPLAY}: {count} calls ran on input outside the supported set')
+    if 'homes' in document:
+        held = document['homes']
+        places = ', '.join(f'{count} {home}' for home, count in held['homes'].items())
+        print(
+            f'{_REPLAY}: {held["tests"]} tests of v1: {places};'
+            f' {len(held["skipped"])} skipped here'
+        )
+        places = ', '.join(
+            f'{count} to {place}' for place, count in held['routed'].items()
+        )
+        print(f'{_REPLAY}: routed: {places}')
+        for family, homed in document['kind_list'].items():
+            places = ', '.join(f'{count} {home}' for home, count in homed.items())
+            label = family.removesuffix('s')
+            print(f'{_REPLAY}: {sum(homed.values())} {label} kinds: {places}')
     for finding in findings:
         line = _line(finding)
         print(f'  {line}')

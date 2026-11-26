@@ -37,6 +37,15 @@ _DROPPED = _ROW.replace('"rust"', '"dropped"')
         (_DROPPED, 'a dropped row cites'),
         (f'{_DROPPED}cite = "D99"\n', 'a dropped row cites'),
         (f'{_ROW}cite = "hooks"\n', 'only a dropped row cites'),
+        (_ROW.replace('"rust"', '"replay"'), 'names the command'),
+        (
+            _ROW.replace('"rust"', '"replay"') + 'target = "confg"\n',
+            'names the command',
+        ),
+        (
+            _ROW.replace('"rust"', '"replay"') + 'target = "trust"\n',
+            'names the command',
+        ),
         (_ROW * 2, 'is routed twice'),
     ],
     ids=[
@@ -52,6 +61,9 @@ _DROPPED = _ROW.replace('"rust"', '"dropped"')
         'uncited',
         'unknown entry',
         'cited',
+        'waiting for nothing',
+        'waiting for no command',
+        'waiting for a command no engine ports',
         'twice',
     ],
 )
@@ -65,8 +77,11 @@ def test_table_that_breaks_a_rule_is_refused(
     A dropped test is held by nothing, so its row cites what it rests on:
     a registry entry the registry holds, a part of v1 a second engine does
     not have, or the test that replaces it. A row that sends its tests to
-    a check cites nothing, and no test is routed twice. A table that keeps
-    the rules comes back by test id, each test with its row.
+    a check cites nothing, a row that waits for the replay names the
+    command it waits for, which is one a second engine ports, and no test
+    is routed twice. A table that keeps the rules comes back by test id,
+    each test with its row, and a test is found by its own id or by the id
+    of its function.
     """
     path = tmp_path / 'routing.toml'
     path.write_text(text, encoding='utf-8')
@@ -78,5 +93,11 @@ def test_table_that_breaks_a_rule_is_refused(
         routes = routing.load(path, entries=['D6'])
         assert list(routes) == [_TEST, f'{_TEST}[one]']
         assert (routes[_TEST].to, routes[f'{_TEST}[one]'].cite) == ('rust', cite)
+    waiting = _ROW.replace('"rust"', '"replay"') + 'target = "init"\n'
+    path.write_text(waiting, encoding='utf-8')
+    routes = routing.load(path)
+    assert routing.find(routes, f'{_TEST}[one]') == routes[_TEST]
+    assert (routes[_TEST].to, routes[_TEST].target) == ('replay', 'init')
+    assert routing.find(routes, 'tests/test_core/test_plan.py::test_other') is None
     path.write_text('', encoding='utf-8')
     assert routing.load(path) == {}

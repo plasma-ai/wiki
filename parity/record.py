@@ -5,6 +5,7 @@ script through one helper, and its format tests call the format functions.
 A run of those tests under the recorder (``parity/plugins``) leaves each
 call of the first two kinds as a command line beside copies of the trees it
 ran on, and each call of the third kind as its arguments and its outcome.
+It also leaves the notice and issue kinds the engine has.
 :func:`run` makes that run and reads the records back, for the replay.
 """
 
@@ -29,12 +30,18 @@ TESTS = ('tests/test_core', 'tests/test_cli')
 # engine class, the format functions, and the tests whose format calls count
 _PLUGIN = 'parity_record'
 _WIKI = 'wiki.core.wiki:Wiki'
+_ISSUE = 'wiki.core.wiki:Issue'
 _FORMAT = 'wiki.core.format'
-_FORMATS = ('tests/test_core/test_format.py',)
+_FORMATS = (
+    'tests/test_core/test_format.py',
+    'tests/test_core/test_update.py::test_read_frontmatter_category',
+    'tests/test_core/test_update.py::test_repair_frontmatter_survives_backslash_timestamp',
+)
 # the files one process of the run leaves in its folder of the store
 _CALLS = 'calls.jsonl'
 _FORMAT_CALLS = 'formats.jsonl'
 _TESTS = 'tests.jsonl'
+_KINDS = 'kinds.json'
 
 
 @dataclasses.dataclass(frozen=True)
@@ -80,6 +87,11 @@ class Call:
             opened with the clock ``notice``.
         notices: The descriptions of the notices an engine call emitted,
             in order.
+        kinds: The kind of each of those notices (``notices``), and of
+            each issue a ``lint`` call returned (``issues``), in order.
+        shared: The shared fixture that made the call, as the start of
+            the test ids it serves, ``::`` and its name; empty for a call
+            the test made itself.
         before: The trees before the call.
         after: The trees after it.
 
@@ -99,6 +111,8 @@ class Call:
     root: Optional[str] = None
     outcome: Mapping[str, Any] = dataclasses.field(default_factory=dict)
     notices: tuple[str, ...] = ()
+    kinds: Mapping[str, Sequence[str]] = dataclasses.field(default_factory=dict)
+    shared: str = ''
     before: Copy = Copy()
     after: Copy = Copy()
 
@@ -113,6 +127,10 @@ class Recording:
         calls: Every recorded call, in the order of its process.
         kinds: For each test that ran, how often it met each notice kind
             (``notices``) and each issue kind (``issues``).
+        known: The notice kinds (``notices``) and the issue kinds
+            (``issues``) the engine has.
+        shared: For each test that ran, the shared fixtures it asked for
+            that made a call, each named as a call names it.
         formats: Every distinct call of a format function: the
             ``function``, its ``args`` and ``kwargs`` and its ``outcome``
             as JSON data, how often it was made (``count``) and the
@@ -124,6 +142,8 @@ class Recording:
     tests: suite.Result
     calls: tuple[Call, ...]
     kinds: Mapping[str, Mapping[str, Mapping[str, int]]]
+    known: Mapping[str, Sequence[str]]
+    shared: Mapping[str, Sequence[str]]
     formats: tuple[Mapping[str, Any], ...]
     store: pathlib.Path
 
@@ -164,6 +184,7 @@ def run(
     document = {
         'store': f'{store}',
         'wiki': _WIKI,
+        'issue': _ISSUE,
         'format': _FORMAT,
         'formats': list(_FORMATS),
         'helper': source.helper,
@@ -180,12 +201,18 @@ def run(
     # read back what each process of the run left
     calls: list[Call] = []
     kinds: dict[str, Mapping[str, Mapping[str, int]]] = {}
+    known: dict[str, Sequence[str]] = {}
+    shared: dict[str, Sequence[str]] = {}
     formats: dict[str, dict[str, Any]] = {}
     for folder in sorted(path for path in store.iterdir() if path.is_dir()):
         for row in _rows(folder / _CALLS):
             calls.append(_call(row, folder))
         for row in _rows(folder / _TESTS):
             kinds[row['test']] = row['kinds']
+            shared[row['test']] = row['shared']
+        # every process lists the kinds of the one engine
+        for row in _rows(folder / _KINDS):
+            known = row
         # one process's distinct format calls, joined with the others'
         for row in _rows(folder / _FORMAT_CALLS):
             call = {key: row[key] for key in row if key not in ('count', 'tests')}
@@ -197,6 +224,8 @@ def run(
         tests=tests,
         calls=tuple(calls),
         kinds=kinds,
+        known=known,
+        shared=shared,
         formats=tuple(formats[key] for key in sorted(formats)),
         store=store,
     )
@@ -225,6 +254,8 @@ def _call(row: Mapping[str, Any], folder: pathlib.Path) -> Call:
         root=row.get('root'),
         outcome=row.get('outcome', {}),
         notices=tuple(row.get('notices') or ()),
+        kinds=row.get('kinds', {}),
+        shared=row['shared'],
     )
     if call.unformed:
         return call

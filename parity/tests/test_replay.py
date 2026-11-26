@@ -1,11 +1,12 @@
-"""Test the ``parity.record`` and ``parity.replay`` modules.
+"""Test the ``parity.record``, ``parity.replay``, ``parity.homes`` and ``parity.kinds`` modules.
 
 The whole of v1's core and CLI suites is recorded and replayed through the
 command line, which ``test_main`` covers for one test file. This module
-holds each rule of the recorder and of the replay against a small checkout
-of tests shaped like v1's: core tests that call the real engine in process,
-a helper module and a CLI test that calls the console script through it,
-and a format test. The tests run under the oracle side's pytest, and every
+holds each rule of the recorder, of the replay and of the account a whole
+replay gives of v1's tests and kinds, against a small checkout of tests
+shaped like v1's: core tests that call the real engine in process, a helper
+module and a CLI test that calls the console script through it, and a
+format test. The tests run under the oracle side's pytest, and every
 replayed command runs on a real side.
 """
 
@@ -25,6 +26,8 @@ import pytest
 from parity import (
     compare,
     dispatch,
+    homes,
+    kinds,
     oracle,
     record,
     replay,
@@ -33,6 +36,7 @@ from parity import (
     standin,
     suite,
 )
+from parity.routing import Route
 
 from .conftest import _needs_git, _needs_unprivileged
 
@@ -46,6 +50,9 @@ __all__ = [
     'test_record_of_a_path_outside_the_recording_is_not_played',
     'test_routed_test_is_no_finding',
     'test_difference_fails_a_routed_test_unless_a_registry_entry_explains_it',
+    'test_registry_row_covers_the_calls_its_entry_is_about',
+    'test_call_of_a_shared_fixture_belongs_to_no_test',
+    'test_call_on_input_outside_the_supported_set_is_a_finding',
     'test_clock_a_test_fixes_is_the_clock_of_the_replay',
     'test_tree_its_owner_cannot_read_is_replayed_sealed',
     'test_entry_a_test_wrote_is_among_the_trees_of_its_calls',
@@ -58,6 +65,9 @@ __all__ = [
     'test_format_calls_are_recorded_and_made_again',
     'test_format_call_with_no_json_form_is_a_finding',
     'test_recording_lists_the_kinds_each_test_met',
+    'test_kind_list_is_held_to_the_engine_and_to_the_replay',
+    'test_issue_kind_the_source_does_not_name_ends_the_recording',
+    'test_every_test_has_one_home',
     'test_test_the_recorder_breaks_is_a_finding',
 ]
 
@@ -448,6 +458,196 @@ def test_pattern():
     assert re.compile('a').pattern == 'a'
 """
 
+# the same call on a folder that holds a hook file
+_HOOKED = _UNDECLARED.replace(
+    "    assert 'alpha page'",
+    "    (tmp_path / '.wiki').mkdir()\n"
+    "    (tmp_path / '.wiki' / 'wiki.py').write_text('', encoding='utf-8')\n"
+    "    assert 'alpha page'",
+)
+
+# commands a registry entry is about, on wikis with no hook file: a pattern
+# that the library refuses, the skill install, and the command that trusts
+_CLI_ABOUT = """
+from .conftest import _wiki
+
+
+def test_library(tmp_path):
+    root = str(tmp_path / 'w')
+    assert _wiki(tmp_path, 'init', 'root', '--path', root).returncode == 0
+    assert _wiki(tmp_path, 'match', '(', '--path', root).returncode == 2
+
+
+def test_install(tmp_path):
+    assert _wiki(tmp_path, 'install', '--project').returncode == 0
+
+
+def test_trust(tmp_path):
+    root = str(tmp_path / 'w')
+    assert _wiki(tmp_path, 'init', 'root', '--path', root).returncode == 0
+    assert _wiki(tmp_path, 'trust', '--path', root).returncode == 0
+"""
+
+# a fixture that two tests share, which makes a call that shows a kind and a
+# call no command line states
+_SHARED = (
+    _HEAD
+    + """
+
+@pytest.fixture(scope='module')
+def shared(tmp_path_factory):
+    wiki = _wiki(tmp_path_factory.mktemp('shared'))
+    assert wiki.update()
+    with pytest.raises(ValueError):
+        wiki.read('notes/alpha', start=0, stop=1, on='paragraphs')
+    return wiki
+
+
+def test_first(shared):
+    assert 'alpha page' in shared.read('notes/alpha')
+
+
+def test_second(shared):
+    assert shared.update() == []
+"""
+)
+
+# calls on input outside the supported set: a timestamp format with a
+# fraction of a second, in a test's own wiki and in a shared fixture's, and
+# a pattern with an atomic group
+_FRACTION = (
+    _HEAD
+    + """
+import json
+
+
+def _fraction(path):
+    _wiki(path)
+    path = path / '.wiki' / 'settings.json'
+    settings = json.loads(path.read_text(encoding='utf-8'))
+    settings['timestamp'] = {'format': '%Y-%m-%dT%H:%M:%S.%fZ'}
+    path.write_text(json.dumps(settings), encoding='utf-8')
+    return Wiki(path.parent.parent)
+
+
+@pytest.fixture(scope='module')
+def stamped(tmp_path_factory):
+    wiki = _fraction(tmp_path_factory.mktemp('stamped'))
+    assert wiki.update()
+    return wiki
+
+
+def test_fraction(tmp_path):
+    assert _fraction(tmp_path).update()
+
+
+def test_stamped(stamped):
+    assert 'alpha page' in stamped.read('notes/alpha')
+
+
+def test_atomic(tmp_path):
+    wiki = _wiki(tmp_path)
+    assert wiki.update()
+    assert wiki.match('(?>alpha)')
+"""
+)
+
+# commands on such input that no cache folder marks: an update of a wiki
+# written by hand, and an init that is given the format
+_CLI_FRACTION = """
+import json
+
+from .conftest import _wiki
+
+SETTINGS = json.dumps({'timestamp': {'format': '%Y-%m-%dT%H:%M:%S.%fZ'}})
+
+
+def test_bare(tmp_path):
+    root = tmp_path / 'w'
+    (root / '.wiki').mkdir(parents=True)
+    (root / '.wiki' / 'settings.json').write_text(SETTINGS, encoding='utf-8')
+    assert _wiki(tmp_path, 'update', '--path', str(root)).returncode == 0
+
+
+def test_given(tmp_path):
+    root = str(tmp_path / 'w')
+    made = _wiki(tmp_path, 'init', 'root', '--path', root, '--settings', SETTINGS)
+    assert made.returncode == 0
+"""
+
+# tests with each home, and with none: core tests that make a call, that
+# make none, that only read the wiki a shared fixture updated, and whose one
+# call no command line states; CLI tests that run a command, that read the
+# tree a shared fixture of the same name made with one, that run none, that
+# the host skips, and that fail as their mark expects; and format tests
+# whose calls give their outcome again, give another, and have no JSON form
+_HOMES = (
+    _HEAD
+    + """
+
+@pytest.fixture(scope='module')
+def made(tmp_path_factory):
+    wiki = _wiki(tmp_path_factory.mktemp('made'))
+    assert wiki.update()
+    return wiki
+
+
+def test_call(tmp_path):
+    assert _wiki(tmp_path).update()
+
+
+def test_no_call(tmp_path):
+    assert _wiki(tmp_path)
+
+
+def test_shared_call(made):
+    assert made
+
+
+def test_unstated(tmp_path):
+    with pytest.raises(ValueError):
+        _wiki(tmp_path).read('notes/alpha', start=0, stop=1, on='paragraphs')
+"""
+)
+_CLI_HOMES = """
+import pytest
+
+from .conftest import _wiki
+
+
+@pytest.fixture(scope='module')
+def made(tmp_path_factory):
+    base = tmp_path_factory.mktemp('made')
+    assert _wiki(base, 'init', 'root', '--path', str(base / 'w')).returncode == 0
+    return base / 'w'
+
+
+def test_command(tmp_path):
+    assert _wiki(tmp_path, '--version').returncode == 0
+
+
+def test_tree(made):
+    assert (made / '_index.md').is_file()
+
+
+def test_tree_again(made):
+    assert (made / '.wiki').is_dir()
+
+
+def test_python():
+    assert True
+
+
+def test_elsewhere():
+    pytest.skip('needs another host')
+
+
+@pytest.mark.xfail(strict=True)
+def test_expected():
+    assert False
+"""
+_FORMAT_HOMES = _FORMATS + _HIDDEN + _BYTES
+
 # a side that runs the command it is given and adds a byte to its stdout
 _LOUD = """
 import subprocess, sys
@@ -772,28 +972,212 @@ def test_difference_fails_a_routed_test_unless_a_registry_entry_explains_it(
     The second side adds a byte to every stdout, so each call differs.
     The differences fail the replay for a test that is not routed and
     for one that is. Only a row that rests on a registry entry takes
-    them out of the verdict, and the report keeps them.
+    them out of the verdict, on a call the entry is about, and the
+    report keeps them. The test's folder holds a hook file, so its call
+    is one the entry of hooked wikis is about, and no call of the entry
+    of the skill install. A row whose entry is about no call of its test
+    is not needed.
     """
-    recording = _record(tmp_path, engine, core=_UNDECLARED)
+    recording = _record(tmp_path, engine, core=_HOOKED)
     (call,) = recording.calls
     loud = tmp_path / 'loud.py'
     loud.write_text(_LOUD, encoding='utf-8')
     other = side.Side(name='loud', argv=(sys.executable, f'{loud}', *engine.argv))
     sides = [engine, other]
     expected = (compare.Difference(call.test, 'loud', 'main-0 read', 'stdout'),)
-    for routed in ([], [call.test]):
-        result = replay.run(recording, sides, routed=routed, second=True)
-        assert result.differences == expected
+    for explained in ({}, {call.test: 'D10'}):
+        for routed in ([], [call.test]):
+            result = replay.run(
+                recording,
+                sides,
+                routed=routed,
+                explained=explained,
+                second=True,
+            )
+            assert result.differences == expected
     result = replay.run(
         recording,
         sides,
         routed=[call.test],
-        explained=[call.test],
+        explained={call.test: 'D6'},
         second=True,
     )
     assert (result.findings, result.differences) == ((), ())
     (row,) = result.report['calls']
     assert [found['aspect'] for found in row['differences']] == ['stdout']
+    # between two builds of v1 the call shows no difference, and is still
+    # one the entry is about
+    seeded = selfcheck._seeded(engine)
+    for entry, needed in (('D6', True), ('D10', False)):
+        result = replay.run(
+            recording,
+            seeded,
+            routed=[call.test],
+            explained={call.test: entry},
+        )
+        (row,) = result.report['calls']
+        assert row['about'] is needed
+    recording = _record(tmp_path / 'held', engine, core=_COMMANDS)
+    test = recording.calls[0].test
+    result = replay.run(recording, seeded, routed=[test], explained={test: 'D10'})
+    assert [finding.kind for finding in replay.unneeded([test], result.report)] == [
+        'unneeded'
+    ]
+
+
+def test_registry_row_covers_the_calls_its_entry_is_about(
+    tmp_path: pathlib.Path,
+    engine: side.Side,
+) -> None:
+    """A row that cites a registry entry covers the calls that can show its difference.
+
+    The entry of library text is about a command that ends in a library's
+    text, here a pattern ``re`` refuses, and not about the ``init``
+    before it. The entry of the skill install is about ``install``, and
+    the entry of hooked wikis about ``trust`` on a wiki with no hook
+    file. Under any other entry the same calls are about nothing, and
+    each row is not needed.
+    """
+    recording = _record(tmp_path, engine, cli=_CLI_ABOUT, jobs=0)
+    cli = 'tests/test_cli/test_commands.py'
+    library, install, trust = (
+        f'{cli}::test_library',
+        f'{cli}::test_install',
+        f'{cli}::test_trust',
+    )
+    seeded = selfcheck._seeded(engine)
+    explained = {library: 'D1', install: 'D10', trust: 'D6'}
+    result = replay.run(recording, seeded, routed=explained, explained=explained)
+    assert result.findings == ()
+    about = [
+        (row['test'], row['command']) for row in result.report['calls'] if row['about']
+    ]
+    assert about == [(library, 'match'), (install, 'install'), (trust, 'trust')]
+    assert replay.unneeded(explained, result.report) == []
+    explained = {library: 'D10', install: 'D6', trust: 'D1'}
+    result = replay.run(recording, seeded, routed=explained, explained=explained)
+    assert not any(row['about'] for row in result.report['calls'])
+    unneeded = replay.unneeded(explained, result.report)
+    assert [finding.subject for finding in unneeded] == sorted(explained)
+
+
+def test_call_of_a_shared_fixture_belongs_to_no_test(
+    tmp_path: pathlib.Path,
+    engine: side.Side,
+) -> None:
+    """A call a shared fixture makes takes no test's routing and shows no test's kind.
+
+    The fixture is set up inside the first test that asks for it, and
+    which test that is turns on how the tests are spread over the
+    processes. Its calls are recorded under the fixture's name, and each
+    test that asks for the fixture lists it. So a row for the first test
+    does not cover the fixture's call that no command line states, and
+    the kind the fixture's update shows is not at home in that test.
+    """
+    recording = _record(tmp_path, engine, core=_SHARED, jobs=0)
+    fixture = 'tests/test_core/test_calls.py::shared'
+    assert [call.shared for call in recording.calls] == [fixture, fixture, '', '']
+    first, second = (call.test for call in recording.calls[2:])
+    assert recording.shared == {first: [fixture], second: [fixture]}
+    result = replay.run(recording, selfcheck._seeded(engine), routed=[first])
+    assert [(finding.kind, finding.subject) for finding in result.findings] == [
+        ('unformed', first)
+    ]
+    rows = result.report['calls']
+    assert [(row['shared'], row['routed']) for row in rows] == [
+        (fixture, False),
+        (fixture, False),
+        ('', True),
+        ('', False),
+    ]
+    # the row is judged by the test's own call, which replays as its command
+    assert [finding.kind for finding in replay.unneeded([first], result.report)] == [
+        'unneeded'
+    ]
+    # the fixture's update shows a kind under the first test's id, for no test
+    assert (rows[0]['test'], 'link_add' in rows[0]['kinds']['notices']) == (first, True)
+    listed = {
+        family: dict.fromkeys(recording.known[family], kinds.PERTURBATION)
+        for family in kinds.FAMILIES
+    }
+    listed['notices']['link_add'] = first
+    findings, _ = kinds.check(listed, recording, result.report, {})
+    assert findings == [
+        replay.Finding(
+            'kind', 'notice link_add', f'no replayed call of {first} shows it'
+        )
+    ]
+
+
+def test_call_on_input_outside_the_supported_set_is_a_finding(
+    tmp_path: pathlib.Path,
+    engine: side.Side,
+) -> None:
+    """A call that v1 runs on input a second engine refuses is reported.
+
+    Some wikis stamp with a fraction of a second, and one test matches a
+    pattern with an atomic group: both are outside the supported set,
+    and v1 runs the calls. The format counts wherever the command finds
+    it: in the settings file of a wiki with caches, in that of a wiki
+    written by hand that has none yet, and in the settings an ``init``
+    is given. Each such call is a finding, unless the test's row rests
+    on the registry entry for refused input. A shared fixture's call has
+    no row, so it stays one. A call on input inside the set is none.
+
+    The row hides nothing else: the entry's classifier says call by call
+    what it explains, so a side that runs such a call and prints another
+    byte still differs.
+    """
+    recording = _record(tmp_path, engine, core=_FRACTION, cli=_CLI_FRACTION, jobs=0)
+    seeded = selfcheck._seeded(engine)
+    result = replay.run(recording, seeded)
+    core, cli = 'tests/test_core/test_calls.py', 'tests/test_cli/test_commands.py'
+    fraction, stamped, atomic = (
+        f'{core}::test_fraction',
+        f'{core}::test_stamped',
+        f'{core}::test_atomic',
+    )
+    bare, given = f'{cli}::test_bare', f'{cli}::test_given'
+    stamp = 'timestamp.format: %f'
+    assert [
+        (finding.kind, finding.subject, finding.detail) for finding in result.findings
+    ] == [
+        ('unsupported', bare, stamp),
+        ('unsupported', given, stamp),
+        ('unsupported', atomic, 'pattern: atomic group'),
+        ('unsupported', fraction, stamp),
+        ('unsupported', stamped, stamp),
+        ('unsupported', stamped, stamp),
+    ]
+    listed = [(row['test'], row['command']) for row in result.report['outside']]
+    assert sorted(listed) == [
+        (bare, 'update'),
+        (given, 'init'),
+        (atomic, 'match'),
+        (fraction, 'update'),
+        (stamped, 'read'),
+        (stamped, 'update'),
+    ]
+    tests: list[str] = [fraction, stamped, atomic, bare, given]
+    explained = dict.fromkeys(tests, 'D3')
+    result = replay.run(recording, seeded, routed=explained, explained=explained)
+    assert [
+        (finding.kind, finding.subject, finding.detail) for finding in result.findings
+    ] == [('unsupported', stamped, stamp)]
+    assert replay.unneeded(explained, result.report) == []
+    # a side that prints one more byte differs on a call the row is about
+    loud = tmp_path / 'loud.py'
+    loud.write_text(_LOUD, encoding='utf-8')
+    other = side.Side(name='loud', argv=(sys.executable, f'{loud}', *engine.argv))
+    result = replay.run(
+        recording,
+        [engine, other],
+        routed=explained,
+        explained=explained,
+        second=True,
+    )
+    differing = {(found.stage, found.aspect) for found in result.differences}
+    assert {(test, 'stdout') for test in explained} <= differing
 
 
 def test_clock_a_test_fixes_is_the_clock_of_the_replay(
@@ -958,8 +1342,9 @@ def test_registry_entry_excuses_nothing_between_two_builds_of_v1(
 
     The second side prints a help page in another layout, which the
     registry excuses. Against a second engine the call is listed and
-    nothing more. Between two builds of v1 no entry has a difference to
-    explain, so the excused call is a finding.
+    nothing more, and a row for its test is needed. Between two builds
+    of v1 no entry has a difference to explain, so the excused call is a
+    finding, unless the row of its test rests on that same entry.
     """
     recording = _record(tmp_path, engine, cli=_CLI_HELP)
     (call,) = recording.calls
@@ -976,10 +1361,19 @@ def test_registry_entry_excuses_nothing_between_two_builds_of_v1(
     result = replay.run(recording, [engine, other], second=True)
     assert (result.findings, result.differences) == ((), ())
     assert [entry.entry for entry in result.excused] == ['D2']
+    assert replay.unneeded([call.test], result.report) == []
     result = replay.run(recording, [engine, other])
     assert [(finding.kind, finding.subject) for finding in result.findings] == [
         ('registered', call.test)
     ]
+    for entry, findings in (('D2', []), ('D1', ['registered'])):
+        result = replay.run(
+            recording,
+            [engine, other],
+            routed=[call.test],
+            explained={call.test: entry},
+        )
+        assert [finding.kind for finding in result.findings] == findings
 
 
 def test_doctored_replay_is_reported(tmp_path: pathlib.Path, engine: side.Side) -> None:
@@ -1069,7 +1463,8 @@ def test_format_calls_are_recorded_and_made_again(
     come back as what they were when the call is made again in a fresh
     interpreter, and a call that raises raises again. A
     call whose outcome turns on a value the test patched gives another
-    outcome there, which is a finding.
+    outcome there, which is a finding. A routing row for a format test is
+    needed only while one of its calls does that.
     """
     recording = _record(tmp_path, engine, formats=_FORMATS)
     counts = sorted((entry['function'], entry['count']) for entry in recording.formats)
@@ -1087,12 +1482,23 @@ def test_format_calls_are_recorded_and_made_again(
     findings, report = replay.formats(recording, source, engine, work=work)
     assert findings == []
     assert (report['calls'], report['distinct']) == (6, 5)
+    # a row for a test whose format calls all give their outcome again is
+    # not needed
+    (test,) = {test for entry in recording.formats for test in entry['tests']}
+    played = replay.run(recording, selfcheck._seeded(engine)).report
+    unneeded = replay.unneeded([test], played, report['differing'], [test])
+    assert [(finding.kind, finding.subject) for finding in unneeded] == [
+        ('unneeded', test)
+    ]
     recording = _record(tmp_path / 'other', engine, formats=_HIDDEN)
     work = tmp_path / 'made again'
-    findings, _ = replay.formats(recording, source, engine, work=work)
+    findings, report = replay.formats(recording, source, engine, work=work)
     assert [(finding.kind, finding.subject) for finding in findings] == [
         ('format', 'match_link_row')
     ]
+    (test,) = report['differing']
+    played = replay.run(recording, selfcheck._seeded(engine)).report
+    assert replay.unneeded([test], played, report['differing'], [test]) == []
 
 
 def test_format_call_with_no_json_form_is_a_finding(
@@ -1137,10 +1543,254 @@ def test_recording_lists_the_kinds_each_test_met(
     index, and its lint reports issues.
     """
     recording = _record(tmp_path, engine, core=_COMMANDS)
-    ((test, kinds),) = recording.kinds.items()
+    ((test, met),) = recording.kinds.items()
     assert test.endswith('::test_every_command')
-    assert kinds['notices']['link_add'] >= 1
-    assert sum(kinds['issues'].values()) >= 1
+    assert met['notices']['link_add'] >= 1
+    assert sum(met['issues'].values()) >= 1
+
+
+def test_kind_list_is_held_to_the_engine_and_to_the_replay(
+    tmp_path: pathlib.Path,
+    engine: side.Side,
+) -> None:
+    """Every kind the engine has needs a home that shows it.
+
+    The recording lists the kinds of the engine itself, and each call the
+    kinds it met. A kind is at home in a test when a call of the test
+    replays as its command and the command shows the kind: a ``lint``
+    document names it, and any other command prints the notice. A home
+    that the routing table sends to a test of the second engine holds a
+    kind the test met. A list that lacks a kind of the engine, names a
+    kind it does not have, or names a home that does not show its kind
+    is a finding. The perturbation answers for its own kinds.
+    """
+    recording = _record(tmp_path, engine, core=_COMMANDS)
+    assert {'link_add', 'write_skip'} <= set(recording.known['notices'])
+    assert {'broken_link', 'requires_update'} <= set(recording.known['issues'])
+    lint = next(call for call in recording.calls if call.command == 'lint')
+    update = next(call for call in recording.calls if call.kinds['notices'])
+    assert (update.command, len(update.kinds['notices'])) == (
+        'update',
+        len(update.notices),
+    )
+    test = lint.test
+    issue = lint.kinds['issues'][0]
+    seeded = selfcheck._seeded(engine)
+    result = replay.run(recording, seeded)
+    shown = [row['kinds'] for row in result.report['calls']]
+    assert any('link_add' in row['notices'] for row in shown)
+    assert any(issue in row['issues'] for row in shown)
+    # a command line that prints no notice, and a lint that ends before its
+    # document, show none of the kinds their calls met
+    silent = dataclasses.replace(update, argv=('--version',))
+    ended = dataclasses.replace(lint, argv=(*lint.argv, '--nope'))
+    only = dataclasses.replace(recording, calls=(silent, ended))
+    rows = replay.run(only, seeded).report['calls']
+    assert [row['kinds'] for row in rows] == [{'notices': [], 'issues': []}] * 2
+    # every kind at home in the perturbation, but two the test shows
+    listed = {
+        family: dict.fromkeys(recording.known[family], kinds.PERTURBATION)
+        for family in kinds.FAMILIES
+    }
+    listed['notices']['link_add'] = test
+    listed['issues'][issue] = test
+    findings, counts = kinds.check(listed, recording, result.report, {})
+    assert findings == []
+    assert (counts['notices']['replay'], counts['issues']['replay']) == (1, 1)
+    # a home the routing table sends to a test of the second engine
+    for to, held in (('rust', True), ('dropped', False)):
+        route = Route(tests=(test,), to=to, target='', cite='', reason='None.')
+        findings, counts = kinds.check(listed, recording, result.report, {test: route})
+        assert (not findings) is held
+        assert counts['notices']['rust'] == int(held)
+    # such a home holds only a kind the test met
+    route = Route(tests=(test,), to='rust', target='', cite='', reason='None.')
+    unmet = {**listed, 'notices': {**listed['notices'], 'write_skip': test}}
+    findings, _ = kinds.check(unmet, recording, result.report, {test: route})
+    assert [(finding.subject, finding.detail) for finding in findings] == [
+        (
+            'notice write_skip',
+            f'{test} is routed, and no test of the second engine holds it',
+        )
+    ]
+    # a command that shows the kind and does not repeat its call is no home:
+    # the pending update, run without the option that keeps it from writing
+    pending = next(call for call in recording.calls if '--check' in call.argv)
+    assert 'link_add' in pending.kinds['notices']
+    argv = tuple(item for item in pending.argv if item != '--check')
+    only = dataclasses.replace(
+        recording,
+        calls=(dataclasses.replace(pending, argv=argv),),
+    )
+    report = replay.run(only, seeded).report
+    (row,) = report['calls']
+    assert row['problems']
+    assert 'link_add' in row['kinds']['notices']
+    alone = {
+        family: dict.fromkeys(recording.known[family], kinds.PERTURBATION)
+        for family in kinds.FAMILIES
+    }
+    alone['notices']['link_add'] = test
+    findings, _ = kinds.check(alone, only, report, {})
+    assert [(finding.subject, finding.detail) for finding in findings] == [
+        ('notice link_add', f'no replayed call of {test} shows it')
+    ]
+    # a list that lacks a kind, names an unknown one, or a home that shows nothing
+    del listed['issues'][issue]
+    listed['issues']['no_such_kind'] = test
+    listed['notices']['write_skip'] = test
+    findings, _ = kinds.check(listed, recording, result.report, {})
+    assert [(finding.subject, finding.detail) for finding in findings] == [
+        ('notice write_skip', f'no replayed call of {test} shows it'),
+        (f'issue {issue}', 'the list gives it no home'),
+        ('issue no_such_kind', 'v1 has no such kind'),
+    ]
+
+
+def test_issue_kind_the_source_does_not_name_ends_the_recording(
+    tmp_path: pathlib.Path,
+    engine: side.Side,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The recorder lists the issue kinds only where the source spells each one.
+
+    The kinds are read from the keyword of every place that makes an
+    issue. A place that names no kind there would leave a kind off the
+    list with nothing to show for it, so the recording ends. The test
+    names an error class in the issue class's place, which the engine's
+    source makes with no kind.
+    """
+    monkeypatch.setattr(record, '_ISSUE', 'wiki.core.wiki:ValueError')
+    with pytest.raises(RuntimeError, match='no string literal'):
+        _record(tmp_path, engine, core=_COMMANDS)
+
+
+def test_every_test_has_one_home(tmp_path: pathlib.Path, engine: side.Side) -> None:
+    """Each test v1 has is held by one part of the harness, or is a finding.
+
+    The CLI suite holds a test that runs a command, and one that reads
+    the tree a shared fixture made with a command, whichever test set the
+    fixture up. The replay holds a core test with a call of its own that
+    replays as its command: a call no command line states gives no home,
+    and neither does the call of a shared fixture, which a test lists
+    only from its own module. The format calls hold a format test whose
+    calls all have a JSON form and give their outcome again. A test with
+    none of these is homeless until a row routes it, and one the host
+    skips, or that fails as its mark expects, shows its home on another
+    host. The table is held to the tests in turn: a row names a test v1
+    has, a dropped row cites a test the CLI suite holds, and a row that
+    waits for the replay does not outlast the port of its command. A
+    collection that does not end cleanly is no list of v1's tests.
+    """
+    recording = _record(
+        tmp_path,
+        engine,
+        core=_HOMES,
+        cli=_CLI_HOMES,
+        formats=_FORMAT_HOMES,
+        jobs=0,
+    )
+    python = suite.source(oracle.load()).python
+    source = suite.Source(python=python, checkout=tmp_path / 'checkout')
+    dispatcher = dispatch.build(tmp_path / 'bin', reference=engine)
+    # the harness's own tests on v1's branch are no tests of v1
+    own = tmp_path / 'checkout' / 'tests' / 'test_parity'
+    own.mkdir()
+    (own / '__init__.py').write_text('', encoding='utf-8')
+    (own / 'test_own.py').write_text('def test_own():\n    pass\n', encoding='utf-8')
+    collected = homes.collect(source, dispatcher, work=tmp_path / 'collect')
+    cli, core = 'tests/test_cli/test_commands.py', 'tests/test_core/test_calls.py'
+    fmt = 'tests/test_core/test_format.py'
+    assert collected == (
+        f'{cli}::test_command',
+        f'{cli}::test_tree',
+        f'{cli}::test_tree_again',
+        f'{cli}::test_python',
+        f'{cli}::test_elsewhere',
+        f'{cli}::test_expected',
+        f'{core}::test_call',
+        f'{core}::test_no_call',
+        f'{core}::test_shared_call',
+        f'{core}::test_unstated',
+        f'{fmt}::test_formats',
+        f'{fmt}::test_hidden',
+        f'{fmt}::test_bytes',
+    )
+    shared = {test: names for test, names in recording.shared.items() if names}
+    assert shared == {
+        f'{core}::test_shared_call': [f'{core}::made'],
+        f'{cli}::test_tree': [f'{cli}::made'],
+        f'{cli}::test_tree_again': [f'{cli}::made'],
+    }
+    seeded = selfcheck._seeded(engine)
+    result = replay.run(recording, seeded)
+    work = tmp_path / 'made'
+    _, formats = replay.formats(recording, source, engine, work=work)
+    findings, report = homes.check(
+        collected,
+        recording,
+        result.report,
+        formats,
+        {},
+        folder=source.folder,
+    )
+    homeless = [
+        f'{cli}::test_python',
+        f'{core}::test_no_call',
+        f'{core}::test_shared_call',
+        f'{core}::test_unstated',
+        f'{fmt}::test_hidden',
+        f'{fmt}::test_bytes',
+    ]
+    assert findings == [replay.Finding('homeless', test) for test in homeless]
+    assert report['homes'] == {'routed': 0, 'suite': 3, 'replay': 1, 'format': 1}
+    assert report['skipped'] == [f'{cli}::test_elsewhere', f'{cli}::test_expected']
+    # a row for each, and three rows the tests do not bear out
+    rows = [
+        Route((f'{cli}::test_python',), 'dropped', '', f'{cli}::test_command', 'x'),
+        Route((f'{core}::test_no_call',), 'replay', 'init', '', 'x'),
+    ]
+    routes = {test: route for route in rows for test in route.tests}
+    findings, report = homes.check(
+        collected,
+        recording,
+        result.report,
+        formats,
+        routes,
+        folder=source.folder,
+    )
+    assert findings == [replay.Finding('homeless', test) for test in homeless[2:]]
+    assert report['homes'] == {'routed': 2, 'suite': 3, 'replay': 1, 'format': 1}
+    assert report['routed'] == {'dropped': 1, 'replay': 1}
+    rows = [
+        Route((f'{core}::test_gone',), 'rust', '', '', 'x'),
+        Route((f'{cli}::test_python',), 'dropped', '', f'{core}::test_call', 'x'),
+        Route((f'{core}::test_no_call',), 'replay', 'init', '', 'x'),
+    ]
+    routes = {test: route for route in rows for test in route.tests}
+    findings, _ = homes.check(
+        collected,
+        recording,
+        result.report,
+        formats,
+        routes,
+        folder=source.folder,
+        ported=['init'],
+    )
+    assert [
+        (finding.kind, finding.subject)
+        for finding in findings
+        if finding.kind != 'homeless'
+    ] == [
+        ('absent', f'{core}::test_gone'),
+        ('waiting', f'{core}::test_no_call'),
+        ('cite', f'{core}::test_call'),
+    ]
+    # a module that does not load ends the collection with the others listed
+    broken = tmp_path / 'checkout' / 'tests' / 'test_core' / 'test_broken.py'
+    broken.write_text('import parity_no_such_module\n', encoding='utf-8')
+    with pytest.raises(RuntimeError, match='did not collect the tests'):
+        homes.collect(source, dispatcher, work=tmp_path / 'again')
 
 
 def test_test_the_recorder_breaks_is_a_finding(
