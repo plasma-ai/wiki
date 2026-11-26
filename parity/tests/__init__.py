@@ -13,6 +13,7 @@ from .test_main import *
 from .test_manifest import *
 from .test_matrix import *
 from .test_oracle import *
+from .test_perturb import *
 from .test_ported import *
 from .test_registry import *
 from .test_replay import *

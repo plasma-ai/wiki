@@ -6,6 +6,8 @@ usage: python -m parity matrix --a NAME --b NAME [--registered] [--sides FILE] -
        python -m parity suite [--engine NAME] [--sides FILE] --work DIR --out DIR
        python -m parity replay [--engine NAME] [--sides FILE] --work DIR --out DIR
        python -m parity fixtures [--engine NAME] [--sides FILE] [--every] --work DIR --out DIR
+       python -m parity perturb corpus [--engine NAME] [--sides FILE] --corpora FILE [--seed N] --work DIR --out DIR
+       python -m parity perturb loop [--engine NAME] [--sides FILE] [--corpora FILE] [--seed N | --fresh N] --work DIR --out DIR
        python -m parity oracle ensure [--side NAME]
        python -m parity oracle check [--skip NAME]
        python -m parity container [--commit COMMIT] [--out DIR] COMMAND [ARG ...]
@@ -55,6 +57,20 @@ family, on a family named twice, on a tree a second engine refuses, on a
 family the file system cannot hold when ``--family`` names it or ``--every``
 is given, and on a work folder the harness refuses.
 
+``perturb`` changes trees by a seed, the way hands, tools and merges change
+a wiki, and compares the sides on what the changes leave. ``perturb corpus``
+perturbs each corpus once, under a fresh seed unless ``--seed`` names one,
+and runs the matrix and the perturbation's own stages on it. ``perturb loop``
+perturbs small trees once for every seed and runs a short stage in place of
+the matrix: the example wiki and the fixture families, or with ``--corpora``
+the wiki of each corpus, copied into a repository of its own. Its seeds are
+the committed list, the ones ``--seed`` names, or ``--fresh N`` new ones.
+Both hold every perturbation to the kinds its operators name, and a run of
+every tree holds the kind list to the kinds it shows. They exit 0 when no
+tree shows a difference or a finding, and 1 otherwise. They exit 2, before a
+tree is written, as ``fixtures`` does, on a seed list or a kind list that
+breaks its rules, and on a kind list that disagrees with the operators.
+
 The registry lists what a second engine may do differently from v1, and two
 builds of v1 have nothing registered between them. ``matrix`` therefore
 counts a command the registry excuses as a result that is not the expected
@@ -76,18 +92,23 @@ exit 1 always means that a result is not the expected one.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import dataclasses
 import datetime as dt
+import functools
 import json
 import logging
+import os
 import pathlib
 import platform
+import random
 import re
 import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 from collections.abc import Mapping, Sequence
 from typing import Any, Optional, Union
@@ -100,6 +121,7 @@ from . import (
     homes,
     kinds,
     oracle,
+    perturb,
     ported,
     record,
     registry,
@@ -136,7 +158,7 @@ _YEARS = (1001, 9998)
 _DESCRIPTION = """\
 Run two wiki engines on the same trees and report what they do differently.
 
-matrix, selfcheck, registry, suite, replay and fixtures exit 0 when every result
+matrix, selfcheck, registry, suite, replay, fixtures and perturb exit 0 when every result
 is the expected one, and 1 otherwise. A run that would compare nothing exits 2 with a message,
 before it snapshots anything or runs a test. oracle ensure exits 2 when it
 refuses a checkout or a venv, and oracle check exits 1 when a check fails. An
@@ -151,6 +173,12 @@ _FIXTURES = 'fixtures'
 # the folders of the checkouts and of the runs, below the fixtures' folder
 _TREES = 'trees'
 _RUNS = 'runs'
+# the same for the perturbation, and its two modes
+_PERTURB = 'perturb'
+_CORPUS = 'corpus'
+_LOOP = 'loop'
+# the seeds a fresh one is drawn from: every whole number of 32 bits
+_SEEDS = 2**32
 # the command that runs another in the Linux container
 _CONTAINER = 'container'
 
@@ -287,6 +315,70 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # sample seed option
     seed_help = 'Seed of the matrix sample (default: 0).'
     command.add_argument('--seed', type=int, default=0, help=seed_help)
+    summary = 'Perturb trees by a seed and compare the sides on each.'
+    command = commands.add_parser(_PERTURB, help=summary, description=summary)
+    modes = command.add_subparsers(dest='mode', required=True)
+    summaries = {
+        _CORPUS: 'Perturb each corpus once and run the matrix on it.',
+        _LOOP: 'Perturb small trees once for every seed and run a short stage on each.',
+    }
+    for name, summary in summaries.items():
+        mode = modes.add_parser(name, help=summary, description=summary)
+        # engine name option
+        engine_help = (
+            'Name of the side compared against v1 (default: v1 against itself).'
+        )
+        mode.add_argument('--engine', help=engine_help)
+        # sides file option
+        sides_help = 'TOML file with one table per side, beside the v1 sides.'
+        mode.add_argument('--sides', type=pathlib.Path, help=sides_help)
+        # corpora file option
+        corpora_help = 'TOML file with one table per corpus.'
+        if name == _LOOP:
+            corpora_help += ' (default: the example wiki and the fixture families)'
+        mode.add_argument(
+            '--corpora',
+            type=pathlib.Path,
+            required=name == _CORPUS,
+            help=corpora_help,
+        )
+        # corpus label option
+        corpus_help = 'Label of a corpus to run on (repeatable; default: every corpus).'
+        mode.add_argument('--corpus', action='append', help=corpus_help)
+        # work folder option
+        work_help = 'Folder the harness makes one new folder in.'
+        mode.add_argument('--work', type=pathlib.Path, required=True, help=work_help)
+        # output folder option
+        out_help = 'Folder for the result files and the saved streams.'
+        mode.add_argument('--out', type=pathlib.Path, required=True, help=out_help)
+        # fixed instant option
+        now_help = f'RFC 3339 instant every side runs at (default: {_NOW}).'
+        mode.add_argument('--now', type=_instant, default=_NOW, help=now_help)
+        if name == _CORPUS:
+            # seed option
+            seed_help = 'Seed of the perturbation (default: a fresh one).'
+            mode.add_argument('--seed', type=_seed, help=seed_help)
+        else:
+            # tree name option
+            family_help = (
+                'Name of a tree to run on: hello or a fixture family (repeatable;'
+                ' default: every tree the file system of the work folder can hold).'
+            )
+            mode.add_argument('--family', action='append', help=family_help)
+            # every tree option
+            every_help = (
+                'Refuse a work folder whose file system cannot hold every tree.'
+            )
+            mode.add_argument('--every', action='store_true', help=every_help)
+            # seed option
+            seed_help = 'A seed to run (repeatable; default: the committed list).'
+            mode.add_argument('--seed', type=_seed, action='append', help=seed_help)
+            # fresh seeds option
+            fresh_help = 'How many fresh seeds to run in place of the committed list.'
+            mode.add_argument('--fresh', type=int, help=fresh_help)
+            # jobs option
+            jobs_help = 'How many trees are run at once (default: one per processor).'
+            mode.add_argument('--jobs', type=int, help=jobs_help)
     summary = 'Build the oracle checkout, or hold oracle.toml level with v1.'
     command = commands.add_parser('oracle', help=summary, description=summary)
     actions = command.add_subparsers(dest='action', required=True)
@@ -365,6 +457,21 @@ def _instant(value: str) -> str:
     return value
 
 
+def _seed(value: str) -> int:
+    """Return ``value``, a ``--seed`` argument, as a seed.
+
+    Raises:
+        argparse.ArgumentTypeError: If ``value`` is not a whole number
+            from zero up.
+
+    """
+    if not (value.isascii() and value.isdigit()):
+        raise argparse.ArgumentTypeError(
+            f'A seed must be a whole number from zero up, got {value!r}.'
+        )
+    return int(value)
+
+
 def _run(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
     """Run the parsed command and return the exit code."""
     if options.command == 'oracle':
@@ -375,6 +482,8 @@ def _run(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
         return _replay(parser, options)
     if options.command == _FIXTURES:
         return _fixtures(parser, options)
+    if options.command == _PERTURB:
+        return _perturb(parser, options)
     if options.command == _CONTAINER:
         return _container(parser, options)
     # read the registry
@@ -846,6 +955,238 @@ def _fixtures(parser: argparse.ArgumentParser, options: argparse.Namespace) -> i
         return 1
     shutil.rmtree(work)
     return 0
+
+
+def _perturb(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
+    """Perturb trees by a seed, run each, and return the exit code."""
+    loop = options.mode == _LOOP
+    # read the registry, the kind list, the seeds, the sides and the corpora
+    try:
+        entries = registry.load()
+        listed = kinds.load()
+        perturb.validate(listed)
+        seeds = _perturb_seeds(options)
+        declared = {}
+        if options.sides is not None:
+            declared = config.load_sides(options.sides)
+        corpora = {}
+        if options.corpora is not None:
+            corpora = config.load_corpora(options.corpora)
+    except ValueError as e:
+        parser.error(f'{e}')
+    # resolve the corpora to run on
+    labels = options.corpus or list(corpora)
+    if options.corpora is None:
+        if options.corpus:
+            parser.error('--corpus names a corpus, and no --corpora file declares one.')
+    else:
+        if loop and (options.family or options.every):
+            parser.error('--corpora names the trees of the loop, and so does --family.')
+        unknown = [label for label in labels if label not in corpora]
+        if unknown:
+            parser.error(f'{options.corpora} declares no corpus named {unknown!r}.')
+        if not labels:
+            parser.error(f'{options.corpora} declares no corpus.')
+    if loop and options.every and (options.family is not None):
+        parser.error('--every runs every tree, and --family names some.')
+    # resolve the sides: v1, and the engine if the run names one
+    names = [suite.REFERENCE]
+    if options.engine is not None:
+        if options.engine == suite.REFERENCE:
+            parser.error(f'--engine names {options.engine!r}, the side v1 runs as.')
+        names.append(options.engine)
+    try:
+        chosen = _sides(names, declared, path=options.sides)
+    except ValueError as e:
+        parser.error(f'{e}')
+    # refuse the work folder and the corpora, and probe every side, before a
+    # tree is written
+    work = options.work.resolve() / _PERTURB
+    try:
+        fixtures.validate(work)
+        if not loop:
+            for label in labels:
+                runner.validate(corpora[label], work=work / _RUNS / label)
+        header = _header(chosen, now=options.now)
+    except ValueError as e:
+        parser.error(f'{e}')
+    header['registry'] = {id: entry.status for id, entry in entries.items()}
+    # write the trees of a loop: the small ones of the harness, or the wiki of
+    # each corpus in a repository of its own
+    trees = [corpora[label] for label in labels]
+    if loop and (options.corpora is not None):
+        try:
+            trees = [perturb.carve(tree, work / _TREES) for tree in trees]
+        except ValueError as e:
+            parser.error(f'{e}')
+    elif loop:
+        try:
+            trees, left = perturb.trees(
+                work / _TREES,
+                names=options.family,
+                every=options.every,
+            )
+        except ValueError as e:
+            parser.error(f'{e}')
+        for name in left:
+            print(f'{_PERTURB}: left out, the file system cannot hold it: {name}')
+        header['left_out'] = left
+    # v1 against itself under two hash seeds, or v1 against the engine, which
+    # also runs on one thread
+    reference, *engines = chosen
+    sides = selfcheck._seeded(reference)
+    if engines:
+        sides = [reference, engines[0], replay.threaded(engines[0])]
+    # a loop prints one line for each tree and seed, and none for each stage
+    if loop:
+        logging.getLogger('parity').setLevel(logging.WARNING)
+    # run each tree under each seed: a corpus alone, the trees of a loop
+    # several at once
+    pairs = [(tree, seed) for tree in trees for seed in seeds]
+    jobs = 1
+    if loop:
+        jobs = options.jobs or os.cpu_count() or 1
+    trial = functools.partial(
+        perturb.run,
+        sides=sides,
+        work=work / _RUNS,
+        now=options.now,
+        loop=loop,
+        second=bool(engines),
+    )
+    options.out.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    rows: dict[str, list[dict[str, Any]]] = {tree.label: [] for tree in trees}
+    shown = []
+    failed = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        tried = pool.map(trial, *zip(*pairs))
+        for done in tried:
+            rows[done.label].append(_tried(done, header, out=options.out, loop=loop))
+            shown.extend(done.shown.values())
+            failed += done.failed
+    # a tree of a loop has one result file, with a row for each seed
+    if loop:
+        for label, held in rows.items():
+            document = {**header, 'corpus': label, 'seeds': held}
+            text = json.dumps(document, indent=2)
+            (options.out / f'{label}.json').write_text(text + '\n', encoding='utf-8')
+    # a run of every tree holds the kind list to the kinds the trees show
+    findings = []
+    if not (options.corpus or (loop and options.family)):
+        findings = perturb.unshown(listed, shown)
+    for finding in findings:
+        line = _line(finding)
+        print(f'  {line}')
+    # write the result file of the run, and print how much ran
+    seconds = round(time.monotonic() - started, 1)
+    document = {
+        **header,
+        'mode': options.mode,
+        'seeds': seeds,
+        'trees': [tree.label for tree in trees],
+        'failed': failed,
+        'findings': [dataclasses.asdict(finding) for finding in findings],
+        'seconds': seconds,
+    }
+    path = options.out / f'{_PERTURB}.json'
+    path.write_text(json.dumps(document, indent=2) + '\n', encoding='utf-8')
+    s = 's' if len(seeds) != 1 else ''
+    on = 'trees' if len(trees) != 1 else 'tree'
+    print(
+        f'{_PERTURB}: {len(seeds)} seed{s} on {len(trees)} {on}: {failed} of'
+        f' {len(pairs)} failed, {seconds:.0f} s'
+    )
+    if failed or findings:
+        return 1
+    shutil.rmtree(work)
+    return 0
+
+
+def _tried(
+    done: perturb.Trial,
+    header: Mapping[str, Any],
+    *,
+    out: pathlib.Path,
+    loop: bool,
+) -> dict[str, Any]:
+    """Print what one tree showed under one seed, and write its result file.
+
+    A corpus has one result file, ``<out>/<label>.json``. In a loop only a
+    tree that failed under a seed gets one, ``<out>/<label>/<seed>.json``,
+    and every other is the row this returns. The streams of a case that
+    differs are saved beside the result file.
+    """
+    result = done.result
+    row = {
+        'seed': done.seed,
+        'differences': len(result.differences),
+        'findings': len(done.findings),
+        'excused': len(result.excused),
+        'seconds': done.seconds,
+    }
+    target = out / f'{done.label}.json'
+    streams = out / done.label
+    if loop:
+        target = out / done.label / f'{done.seed}.json'
+        streams = out / done.label / f'{done.seed}'
+    if done.failed or not loop:
+        document = {
+            **header,
+            **result.report,
+            'perturbation': dataclasses.asdict(done.perturbation),
+            'kinds': done.shown,
+            'findings': [dataclasses.asdict(finding) for finding in done.findings],
+            'seconds': done.seconds,
+        }
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(document, indent=2) + '\n', encoding='utf-8')
+        _save(result.streams, streams)
+    # print the differences, the findings and the searches that found nothing
+    count = len(result.differences)
+    s = 's' if count != 1 else ''
+    print(f'{done.label} seed {done.seed}: {count} difference{s}')
+    for difference in result.differences:
+        line = _line(difference)
+        print(f'  {line}')
+    for excused in result.excused:
+        line = _line(excused)
+        print(f'  registered: {line}')
+    for finding in done.findings:
+        line = _line(finding)
+        print(f'  {line}')
+    for name in _no_hits(result.report):
+        print(f'  found nothing: {name}')
+    return row
+
+
+def _perturb_seeds(options: argparse.Namespace) -> list[int]:
+    """Return the seeds of a perturbation run.
+
+    A corpus takes the seed the run names, or a fresh one. A loop takes the
+    seeds the run names, as many fresh ones as it asks for, or the committed
+    list.
+
+    Raises:
+        ValueError: If a loop names seeds and asks for fresh ones, if it
+            asks for fewer than one, or if the committed list breaks a
+            rule of :func:`parity.perturb.load_seeds`.
+
+    """
+    fresh = random.SystemRandom()
+    if options.mode == _CORPUS:
+        if options.seed is not None:
+            return [options.seed]
+        return [fresh.randrange(_SEEDS)]
+    if options.fresh is not None:
+        if options.seed:
+            raise ValueError('--fresh draws the seeds, and --seed names some.')
+        if options.fresh < 1:
+            raise ValueError(f'--fresh must be at least 1, got {options.fresh}.')
+        return [fresh.randrange(_SEEDS) for _ in range(options.fresh)]
+    if options.seed:
+        return list(dict.fromkeys(options.seed))
+    return list(perturb.load_seeds())
 
 
 def _container(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:

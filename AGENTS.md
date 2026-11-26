@@ -83,6 +83,9 @@ uv run --no-sync python -m parity replay --work <dir> --out <dir>
 # write the fixture families and run the matrix on each
 uv run --no-sync python -m parity fixtures --work <dir> --out <dir>
 
+# perturb the small trees by the committed seeds and run each
+uv run --no-sync python -m parity perturb loop --work <dir> --out <dir>
+
 # run a command in the Linux container, on a clone of HEAD (needs Docker)
 uv run --no-sync python -m parity container -- <command>
 
@@ -508,10 +511,10 @@ side runs through `parity/launcher.py` and proves on every command that it is
 the oracle commit. Never edit the oracle checkout, and never sync or install
 into its venvs by hand: the harness refuses a checkout or a venv that is not
 what the file names. `python -m parity oracle check` holds the file level with
-v1; run it after `git fetch origin` when a work session starts. The three
-scripts the harness runs inside a side's interpreter, `launcher.py`, `facts.py`
-and `judge.py`, import nothing from `parity`, and neither do the modules in
-`parity/plugins/`, which are loaded there by names of their own.
+v1; run it after `git fetch origin` when a work session starts. The four scripts
+the harness runs inside a side's interpreter, `launcher.py`, `facts.py`,
+`judge.py` and `tap.py`, import nothing from `parity`, and neither do the
+modules in `parity/plugins/`, which are loaded there by names of their own.
 
 `python -m parity suite` runs v1's CLI tests (`tests/test_cli` of the oracle
 checkout, unedited) and a short table of commands on a pseudo-terminal
@@ -572,6 +575,28 @@ entry D4 has a second engine refuse the tree. Only the tests in
 `parity/tests/test_fixtures.py` write them, and they hold v1 to the spec's table
 on Linux, so a change in v1 there changes the table and, as a change to the
 registry does, the entry.
+
+`python -m parity perturb` changes trees by a seed (`parity/perturb.py`) and
+runs each as a corpus, because a converged wiki gives `update` and `lint` little
+to do. `perturb corpus` perturbs a snapshot of each corpus once and runs the
+matrix on it; `perturb loop` runs many seeds on small trees through a short
+stage: the example wiki and the fixture families, or the wiki of each corpus
+copied into a repository of its own. Each seed gives three trees: the one the
+operators leave, that tree with every index deleted, and that tree with conflict
+markers, which `update` refuses. An operator is one kind of change, and it names
+the notice and issue kinds its change puts into the tree. The tap
+(`parity/tap.py`) runs `lint` and `update` inside v1's interpreter on each tree,
+and a named kind that v1 does not meet there is a finding. So an operator names
+a kind only where its change shows it whatever else the perturbation did: draw a
+page, an index or a folder through the tree's own methods, which hand out what
+the engine left and keep the operators off each other's files. One seed gives
+one tree, byte for byte: draw only from the generator the operator is handed,
+and write only through the tree, which gives every file one of two fixed times.
+A new operator goes into `operators()`, with a row in the spec's table, and each
+kind it names takes the home `perturbation` in `parity/kinds.toml`; a run exits
+2 while the list and the operators disagree. `parity/seeds.toml` holds the seeds
+every pull request runs. A change to an operator changes what every seed leaves,
+so run the loop again on the committed seeds.
 
 `python -m parity container` runs one command in the Linux container
 (`parity/container.py`, `parity/Dockerfile`): the Ubuntu release of the CI

@@ -1,0 +1,4 @@
+# The seeds of the perturbation loop that every pull request runs: each one
+# perturbs the example wiki and every fixture family `update` takes. The
+# rules are in SPEC.md, under Perturbation.
+seeds = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]

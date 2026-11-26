@@ -418,16 +418,27 @@ def _write(family: Family, checkout: pathlib.Path) -> None:
             path = os.path.join(folder, name)
             os.utime(path, (_WRITTEN, _WRITTEN), follow_symlinks=False)
         os.utime(folder, (_WRITTEN, _WRITTEN))
-    if not family.repository:
-        return
-    # commit the tree under no config but the repository's own
+    if family.repository:
+        _commit(checkout, f'fixture family {family.name}')
+
+
+def _commit(checkout: pathlib.Path, message: str) -> None:
+    """Make the folder ``checkout`` a repository with one commit of all it holds.
+
+    The commit is made under a fixed identity and date, and under no config
+    but the repository's own.
+
+    Raises:
+        RuntimeError: If git cannot commit the tree.
+
+    """
     env = {**os.environ, **_COMMIT}
     env['GIT_CONFIG_GLOBAL'] = os.devnull
     env['GIT_CONFIG_SYSTEM'] = os.devnull
     commands = (
         ['init', '--quiet', '--initial-branch', 'main'],
         ['add', '--all'],
-        ['commit', '--quiet', '--message', f'fixture family {family.name}'],
+        ['commit', '--quiet', '--message', message],
     )
     for command in commands:
         result = subprocess.run(

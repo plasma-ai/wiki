@@ -49,6 +49,10 @@ class Side:
         judge: A whole command that answers what the side's interpreter
             makes of an input, for the classifiers of the registry. Empty
             for a side that has none.
+        tap: A whole command that takes a wiki root, runs ``lint`` and
+            ``update`` there inside the side's interpreter, and prints the
+            kinds they met, for the perturbation. Empty for a side that
+            has none.
 
     """
 
@@ -59,6 +63,7 @@ class Side:
     notice: bool = True
     identity: Mapping[str, str] = dataclasses.field(default_factory=dict)
     judge: tuple[str, ...] = ()
+    tap: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)

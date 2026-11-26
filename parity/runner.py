@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import json
 import logging
 import os
 import pathlib
 import shutil
+import subprocess
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Optional
 
 from . import cache, classify, compare, manifest, matrix, side, snapshot
@@ -113,13 +115,22 @@ class Result:
     excused: tuple[Excused, ...] = ()
 
 
-def prepare(corpus: Corpus, *, work: pathlib.Path, seed: int = 0) -> Plan:
+def prepare(
+    corpus: Corpus,
+    *,
+    work: pathlib.Path,
+    seed: int = 0,
+    change: Optional[Callable[[pathlib.Path], None]] = None,
+) -> Plan:
     """Snapshot ``corpus`` into the new folder ``work`` and plan its matrix.
 
     Args:
         corpus: The wiki to run on.
         work: New folder for the snapshot and the clones.
         seed: Seed of the matrix sample.
+        change: A change the snapshot takes before the sample is drawn: a
+            function that is handed the snapshot. The matrix then runs on
+            the changed tree, and the checkout stays as it is.
 
     Returns:
         The plan to hand to :func:`run`, and to :func:`discard` at the end.
@@ -132,6 +143,8 @@ def prepare(corpus: Corpus, *, work: pathlib.Path, seed: int = 0) -> Plan:
     work.mkdir(parents=True)
     source = work / _SNAPSHOT
     snapshot.snapshot(corpus.checkout, source)
+    if change is not None:
+        change(source)
     drawn = matrix.sample(source / corpus.root, seed=seed)
     # hash the snapshot once: every clone of it starts from these digests
     entries = manifest.scan(source, skip=frozenset({'.git'}))
@@ -306,6 +319,59 @@ def run(
     )
 
 
+def tap(
+    plan: Plan,
+    runner: Side,
+    *,
+    now: str,
+    stage: Optional[Stage] = None,
+) -> dict[str, Any]:
+    """Return what the tap of ``runner`` prints on a fresh tree of the plan.
+
+    The tree is a clone of the snapshot at the path every side runs at,
+    changed as ``stage`` changes its trees. The tap writes to it, and no
+    run is compared on it.
+
+    Args:
+        plan: The snapshot, from :func:`prepare`.
+        runner: A side that has a tap.
+        now: RFC 3339 instant for ``WIKI_FREEZE_TIME``.
+        stage: The stage whose change the tree takes. ``None`` leaves the
+            tree as the snapshot is.
+
+    Returns:
+        The JSON object the tap printed.
+
+    Raises:
+        RuntimeError: If the tap fails.
+
+    """
+    slot = plan.work / _SLOT
+    slot.mkdir()
+    snapshot.clone(plan.work / _SNAPSHOT, slot / _TREE)
+    (slot / _HOME).mkdir()
+    (slot / _HOME / '.gitconfig').write_bytes(b'')
+    (slot / _CWD).mkdir()
+    if (stage is not None) and (stage.change is not None):
+        stage.change(slot / _TREE)
+    env = side.environment(runner, slot / _HOME, now=now)
+    snapshot.refresh(slot / _TREE, env=env)
+    result = subprocess.run(
+        [*runner.tap, f'{plan.root}'],
+        cwd=slot / _CWD,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        encoding='utf-8',
+        errors='replace',
+    )
+    shutil.rmtree(slot)
+    if result.returncode != 0:
+        error = result.stderr.strip()
+        raise RuntimeError(f'tap failed (exit {result.returncode}): {error!r}')
+    return json.loads(result.stdout)
+
+
 def discard(plan: Plan) -> None:
     """Remove the plan's work folder: the snapshot and every tree kept in it."""
     return shutil.rmtree(plan.work)
@@ -358,13 +424,17 @@ def _run_stage(
         snapshot.clone(origin, slot)
     if stage.settings is not None:
         (plan.root / WIKI_SETTINGS).write_text(stage.settings, encoding='utf-8')
+    if stage.change is not None:
+        stage.change(slot / _TREE)
     env = {**side.environment(runner, slot / _HOME, now=now), **stage.env}
     snapshot.refresh(slot / _TREE, env=env)
     if stage.cold and (plan.root / CACHE).exists():
         shutil.rmtree(plan.root / CACHE)
-    # scan everything a command could write, the clone's own repository aside
+    # scan everything a command could write, the clone's own repository aside;
+    # a tree the stage changed holds files no manifest answers for
     skip = frozenset({f'{_TREE}/.git'})
-    before = manifest.scan(slot, skip=skip, origin=entries)
+    known = entries if stage.change is None else None
+    before = manifest.scan(slot, skip=skip, origin=known)
     baseline = {relpath: entry.content for relpath, entry in before.items()}
     view = cache.view(plan.root, _below(before, plan.corpus))
     first = view

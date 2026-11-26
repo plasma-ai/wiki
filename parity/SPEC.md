@@ -40,6 +40,14 @@ python -m parity replay [--engine NAME] [--sides SIDES] --work DIR --out DIR
 # write the fixture families and run the matrix on each
 python -m parity fixtures [--engine NAME] [--sides SIDES] [--every] --work DIR --out DIR
 
+# perturb each corpus by a seed and run the matrix on what the seed leaves
+python -m parity perturb corpus [--engine NAME] [--sides SIDES] \
+    --corpora CORPORA [--seed N] --work DIR --out DIR
+
+# perturb small trees by many seeds and run a short stage on each
+python -m parity perturb loop [--engine NAME] [--sides SIDES] [--corpora CORPORA] \
+    [--seed N | --fresh N] [--jobs N] --work DIR --out DIR
+
 # run a command in the Linux container
 python -m parity container [--commit COMMIT] [--out DIR] COMMAND [ARG ...]
 ```
@@ -172,6 +180,34 @@ result file, `<out>/<family>.json`, in the form `matrix` writes for a corpus,
 and the streams of a case that differs are saved under
 `<out>/<family>/<stage>/`.
 
+`perturb` changes trees by a seed and runs each as `matrix` runs a corpus
+(Perturbation, below). `perturb corpus` takes each corpus of the file once, and
+`--seed N` names the seed in place of a fresh one. `perturb loop` takes small
+trees once for every seed: the example wiki and the fixture families, or with
+`--corpora` the wiki of each corpus. `--family NAME` (repeatable) and `--every`
+pick among the small trees as they pick families for `fixtures`. Its seeds are
+the committed list, the ones `--seed N` (repeatable) names, or `--fresh N` new
+ones, and `--jobs N` sets how many trees run at once. `--engine`, `--sides`,
+`--corpus` and `--now` are those of the other commands. Both exit 0 when no tree
+shows a difference or a finding, and 1 otherwise. They exit 2 with a message,
+before a tree is written: on what `fixtures` refuses of an engine, a tree and a
+work folder; on a corpus the harness cannot snapshot; on a seed list or a kind
+list that breaks a rule; on a kind list that disagrees with the operators
+(Perturbation, Kinds); on `--fresh` with `--seed`, or with a count below one;
+and on `--family` or `--every` with `--corpora`. They make `<work>/perturb`,
+which must not exist beforehand, and remove it when the run passed. A corpus
+gets a result file `<out>/<label>.json` in the form `matrix` writes, with the
+seed, what the perturbation did, the kinds each of its trees showed and the
+findings; the streams of a case that differs are saved under
+`<out>/<label>/<stage>/`. A tree of a loop gets `<out>/<label>.json` with one
+row for each seed (differences, findings, excused commands, seconds), and for
+each seed that failed the whole result as `<out>/<label>/<seed>.json`, with the
+streams under `<out>/<label>/<seed>/<stage>/`. `<out>/perturb.json` records the
+run: the mode, the seeds, the trees, how many failed, and the findings of the
+whole run. A corpus that failed keeps its perturbed snapshot under
+`<work>/perturb/runs/<label>/<seed>/`, because its checkout may move on; a tree
+of a loop is written again from its seed.
+
 `container` runs one command in the Linux container (Container, below) and exits
 with that command's exit code. It exits 2 with a message when it is given no
 command, when `--commit` names no commit, and when Docker is not installed or
@@ -179,8 +215,8 @@ its daemon does not answer.
 
 The sections below are the rules of the harness, one part each: the oracle,
 sides, snapshots, comparison, caches, the matrix, the fixture families, the
-registry, the self-check, the CLI suite, the replay, with the account a whole
-replay gives of v1's tests and kinds, and the container.
+perturbation, the registry, the self-check, the CLI suite, the replay, with the
+account a whole replay gives of v1's tests and kinds, and the container.
 
 ## Oracle
 
@@ -240,10 +276,11 @@ reason = "<why it waits>"
   side's interpreter can import every top-level folder of the oracle commit, a
   `parity` folder among them. Harness code that runs there is a script run by
   its path with `-P` (the launcher; `facts.py`, which prints what the
-  interpreter is made of; and `judge.py`, which answers the classifiers), never
-  an import of `parity`. The pytest plugins of the CLI suite and of the replay
-  are loaded there by names of their own (`parity_suite`, `parity_record`), from
-  a folder that holds the harness's plugins and nothing else.
+  interpreter is made of; `judge.py`, which answers the classifiers; and
+  `tap.py`, which names the kinds a tree shows), never an import of `parity`.
+  The pytest plugins of the CLI suite and of the replay are loaded there by
+  names of their own (`parity_suite`, `parity_record`), from a folder that holds
+  the harness's plugins and nothing else.
 
 `python -m parity oracle check` holds `oracle.toml` level with v1, by three
 checks. It reads branches as the remote-tracking references hold them, so fetch
@@ -268,9 +305,9 @@ so exit 1 always means that a check failed.
 ## Sides
 
 A side has a name, an argv prefix, variables of its own, a `notice` flag, an
-optional `describe` command, an optional `judge` command, and an optional
-identity. The harness appends the wiki arguments to the prefix. The environment
-is built from nothing:
+optional `describe` command, an optional `judge` command, an optional `tap`
+command, and an optional identity. The harness appends the wiki arguments to the
+prefix. The environment is built from nothing:
 
 | Variable              | Value                                                                            |
 | --------------------- | -------------------------------------------------------------------------------- |
@@ -310,7 +347,8 @@ The side's own variables are applied last. stdin is the null device.
 - **v1 sides.** The argv prefix of a v1 side is its venv's interpreter, `-P` and
   `parity/launcher.py`. The launcher runs the command line of the `wiki` package
   the interpreter imports, with `argv[0]` set to `wiki`. Its `describe` command
-  runs `parity/facts.py`, and its `judge` command `parity/judge.py`.
+  runs `parity/facts.py`, its `judge` command `parity/judge.py`, and its `tap`
+  command `parity/tap.py` (Perturbation, Kinds). Only a v1 side has a tap.
 - **Identity.** A side with an identity gets `WIKI_TRACE=<file>` on every
   command, a fresh file outside the slot. Before it runs the command, the side
   appends one line of JSON to the file: `engine`, `version` and `build`. For a
@@ -567,6 +605,138 @@ trees; on the other two v1 runs, and the refusal is the second engine's own.
 | `refused-folder`  | a managed folder                            | The same for the page inside it. `update` exits 2 with the codec error where it would write the folder's index, with the pages before it already written.                                                                                                                                                                                                    |
 | `refused-pattern` | a page that only an exclude pattern removes | The pattern is matched against the name as text, and every command runs as on a wiki without the page.                                                                                                                                                                                                                                                       |
 | `refused-file`    | a file of a managed folder that is no page  | `update` exits 0: it names the skip, gives the file no row, and changes no file, because a file that is no page gets no `name`. A second `update --check` finds nothing to do, and `search` runs. `lint` exits 1 on every run with one issue, the invalid name, and no invalid YAML, in a JSON document that holds the byte itself and so is no valid UTF-8. |
+
+## Perturbation
+
+The corpora and the fixture bases are converged: `update` writes almost nothing
+there and `lint` reports almost nothing. A perturbation changes a tree by a
+seed, the way hands, tools and merges change a wiki, so that the read-only
+commands have something to report and `update` something to take in.
+`python -m parity perturb` perturbs trees and runs each as a corpus. The
+operators are in `parity/perturb.py`. A perturbation runs no engine: it edits
+files, and what the engines make of the edits is what the run compares.
+
+- **Seed.** One seed, one tree and one path for the wiki to stand at give one
+  perturbation, byte for byte. Each operator draws from a generator of its own,
+  seeded with the seed and the operator's name, so a new operator moves no
+  other's draws. The seed is also the seed of the matrix sample.
+- **Every operator, every tree.** Each operator applies once or twice on every
+  tree; the seed draws how often and where. The one operator that needs a
+  repository is left out on a tree without one.
+- **What an operator draws.** A page or an index as the engine left it: a page
+  with a closed block that carries a `name`, and an index with such a block, a
+  delimiter and a row. The operators that rewrite a block, a body under a kept
+  stamp or a row each take a file that no other of them has taken. Those that
+  add a link to a body or a row to an index draw among all, and their changes
+  add up. A tree that runs short gets new pages and folders, in the form the
+  engine writes under its default settings. Dot folders, symlinks, a wiki
+  declared inside the wiki and names that open with a dash are never drawn.
+- **Names.** A name the perturbation makes is `perturbed` and a number, which
+  the default naming policy and one that asks for identifiers both take. The two
+  invalid names end in `[`, which is link grammar and so denied by every policy.
+- **Order.** A folder is renamed first, before anything else is drawn. An index
+  is cut short next, and no later operator adds to its folder: an index that was
+  cut takes no row, so a file added beside it would show less than its operator
+  names.
+- **Times.** Every file the perturbation writes gets one of two fixed
+  modification times: long before any stamp a wiki holds, so the file reads as
+  stamped after its last edit, or long after, so it reads as edited since. The
+  seed draws which, and a file left late stays late. The first `dirty-edit` of a
+  tree is late.
+- **Three trees.** The operators without a stage leave the tree `edited`. Two
+  more trees come from it, each by one staged operator: `unindexed`, where every
+  index is deleted and `update` builds each again, and `conflicted`, where a
+  page and an index end in merge conflict markers and `update` refuses. A stage
+  of the perturbation makes its change on every tree it runs on, before the
+  first command, and every file of such a tree is hashed at the first scan.
+- **Corpus mode.** `perturb corpus` snapshots a corpus, perturbs the snapshot
+  and runs the stages of the matrix (Matrix) on the edited tree, then the stages
+  `unindexed` and `conflicted`. It runs once for each corpus, under a fresh seed
+  that the result file records, or under the seed `--seed` names.
+- **Loop mode.** `perturb loop` runs many seeds on small trees, each seed on
+  each tree, several at once. In place of the matrix it runs the short stage
+  `edited`, then `unindexed` and `conflicted`. With no `--corpora` the trees are
+  the repository's example wiki, `hello`, as a committed checkout of the files
+  git tracks there, and the fixture families `update` takes: a family that runs
+  alone is no tree of the loop, and no stage of a family's own runs, since it
+  names pages the perturbation may have moved. With `--corpora` each tree is the
+  wiki of a corpus, copied into a small repository of its own: the wiki at the
+  path it has in its checkout and the `.gitignore` from the top of that
+  checkout, in one commit. A loop snapshots its tree once for every seed, and a
+  wiki may lie in a checkout many times its size. The copy leaves behind the
+  history, the checkout's other folders and whatever git holds of the wiki's own
+  files, so a loop on a corpus proves less about that corpus than corpus mode
+  does.
+- **Seeds.** `parity/seeds.toml` is the committed list: the seeds that every
+  pull request runs on the small trees. A list is refused when it holds a key
+  other than `seeds`, or when `seeds` is not a list of whole numbers from zero
+  up, each once, with at least one. A fresh seed is a whole number below 2^32.
+- **Sides.** With no `--engine` both sides are v1, under `PYTHONHASHSEED=1` and
+  `PYTHONHASHSEED=2`, and a command the registry excuses fails the run. With
+  one, the runs are v1, the engine, and the engine with `WIKI_THREADS=1`, and
+  what the registry excuses passes.
+
+| Stage        | Tree                                         | Commands                                                                                                                                                                                                                                                                                    |
+| ------------ | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `edited`     | the perturbed snapshot, in a loop            | `lint --json`, `lint`, `update --check --full`, `map`, a `search --json` and a `match --lines` for the word the perturbation's own text holds, a `search --tag` for a word and the tag of a page it tagged, a `read` of a page it edited, `update --full`, `update --check`, `lint --json`. |
+| `unindexed`  | the perturbed snapshot without any index     | `lint --json`, `update --check --full`, `update --full`, `update --check`, `lint --json`, `map`.                                                                                                                                                                                            |
+| `conflicted` | the perturbed snapshot with conflict markers | `lint --json`, `update --check` and `update`, which both must exit 2, `map`.                                                                                                                                                                                                                |
+
+| Operator            | Change                                                                                                                          | Notice kinds it names    | Issue kinds it names     |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | ------------------------ |
+| `rename-folder`     | renames an indexed folder below the root, with all it holds                                                                     | `link_add`               | `requires_update`        |
+| `truncate-index`    | cuts an index short, inside its block or before it                                                                              | `index_truncated`        | `truncated_index`        |
+| `dirty-edit`        | adds a paragraph to a page and leaves its stamp; where git tracks the page and the edit is late, the kinds are named            | `restamp`                | `requires_update`        |
+| `strip-frontmatter` | takes the block off a page                                                                                                      | `page_adopt`             | `bare_page`              |
+| `blank-stamps`      | leaves both stamps of a page with no value                                                                                      |                          | `requires_update`        |
+| `shuffle-keys`      | puts the fields of a page's block in another order                                                                              |                          | `requires_update`        |
+| `add-tags`          | gives a page two tags, one of them the perturbation's own, so a search by tag finds a page                                      |                          |                          |
+| `missing-desc`      | puts the placeholder `...` in place of a page's desc                                                                            | `desc_missing`           |                          |
+| `long-desc`         | gives a page a desc of more than 500 characters                                                                                 | `desc_long`              |                          |
+| `bare-file`         | adds a page with no block                                                                                                       | `page_adopt`, `link_add` | `bare_page`              |
+| `crlf-file`         | adds a page whose lines end in CR LF                                                                                            | `crlf_notice`            |                          |
+| `other-file`        | adds a file that is no page                                                                                                     | `link_add`               |                          |
+| `stale-link`        | adds a link to a page that does not exist to a body                                                                             | `link_stale`             |                          |
+| `directory-link`    | adds a link that names a folder, not its index, to a body                                                                       |                          | `directory_link`         |
+| `absolute-link`     | adds a link to a page by its absolute path, as the wiki stands when the commands run, to a body                                 |                          | `absolute_link`          |
+| `outside-link`      | adds a link that leaves the wiki to a body                                                                                      |                          | `outside_link`           |
+| `region-marker`     | adds the end of a region that never started to a body                                                                           |                          | `region_marker`          |
+| `invalid-page`      | adds a page whose name ends in `[`                                                                                              | `name_skip`              | `invalid_page_name`      |
+| `invalid-folder`    | adds a folder whose name ends in `[`, with a page inside                                                                        | `name_skip`              | `invalid_folder_name`    |
+| `drift-row`         | changes the desc of a row of an index: a row whose page has a desc of its own, which the engine writes over the row's           | `desc_overwrite`         | `requires_update`        |
+| `drop-row`          | takes a row out of an index: a row whose entry stands, so the engine adds it again                                              | `link_add`               | `requires_update`        |
+| `broken-row`        | adds a row for a page that does not exist to an index                                                                           | `link_prune`             | `broken_link`            |
+| `symlink-row`       | adds a symlink to a page, and a row for it                                                                                      | `symlink_skip`           | `symlink_link_target`    |
+| `excluded-row`      | adds a page, a row for it, and an exclude pattern that names the page to the wiki's settings, which it makes if absent          | `exclude_skip`           | `excluded_link_target`   |
+| `gitignored-row`    | adds a page, a row for it, and a pattern that names the page to the `.gitignore` at the top of the checkout; needs a repository | `gitignore_skip`         | `gitignored_link_target` |
+| `delete-indexes`    | deletes every index; staged, on `unindexed`                                                                                     | `index_create`           | `missing_index`          |
+| `conflict-markers`  | ends a page and an index in the lines a merge leaves around a conflict; staged, on `conflicted`                                 |                          | `conflict_markers`       |
+
+### Kinds
+
+A perturbation is held to what its operators name: a change that does not show
+its kind compares less than the table says.
+
+- **Tap.** A command line prints the text of a notice and not its kind. So the
+  tap of the reference side (`parity/tap.py`) runs `lint` and then `update` on
+  the wiki inside v1's interpreter, as the command line runs them, and prints
+  the kind of each issue and of each notice they met, and the text of the error
+  if `update` refused. It runs once on each of the three trees: a fresh clone of
+  the snapshot at the path every side runs at, changed as the tree's stage
+  changes it. The tap writes to that clone, and no run is compared on it.
+- **Named kinds.** Each change names the kinds it put into its tree, where the
+  table says it does. A named kind that the tap does not meet on that tree is a
+  `kind` finding, and the run fails: the operator did not do what it names.
+- **One home.** The kinds the operators name are exactly the kinds whose home in
+  `parity/kinds.toml` is `perturbation`. A run exits 2 on a list that gives a
+  kind that home and no operator names it, and on an operator that names a kind
+  whose home is a test.
+- **Whole run.** A run that names no tree (no `--corpus`, no `--family`) also
+  holds the kind list to what its trees showed: a kind whose home is the
+  perturbation and that no tree of the run shows is a `kind` finding.
+- **Limits.** A wiki whose settings make a stale link an issue shows
+  `link_stale` as an issue, and the notice the operator names is then a finding.
+  No corpus and no small tree has such settings.
 
 ## Registry
 
@@ -1334,7 +1504,7 @@ broken_link = "perturbation"
   recorded call: the test of the second engine that takes the test's place holds
   the kind. A home routed anywhere else is a `kind` finding.
 - **Perturbation.** The replay does not judge a kind whose home is the
-  perturbation. The perturbation's own run answers for it.
+  perturbation. The perturbation's own run answers for it (Perturbation, Kinds).
 - **Counts.** The run prints, and the result file records, how many kinds of
   each family have each sort of home.
 

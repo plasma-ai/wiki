@@ -10,7 +10,7 @@ import os
 import pathlib
 import random
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, Optional
 
 __all__ = []
@@ -101,6 +101,10 @@ class Stage:
             starts. ``None`` leaves the file as the tree has it.
         env: Variables every side runs the stage's commands under, set
             over the side's own.
+        change: A change every tree of the stage takes before its first
+            command: a function that is handed the checkout. It must make
+            the same change on every tree. ``None`` leaves the tree as it
+            is.
 
     """
 
@@ -110,6 +114,7 @@ class Stage:
     cold: bool = False
     settings: Optional[str] = None
     env: Mapping[str, str] = dataclasses.field(default_factory=dict)
+    change: Optional[Callable[[pathlib.Path], None]] = None
 
 
 @dataclasses.dataclass(frozen=True)
