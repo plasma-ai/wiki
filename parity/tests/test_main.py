@@ -60,6 +60,7 @@ __all__ = [
     'test_difference_at_a_path_that_is_not_utf8_is_listed',
     'test_fixtures_run_that_would_compare_nothing_is_refused',
     'test_perturb_command_runs_a_loop_and_a_corpus',
+    'test_fresh_seeds_are_printed_before_a_tree_runs',
     'test_failed_perturbation_keeps_its_result_and_its_streams',
     'test_whole_perturbation_run_holds_the_kind_list',
     'test_perturbation_run_that_would_compare_nothing_is_refused',
@@ -1360,6 +1361,33 @@ def test_perturb_command_runs_a_loop_and_a_corpus(
     assert list(document['kinds']) == [perturb.EDITED, 'unindexed', 'conflicted']
     applied = document['perturbation']['applied']
     assert [name for name, paths in applied.items() if not paths] == []
+
+
+@_needs_git
+def test_fresh_seeds_are_printed_before_a_tree_runs(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A run that draws its seeds names them first, and records each.
+
+    A fresh seed is known nowhere else until its tree has run, so a run
+    that ended in an error could not be run again. The seeds a loop draws
+    are those its rows and its result file hold.
+    """
+    out = tmp_path / 'out'
+    argv = ['perturb', 'loop', '--family', 'hello', '--fresh', '2', '--jobs', '2']
+    argv += ['--work', f'{tmp_path / "work"}', '--out', f'{out}', '--now', NOW]
+    assert cli.main(argv) == 0
+    first, *lines = capsys.readouterr().out.splitlines()
+    label, _, drawn = first.rpartition(': ')
+    assert label == 'perturb: fresh seeds'
+    seeds = [int(seed) for seed in drawn.split()]
+    assert len(set(seeds)) == 2
+    assert lines[:2] == [f'hello seed {seed}: 0 differences' for seed in seeds]
+    document = json.loads((out / 'hello.json').read_text(encoding='utf-8'))
+    assert [row['seed'] for row in document['seeds']] == seeds
+    document = json.loads((out / 'perturb.json').read_text(encoding='utf-8'))
+    assert document['seeds'] == seeds
 
 
 @_needs_git

@@ -1037,6 +1037,13 @@ def _perturb(parser: argparse.ArgumentParser, options: argparse.Namespace) -> in
     sides = selfcheck._seeded(reference)
     if engines:
         sides = [reference, engines[0], replay.threaded(engines[0])]
+    # a fresh seed is known nowhere else until its tree has run
+    fresh = options.seed is None
+    if loop:
+        fresh = options.fresh is not None
+    if fresh:
+        drawn = ' '.join(f'{seed}' for seed in seeds)
+        print(f'{_PERTURB}: fresh seeds: {drawn}', flush=True)
     # a loop prints one line for each tree and seed, and none for each stage
     if loop:
         logging.getLogger('parity').setLevel(logging.WARNING)

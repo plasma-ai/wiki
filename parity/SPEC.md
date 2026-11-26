@@ -675,7 +675,9 @@ files, and what the engines make of the edits is what the run compares.
 - **Seeds.** `parity/seeds.toml` is the committed list: the seeds that every
   pull request runs on the small trees. A list is refused when it holds a key
   other than `seeds`, or when `seeds` is not a list of whole numbers from zero
-  up, each once, with at least one. A fresh seed is a whole number below 2^32.
+  up, each once, with at least one. A fresh seed is a whole number below 2^32,
+  and a run prints its fresh seeds before it runs a tree, so a run that ends in
+  an error can be run again.
 - **Sides.** With no `--engine` both sides are v1, under `PYTHONHASHSEED=1` and
   `PYTHONHASHSEED=2`, and a command the registry excuses fails the run. With
   one, the runs are v1, the engine, and the engine with `WIKI_THREADS=1`, and
