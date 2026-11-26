@@ -1056,7 +1056,8 @@ reason = "<why the replay cannot hold the tests>"
   `replay`: the replay will, once the recorder has a command line for the method
   the tests call. `dropped`: nothing does. `target` names the test or the
   function, and is empty until it exists. For a `replay` row it names the
-  command the row waits for, and may not be empty.
+  command the row waits for, which is one a second engine ports: any command of
+  v1 but `trust`.
 - **Cite.** A dropped row cites what it rests on: the id of a registry entry,
   the id of the test that replaces the dropped ones, or a part of v1 that a
   second engine does not have (`trust`, `hooks`, `frontmatter memo`,
@@ -1066,8 +1067,8 @@ reason = "<why the replay cannot hold the tests>"
 - **Refusals.** A table is refused when it holds a key other than `route`, a row
   that is no table, a field outside those above or of the wrong shape, a row
   with no test or no reason, a `to` outside the four, a dropped row that cites
-  nothing it may cite, another row that cites, a `replay` row with no target, or
-  one test in two rows.
+  nothing it may cite, another row that cites, a `replay` row whose target is no
+  command a second engine ports, or one test in two rows.
 - **Routed calls.** The calls of a routed test are replayed and compared like
   any other. A call with no command line and an unfaithful call are no findings
   there. A difference between the sides still fails the run.

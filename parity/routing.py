@@ -23,6 +23,21 @@ TARGETS = ('rust', 'probe', 'replay', 'dropped')
 #: the parts of v1 that a second engine does not have, which a dropped row
 #: may cite
 MECHANISMS = ('trust', 'hooks', 'frontmatter memo', 'loader choice', 'Python API')
+#: the commands of v1 that a second engine ports, one of which a row that
+#: waits for the replay names
+COMMANDS = (
+    'install',
+    'init',
+    'config',
+    'read',
+    'search',
+    'match',
+    'update',
+    'new',
+    'lint',
+    'map',
+    '_merge',
+)
 
 # the one key of the file, and the fields of a row: its list and its texts
 _KEY = 'route'
@@ -75,8 +90,8 @@ def load(
             if a row names no test, sends its tests to an unknown place
             or gives no reason, if a dropped row cites nothing a dropped
             row may cite, if another row cites anything, if a row that
-            waits for the replay names no command, or if two rows name
-            one test.
+            waits for the replay names no command a second engine ports,
+            or if two rows name one test.
 
     """
     path = path or PATH
@@ -125,10 +140,11 @@ def load(
             )
         if (texts['to'] != 'dropped') and cite:
             raise ValueError(f'{where}: only a dropped row cites, got {cite!r}.')
-        if (texts['to'] == 'replay') and not texts['target'].strip():
+        if (texts['to'] == 'replay') and (texts['target'] not in COMMANDS):
             raise ValueError(
                 f'{where}: a row that waits for the replay names the command'
-                f' it waits for as its target.'
+                f' it waits for as its target, one of {COMMANDS!r}, got'
+                f' {texts["target"]!r}.'
             )
         route = Route(tests=tuple(tests), **texts)
         for test in tests:
