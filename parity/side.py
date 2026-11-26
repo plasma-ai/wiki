@@ -1,4 +1,4 @@
-"""Sides: an argv prefix plus the full environment a command runs under."""
+"""Functions for running one side under a built environment."""
 
 from __future__ import annotations
 
@@ -11,17 +11,10 @@ import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
 
-__all__ = [
-    'NOTICE',
-    'TRACE',
-    'Side',
-    'Outcome',
-    'environment',
-    'run',
-]
+__all__ = []
 
-#: the stderr line an engine prints first when ``WIKI_NOW`` fixes its clock
-NOTICE = b'WIKI_NOW is set: timestamps use its fixed instant, not the clock.\n'
+#: the stderr line an engine prints first when ``WIKI_FREEZE_TIME`` is set
+NOTICE = b'WIKI_FREEZE_TIME is set: timestamps use its fixed instant, not the clock.\n'
 #: the variable that names the file a side appends its identity record to
 TRACE = 'WIKI_TRACE'
 
@@ -32,8 +25,8 @@ _LANG = 'C.UTF-8'
 _TZ = '<+0545>-05:45'
 # the folders after git's own on every side's PATH
 _SYSTEM_PATH = ('/usr/bin', '/bin', '/usr/sbin', '/sbin')
-# a side that runs this long has hung
-_TIMEOUT = 3600
+# seconds one command may run -- a side that runs this long has hung
+_TIMEOUT = 3_600
 
 
 @dataclasses.dataclass(frozen=True)
@@ -44,11 +37,12 @@ class Side:
         name: Label of the side in results.
         argv: Command prefix; the harness appends the wiki arguments.
         env: Variables set for this side only, over the fixed environment.
-        notice: Whether the side prints :data:`NOTICE` when ``WIKI_NOW`` is
-            set. A side that fixes its clock through a wrapper prints none.
         describe: A whole command whose stdout says what the side is made
             of (its interpreter, its dependencies, its commit), for the
             result file. Empty for a side that has none.
+        notice: Whether the side prints :data:`NOTICE` when
+            ``WIKI_FREEZE_TIME`` is set. A side that fixes its clock through
+            a wrapper prints none.
         identity: The identity record the side must write on every command
             (its engine, its version and its build id). Empty for a side
             that writes none.
@@ -61,8 +55,8 @@ class Side:
     name: str
     argv: tuple[str, ...]
     env: Mapping[str, str] = dataclasses.field(default_factory=dict)
-    notice: bool = True
     describe: tuple[str, ...] = ()
+    notice: bool = True
     identity: Mapping[str, str] = dataclasses.field(default_factory=dict)
     judge: tuple[str, ...] = ()
 
@@ -98,7 +92,7 @@ def environment(side: Side, home: pathlib.Path, *, now: str) -> dict[str, str]:
     Args:
         side: The side to run.
         home: Scratch home folder; it holds the global git config.
-        now: RFC 3339 instant for ``WIKI_NOW``.
+        now: RFC 3339 instant for ``WIKI_FREEZE_TIME``.
 
     Returns:
         The variables to run every command of the side under.
@@ -109,20 +103,21 @@ def environment(side: Side, home: pathlib.Path, *, now: str) -> dict[str, str]:
     git = shutil.which('git')
     if git and (os.path.dirname(git) not in folders):
         folders.insert(0, os.path.dirname(git))
-    config = f'{home / ".gitconfig"}'
+    gitconfig = home / '.gitconfig'
+    config_dir = home / 'wiki_config'
     # NOTE: the Python engine drops GIT_CONFIG_GLOBAL and GIT_CONFIG_NOSYSTEM
     #   from its git children, which then read the same file as $HOME/.gitconfig
     #   and still read the system config
     env = {
         'PATH': os.pathsep.join(folders),
         'HOME': f'{home}',
-        'WIKI_CONFIG_DIR': f'{home / "wiki_config"}',
+        'WIKI_CONFIG_DIR': f'{config_dir}',
         'OFFLINE_MODE': 'true',
-        'GIT_CONFIG_GLOBAL': config,
+        'GIT_CONFIG_GLOBAL': f'{gitconfig}',
         'GIT_CONFIG_NOSYSTEM': '1',
         'LANG': _LANG,
         'TZ': _TZ,
-        'WIKI_NOW': now,
+        'WIKI_FREEZE_TIME': now,
     }
     env.update(side.env)
     return env

@@ -16,12 +16,7 @@ from typing import Any, Optional
 from . import snapshot
 from .manifest import Entry
 
-__all__ = [
-    'CACHE',
-    'View',
-    'view',
-    'compare',
-]
+__all__ = []
 
 #: the cache folder, relative to a wiki root
 CACHE = '.wiki/cache'
@@ -115,7 +110,7 @@ def view(
     gitignore = None
     if '.gitignore' in regular:
         gitignore = (cache / '.gitignore').read_bytes()
-    # word counts
+    # read the word counts
     counts = None
     counts_form = None
     counts_raw = None
@@ -123,7 +118,7 @@ def view(
         raw = (cache / _COUNTS).read_bytes()
         counts, counts_form = _read_counts(raw, pages)
         counts_raw = hashlib.sha256(raw).hexdigest()
-    # search index, dumped again only when one of its files changed
+    # read the search index, dumped again only when one of its files changed
     signature = tuple(
         (name, entry.inode, entry.size, entry.mtime_ns, entry.ctime_ns)
         for name in _SEARCH_FAMILY
@@ -175,19 +170,23 @@ def compare(first: View, second: View, *, raw: bool) -> list[str]:
     """
     result = []
     for name in _unequal(first.files, second.files):
-        result.append(f'file list: {name or "."}')
+        label = name or '.'
+        result.append(f'file list: {label}')
     if first.gitignore != second.gitignore:
         result.append('.gitignore')
-    # word counts: keys and entries, then the form; the bytes only where
-    # those agree, since bytes that hold different entries always differ
-    keys = _unequal(first.counts or {}, second.counts or {})
+    # compare the word counts: keys and entries, then the form; the bytes only
+    # where those agree, since bytes that hold different entries always differ
+    first_counts = first.counts or {}
+    second_counts = second.counts or {}
+    keys = _unequal(first_counts, second_counts)
     counts = [f'{_COUNTS}: {key}' for key in keys]
     if first.counts_form != second.counts_form:
         counts.append(f'{_COUNTS}: form')
     if raw and (not counts) and (first.counts_raw != second.counts_raw):
         counts.append(f'{_COUNTS}: bytes')
     result.extend(counts)
-    # search index: meta and the schema as they are, then both tables by path
+    # compare the search index: meta and the schema as they are, then both
+    # tables by path
     if first.search_meta != second.search_meta:
         result.append(f'{_SEARCH}: meta')
     for name in _unequal(first.search_schema, second.search_schema):
@@ -230,11 +229,11 @@ def _read_search(
 ) -> tuple[Any, dict[str, tuple], dict[str, tuple], dict[str, str]]:
     """Return the ``meta`` rows, schema, ``files`` rows and row digests of ``search.db``."""
     # read a copy: opening the database itself would write beside it
-    with tempfile.TemporaryDirectory() as scratch:
+    with tempfile.TemporaryDirectory() as tmp:
         for name in _SEARCH_FAMILY:
             if os.path.isfile(cache / name):
-                snapshot.clone(cache / name, pathlib.Path(scratch) / name)
-        connection = sqlite3.connect(os.path.join(scratch, _SEARCH))
+                snapshot.clone(cache / name, pathlib.Path(tmp) / name)
+        connection = sqlite3.connect(os.path.join(tmp, _SEARCH))
         try:
             meta = connection.execute('SELECT key, value FROM meta').fetchall()
             schema = {
@@ -255,7 +254,8 @@ def _read_search(
                 'SELECT path, title, desc, headings, tags, body, folder FROM notes_fts'
             )
             for row in cursor:
-                rows.setdefault(row[0], []).append(row)
+                relpath, *_ = row
+                rows.setdefault(relpath, []).append(row)
         except sqlite3.DatabaseError as e:
             return f'{type(e).__name__}: {e}', {}, {}, {}
         finally:
@@ -263,7 +263,7 @@ def _read_search(
     digests = {}
     for relpath, group in rows.items():
         text = repr(sorted(group, key=repr))
-        digest = hashlib.sha256(text.encode('utf-8', 'surrogatepass'))
+        digest = hashlib.sha256(text.encode('utf-8'))
         digests[relpath] = digest.hexdigest()
     return sorted(meta), schema, files, digests
 

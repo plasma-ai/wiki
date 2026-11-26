@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import base64
 import pathlib
-import shutil
 from typing import Any, Optional
 
 import pytest
@@ -20,7 +19,7 @@ from parity.compare import Difference, Record, Run
 from parity.matrix import Case, Stage
 from parity.side import Outcome
 
-from .conftest import NOW
+from .conftest import NOW, _needs_git
 
 __all__ = [
     'test_judge_draws_the_line_of_the_supported_set',
@@ -28,7 +27,7 @@ __all__ = [
     'test_forbidden_exit_code_is_excused_only_with_a_refusal',
 ]
 
-pytestmark = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
+pytestmark = _needs_git
 
 # every construct of the supported set in one pattern
 _INSIDE = (

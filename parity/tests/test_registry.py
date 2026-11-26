@@ -11,14 +11,13 @@ from __future__ import annotations
 
 import dataclasses
 import pathlib
-import shutil
 import sys
 
 import pytest
 
 from parity import classify, registry, runner, selfcheck, side, standin
 
-from .conftest import NOW
+from .conftest import NOW, _needs_git
 
 __all__ = [
     'test_registry_file_that_breaks_a_rule_is_refused',
@@ -29,7 +28,7 @@ __all__ = [
     'test_stand_in_that_changes_nothing_is_an_error',
 ]
 
-pytestmark = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
+pytestmark = _needs_git
 
 # a well-formed file, as the registry spells one: an entry for each classifier
 _FILE = """

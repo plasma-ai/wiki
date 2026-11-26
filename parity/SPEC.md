@@ -36,6 +36,10 @@ A side name is `oracle` or `campaign`, the two v1 sides that
 `parity/oracle.toml` names (Oracle, below), or a side that the `SIDES` file
 declares. `SIDES` may not declare a side under the name of a v1 side.
 
+Every command reads `parity/oracle.toml` and asks git where the repository and
+its main checkout are, whichever sides a run names. So the harness needs git on
+`PATH`, and its folder must lie in a checkout of the repository.
+
 `--corpus LABEL` (repeatable) picks corpora; the default is every corpus of the
 file. `--now` sets the fixed instant. `matrix` and `selfcheck` take `--seed`,
 the seed of the matrix sample. `matrix` also takes `--stage NAME` (repeatable)
@@ -45,10 +49,15 @@ The three commands exit 0 when every result is the expected one and 1 otherwise.
 For `matrix` that is no difference, and no command the registry excuses unless
 `--registered` is given (Registry, Second engine). A run that would compare
 nothing exits 2 with a message, before it snapshots anything: a corpora file
-with no corpus, an unknown corpus label, stage name or side name, a side whose
-`--version` fails or prints nothing, a side that does not prove its identity, a
-v1 side the oracle rules refuse, or a registry file that breaks a rule of
-Registry. An error of the harness itself is a Python traceback.
+with no corpus, an unknown corpus label, stage name or side name, the same side
+named as `--a` and `--b`, a sides or corpora file whose values have the wrong
+shape, a `--now` that is not an instant in the form `WIKI_FREEZE_TIME` takes, a
+checkout or a work folder the harness refuses (see Snapshots), a side or a
+`describe` command that cannot be started, a side whose `--version` fails or
+prints nothing, a side that does not prove its identity, a v1 side the oracle
+rules refuse, or a registry file that breaks a rule of Registry. An error of the
+harness itself prints a Python traceback and exits 2 as well, so exit 1 always
+means that a result is not the expected one.
 
 The harness makes `<work>/<label>` for each corpus; it must not exist
 beforehand. `matrix` removes it at the end unless `--keep` is given. `selfcheck`
@@ -174,7 +183,8 @@ reason = "<why it waits>"
 `python -m parity oracle check` holds `oracle.toml` level with v1, by three
 checks. It reads branches as the remote-tracking references hold them, so fetch
 first. It exits 1 when a check fails, and `--skip NAME` (repeatable) leaves one
-out.
+out. An error of the harness itself exits 2 from the `oracle` commands as well,
+so exit 1 always means that a check failed.
 
 | Check     | Holds when                                                                                        |
 | --------- | ------------------------------------------------------------------------------------------------- |
@@ -207,7 +217,7 @@ is built from nothing:
 | `GIT_CONFIG_NOSYSTEM` | `1`                                                                              |
 | `LANG`                | `C.UTF-8`                                                                        |
 | `TZ`                  | `<+0545>-05:45`                                                                  |
-| `WIKI_NOW`            | the run's instant                                                                |
+| `WIKI_FREEZE_TIME`    | the run's instant                                                                |
 
 The side's own variables are applied last. stdin is the null device.
 
@@ -219,17 +229,17 @@ The side's own variables are applied last. stdin is the null device.
   runs. Those commands find the same empty global config as `$HOME/.gitconfig`,
   and they still read the system config, which no variable left to them can
   switch off. The result file records `git config --system --list`.
-- **Notice.** An engine prints one fixed line first on stderr when `WIKI_NOW`
-  fixes its clock. On a side with `notice = true` (the default) the harness
-  removes that line when it is the first line of stderr. A side that fixes its
-  clock through a wrapper prints no notice and sets `notice = false`. A notice
-  on a side that does not declare it is a stderr difference. Every matrix
-  command reads the clock variable, so a side that declares the notice must
-  print it on each one: a command without it is a `notice` difference, since
-  that side's clock was not fixed. A command that the argument parser ends, with
-  a usage error or a help page, reads no clock. Its case says so, and a side
-  that declares the notice must then print none: one that does shows a `notice`
-  difference, and the line stays in its stderr.
+- **Notice.** An engine prints one fixed line first on stderr when
+  `WIKI_FREEZE_TIME` fixes its clock. On a side with `notice = true` (the
+  default) the harness removes that line when it is the first line of stderr. A
+  side that fixes its clock through a wrapper prints no notice and sets
+  `notice = false`. A notice on a side that does not declare it is a stderr
+  difference. Every matrix command reads the clock variable, so a side that
+  declares the notice must print it on each one: a command without it is a
+  `notice` difference, since that side's clock was not fixed. A command that the
+  argument parser ends, with a usage error or a help page, reads no clock. Its
+  case says so, and a side that declares the notice must then print none: one
+  that does shows a `notice` difference, and the line stays in its stderr.
 - **Hash seed.** Outside the self-check a side has no `PYTHONHASHSEED` unless
   its table sets one.
 - **v1 sides.** The argv prefix of a v1 side is its venv's interpreter, `-P` and
@@ -250,7 +260,7 @@ The side's own variables are applied last. stdin is the null device.
 `prepare` clones the checkout once into `<work>/<label>/snapshot` and hashes it.
 Every tree a side runs on is a clone of that snapshot, placed at one path:
 
-```
+```text
 <work>/<label>/
     snapshot/        the clone of the checkout
     slot/            where every side runs, one at a time
@@ -268,13 +278,17 @@ Every tree a side runs on is a clone of that snapshot, placed at one path:
 - **Index.** A copy has new inodes, which makes every git index entry stale, and
   git would hash every tracked file on each call. Each clone therefore runs
   `git update-index -q --refresh` before the first command.
-- **Refusals.** A checkout whose `.git` is a file or a symlink is refused: a
-  linked worktree keeps its state in the main repository. A checkout with no
-  `.git` is refused when the work folder lies inside a repository, because git
-  would answer from that one. A work folder below a folder that holds
-  `.wiki/settings.json` is refused: every side runs under a scratch home, so
-  even the user's own `~/.wiki` reads as an enclosing wiki, and a command run
-  from inside the snapshot's wiki would fail the same way on both sides.
+- **Refusals.** Each corpus of a run is checked before the first one is
+  snapshotted. A checkout that is not a folder is refused, a symlink to one
+  included: the copy of a link would point at the live folder. A checkout whose
+  `.git` is a file or a symlink is refused: a linked worktree keeps its state in
+  the main repository. A checkout with no `.git` is refused when the work folder
+  lies inside a repository, because git would answer from that one. A work
+  folder below a folder that holds `.wiki/settings.json` is refused: every side
+  runs under a scratch home, so even the user's own `~/.wiki` reads as an
+  enclosing wiki, and a command run from inside the snapshot's wiki would fail
+  the same way on both sides. A `<work>/<label>` that exists is refused and left
+  as it stood.
 - **Swept folders.** A clone keeps its source's times, so its entries look old
   to a cleaner of temporary files. On a path the system sweeps, such as `/tmp`
   on macOS, a snapshot can lose old empty folders while a run is under way, and
@@ -282,8 +296,8 @@ Every tree a side runs on is a clone of that snapshot, placed at one path:
   work folder the system leaves alone.
 - **Live repositories.** The harness runs no `git worktree` subcommand, no
   commit and no checkout in a clone. Its one git write is the index refresh.
-- A stage marked cold removes `<root>/.wiki/cache` from its clone before the
-  first command.
+- **Cold stages.** A stage marked cold removes `<root>/.wiki/cache` from its
+  clone before the first command.
 
 ## Comparison
 
@@ -557,7 +571,7 @@ The supported set, as the judge decides it:
   `Invalid value: ` byte for byte, and D1 covers JSON text only behind the
   malformed-settings prefix, so another text there is reported.
 
-## Self-check
+## Self-Check
 
 A result of the harness counts only after the self-check passes on the same
 corpus. It runs one engine on both sides.
@@ -591,12 +605,19 @@ corpus. It runs one engine on both sides.
 
 The first six are one stdout byte, one stderr byte, one exit code, one file
 byte, one mode and one extra written file. The others prove the rules those six
-do not reach: the touched set by itself, the read-only rule, each part of the
-cache rule, the notice and the identity. The `exit` check also proves the rule
-of allowed exit codes. The `notice` check is left out for a side that prints no
-notice, and the `identity` check for a side that has no identity.
+do not reach: the touched set by itself, the read-only rule, four parts of the
+cache rule (a cache file's mode, one counts entry, an index row that one side
+lacks and the index schema), the notice and the identity. The `exit` check also
+proves the rule of allowed exit codes. The `notice` check is left out for a side
+that prints no notice, and the `identity` check for a side that has no identity.
+The other parts of the cache rule (the bytes of `.gitignore`, the form and the
+bytes of `word_counts.json`, a recorded mtime that is not current, a recorded
+size, the text of an index row, and `meta`), each half of the touched rule, a
+deleted path, a symlink's target, an unreadable file, the `(baseline)` and
+`(end)` cases, the runs after the second, and an identity record left twice or
+not at all have no doctored check; the unit tests in `parity/tests` pin them.
 
-### Registry check
+### Registry Check
 
 `python -m parity registry` proves the classifiers the way the doctored checks
 prove the comparison rules. It runs one engine against a stand-in: a wrapper

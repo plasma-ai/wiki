@@ -444,17 +444,17 @@ per-kind hooks against per-kind signature defaults, not the raw grep totals.
 
 ### Clock
 
-Every wall-clock read goes through `_now` (`core/wiki.py`), so the `WIKI_NOW`
-test seam governs all of them: when the variable holds an RFC 3339 instant,
-`_now` returns that instant instead of the clock's. `_pinned_now` is the one
-reader and validator of the variable. The `@command` wrapper calls it as each
-public command starts — after typer has parsed the command line, before the
-command's own option checks: an invalid value is a command error, and a valid
-one opens stderr with the fixed `_PINNED_CLOCK_NOTICE` line, so a seam left set
-in a real shell is never silent. Help, `--version` and a parse error never reach
-the wrapper, so they never read the variable. A private command is exempt: git
-reads the `_merge` driver's exit code as the merge outcome, and the driver reads
-no clock. A new clock read calls `_now`, never `datetime.now`
+Every wall-clock read goes through `_now` (`core/wiki.py`), so the
+`WIKI_FREEZE_TIME` test seam governs all of them: when the variable holds an RFC
+3339 instant, `_now` returns that instant instead of the clock's. `_pinned_now`
+is the one reader and validator of the variable. The `@command` wrapper calls it
+as each public command starts — after typer has parsed the command line, before
+the command's own option checks: an invalid value is a command error, and a
+valid one opens stderr with the fixed `_PINNED_CLOCK_NOTICE` line, so a seam
+left set in a real shell is never silent. Help, `--version` and a parse error
+never reach the wrapper, so they never read the variable. A private command is
+exempt: git reads the `_merge` driver's exit code as the merge outcome, and the
+driver reads no clock. A new clock read calls `_now`, never `datetime.now`
 (`grep -rn --include='*.py' 'datetime\.now' wiki` shows the one call, in
 `_now`).
 
@@ -464,22 +464,23 @@ no clock. A new clock read calls `_now`, never `datetime.now`
 one built environment, on its own copy-on-write clone of one snapshot, at the
 same absolute path. `python -m parity matrix` compares two sides over the
 command matrix, and `python -m parity selfcheck` proves the harness with one
-side: clean under two hash seeds, then against a doctored copy for each
-comparison rule. `parity/SPEC.md` is the specification, and a change to a rule
-changes the spec and the matching doctored check in the same commit.
-`parity/differences.toml` is the registry of differences, the one list of what a
-comparison may excuse. A classifier (`parity/classify.py`) recognizes an entry's
-difference, and `python -m parity registry` proves each one with one side
-against a stand-in: on fixtures inside the entry's scope and on one just outside
-it, which must still be reported. The registry is for a second engine: between
-two builds of v1 nothing is registered, so `matrix` fails on an excused command
-unless `--registered` is given. A change to the registry or to a classifier
-changes the entry, the spec and the fixtures in the same commit, and its pull
-request names the question whose Decision line approves it. Two sides that fail
-the same way agree on everything, so each matrix case names the exit codes it
-allows (`_case` in `parity/matrix.py`), and a search or match draws its word
-from the text the command reads; a new case states both. The harness treats a
-side as a black box, so it imports nothing from `wiki` and nothing from
+side: clean under two hash seeds, then against a doctored copy for each check in
+the spec's table; the unit tests in `parity/tests` pin the rules no doctored
+check reaches. `parity/SPEC.md` is the specification, and a change to a rule
+changes the spec and the matching doctored check or unit test in the same
+commit. `parity/differences.toml` is the registry of differences, the one list
+of what a comparison may excuse. A classifier (`parity/classify.py`) recognizes
+an entry's difference, and `python -m parity registry` proves each one with one
+side against a stand-in: on fixtures inside the entry's scope and on one just
+outside it, which must still be reported. The registry is for a second engine:
+between two builds of v1 nothing is registered, so `matrix` fails on an excused
+command unless `--registered` is given. A change to the registry or to a
+classifier changes the entry, the spec and the fixtures in the same commit, and
+its pull request names the question whose Decision line approves it. Two sides
+that fail the same way agree on everything, so each matrix case names the exit
+codes it allows (`_case` in `parity/matrix.py`), and a search or match draws its
+word from the text the command reads; a new case states both. The harness treats
+a side as a black box, so it imports nothing from `wiki` and nothing from
 `tests/`: its own tests run v1 as a side. Corpus paths come only from the TOML
 file a run names: nothing committed names a private wiki, its paths, its sizes
 or its text, and result files stay outside the repository. The harness snapshots

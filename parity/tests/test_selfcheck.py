@@ -2,14 +2,15 @@
 
 The self-check is the proof that a result of the harness counts: one
 engine against itself must show nothing, and a side doctored in one way
-must show exactly that way. Each comparison rule has one doctored check.
+must show exactly that way. Each doctored check proves one comparison
+rule; ``test_cache``, ``test_compare`` and ``test_manifest`` carry the
+rules no doctored check reaches.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import pathlib
-import shutil
 import sys
 from typing import Optional
 
@@ -18,7 +19,7 @@ import pytest
 from parity import matrix, runner, selfcheck, side
 from parity.matrix import Case
 
-from .conftest import NOW
+from .conftest import NOW, _needs_git
 
 __all__ = [
     'test_one_engine_against_itself_shows_no_difference',
@@ -26,7 +27,7 @@ __all__ = [
     'test_excused_command_fails_a_check',
 ]
 
-pytestmark = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
+pytestmark = _needs_git
 
 # a side that runs the command it is given and, under the hash seed 2, words
 # the text of `re` its own way
