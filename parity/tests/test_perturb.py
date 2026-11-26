@@ -43,7 +43,7 @@ with open(os.path.join(root, os.environ['MARKED']), encoding='utf-8') as handle:
     marked = '<<<<<<< ' in handle.read()
 sys.stdout.write(f'{indexed} {marked}')
 """
-# one list that keeps every rule: the kinds the operators name, and one more
+# a home that is a test of v1, as the kind list names one
 _HELD = 'tests/test_core/test_plan.py::test_update_preserves_concurrent_edit'
 
 
