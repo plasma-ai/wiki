@@ -17,15 +17,16 @@ the other sides only.
 
 from __future__ import annotations
 
-import concurrent.futures
 import dataclasses
 import datetime as dt
 import hashlib
 import json
 import logging
+import multiprocessing
 import os
 import pathlib
 import pickle
+import queue
 import resource
 import shlex
 import shutil
@@ -66,6 +67,12 @@ _AT = 'at'
 _WORKER = 'worker-{index}'
 # the home its judge runs under
 _JUDGE = 'judge-{index}'
+# how many merges a worker takes at once: neighbors, whose trees are close,
+# and few enough that the workers end together though the merges of a
+# history differ in what they cost
+_NEIGHBORS = 8
+# seconds between two looks at the workers while no merge has ended
+_PATIENCE = 5
 # the name and the driver git holds for the attribute `merge=wiki`
 _DRIVER_NAME = 'wiki merge (auto-resolve generated sections)'
 _DRIVER_ARGS = '_merge %O %A %B %L %P'
@@ -389,9 +396,9 @@ def run(
 
     A merge runs at a path of its own, which its commit names, so the
     paths in what a side prints are those of every other run of that
-    merge. The merges are dealt to the workers in runs of neighbors: a
-    worker keeps one repository, and the tree of a merge is close to the
-    tree of the merge before it.
+    merge. The workers take the merges in runs of neighbors: a worker
+    keeps one repository, and the tree of a merge is close to the tree of
+    the merge before it.
 
     Args:
         plan: The snapshot, from :func:`prepare`.
@@ -411,10 +418,11 @@ def run(
 
     Yields:
         Each merge as the run found it: the ones the cache answers alone
-        first, then the others as the workers end.
+        first, then the others as each ends.
 
     Raises:
         ValueError: If two sides share a name.
+        RuntimeError: If the workers end before every merge has.
 
     """
     names = [item.name for item in sides]
@@ -432,27 +440,44 @@ def run(
             yield Replayed(commit=merge.commit, report=entry['report'], cached=True)
     if not waiting:
         return
-    # deal the others to the workers, each a run of neighbors
-    jobs = max(1, min(jobs, len(waiting)))
-    size = -(-len(waiting) // jobs)
-    chunks = [waiting[start : start + size] for start in range(0, len(waiting), size)]
-    with concurrent.futures.ProcessPoolExecutor(max_workers=len(chunks)) as pool:
-        futures = [
-            pool.submit(
-                _work,
-                plan,
-                chunk,
-                index,
-                sides,
-                now=now,
-                second=second,
-                store=store,
-                stamped=stamped,
-            )
-            for index, chunk in enumerate(chunks)
-        ]
-        for future in concurrent.futures.as_completed(futures):
-            yield from future.result()
+    # deal the others out in runs of neighbors, which the workers take in turn
+    runs = [
+        waiting[start : start + _NEIGHBORS]
+        for start in range(0, len(waiting), _NEIGHBORS)
+    ]
+    count = max(1, min(jobs, len(runs)))
+    # NOTE: a worker is a process started from nothing: the harness holds
+    #   threads, and a forked copy of a process with threads may hang
+    context = multiprocessing.get_context('spawn')
+    tasks = context.Queue()
+    results = context.Queue()
+    for item in (*runs, *[None] * count):
+        tasks.put(item)
+    workers = [
+        context.Process(
+            target=_work,
+            args=(plan, index, tasks, results, sides),
+            kwargs={'now': now, 'second': second, 'store': store, 'stamped': stamped},
+        )
+        for index in range(count)
+    ]
+    for worker in workers:
+        worker.start()
+    left = len(waiting)
+    while left:
+        try:
+            done = results.get(timeout=_PATIENCE)
+        except queue.Empty:
+            # a worker that died took its merges with it
+            if not any(worker.is_alive() for worker in workers) and results.empty():
+                raise RuntimeError(
+                    f'The workers ended with {left} merges left.'
+                ) from None
+            continue
+        left -= 1
+        yield done
+    for worker in workers:
+        worker.join()
 
 
 def summary(replayed: Sequence[Replayed]) -> dict[str, int]:
@@ -556,16 +581,30 @@ def _save(store: pathlib.Path, entry: Mapping[str, Any]) -> None:
 
 def _work(
     plan: Plan,
-    merges: Sequence[Merge],
     index: int,
+    tasks: multiprocessing.Queue[Optional[Sequence[Merge]]],
+    results: multiprocessing.Queue[Replayed],
     sides: Sequence[Side],
     *,
     now: str,
     second: bool,
     store: Optional[pathlib.Path],
     stamped: Optional[Stamp],
-) -> list[Replayed]:
-    """Replay ``merges`` one after the other in one repository, as one worker."""
+) -> None:
+    """Replay runs of merges in one repository, as one worker, until none is left.
+
+    Args:
+        plan: The snapshot.
+        index: The number of the worker, which names its folders.
+        tasks: The runs of merges to take; ``None`` ends the worker.
+        results: Where each merge goes as the worker found it.
+        sides: The sides.
+        now: RFC 3339 instant for ``WIKI_FREEZE_TIME``.
+        second: Whether a side is a second engine.
+        store: Folder of the cache, or ``None``.
+        stamped: What the cache is keyed on, or ``None``.
+
+    """
     logging.basicConfig(level=logging.INFO, format='%(message)s')
     folder = plan.work / _WORKER.format(index=index)
     _repository(folder / _TREE, plan)
@@ -578,42 +617,41 @@ def _work(
         env = side.environment(sides[0], asked, now=now)
         judge = Judge(sides[0].judge, env=env)
     held: dict[str, Entry] = {}
-    result = []
-    for merge in merges:
-        slot = plan.at / merge.commit
-        slot.parent.mkdir(parents=True, exist_ok=True)
-        folder.rename(slot)
-        # NOTE: an error must not take the other merges with it: a replay
-        #   runs for hours, and one checkout that fails would end it
-        failed = False
-        try:
-            done, held = _replay(
-                plan,
-                merge,
-                sides,
-                slot=slot,
-                held=held,
-                judge=judge,
-                now=now,
-                second=second,
-                store=store,
-                stamped=stamped,
-            )
-        except Exception as e:
-            traceback.print_exc()
-            done = Replayed(commit=merge.commit, error=f'{type(e).__name__}: {e}')
-            failed = True
-        finally:
-            slot.rename(folder)
-        # a pass that was cut short may leave a lock or half a merge behind
-        if failed:
-            shutil.rmtree(folder)
-            _repository(folder / _TREE, plan)
-            held = {}
-        _log(plan, done)
-        result.append(done)
+    while (merges := tasks.get()) is not None:
+        for merge in merges:
+            slot = plan.at / merge.commit
+            slot.parent.mkdir(parents=True, exist_ok=True)
+            folder.rename(slot)
+            # NOTE: an error must not take the other merges with it: a replay
+            #   runs for hours, and one checkout that fails would end it
+            failed = False
+            try:
+                done, held = _replay(
+                    plan,
+                    merge,
+                    sides,
+                    slot=slot,
+                    held=held,
+                    judge=judge,
+                    now=now,
+                    second=second,
+                    store=store,
+                    stamped=stamped,
+                )
+            except Exception as e:
+                traceback.print_exc()
+                done = Replayed(commit=merge.commit, error=f'{type(e).__name__}: {e}')
+                failed = True
+            finally:
+                slot.rename(folder)
+            # a pass that was cut short may leave a lock or half a merge behind
+            if failed:
+                shutil.rmtree(folder)
+                _repository(folder / _TREE, plan)
+                held = {}
+            _log(plan, done)
+            results.put(done)
     shutil.rmtree(folder)
-    return result
 
 
 def _log(plan: Plan, done: Replayed) -> None:

@@ -930,8 +930,10 @@ replay is `parity/merges.py`.
   one, the runs are v1, the engine, and the engine with `WIKI_THREADS=1`, and
   what the registry excuses passes.
 - **Workers.** `--jobs N` replays that many merges at once, each worker a
-  process with one repository. The merges are dealt in runs of neighbors, since
-  the tree of a merge is close to the tree of the merge before it.
+  process with one repository. A worker takes eight merges at a time, neighbors
+  in the history, since the tree of a merge is close to the tree of the merge
+  before it; the workers then end together, though the merges of a history
+  differ widely in what they cost.
 - **Sample.** `--sample N` replays the fixed sample: the merges whose commit,
   read as a number, is a multiple of `N`. A merge is in the sample of every run
   or of none, however far the history has grown.
