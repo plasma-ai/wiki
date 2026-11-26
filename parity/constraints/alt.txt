@@ -1,4 +1,4 @@
-# Every package of the campaign side's venv (SPEC.md, Oracle).
+# Every package of the alt side's venv (SPEC.md, Oracle).
 annotated-doc==0.0.4
 markdown-it-py==4.2.0
 mdurl==0.1.2

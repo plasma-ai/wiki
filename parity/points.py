@@ -13,7 +13,7 @@ the code points of a block the tables hold nothing for share one run.
 
 The harness holds the answers of two sides against each other: a code point
 whose properties differ is one the two interpreters may treat differently
-(``SPEC.md``, Campaign Run).
+(``SPEC.md``, Interpreters Run).
 
 Run with ``-P`` so the script's folder stays off ``sys.path``.
 """

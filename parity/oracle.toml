@@ -17,14 +17,15 @@ unicode = "16.0.0"
 libyaml = "0.2.5"
 constraints = "constraints/oracle.txt"
 
-# the campaign side: the oracle commit as the consumers of 1.9.x run it
-[sides.campaign]
+# the alt side: the oracle commit under a second interpreter that v1 supports,
+# with its own packages
+[sides.alt]
 python = "3.13.12"
 unicode = "15.1.0"
 libyaml = "0.2.5"
-constraints = "constraints/campaign.txt"
+constraints = "constraints/alt.txt"
 
-# the crossed side: the campaign side's interpreter under the oracle side's
+# the crossed side: the alt side's interpreter under the oracle side's
 # packages, so a difference between those two has one cause on each side of it
 [sides.crossed]
 python = "3.13.12"

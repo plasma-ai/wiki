@@ -184,7 +184,7 @@ def test_v1_sides_run_as_the_oracle_names_them(
     tmp_path: pathlib.Path,
     corpus: runner.Corpus,
 ) -> None:
-    """The oracle and campaign sides need no sides file, and say what they are.
+    """The oracle and alt sides need no sides file, and say what they are.
 
     Both run the oracle commit, each under its own interpreter and pins,
     and the example wiki reads the same to both. The result file records
@@ -196,7 +196,7 @@ def test_v1_sides_run_as_the_oracle_names_them(
     work = tmp_path / 'work'
     argv = [
         'matrix',
-        *('--a', 'oracle', '--b', 'campaign'),
+        *('--a', 'oracle', '--b', 'alt'),
         *('--corpora', f'{corpora}', '--stage', 'write'),
         *('--work', f'{work}', '--out', f'{out}', '--now', NOW),
     ]
@@ -646,7 +646,7 @@ def test_registry_command_proves_the_classifiers(
 @_needs_git
 @pytest.mark.parametrize(
     argnames=('second', 'commands'),
-    argvalues=[(None, []), ('campaign', ['read'])],
+    argvalues=[(None, []), ('alt', ['read'])],
     ids=['v1 alone', 'second engine'],
 )
 def test_suite_command_runs_v1s_tests_and_the_terminal_table(
@@ -660,7 +660,7 @@ def test_suite_command_runs_v1s_tests_and_the_terminal_table(
 
     Two of v1's own tests run from the oracle checkout, then the terminal
     table. With no engine every call is v1's. With ``read`` ported, the
-    calls of ``read`` go to the campaign side, which is the same commit:
+    calls of ``read`` go to the alt side, which is the same commit:
     the tests pass on both, and the command prints how many calls each
     side took. The result file records each test with its calls, and the
     work folder is gone. The folders are named from where the command is
@@ -837,7 +837,7 @@ def test_suite_that_would_prove_nothing_is_refused(
         settings.write_text('{}', encoding='utf-8')
         work = tmp_path / 'outer' / 'work'
     engines = {'reference': 'oracle', 'unknown': 'absent'}
-    second = engines.get(broken, 'campaign')
+    second = engines.get(broken, 'alt')
     argv = ['suite', '--engine', second, '--work', f'{work}', '--out', f'{out}']
     held = sorted(tmp_path.rglob('*'))
     with pytest.raises(SystemExit) as raised:
@@ -851,7 +851,7 @@ def test_suite_that_would_prove_nothing_is_refused(
 @_needs_git
 @pytest.mark.parametrize(
     argnames=('second', 'commands'),
-    argvalues=[(None, []), ('campaign', ['read'])],
+    argvalues=[(None, []), ('alt', ['read'])],
     ids=['v1 alone', 'second engine'],
 )
 def test_replay_command_records_and_replays_v1s_tests(
@@ -868,7 +868,7 @@ def test_replay_command_records_and_replays_v1s_tests(
     seeds, and the two tests of the file that the routing table names
     keep the run green though no command repeats their calls. With
     ``read`` ported, the ``read`` calls alone are replayed, on v1, on the
-    campaign side and on that side with one thread. The result file
+    alt side and on that side with one thread. The result file
     records each call with its runs, and the work folder is gone.
     """
     listed = tmp_path / 'ported.toml'
@@ -1087,7 +1087,7 @@ def test_replay_that_would_prove_nothing_is_refused(
     work = tmp_path / 'work'
     if broken == 'work':
         (work / 'replay').mkdir(parents=True)
-    second = 'oracle' if broken == 'reference' else 'campaign'
+    second = 'oracle' if broken == 'reference' else 'alt'
     argv = ['replay', '--engine', second, '--work', f'{work}', '--out', f'{out}']
     with pytest.raises(SystemExit) as raised:
         cli.main(argv)
@@ -1099,7 +1099,7 @@ def test_replay_that_would_prove_nothing_is_refused(
 @_needs_git
 @pytest.mark.parametrize(
     argnames=('second', 'families'),
-    argvalues=[(None, ['control', 'nested']), ('campaign', ['nested'])],
+    argvalues=[(None, ['control', 'nested']), ('alt', ['nested'])],
     ids=['v1 alone', 'second engine'],
 )
 def test_fixtures_command_runs_the_families_on_v1_and_on_an_engine(
@@ -1282,7 +1282,7 @@ def test_fixtures_run_that_would_compare_nothing_is_refused(
 @_needs_git
 @pytest.mark.parametrize(
     argnames=('mode', 'second'),
-    argvalues=[('loop', None), ('corpus', 'campaign')],
+    argvalues=[('loop', None), ('corpus', 'alt')],
     ids=['loop', 'corpus'],
 )
 def test_perturb_command_runs_a_loop_and_a_corpus(

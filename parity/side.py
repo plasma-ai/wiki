@@ -54,7 +54,7 @@ class Side:
             kinds they met, for the perturbation. Empty for a side that
             has none.
         points: A whole command that prints what the side's interpreter
-            makes of every code point, for the campaign run. Empty for a
+            makes of every code point, for the interpreters run. Empty for a
             side that has none.
 
     """

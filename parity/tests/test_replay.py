@@ -1271,7 +1271,7 @@ def test_second_engine_takes_the_calls_of_the_ported_commands(
     thread differs there on every call, and nowhere else.
     """
     recording = _record(tmp_path, engine, core=_COMMANDS)
-    other = oracle.side(oracle.load(), 'campaign')
+    other = oracle.side(oracle.load(), 'alt')
     sides = [engine, other, replay.threaded(other)]
     result = replay.run(recording, sides, commands=['read', 'map'], second=True)
     assert (result.findings, result.differences) == ((), ())

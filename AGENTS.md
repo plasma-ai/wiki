@@ -86,8 +86,8 @@ uv run --no-sync python -m parity fixtures --work <dir> --out <dir>
 # perturb the small trees by the committed seeds and run each
 uv run --no-sync python -m parity perturb loop --work <dir> --out <dir>
 
-# compare the campaign side with the oracle on each corpus of a file
-uv run --no-sync python -m parity campaign --corpora <file> --work <dir> --out <dir>
+# compare the alt side with the oracle on each corpus of a file
+uv run --no-sync python -m parity interpreters --corpora <file> --work <dir> --out <dir>
 
 # run a command in the Linux container, on a clone of HEAD (needs Docker)
 uv run --no-sync python -m parity container -- <command>
@@ -500,26 +500,26 @@ codes it allows (`_case` in `parity/matrix.py`), and a search or match draws its
 word from the text the command reads; a new case states both. The harness treats
 a side as a black box, so it imports nothing from `wiki` and nothing from
 `tests/`: its own tests run v1 as a side. Corpus paths come only from the TOML
-file a run names: nothing committed names a private wiki, its paths, its sizes
-or its text, and result files stay outside the repository. The harness snapshots
-a checkout and runs only in clones, in a new work folder outside any wiki.
+file a run names: nothing committed names a wiki the harness ran on, its paths,
+its sizes or its text, and result files stay outside the repository. The harness
+snapshots a checkout and runs only in clones, in a new work folder outside any
+wiki.
 
 The oracle is v1 at the commit `parity/oracle.toml` names, the merge base of
 this branch and `dev`. `python -m parity oracle ensure` builds its checkout, a
 detached worktree at `worktrees/wiki-oracle-<sha7>`, with one venv per v1 side:
-`oracle`, which defines parity; `campaign`, the same commit under the
-interpreter and package versions the consumers of 1.9.x run; and `crossed`, the
-campaign side's interpreter under the oracle side's packages. Each side's
-constraints file in `parity/constraints/` pins every package of its venv. A v1
-side runs through `parity/launcher.py` and proves on every command that it is
-the oracle commit. Never edit the oracle checkout, and never sync or install
-into its venvs by hand: the harness refuses a checkout or a venv that is not
-what the file names. `python -m parity oracle check` holds the file level with
-v1; run it after `git fetch origin` when a work session starts. The five scripts
-the harness runs inside a side's interpreter, `launcher.py`, `facts.py`,
-`judge.py`, `tap.py` and `points.py`, import nothing from `parity`, and neither
-do the modules in `parity/plugins/`, which are loaded there by names of their
-own.
+`oracle`, which defines parity; `alt`, the same commit under a second
+interpreter that v1 supports, with its own package versions; and `crossed`, the
+alt side's interpreter under the oracle side's packages. Each side's constraints
+file in `parity/constraints/` pins every package of its venv. A v1 side runs
+through `parity/launcher.py` and proves on every command that it is the oracle
+commit. Never edit the oracle checkout, and never sync or install into its venvs
+by hand: the harness refuses a checkout or a venv that is not what the file
+names. `python -m parity oracle check` holds the file level with v1; run it
+after `git fetch origin` when a work session starts. The five scripts the
+harness runs inside a side's interpreter, `launcher.py`, `facts.py`, `judge.py`,
+`tap.py` and `points.py`, import nothing from `parity`, and neither do the
+modules in `parity/plugins/`, which are loaded there by names of their own.
 
 `python -m parity suite` runs v1's CLI tests (`tests/test_cli` of the oracle
 checkout, unedited) and a short table of commands on a pseudo-terminal
@@ -605,18 +605,18 @@ kind it names takes the home `perturbation` in `parity/kinds.toml`; a run exits
 every pull request runs. A change to an operator changes what every seed leaves,
 so run the loop again on the committed seeds.
 
-`python -m parity campaign` compares the `campaign` side with the oracle over
-the matrix on a snapshot of each corpus (`parity/campaign.py`), with no
-perturbation: it asks what the consumers' interpreter makes of the wikis' real
-names and text. The stages that differ run once more on all three sides, and
-what the `crossed` side does there lays each difference to the interpreter, to a
-package or to both, so `crossed` keeps the campaign side's interpreter and the
-oracle side's constraints file whenever either moves. The run also asks both
-interpreters what they make of every code point (`parity/points.py`) and reads
-the name of the wiki root and every name below it for a code point they do not
-agree on; such a name fails the corpus even where the matrix shows no
-difference. A property an engine starts to read from the Unicode tables goes
-into `PROPERTIES` there and into the spec's table.
+`python -m parity interpreters` compares the `alt` side with the oracle over the
+matrix on a snapshot of each corpus (`parity/interpreters.py`), with no
+perturbation: it asks what the second interpreter makes of the wikis' real names
+and text. The stages that differ run once more on all three sides, and what the
+`crossed` side does there lays each difference to the interpreter, to a package
+or to both, so `crossed` keeps the alt side's interpreter and the oracle side's
+constraints file whenever either moves. The run also asks both interpreters what
+they make of every code point (`parity/points.py`) and reads the name of the
+wiki root and every name below it for a code point they do not agree on; such a
+name fails the corpus even where the matrix shows no difference. A property an
+engine starts to read from the Unicode tables goes into `PROPERTIES` there and
+into the spec's table.
 
 `python -m parity container` runs one command in the Linux container
 (`parity/container.py`, `parity/Dockerfile`): the Ubuntu release of the CI
