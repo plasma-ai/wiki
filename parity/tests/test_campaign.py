@@ -31,6 +31,9 @@ __all__ = [
 
 pytestmark = _needs_git
 
+# the properties v1's name rule reads under the default policy: a name is
+# printable, and an identifier once its allowed characters are taken out
+_NAME_RULE = frozenset({'isprintable', 'identifier start', 'identifier part'})
 # a side that runs the command it is given, unless the wiki command is one of
 # those its first argument names; a v1 side's own prefix is three long
 _BROKEN = """
@@ -51,31 +54,35 @@ def changed() -> dict[int, tuple[str, ...]]:
 
 
 @pytest.mark.parametrize(
-    argnames='named',
-    argvalues=[False, True],
-    ids=['plain names', 'a changed code point'],
+    argnames='name',
+    argvalues=[None, 'alike', 'apart'],
+    ids=['plain names', 'a name both sides read alike', 'a name one side refuses'],
 )
 def test_campaign_command_compares_the_sides_and_reads_the_names(
     tmp_path: pathlib.Path,
     corpus: runner.Corpus,
     engine: side.Side,
     changed: Mapping[int, Sequence[str]],
-    named: bool,
+    name: Optional[str],
 ) -> None:
     """A campaign run passes on a wiki both sides and both tables agree on.
 
     The example wiki reads the same to the oracle and the campaign side
     over the whole matrix, and its names are plain, so the command exits 0
-    with no second run and removes its snapshot. One more page, named with
-    a code point the two interpreters hold different properties for, fails
-    the run by itself: the two sides may agree on everything the matrix
-    asks of the name today, and the result file still lists it with the
-    properties that differ.
+    with no second run and removes its snapshot. One more page fails the
+    run, named with a code point the two interpreters hold different
+    properties for. Where no name rule of v1 reads those properties, the
+    sides agree on everything the matrix asks, and the name fails the run
+    by itself. Where one interpreter calls the code point printable and
+    the other does not, one side lists the page and the other refuses its
+    name: the sides differ, and the crossed side, which shares the
+    interpreter, lays every difference to it.
     """
-    point = _holdable(tmp_path, changed)
-    if named:
+    point = None
+    if name is not None:
+        point = _holdable(tmp_path, changed, printable=name == 'apart')
         if point is None:
-            pytest.skip('the two interpreters agree on every code point')
+            pytest.skip('the two interpreters agree on every such code point')
         corpus = _renamed(tmp_path, corpus, engine, name=chr(point))
     corpora = _corpora_file(tmp_path, corpus)
     out = tmp_path / 'out'
@@ -85,27 +92,39 @@ def test_campaign_command_compares_the_sides_and_reads_the_names(
         *('--corpora', f'{corpora}'),
         *('--work', f'{work}', '--out', f'{out}', '--now', NOW),
     ]
-    assert cli.main(argv) == int(named)
+    assert cli.main(argv) == int(name is not None)
     document = json.loads((out / 'example.json').read_text(encoding='utf-8'))
-    # the three v1 sides ran, and the two that are compared agree
+    # the three v1 sides ran
     sides = [campaign.REFERENCE, campaign.COMPARED, campaign.CROSSED]
     assert [record['name'] for record in document['sides']] == sides
-    assert [stage['differences'] for stage in document['stages']] == [[]] * 5
-    assert document['rerun'] is None
+    # the two that are compared differ only on the name one of them refuses,
+    # and the crossed side repeats each difference
+    differences = [
+        difference
+        for stage in document['stages']
+        for difference in stage['differences']
+    ]
+    rerun = document['rerun']
+    if name == 'apart':
+        assert differences
+        assert len(rerun['causes']) == len(differences)
+        assert {row['cause'] for row in rerun['causes']} == {campaign.INTERPRETER}
+    else:
+        assert differences == []
+        assert rerun is None
     # the tables differ exactly when the two sides name other Unicode versions
     builds = oracle.load().builds
-    versions = {builds[name].unicode for name in sides[:2]}
+    versions = {builds[side].unicode for side in sides[:2]}
     assert (document['points']['changed'] > 0) == (len(versions) == 2)
-    assert document['points']['changed'] == len(changed)
     # the scan read the names, and found the one that holds the code point
     assert document['names']['read'] > 0
     hits = []
-    if named and (point is not None):
+    if point is not None:
         differing = {campaign.spell(point): list(changed[point])}
         hits = [{'path': f'guides/{chr(point)}.md', 'points': differing}]
     assert document['names']['hits'] == hits
     # the snapshot of a run that failed stays, and no other
-    assert (work / 'example' / 'snapshot').is_dir() == named
+    assert (work / 'example' / 'snapshot').is_dir() == (name is not None)
 
 
 def test_difference_runs_once_more_on_the_crossed_side(
@@ -267,16 +286,34 @@ def test_crossed_side_that_does_not_cross_the_other_two_is_refused(
 def _holdable(
     tmp_path: pathlib.Path,
     changed: Mapping[int, Sequence[str]],
+    *,
+    printable: Optional[bool] = None,
 ) -> Optional[int]:
     """Return the first changed code point the file system holds in a name.
 
-    A file system may refuse a code point its own tables do not know, as
-    APFS does. ``None`` when the two interpreters agree on every code point
-    the file system holds.
+    A file system may refuse a code point its own tables do not know.
+
+    Args:
+        tmp_path: Folder to probe the file system in.
+        changed: The changed code points, from :func:`parity.campaign.changed`.
+        printable: ``True`` for a code point only one interpreter calls
+            printable, which v1's name rule then takes on one side alone;
+            ``False`` for one that the two interpreters differ on in no
+            property a name rule of v1 reads; ``None`` for any.
+
+    Returns:
+        The code point, or ``None`` when the two interpreters agree on
+        every such code point the file system holds.
+
     """
     probe = tmp_path / 'probe'
     probe.mkdir(exist_ok=True)
     for point in sorted(changed):
+        differing = set(changed[point])
+        if (printable is True) and ('isprintable' not in differing):
+            continue
+        if (printable is False) and (differing & _NAME_RULE):
+            continue
         try:
             (probe / chr(point)).write_bytes(b'')
         except (OSError, UnicodeEncodeError):
