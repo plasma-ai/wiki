@@ -83,6 +83,9 @@ uv run --no-sync python -m parity replay --work <dir> --out <dir>
 # write the fixture families and run the matrix on each
 uv run --no-sync python -m parity fixtures --work <dir> --out <dir>
 
+# run a command in the Linux container, on a clone of HEAD (needs Docker)
+uv run --no-sync python -m parity container -- <command>
+
 # run pre-commit
 uv run --no-sync pre-commit run [--all-files]
 
@@ -561,10 +564,17 @@ the matrix sample draws them; a folder the wiki excludes or refuses lies deeper.
 A family whose wiki `update` refuses runs its own stage alone, and each of its
 cases states the exit codes it allows. The family `linux` and the three refused
 trees need a file system that keeps case and bytes, so on macOS they are left
-out. The refused trees show what registry entry D4 says v1 does on a name that
-is no valid UTF-8; the tests in `parity/tests/test_fixtures.py` hold v1 to that
-on Linux, so a change in v1 there changes the spec's table and, as a change to
-the registry does, the entry.
+out: run them in the container. The refused trees show what registry entry D4
+says v1 does on a name that is no valid UTF-8; the tests in
+`parity/tests/test_fixtures.py` hold v1 to that on Linux, so a change in v1
+there changes the spec's table and, as a change to the registry does, the entry.
+
+`python -m parity container` runs one command in the Linux container
+(`parity/container.py`, `parity/Dockerfile`): the Ubuntu release of the CI
+runners, with a clone of the repository at `HEAD` on the container's own file
+system. The clone holds what is committed, so commit before a run. Nothing a
+side runs on is mounted from the host. A change to the container changes the
+spec's Container section in the same commit.
 
 ### Run Bracket
 

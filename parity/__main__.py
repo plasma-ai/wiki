@@ -8,6 +8,7 @@ usage: python -m parity matrix --a NAME --b NAME [--registered] [--sides FILE] -
        python -m parity fixtures [--engine NAME] [--sides FILE] --work DIR --out DIR
        python -m parity oracle ensure [--side NAME]
        python -m parity oracle check [--skip NAME]
+       python -m parity container [--commit COMMIT] [--out DIR] COMMAND [ARG ...]
 
 ``matrix`` compares two sides over the matrix; ``selfcheck`` runs one side
 against itself, clean and doctored; ``registry`` runs one side against a
@@ -62,6 +63,11 @@ one, unless ``--registered`` says side ``b`` is a second engine.
 exits 2 when it refuses a checkout or a venv. ``oracle check`` holds
 ``oracle.toml`` level with v1 and exits 1 when a check fails.
 
+``container`` runs a command in the Linux container: a clone of the
+repository at ``HEAD``, or at the commit ``--commit`` names, on a file system
+that keeps case and bytes. It exits with the exit code of the command, and
+with 2 when Docker does not answer or the commit is none.
+
 An error of the harness itself prints its traceback and exits 2 as well, so
 exit 1 always means that a result is not the expected one.
 """
@@ -87,6 +93,7 @@ from typing import Any, Optional, Union
 
 from . import (
     config,
+    container,
     dispatch,
     fixtures,
     homes,
@@ -143,6 +150,8 @@ _FIXTURES = 'fixtures'
 # the folders of the checkouts and of the runs, below the fixtures' folder
 _TREES = 'trees'
 _RUNS = 'runs'
+# the command that runs another in the Linux container
+_CONTAINER = 'container'
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -293,6 +302,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         default=[],
         help=skip_help,
     )
+    summary = 'Run a command in the Linux container, in a clone of the repository.'
+    command = commands.add_parser(_CONTAINER, help=summary, description=summary)
+    # commit option
+    commit_help = 'Commit the clone is checked out at (default: HEAD).'
+    command.add_argument('--commit', help=commit_help)
+    # output folder option
+    out_help = 'Folder of the host that the container writes as /out.'
+    command.add_argument('--out', type=pathlib.Path, help=out_help)
+    # command argument
+    argv_help = "The command and its arguments, run from the clone's root."
+    command.add_argument('argv', nargs=argparse.REMAINDER, help=argv_help)
     # parse arguments
     options = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -351,6 +371,8 @@ def _run(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
         return _replay(parser, options)
     if options.command == _FIXTURES:
         return _fixtures(parser, options)
+    if options.command == _CONTAINER:
+        return _container(parser, options)
     # read the registry
     try:
         entries = registry.load()
@@ -808,6 +830,18 @@ def _fixtures(parser: argparse.ArgumentParser, options: argparse.Namespace) -> i
         return 1
     shutil.rmtree(work)
     return 0
+
+
+def _container(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
+    """Run a command in the Linux container and return its exit code."""
+    # a `--` that parts the command from the options is not part of it
+    command = options.argv
+    if command[:1] == ['--']:
+        command = command[1:]
+    try:
+        return container.run(command, commit=options.commit, out=options.out)
+    except ValueError as e:
+        parser.error(f'{e}')
 
 
 def _sides(

@@ -39,6 +39,9 @@ python -m parity replay [--engine NAME] [--sides SIDES] --work DIR --out DIR
 
 # write the fixture families and run the matrix on each
 python -m parity fixtures [--engine NAME] [--sides SIDES] --work DIR --out DIR
+
+# run a command in the Linux container
+python -m parity container [--commit COMMIT] [--out DIR] COMMAND [ARG ...]
 ```
 
 A side name is `oracle` or `campaign`, the two v1 sides that
@@ -166,10 +169,15 @@ the run passed; a failed run leaves the checkouts it wrote under
 in the form `matrix` writes for a corpus, and the streams of a case that differs
 are saved under `<out>/<family>/<stage>/`.
 
+`container` runs one command in the Linux container (Container, below) and exits
+with that command's exit code. It exits 2 with a message when it is given no
+command, when `--commit` names no commit, and when Docker is not installed or
+its daemon does not answer.
+
 The sections below are the rules of the harness, one part each: the oracle,
 sides, snapshots, comparison, caches, the matrix, the fixture families, the
-registry, the self-check, the CLI suite and the replay, with the account a whole
-replay gives of v1's tests and kinds.
+registry, the self-check, the CLI suite, the replay, with the account a whole
+replay gives of v1's tests and kinds, and the container.
 
 ## Oracle
 
@@ -1339,3 +1347,31 @@ A run passes when it has no difference and no finding:
 
 A test that is skipped, or fails as its mark expects, records no call. The
 result file lists it with its outcome, and it is no finding of the replay.
+
+## Container
+
+macOS keeps no two names that differ only in case and no name that is no valid
+UTF-8, and link verdicts turn on the file system. The container is the Linux of
+the CI runners on a host that is none. `python -m parity container` builds its
+image from `parity/Dockerfile` and runs one command in a fresh container.
+
+- **Image.** The image of the CI runners' release, with git, uv, gawk, mawk and
+  the system zone files, and a user of its own, because v1's tests of unreadable
+  files need a user that is not root. It holds no file of the repository, so it
+  is built with no context. Its tag is a digest of the Dockerfile: a changed
+  Dockerfile builds a new image.
+- **Clone.** A container reads the repository of the checkout the harness lies
+  in, and never writes it. It clones that repository to its own file system,
+  takes the remote-tracking branches as the host holds them, and checks out one
+  commit: `HEAD` of that checkout, or the commit `--commit` names. So the clone
+  holds what is committed, and an edit that is not committed does not reach it.
+- **File system.** The clone, the oracle checkout that `oracle ensure` makes
+  beside it, and every work folder below `/work` lie on the container's own file
+  system, which keeps case and bytes. Nothing a side runs on is mounted from the
+  host.
+- **Environment.** The container installs the harness's dependency group, then
+  becomes the command, which runs from the clone's root with the streams of the
+  caller. The command builds the oracle with `oracle ensure`, as CI does.
+- **Kept.** One volume, `wiki-parity-cache`, holds what uv downloads, so a
+  second container starts fast. `--out DIR` gives the container a folder of the
+  host as `/out`. Everything else is gone when the command ends.

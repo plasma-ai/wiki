@@ -8,6 +8,7 @@ from . import (
     classify,
     compare,
     config,
+    container,
     dispatch,
     doctor,
     facts,

@@ -4,6 +4,7 @@ from .test_cache import *
 from .test_classify import *
 from .test_compare import *
 from .test_config import *
+from .test_container import *
 from .test_dispatch import *
 from .test_doctor import *
 from .test_fixtures import *
