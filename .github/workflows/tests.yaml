@@ -54,10 +54,16 @@ jobs:
         run: >-
           uv run --no-sync python -m parity suite
           --work "$RUNNER_TEMP/suite-work" --out "$RUNNER_TEMP/suite-out"
-      - name: Keep the output of a failed run of v1's CLI tests
+      - name: Replay the calls of v1's tests through the harness
+        run: >-
+          uv run --no-sync python -m parity replay
+          --work "$RUNNER_TEMP/replay-work" --out "$RUNNER_TEMP/replay-out"
+      - name: Keep the output of a failed run of v1's tests
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: suite-out
-          path: ${{ runner.temp }}/suite-out
+          name: parity-out
+          path: |
+            ${{ runner.temp }}/suite-out
+            ${{ runner.temp }}/replay-out
           if-no-files-found: ignore
