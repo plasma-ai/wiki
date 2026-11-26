@@ -64,6 +64,14 @@ def _git(cwd: pathlib.Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def _declare(folder: pathlib.Path, corpus: runner.Corpus) -> pathlib.Path:
+    """Write a corpora file that declares ``corpus`` and return its path."""
+    path = folder / 'corpora.toml'
+    text = f'[{corpus.label}]\ncheckout = "{corpus.checkout}"\nroot = "{corpus.root}"\n'
+    path.write_text(text, encoding='utf-8')
+    return path
+
+
 @pytest.fixture(scope='session')
 def engine() -> side.Side:
     """Return the oracle side: v1 at the oracle commit, under its own venv."""
@@ -126,3 +134,63 @@ def corpus(
     _git(checkout, 'add', '-A')
     _git(checkout, 'commit', '-q', '-m', 'wiki')
     return runner.Corpus(label='example', checkout=checkout, root='hello')
+
+
+@pytest.fixture(scope='session')
+def history(
+    tmp_path_factory: pytest.TempPathFactory,
+    corpus: runner.Corpus,
+    engine: side.Side,
+) -> runner.Corpus:
+    """Return a checkout whose history holds three merges of a small wiki.
+
+    The first joins a branch that the other side did not move on from, so
+    git calls no driver. The second joins two branches that each added a
+    page to one folder, so both changed its index and git calls the driver.
+    The third joins two edits of one page's body. The example wiki maps
+    its pages to the driver too, whose text merge cannot settle them: the
+    merge is left with a conflict, and ``update`` refuses the tree.
+    Each merge commit keeps its first parent's tree: a replay reads the
+    parents of a merge and never its tree. READ-ONLY: a replay runs in
+    repositories of its own.
+    """
+    checkout = tmp_path_factory.mktemp('merges') / 'checkout'
+    shutil.copytree(corpus.checkout, checkout, symlinks=True)
+    root = checkout / corpus.root
+    home = checkout.parent / 'home'
+    home.mkdir()
+    env = side.environment(engine, home, now=NOW)
+
+    def page(relpath: str, text: str) -> None:
+        """Write a page, converge the wiki and commit."""
+        block = f'---\ndesc: About {relpath}.\n---\n\n'
+        (root / relpath).write_text(f'{block}{text}\n', encoding='utf-8')
+        args = ['update', '--path', f'{root}']
+        updated = side.run(engine, args, cwd=home, env=env)
+        assert updated.code == 0, updated.stderr
+        _git(checkout, 'add', '-A')
+        _git(checkout, 'commit', '-q', '-m', relpath)
+
+    # map every index to the driver, as `wiki init` does
+    attributes = '**/_index.md merge=wiki\n'
+    (checkout / '.gitattributes').write_text(attributes, encoding='utf-8')
+    _git(checkout, 'add', '-A')
+    _git(checkout, 'commit', '-q', '-m', 'attributes')
+    # a branch the main line did not move on from
+    _git(checkout, 'checkout', '-q', '-b', 'one')
+    page('guides/alpha.md', '# Alpha\n\nThe first page.')
+    _git(checkout, 'checkout', '-q', 'main')
+    _git(checkout, 'merge', '-q', '--no-ff', '-s', 'ours', '-m', 'one', 'one')
+    # two branches that each add a page to one folder
+    _git(checkout, 'checkout', '-q', '-b', 'two')
+    page('guides/beta.md', '# Beta\n\nThe second page.')
+    _git(checkout, 'checkout', '-q', 'main')
+    page('guides/gamma.md', '# Gamma\n\nThe third page.')
+    _git(checkout, 'merge', '-q', '--no-ff', '-s', 'ours', '-m', 'two', 'two')
+    # two edits of one page's body
+    _git(checkout, 'checkout', '-q', '-b', 'three')
+    page('core/design.md', '# Design\n\nThe branch words it one way.')
+    _git(checkout, 'checkout', '-q', 'main')
+    page('core/design.md', '# Design\n\nThe main line words it another way.')
+    _git(checkout, 'merge', '-q', '--no-ff', '-s', 'ours', '-m', 'three', 'three')
+    return runner.Corpus(label='example', checkout=checkout, root=corpus.root)
