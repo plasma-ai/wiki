@@ -19,7 +19,7 @@ import tomllib
 from collections.abc import Mapping, Sequence
 from typing import Literal, Optional, overload
 
-from . import facts, judge, launcher, tap
+from . import facts, judge, launcher, points, tap
 from .side import Side
 
 __all__ = [
@@ -227,6 +227,7 @@ def side(oracle: Oracle, name: str) -> Side:
         describe=(python, '-P', f'{facts.__file__}'),
         judge=(python, '-P', f'{judge.__file__}'),
         tap=(python, '-P', f'{tap.__file__}'),
+        points=(python, '-P', f'{points.__file__}'),
         identity={
             'engine': launcher.ENGINE,
             'version': oracle.version,
