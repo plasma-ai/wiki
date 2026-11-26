@@ -215,6 +215,25 @@ def refusal(command: Command, judge: Optional[Judge]) -> bool:
     return bool(pattern and pattern['outside'])
 
 
+def outside(command: Command, judge: Optional[Judge]) -> list[str]:
+    """Return why an input of ``command`` lies outside the supported set.
+
+    The inputs are those of D3: the settings file as v1 found it, and the
+    pattern of a ``match`` command. A side with no judge leaves every
+    input unjudged.
+
+    Returns:
+        Each reason; none for inputs inside the set.
+
+    """
+    pattern = _pattern(command, judge)
+    reasons = list(_settings(command, judge)['outside'])
+    reasons.extend(
+        f'pattern: {reason}' for reason in (pattern or {}).get('outside', ())
+    )
+    return reasons
+
+
 #: the classifier of each registry entry that has one, by the entry's id
 CLASSIFIERS: Mapping[str, Callable[[Command, Optional[Judge]], bool]] = {
     'D1': library_text,

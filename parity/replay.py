@@ -81,6 +81,15 @@ _DOCTORED = {
 }
 # the file the `extra` kind writes, beside the file the other kinds act on
 _EXTRA = 'parity_doctored.md'
+# the hook file of a wiki, the command that trusts one, and the command that
+# installs the skills
+_HOOK = '.wiki/wiki.py'
+_TRUST = 'trust'
+_INSTALL = 'install'
+# the exit codes of a command that v1 ran: it refused nothing
+_RAN = (0, 1)
+# the registry entry that covers input outside the supported set
+_REFUSAL = 'D3'
 
 
 @dataclasses.dataclass(frozen=True, order=True)
@@ -93,14 +102,17 @@ class Finding:
             ``unformed`` (no command line states a call); ``unfaithful``
             (v1's command line does not do what the call did in its
             test); ``registered`` (a registry entry excused a call
-            between two builds of v1); ``unneeded`` (the routing table
-            names a test the replay holds); ``unrecorded`` (the tests
-            ran commands, and the recorder recorded none); ``format`` (a
-            format call that has no JSON form, or that gives another
-            outcome when it is made again); or ``control`` (a doctored
-            replay did not show what it must).
-        subject: The test, the format function, the control, or the
-            number of commands.
+            between two builds of v1); ``unsupported`` (v1 ran a call on
+            input outside the supported set); ``unneeded`` (the routing
+            table names a test the replay holds); ``unrecorded`` (the
+            tests ran commands, and the recorder recorded none);
+            ``format`` (a format call that has no JSON form, or that
+            gives another outcome when it is made again); ``control`` (a
+            doctored replay did not show what it must); or a finding of
+            the account of v1's tests and kinds (``parity.homes``,
+            ``parity.kinds``).
+        subject: The test, the format function, the control, the kind,
+            or the number of commands.
         detail: What is wrong.
 
     """
@@ -172,6 +184,9 @@ class _Played:
         problems: The ways v1's command line departs from the call.
         differences: What the sides did differently.
         excused: The registry entries that explain a difference.
+        outside: Why an input of the call lies outside the supported
+            set, as the judge of v1's side says; empty for a call whose
+            inputs are inside it, and where no judge was asked.
         passes: What each side did.
 
     """
@@ -181,6 +196,7 @@ class _Played:
     problems: tuple[str, ...] = ()
     differences: tuple[Difference, ...] = ()
     excused: tuple[Excused, ...] = ()
+    outside: tuple[str, ...] = ()
     passes: tuple[_Pass, ...] = ()
 
 
@@ -190,7 +206,7 @@ def run(
     *,
     commands: Optional[Sequence[str]] = None,
     routed: Iterable[str] = (),
-    explained: Iterable[str] = (),
+    explained: Optional[Mapping[str, str]] = None,
     second: bool = False,
     jobs: Optional[int] = None,
 ) -> Result:
@@ -204,10 +220,13 @@ def run(
             every call.
         routed: The ids of the tests that another check holds. A call of
             such a test is replayed and compared like any other, and is
-            no finding when it has no command line or is unfaithful.
+            no finding when it has no command line or is unfaithful. A
+            call a shared fixture made belongs to no one test, and no
+            row covers it.
         explained: The ids among them whose row rests on a registry
-            entry. What the sides differ in on a call of such a test is
-            the entry's difference, and does not fail the replay.
+            entry, each with the entry's id. On a call of such a test
+            that the entry is about, what the sides differ in is the
+            entry's difference, and does not fail the replay.
         second: Whether the later sides are a second engine, which the
             registry may excuse. Between two builds of v1 an excused call
             is a finding.
@@ -219,7 +238,7 @@ def run(
 
     """
     routed = frozenset(routed)
-    explained = frozenset(explained)
+    explained = dict(explained or {})
     chosen = [
         call
         for call in recording.calls
@@ -238,8 +257,11 @@ def run(
     rows = []
     for item in played:
         call = item.call
-        exempt = _is_routed(call.test, routed)
-        known = _is_routed(call.test, explained)
+        exempt = (not call.shared) and _is_routed(call.test, routed)
+        entry = '' if call.shared else _cited(call.test, explained)
+        about = _is_about(entry, item)
+        # a classifier says by itself what its entry explains on a call
+        known = about and (entry not in classify.CLASSIFIERS)
         if item.unformed and not exempt:
             findings.append(Finding('unformed', call.test, item.unformed))
         if item.problems and not exempt:
@@ -249,21 +271,26 @@ def run(
             excused.extend(item.excused)
         if not (second or known):
             findings.extend(
-                Finding('registered', call.test, f'{entry.case}: {entry.entry}')
-                for entry in item.excused
+                Finding('registered', call.test, f'{found.case}: {found.entry}')
+                for found in item.excused
+                if found.entry != entry
             )
+        # v1 ran the call on input that a second engine refuses
+        if _is_about(_REFUSAL, item) and (entry != _REFUSAL):
+            findings.append(Finding('unsupported', call.test, '; '.join(item.outside)))
         if item.problems or item.differences or item.excused:
             for done in item.passes:
                 stem = f'{call.worker}-{call.index} {done.name}'
                 streams[f'{stem}.out'] = done.outcome.stdout
                 streams[f'{stem}.err'] = done.outcome.stderr
-        rows.append(_row(item, exempt))
+        rows.append(_row(item, exempt, about))
     report = {
         'commands': None if commands is None else list(commands),
         'counts': _counts(played, routed),
         'kinds': recording.kinds,
         'calls': rows,
         'unrecorded': _unrecorded(recording),
+        'outside': _outside(played),
     }
     return Result(
         findings=tuple(sorted(findings)),
@@ -443,27 +470,33 @@ def unneeded(
     routed: Iterable[str],
     report: Mapping[str, Any],
     differing: Iterable[str] = (),
+    formatted: Iterable[str] = (),
 ) -> list[Finding]:
     """Return a finding for each routed test that a whole replay holds.
 
     A test whose calls all replay as their commands, with no difference,
     has its place in the replay, and a row of the routing table would
-    give it a second one. A row that rests on a registry entry is not
-    judged this way: its tests differ against a second engine only.
+    give it a second one. So has a test whose format calls all give
+    their outcome again. A row that rests on a registry entry is needed
+    while a call of its test is one the entry is about: two builds of v1
+    do not show the entry's difference.
 
     Args:
-        routed: The ids the routing table names in rows that rest on no
-            registry entry.
+        routed: The ids the routing table names.
         report: The report of a replay of every call, from :func:`run`.
         differing: The tests that made a format call which gave another
             outcome when it was made again, from :func:`formats`.
+        formatted: The tests that made a format call.
 
     """
-    ran = set()
+    ran = set(formatted)
     shown = set(differing)
     for row in report['calls']:
+        if row['shared']:
+            continue
         ran.add(row['test'])
-        if row['unformed'] or row['problems'] or row['differences']:
+        differs = row['differences'] or row['excused'] or row['about']
+        if row['unformed'] or row['problems'] or differs:
             shown.add(row['test'])
     ran.update([_function(test) for test in ran])
     shown.update([_function(test) for test in shown])
@@ -613,6 +646,7 @@ def _play_one(
     stage = Stage(name=call.test, cases=(case,))
     differences: dict[Difference, None] = {}
     excused: dict[Excused, None] = {}
+    outside: dict[str, None] = {}
     for root in roots or [None]:
         folder = '' if root is None else f'{root}/{CACHE}'
         others = [other for other in folders if other != folder]
@@ -620,13 +654,18 @@ def _play_one(
         found = compare.stage(stage, runs, folder=folder)
         with lock:
             found, explained = classify.apply(stage, runs, found, judge=judge)
+            first = runs[0].records[0]
+            asked = classify.Command(case.args, first, first, frozenset())
+            reasons = classify.outside(asked, judge)
         differences.update(dict.fromkeys(found))
         excused.update(dict.fromkeys(explained))
+        outside.update(dict.fromkeys(reasons))
     return _Played(
         call=call,
         problems=tuple(problems),
         differences=tuple(differences),
         excused=tuple(excused),
+        outside=tuple(outside),
         passes=tuple(passes),
     )
 
@@ -1035,13 +1074,97 @@ def _is_routed(test: str, routed: frozenset[str]) -> bool:
     return (test in routed) or (_function(test) in routed)
 
 
+def _cited(test: str, explained: Mapping[str, str]) -> str:
+    """Return the registry entry the row of ``test`` rests on; empty for none."""
+    return explained.get(test) or explained.get(_function(test), '')
+
+
+def _is_about(entry: str, item: _Played) -> bool:
+    """Return whether the call of ``item`` is one the registry entry ``entry`` is about.
+
+    A row that cites an entry routes its tests for the entry's difference
+    alone, so it covers the calls that can show it: for D1 a command of
+    v1 that ends in a library's text, for D3 one that v1 ran on input
+    outside the supported set, for D6 one on a wiki with a hook file or
+    the command that trusts one, and for D10 the command that installs
+    the skills. No call is about another entry.
+    """
+    if not item.passes:
+        return False
+    first = item.passes[0]
+    if entry == 'D1':
+        stderr = first.outcome.stderr
+        named = (classify._NAMING in stderr) or (classify._MALFORMED in stderr)
+        failed = (item.call.command == 'match') and (first.outcome.code == 2)
+        return named or failed or (classify._QUERY.search(stderr) is not None)
+    if entry == _REFUSAL:
+        return bool(item.outside) and (first.outcome.code in _RAN)
+    if entry == 'D6':
+        paths = {*first.before, *first.after}
+        hooked = any(f'/{relpath}'.endswith(f'/{_HOOK}') for relpath in paths)
+        return hooked or (item.call.command == _TRUST)
+    if entry == 'D10':
+        return item.call.command == _INSTALL
+    return False
+
+
+def _shown(call: Call, outcome: Outcome) -> dict[str, list[str]]:
+    """Return the notice and issue kinds of ``call`` that a command line shows.
+
+    A ``lint`` command names the kind of every issue and note of its
+    document. Any other command shows a notice by its text on stderr.
+    The kinds are those the call met in its test, so a command of the
+    helper, which ran in no test's process, shows none.
+    """
+    met = {name: call.kinds.get(name, ()) for name in ('notices', 'issues')}
+    if call.command == 'lint':
+        try:
+            data = json.loads(_text(outcome.stdout))
+            named = {
+                'notices': {row['kind'] for row in data['notes']},
+                'issues': {row['kind'] for row in data['issues']},
+            }
+        except (ValueError, TypeError, KeyError):
+            named = {'notices': set(), 'issues': set()}
+        return {name: sorted(named[name] & set(met[name])) for name in met}
+    report = _text(outcome.stderr)
+    notices = {
+        kind
+        for kind, notice in zip(met['notices'], call.notices)
+        if f'{notice}\n' in report
+    }
+    return {'notices': sorted(notices), 'issues': []}
+
+
+def _outside(played: Sequence[_Played]) -> list[dict[str, Any]]:
+    """Return the calls v1 ran on input outside the supported set, as JSON data."""
+    return [
+        {
+            'test': item.call.test,
+            'call': f'{item.call.worker}-{item.call.index}',
+            'command': item.call.command,
+            'reasons': list(item.outside),
+        }
+        for item in played
+        if _is_about(_REFUSAL, item)
+    ]
+
+
 def _all_routed(tests: Sequence[str], routed: frozenset[str]) -> bool:
     """Return whether every one of ``tests`` is routed."""
     return all(_is_routed(test, routed) for test in tests)
 
 
-def _row(item: _Played, exempt: bool) -> dict[str, Any]:
-    """Return one replayed call as JSON data."""
+def _row(item: _Played, exempt: bool, about: bool) -> dict[str, Any]:
+    """Return one replayed call as JSON data.
+
+    Args:
+        item: The call as the sides replayed it.
+        exempt: Whether the routing table names the call's test.
+        about: Whether the call is one the registry entry of that row is
+            about.
+
+    """
     call = item.call
     runs = {}
     for done in item.passes:
@@ -1060,6 +1183,10 @@ def _row(item: _Played, exempt: bool) -> dict[str, Any]:
         'unformed': item.unformed,
         'problems': list(item.problems),
         'routed': exempt,
+        'about': about,
+        'shared': call.shared,
+        'kinds': _shown(call, item.passes[0].outcome) if item.passes else {},
+        'outside': list(item.outside),
         'runs': runs,
         'differences': [dataclasses.asdict(found) for found in item.differences],
         'excused': [dataclasses.asdict(entry) for entry in item.excused],

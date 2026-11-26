@@ -1,7 +1,7 @@
 """Functions for reading the routing table.
 
-The routing table lists the tests of v1 that the replay cannot hold, with
-the check that holds each one in its place.
+The routing table lists the tests of v1 that neither the CLI suite nor the
+replay holds, with the check that holds each one in their place.
 """
 
 from __future__ import annotations
@@ -9,16 +9,17 @@ from __future__ import annotations
 import dataclasses
 import pathlib
 import tomllib
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from typing import Optional
 
 __all__ = []
 
 #: the committed file that holds the routing table
 PATH = pathlib.Path(__file__).parent / 'routing.toml'
-#: where a row sends its tests: to a test of the second engine's own suite,
-#: to a function of its probe, or nowhere
-TARGETS = ('rust', 'probe', 'dropped')
+#: where a row sends its tests: to a test the second engine brings, to a
+#: function of its probe, to the replay once the recorder has a form for
+#: their command, or nowhere
+TARGETS = ('rust', 'probe', 'replay', 'dropped')
 #: the parts of v1 that a second engine does not have, which a dropped row
 #: may cite
 MECHANISMS = ('trust', 'hooks', 'frontmatter memo', 'loader choice', 'Python API')
@@ -40,7 +41,8 @@ class Route:
             function routes every parameter set of it.
         to: One of :data:`TARGETS`.
         target: The test or the probe function that holds the tests in
-            the replay's place; empty until it exists.
+            the replay's place; empty until it exists. For a row that
+            waits for the replay, the command it waits for.
         cite: What a dropped row rests on: the id of a registry entry,
             one of :data:`MECHANISMS`, or the id of the test that
             replaces the dropped ones.
@@ -72,8 +74,9 @@ def load(
             is no table, lacks a field or holds one of the wrong shape,
             if a row names no test, sends its tests to an unknown place
             or gives no reason, if a dropped row cites nothing a dropped
-            row may cite, if another row cites anything, or if two rows
-            name one test.
+            row may cite, if another row cites anything, if a row that
+            waits for the replay names no command, or if two rows name
+            one test.
 
     """
     path = path or PATH
@@ -122,9 +125,24 @@ def load(
             )
         if (texts['to'] != 'dropped') and cite:
             raise ValueError(f'{where}: only a dropped row cites, got {cite!r}.')
+        if (texts['to'] == 'replay') and not texts['target'].strip():
+            raise ValueError(
+                f'{where}: a row that waits for the replay names the command'
+                f' it waits for as its target.'
+            )
         route = Route(tests=tuple(tests), **texts)
         for test in tests:
             if test in result:
                 raise ValueError(f'{where}: {test} is routed twice.')
             result[test] = route
     return result
+
+
+def find(routes: Mapping[str, Route], test: str) -> Optional[Route]:
+    """Return the row of ``routes`` that names ``test`` or its test function, if any."""
+    return routes.get(test) or routes.get(function(test))
+
+
+def function(test: str) -> str:
+    """Return the id of a test without its parameters: the test function's."""
+    return test.partition('[')[0]

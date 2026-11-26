@@ -139,16 +139,18 @@ ends: an error of the table leaves the tests' result behind.
 `replay` takes no corpus either: it runs on the trees v1's tests make (Replay,
 below). It exits 0 when the sides differ in nothing and it has no finding, and 1
 otherwise. It exits 2 with a message, before it runs a test, on what `suite`
-refuses and on a routing table that breaks a rule of Routing. `--test` and
-`--jobs` are those of `suite`. It makes `<work>/replay`, which must not exist
-beforehand, and removes it when the run passed. It writes `<out>/replay.json`,
-what pytest printed as `<out>/replay/pytest.txt`, the recorded format calls as
+refuses, on a routing table that breaks a rule of Routing and on a kind list
+that breaks a rule of Kinds. `--test` and `--jobs` are those of `suite`. It
+makes `<work>/replay`, which must not exist beforehand, and removes it when the
+run passed. It writes `<out>/replay.json`, what pytest printed as
+`<out>/replay/pytest.txt`, the recorded format calls as
 `<out>/replay/formats.jsonl`, and both streams of every run of each call that
 differs or is unfaithful under `<out>/replay/`.
 
 The sections below are the rules of the harness, one part each: the oracle,
 sides, snapshots, comparison, caches, the matrix, the registry, the self-check,
-the CLI suite and the replay.
+the CLI suite and the replay, with the account a whole replay gives of v1's
+tests and kinds.
 
 ## Oracle
 
@@ -938,7 +940,17 @@ and `new`) and for the module the CLI tests' helper starts commands with.
 - **Environment.** The record holds the whole environment of the call and its
   working directory.
 - **Kinds.** For each test the recorder counts the notice kinds the engine
-  emitted in process and the issue kinds `lint` returned.
+  emitted in process and the issue kinds `lint` returned. Each record of an
+  engine call holds the kind of each notice it emitted and of each issue it
+  returned. The recorder also lists the kinds the engine has: one notice kind
+  for each notice hook of the engine class, and the issue kinds its source
+  names. An issue's kind is a keyword where the issue is made, so an issue made
+  with a kind that is no string literal ends the run.
+- **Shared fixtures.** A fixture of a wider scope than one test is set up inside
+  the first test that asks for it, and which test that is turns on how the tests
+  are spread over the processes. A call such a fixture makes is recorded under
+  the fixture's name, and each test lists the shared fixtures it asks for that
+  made a call.
 - **Commands with no record.** The recorder sees a command of the console script
   only when the helper's own `subprocess.run` starts it. The merge driver that
   git starts during a test's `git merge`, and a command a test starts by itself,
@@ -1025,8 +1037,8 @@ finding under its test, never a skip, unless the routing table names the test.
 
 ### Routing
 
-`parity/routing.toml` is the routing table: the tests of v1 that the replay
-cannot hold, each with the check that holds it in the replay's place.
+`parity/routing.toml` is the routing table: the tests of v1 that neither the CLI
+suite nor the replay holds, each with the check that holds it in their place.
 
 ```toml
 [[route]]
@@ -1039,9 +1051,12 @@ reason = "<why the replay cannot hold the tests>"
 
 - **Tests.** The id of a test function routes every parameter set of it; an id
   with its parameters routes that one.
-- **To.** `rust`: a test of the second engine's own suite holds the tests.
-  `probe`: a function of its probe does. `dropped`: nothing does. `target` names
-  the test or the function, and is empty until it exists.
+- **To.** `rust`: a test that the second engine brings holds the tests, in its
+  own suite or over its repository. `probe`: a function of its probe does.
+  `replay`: the replay will, once the recorder has a command line for the method
+  the tests call. `dropped`: nothing does. `target` names the test or the
+  function, and is empty until it exists. For a `replay` row it names the
+  command the row waits for, and may not be empty.
 - **Cite.** A dropped row cites what it rests on: the id of a registry entry,
   the id of the test that replaces the dropped ones, or a part of v1 that a
   second engine does not have (`trust`, `hooks`, `frontmatter memo`,
@@ -1050,26 +1065,46 @@ reason = "<why the replay cannot hold the tests>"
   cites.
 - **Refusals.** A table is refused when it holds a key other than `route`, a row
   that is no table, a field outside those above or of the wrong shape, a row
-  with no test or no reason, a `to` outside the three, a dropped row that cites
-  nothing it may cite, another row that cites, or one test in two rows.
+  with no test or no reason, a `to` outside the four, a dropped row that cites
+  nothing it may cite, another row that cites, a `replay` row with no target, or
+  one test in two rows.
 - **Routed calls.** The calls of a routed test are replayed and compared like
   any other. A call with no command line and an unfaithful call are no findings
-  there. A difference between the sides still fails the run, unless the row
-  cites a registry entry: what the sides differ in on such a test is that
-  entry's difference, and it is listed in the result file only.
+  there. A difference between the sides still fails the run.
+- **Registry rows.** A row that cites a registry entry routes its tests for that
+  entry's difference, so it covers the calls the entry is about (the table
+  below) and no other call. For an entry with no classifier, what the sides
+  differ in on such a call is the entry's difference, and it is listed in the
+  result file only. An entry with a classifier says call by call what it
+  explains: between two builds of v1 a call it excuses under the row's own entry
+  is no `registered` finding, and any other difference still fails the run.
+- **Shared calls.** A call a shared fixture made belongs to no one test, so no
+  row covers it: it is held like the call of a test that is not routed.
 - **Unneeded rows.** Where every call is replayed, a row for a test whose calls
   all replay as their commands, with no difference, is an `unneeded` finding:
-  the replay holds that test. A row that cites a registry entry is not judged
-  this way: two builds of v1 do not show the entry's difference.
+  the replay holds that test. So is a row for a test whose format calls all give
+  their outcome again. A row that cites a registry entry is needed while a call
+  of its test is one the entry is about, whether or not two builds of v1 differ
+  there.
+
+| Entry | A call the entry is about                                                     |
+| ----- | ----------------------------------------------------------------------------- |
+| D1    | v1's command ends in a library's text behind a wiki-written prefix            |
+| D3    | v1 ran the command on input outside the supported set (Supported Sets, below) |
+| D6    | the call's trees hold a hook file, or the command is `trust`                  |
+| D10   | the command is `install`                                                      |
+
+No call is about another entry, so a row that cites one covers nothing.
 
 ### Format Calls
 
-The recorder also records every call the tests of
-`tests/test_core/test_format.py` make to a public function of
-`wiki.core.format`, whoever makes it: the test, or the engine under it. The
-outermost call counts. A record holds the function, the arguments and the
-outcome as JSON, how often the call was made, and the tests that made it. Equal
-calls are one record.
+The recorder also records every call the format tests make to a public function
+of `wiki.core.format`, whoever makes it: the test, or the engine under it. The
+format tests are those of `tests/test_core/test_format.py` and the two tests of
+`tests/test_core/test_update.py` that call a format function and nothing else
+the recorder records. The outermost call counts. A record holds the function,
+the arguments and the outcome as JSON, how often the call was made, and the
+tests that made it. Equal calls are one record.
 
 - **JSON form.** A string, a number, a boolean, `null` and a list are
   themselves. A tuple, a set and a mapping are objects marked with the key `~`,
@@ -1105,6 +1140,92 @@ own recording. Each doctors the replay and must be reported.
 A control that doctors no call, or that the replay does not report in full, is a
 `control` finding.
 
+### Supported Sets
+
+A second engine supports a fixed set of regex constructs, of timestamp
+directives and of settings values, and refuses input outside it (Registry,
+Classifiers). The replay confirms the set against v1's tests: for every call it
+asks the judge of v1's side about the inputs of D3, which are the settings file
+as v1's command found it and the pattern of a `match` command.
+
+- **Outside.** A call that v1 ran, with exit code 0 or 1, on input the judge
+  calls outside the set is listed in the result file (`outside`) with the
+  judge's reasons. A command that v1 refuses by itself is not listed: no engine
+  runs it.
+- **Finding.** Each such call is an `unsupported` finding, unless the routing
+  table drops its test under D3. So a test that depends on input outside the set
+  is either named in the table or fails the replay, and a change to the set
+  shows at once in which tests it reaches.
+
+### Homes
+
+With no second engine, and no `--test`, a replay ends with an account of v1's
+tests: each has one home, the part of the harness that holds a second engine to
+it.
+
+- **Tests.** The tests are those pytest collects from the root of the oracle
+  checkout under v1's own settings: every test file and every doctest. The
+  harness's own tests on v1's branch (`tests/test_parity`) are left out. A test
+  that v1's settings leave out has no home and needs none.
+- **Homes.** A test takes the first home that holds it.
+
+| Home     | Holds a test when                                                                                   |
+| -------- | --------------------------------------------------------------------------------------------------- |
+| `routed` | the routing table names it                                                                          |
+| `suite`  | it is a test of the CLI suite that ran a command, by itself or through a shared fixture it asks for |
+| `replay` | a call of its own replays as its command                                                            |
+| `format` | it made a format call that has a JSON form, and every format call it made gives its outcome again   |
+
+- **Homeless.** A test with none of these is a `homeless` finding. It runs v1's
+  Python code and nothing the harness can run on a second engine, so a row of
+  the routing table has to say what holds it.
+- **Skipped.** A test that v1 skips on the host, before it shows a home, is
+  listed as skipped and is no finding: it shows its home on a host that runs it.
+- **The table.** The account holds the routing table to the tests in turn. A row
+  that names a test v1 does not have is an `absent` finding. A dropped row that
+  cites a test must cite one the CLI suite holds, or it is a `cite` finding. A
+  `replay` row whose command is a ported command is a `waiting` finding: the
+  recorder was to have a command line for the tests' method by then.
+- **Counts.** The run prints, and the result file records, how many tests have
+  each home, how many the table sends to each place and how many the host
+  skipped.
+
+### Kinds
+
+`parity/kinds.toml` is the kind list. It gives every notice kind and every issue
+kind of v1 one home: a test of v1, or `perturbation` for a kind that the
+perturbation puts into the trees it changes.
+
+```toml
+[notices]
+link_add = "tests/test_core/test_x.py::test_name"
+
+[issues]
+broken_link = "perturbation"
+```
+
+- **Refusals.** A list is refused when it holds a key other than the two tables,
+  a table of another shape, or a home that is neither `perturbation` nor a test
+  id.
+- **Every kind.** With no second engine, and no `--test`, the replay holds the
+  list to the kinds the recorder found in the engine. A kind of the engine that
+  the list lacks, and a kind of the list that the engine lacks, are `kind`
+  findings.
+- **A test for a home.** The replay holds the kind when a call of the test
+  replays as its command and the command shows the kind. A `lint` command shows
+  the kinds its JSON document names, for its issues and its notes. Any other
+  command shows a notice kind when it prints, on stderr, the text of a notice of
+  that kind which the call emitted in its test. A home that shows nothing of its
+  kind is a `kind` finding.
+- **A routed home.** A kind that only a routed test meets has that test for a
+  home, if the table sends the test to `rust` and the test met the kind in a
+  recorded call: the test of the second engine that takes the test's place holds
+  the kind. A home routed anywhere else is a `kind` finding.
+- **Perturbation.** The replay does not judge a kind whose home is the
+  perturbation. The perturbation's own run answers for it.
+- **Counts.** The run prints, and the result file records, how many kinds of
+  each family have each sort of home.
+
 A run passes when it has no difference and no finding:
 
 | Finding                                   | Means                                                                     |
@@ -1113,7 +1234,11 @@ A run passes when it has no difference and no finding:
 | `unformed`                                | No command line states a call of the test.                                |
 | `unfaithful`                              | v1's command line does not do what a call of the test did.                |
 | `registered`                              | A registry entry excused a call between two builds of v1.                 |
+| `unsupported`                             | v1 ran a call on input outside the supported set.                         |
 | `unneeded`                                | The routing table names a test the replay holds.                          |
+| `homeless`                                | A test of v1 has no home.                                                 |
+| `absent`, `cite`, `waiting`               | A row of the routing table is not borne out by v1's tests.                |
+| `kind`                                    | The kind list lacks a kind, or a home does not show its kind.             |
 | `unrecorded`                              | The tests ran commands, and a whole recording holds none of the helper's. |
 | `format`                                  | A format call has no JSON form, or gives another outcome when made again. |
 | `control`                                 | A doctored replay was not reported.                                       |

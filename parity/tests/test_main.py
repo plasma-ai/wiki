@@ -18,6 +18,7 @@ import pytest
 
 from parity import (
     __main__ as cli,
+    kinds,
     oracle,
     ported,
     registry,
@@ -861,25 +862,24 @@ def test_failed_replay_keeps_its_output_and_trees(
 
 @_needs_git
 @pytest.mark.parametrize(
-    argnames=('row', 'code'),
-    argvalues=[('to = "rust"', 1), ('to = "dropped"\ncite = "D6"', 0)],
-    ids=['unneeded', 'registered'],
+    argnames='row',
+    argvalues=['to = "rust"', 'to = "dropped"\ncite = "D6"'],
+    ids=['plain', 'registry'],
 )
 def test_row_for_a_test_the_replay_holds_fails_the_replay(
     tmp_path: pathlib.Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
     row: str,
-    code: int,
 ) -> None:
     """A routing row for a test the replay holds is reported, not kept.
 
     The table routes the tests of the file that no command repeats, and
     one more whose calls all replay as their commands. That row would
     take a test out of the replay for nothing, so the command exits 1
-    and names it. A row that rests on a registry entry is left alone:
-    its tests differ against a second engine, which this run has none
-    of.
+    and names it. A row that rests on a registry entry is held the same
+    way: the test's wiki has no hook file, so none of its calls is one
+    the entry is about.
     """
     committed = routing.PATH.read_text(encoding='utf-8')
     held = f'{_CORE_TESTS}::test_read_line_slicing'
@@ -890,10 +890,9 @@ def test_row_for_a_test_the_replay_holds_fails_the_replay(
     out = tmp_path / 'out'
     argv = ['replay', '--test', _CORE_TESTS, '--jobs', '0']
     argv += ['--work', f'{tmp_path / "work"}', '--out', f'{out}']
-    assert cli.main(argv) == code
+    assert cli.main(argv) == 1
     lines = capsys.readouterr().out.splitlines()
-    line = f'  unneeded: {held}: every call of the test replays as its command'
-    assert (line in lines) == bool(code)
+    assert f'  unneeded: {held}: every call of the test replays as its command' in lines
 
 
 @_needs_git
@@ -903,6 +902,7 @@ def test_row_for_a_test_the_replay_holds_fails_the_replay(
         ('reference', "--engine names 'oracle'"),
         ('unported', 'lists no command'),
         ('table', 'gives no reason'),
+        ('kinds', 'unknown key'),
         ('work', 'exists'),
     ],
 )
@@ -918,8 +918,8 @@ def test_replay_that_would_prove_nothing_is_refused(
     An engine that is v1 itself and an engine no ported command would
     reach would replay v1 against v1 under another name, and a routing
     table that breaks its rules would take tests out of the replay with
-    nothing behind them. The command exits 2 with a message, and writes
-    no result file.
+    nothing behind them, as a kind list that breaks its rules would a
+    kind. The command exits 2 with a message, and writes no result file.
     """
     listed = tmp_path / 'ported.toml'
     text = 'commands = []\n' if broken == 'unported' else 'commands = ["read"]\n'
@@ -929,6 +929,9 @@ def test_replay_that_would_prove_nothing_is_refused(
     row = '[[route]]\ntests = ["tests/a.py::test_b"]\nto = "rust"\n'
     table.write_text(row if broken == 'table' else '', encoding='utf-8')
     monkeypatch.setattr(routing, 'PATH', table)
+    listed = tmp_path / 'kinds.toml'
+    listed.write_text('events = 1\n' if broken == 'kinds' else '', encoding='utf-8')
+    monkeypatch.setattr(kinds, 'PATH', listed)
     out = tmp_path / 'out'
     work = tmp_path / 'work'
     if broken == 'work':

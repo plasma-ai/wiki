@@ -533,6 +533,16 @@ line, to a row of the fidelity table or to a rule of the replay changes the spec
 and its test in `parity/tests/test_replay.py` in the same commit; a change to a
 rule the table's loader refuses on changes `parity/tests/test_routing.py`.
 
+A whole replay of v1 alone ends with an account of v1 itself. Every test v1
+collects has one home (`parity/homes.py`): the CLI suite, the replay, the format
+calls, or a row of the routing table, so a test of v1 that calls nothing the
+harness can run on a second engine needs a row. Every notice and issue kind of
+the engine has one home in `parity/kinds.toml` (`parity/kinds.py`): a test whose
+replayed call shows the kind, or the perturbation. And a call that v1 runs on
+input outside the supported set is a finding unless the table drops its test
+under D3. A new v1 test, kind or input therefore fails the `parity` job until
+the table or the list accounts for it.
+
 ### Run Bracket
 
 Every operation the `Wiki` class docstring names carries `@format.run_scoped`

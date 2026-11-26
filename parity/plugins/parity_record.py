@@ -8,20 +8,22 @@ a command line: the arguments, the working directory, the environment and
 the clock. Around each call it copies the folders the call names, so the
 replay can run the command line on the tree the test's call found and hold
 it to what the call did. It also records every call the format tests make
-to a public format function, and the notice and issue kinds each test
-meets.
+to a public format function, the notice and issue kinds each test and each
+call meets, and the kinds the engine has.
 
 ``PLAN`` is a JSON object: ``store`` is the folder for the records and the
-copies, ``wiki`` the engine class as ``module:Class``, ``format`` the module
-of the format functions, ``formats`` the ids of the tests whose format calls
-are recorded (each a prefix), and ``helper`` the module the CLI tests take
-the console script from. The plugin runs inside a v1 side's interpreter, so
+copies, ``wiki`` the engine class as ``module:Class``, ``issue`` the class of
+a ``lint`` issue in the same form, ``format`` the module of the format
+functions, ``formats`` the ids of the tests whose format calls are recorded
+(each a prefix), and ``helper`` the module the CLI tests take the console
+script from. The plugin runs inside a v1 side's interpreter, so
 it imports nothing from ``parity``; its folder holds the harness's other
 plugins and nothing else.
 """
 
 from __future__ import annotations
 
+import ast
 import collections
 import datetime as dt
 import functools
@@ -74,6 +76,11 @@ _HOME = 'parity_home'
 _CALLS = 'calls.jsonl'
 _FORMATS = 'formats.jsonl'
 _TESTS = 'tests.jsonl'
+_KINDS = 'kinds.json'
+# the keyword that names the kind of a `lint` issue where one is made
+_KIND = 'kind'
+# the scope of a fixture that one test alone sets up
+_OWN = 'function'
 # the name of the process in the store, where no worker runs
 _MAIN = 'main'
 # the permission bits a copy needs to be read again: of a folder, of a file
@@ -107,21 +114,35 @@ class _Recorder:
         # the calls recorded so far, and the format calls by their JSON text
         self.count = 0
         self.seen: dict[str, dict[str, Any]] = {}
-        # the recorded call under way: its thread, and the notices it emits
+        # the recorded call under way: its thread, the notices it emits and
+        # the kind of each
         self.owner: Optional[int] = None
         self.notices: Optional[list[str]] = None
+        self.noticed: list[str] = []
         self.formatting = threading.local()
         self.original: Optional[Callable[..., Any]] = None
+        # the kinds the engine has
+        self.known: dict[str, list[str]] = {}
+        # the fixture names of the test under way, the shared fixture being
+        # set up, and each shared fixture that made a call, with the start of
+        # the test ids it serves and its name
+        self.names: frozenset[str] = frozenset()
+        self.shared = ''
+        self.serves: tuple[str, str] = ('', '')
+        self.fixtures: dict[str, tuple[str, str]] = {}
 
     def open(self: _Recorder, worker: str) -> None:
-        """Make the folder of the process ``worker`` in the store."""
+        """Make the folder of the process ``worker`` in the store, with the engine's kinds."""
         self.folder = pathlib.Path(self.plan['store']) / worker
         self.folder.mkdir(parents=True, exist_ok=True)
+        text = json.dumps(self.known) + '\n'
+        (self.folder / _KINDS).write_text(text, encoding='utf-8')
 
-    def start(self: _Recorder, test: str) -> None:
-        """Start recording for the test ``test``."""
+    def start(self: _Recorder, test: str, names: Sequence[str] = ()) -> None:
+        """Start recording for the test ``test``, which asks for the fixtures ``names``."""
         self.finish()
         self.test = test
+        self.names = frozenset(names)
         self.held = _entries(self.base) if self.base else {}
         self.formats = any(test.startswith(prefix) for prefix in self.plan['formats'])
         self.kinds = {'notices': collections.Counter(), 'issues': collections.Counter()}
@@ -137,6 +158,11 @@ class _Recorder:
             'kinds': {
                 name: dict(sorted(count.items())) for name, count in self.kinds.items()
             },
+            'shared': sorted(
+                fixture
+                for fixture, (base, name) in self.fixtures.items()
+                if (name in self.names) and self.test.startswith(base)
+            ),
         }
         _append(self.folder / _TESTS, row)
         self.test = ''
@@ -171,6 +197,7 @@ class _Recorder:
             'index': index,
             'source': 'core',
             'command': method,
+            'shared': self.shared,
             'root': f'{wiki._root}',
         }
         # state the call as a command line, and copy the trees it names
@@ -200,12 +227,15 @@ class _Recorder:
         clock = _Clock(wiki, self.original)
         self.owner = threading.get_ident()
         self.notices = []
+        self.noticed = []
+        issues: list[str] = []
         try:
             with clock:
                 result = original(wiki, *args, **kwargs)
             record['outcome'] = _summary(method, result)
             if method == 'lint':
-                self.kinds['issues'].update(issue.kind for issue in result)
+                issues = [issue.kind for issue in result]
+                self.kinds['issues'].update(issues)
             return result
         except BaseException as e:
             record['outcome'] = {
@@ -216,6 +246,7 @@ class _Recorder:
             raise
         finally:
             record['notices'] = self.notices
+            record['kinds'] = {'notices': self.noticed, 'issues': issues}
             self.owner = None
             self.notices = None
             # the instant the call ran at, read from the clock it saw
@@ -259,6 +290,7 @@ class _Recorder:
             'index': index,
             'source': 'cli',
             'command': args[0] if args else '',
+            'shared': self.shared,
             'argv': args,
             'cwd': cwd,
             'env': env,
@@ -344,9 +376,11 @@ class _Recorder:
         name = getattr(event, 'name', None)
         if not (self.test and isinstance(name, str)):
             return
-        self.kinds['notices'][name.removesuffix('_EVENT').lower()] += 1
+        kind = name.removesuffix('_EVENT').lower()
+        self.kinds['notices'][kind] += 1
         if (self.notices is not None) and (self.owner == threading.get_ident()):
             self.notices.append(f'{event.description}')
+            self.noticed.append(kind)
 
     # ------ helper methods
 
@@ -413,6 +447,8 @@ class _Recorder:
                 self._copy(index, 'after', record)
             except OSError as e:
                 record['unformed'] = f'{e}'
+        if record['shared']:
+            self.fixtures[record['shared']] = self.serves
         _append(self.folder / _CALLS, record)
 
     def _copy(self: _Recorder, index: int, moment: str, record: dict[str, Any]) -> None:
@@ -558,15 +594,18 @@ def pytest_load_initial_conftests(early_config: pytest.Config) -> None:
     plan = json.loads(path.read_text(encoding='utf-8'))
     recorder = _Recorder(plan)
     early_config.stash[_RECORDER] = recorder
-    # wrap the engine's methods and its notice hooks
+    # wrap the engine's methods and its notice hooks, one hook for each kind
     module, _, name = plan['wiki'].partition(':')
     wiki = getattr(importlib.import_module(module), name)
     recorder.original = vars(wiki)[_NOW]
     for method in _METHODS:
         setattr(wiki, method, _engine(recorder, method, getattr(wiki, method)))
+    notices = []
     for name, hook in list(vars(wiki).items()):
         if name.startswith(_HOOK) and (name != _FUNNEL) and inspect.isfunction(hook):
             setattr(wiki, name, _hook(recorder, hook))
+            notices.append(name[len(_HOOK) :])
+    recorder.known = {'notices': sorted(notices), 'issues': _issues(plan['issue'])}
     # wrap the public format functions
     formats = importlib.import_module(plan['format'])
     for name, function in list(vars(formats).items()):
@@ -639,7 +678,27 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     module = vars(helper)[_STARTER]
     if not isinstance(module, _Spawner):
         vars(helper)[_STARTER] = _Spawner(module, helper, recorder)
-    recorder.start(item.nodeid)
+    recorder.start(item.nodeid, getattr(item, 'fixturenames', ()))
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_fixture_setup(
+    fixturedef: pytest.FixtureDef[Any],
+    request: pytest.FixtureRequest,
+) -> Iterator[None]:
+    """Record the calls a shared fixture makes as the fixture's own.
+
+    A fixture of a wider scope than one test is set up inside the first
+    test that asks for it, and serves every other test that does. Which
+    test comes first turns on how the tests are spread over the processes.
+    """
+    recorder = request.config.stash[_RECORDER]
+    kept = (recorder.shared, recorder.serves)
+    if fixturedef.scope != _OWN:
+        recorder.shared = f'{fixturedef.baseid}::{fixturedef.argname}'
+        recorder.serves = (fixturedef.baseid, fixturedef.argname)
+    yield
+    recorder.shared, recorder.serves = kept
 
 
 def pytest_sessionfinish(session: pytest.Session) -> None:
@@ -661,6 +720,46 @@ def _engine(
         return recorder.engine(method, original, self, args, kwargs)
 
     return recorded
+
+
+def _issues(named: str) -> list[str]:
+    """Return the issue kinds of the engine whose issue class is ``named``.
+
+    An issue's kind is a keyword where the issue is made, so the kinds are
+    read from the source of the package that holds the class.
+
+    Raises:
+        pytest.UsageError: If an issue is made with no kind keyword, or
+            with one that is no string literal: the source then does not
+            list the kinds.
+
+    """
+    module, _, name = named.partition(':')
+    package = importlib.import_module(module.partition('.')[0])
+    kinds = set()
+    for path in sorted(pathlib.Path(f'{package.__file__}').parent.rglob('*.py')):
+        for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
+            if not isinstance(node, ast.Call):
+                continue
+            called = node.func
+            made = (isinstance(called, ast.Name) and (called.id == name)) or (
+                isinstance(called, ast.Attribute) and (called.attr == name)
+            )
+            if not made:
+                continue
+            values = [item.value for item in node.keywords if item.arg == _KIND]
+            literal = [
+                value.value
+                for value in values
+                if isinstance(value, ast.Constant) and isinstance(value.value, str)
+            ]
+            if len(literal) != 1:
+                raise pytest.UsageError(
+                    f'{path}:{node.lineno}: an issue is made with a kind that is'
+                    f' no string literal; the recorder cannot list the kinds.'
+                )
+            kinds.update(literal)
+    return sorted(kinds)
 
 
 def _hook(recorder: _Recorder, original: Callable[..., Any]) -> Callable[..., Any]:
