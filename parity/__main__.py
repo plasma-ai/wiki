@@ -10,6 +10,7 @@ usage: python -m parity matrix --a NAME --b NAME [--registered] [--sides FILE] -
        python -m parity perturb loop [--engine NAME] [--sides FILE] [--corpora FILE] [--seed N | --fresh N] --work DIR --out DIR
        python -m parity interpreters --corpora FILE --work DIR --out DIR
        python -m parity merges [--engine NAME] [--sides FILE] --corpora FILE [--cache DIR] --work DIR --out DIR
+       python -m parity gate {full,daily} [--engine NAME] [--sides FILE] --corpora FILE --cache DIR --work DIR --out DIR
        python -m parity oracle ensure [--side NAME]
        python -m parity oracle check [--skip NAME]
        python -m parity container [--commit COMMIT] [--out DIR] COMMAND [ARG ...]
@@ -99,6 +100,15 @@ exits 2, before it snapshots a repository, as ``matrix`` does and on a corpus
 whose checkout is no repository. A merge that ends in an error is printed and
 recorded, the others run on, and the run then exits 2.
 
+``gate`` runs a gate: the layers of the harness on the corpora, one after the
+other, each a set of the commands above with a work folder, an output folder
+and a log of its own. A full gate checks the harness with v1 alone, compares
+v1 with an engine if one is named, and ends with the whole merge history; a
+daily gate holds the comparison with the engine and the merges the cache does
+not hold yet. It records for each layer the seconds on the clock, the
+processor seconds of its commands and how many processors that comes to, and
+exits with the highest exit code of its steps: 0, 1, or 2 for any other.
+
 The registry lists what a second engine may do differently from v1, and two
 builds of v1 have nothing registered between them. ``matrix`` therefore
 counts a command the registry excuses as a result that is not the expected
@@ -147,6 +157,7 @@ from . import (
     container,
     dispatch,
     fixtures,
+    gate,
     homes,
     interpreters,
     kinds,
@@ -189,8 +200,8 @@ _YEARS = (1001, 9998)
 _DESCRIPTION = """\
 Run two wiki engines on the same trees and report what they do differently.
 
-matrix, selfcheck, registry, suite, replay, fixtures, perturb, interpreters and merges exit 0 when
-every result is the expected one, and 1 otherwise. A run that would compare nothing exits 2 with a message,
+matrix, selfcheck, registry, suite, replay, fixtures, perturb, interpreters, merges and gate exit 0
+when every result is the expected one, and 1 otherwise. A run that would compare nothing exits 2 with a message,
 before it snapshots anything or runs a test. oracle ensure exits 2 when it
 refuses a checkout or a venv, and oracle check exits 1 when a check fails. An
 error of the harness itself prints its traceback and exits 2.
@@ -217,6 +228,8 @@ _INTERPRETERS = 'interpreters'
 _MERGES = 'merges'
 _REPOSITORIES = 'repositories'
 _AT = 'at'
+# the command that runs a gate, and its result file
+_GATE = 'gate'
 # the command that runs another in the Linux container
 _CONTAINER = 'container'
 
@@ -488,6 +501,69 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # fixed instant option
     now_help = f'RFC 3339 instant every side runs at (default: {_NOW}).'
     command.add_argument('--now', type=_instant, default=_NOW, help=now_help)
+    summary = 'Run a gate: the layers of the harness on the corpora, each timed.'
+    command = commands.add_parser(_GATE, help=summary, description=summary)
+    # gate argument
+    kind_help = (
+        'The gate: full checks the harness with v1 alone and holds every'
+        ' layer; daily holds the comparison with an engine and the new merges.'
+    )
+    command.add_argument('kind', choices=(gate.FULL, gate.DAILY), help=kind_help)
+    # engine name option
+    engine_help = (
+        'Name of the side compared against v1 (default: none, and the layers'
+        ' that compare two engines are left out).'
+    )
+    command.add_argument('--engine', help=engine_help)
+    # sides file option
+    sides_help = 'TOML file with one table per side, beside the v1 sides.'
+    command.add_argument('--sides', type=pathlib.Path, help=sides_help)
+    # corpora file option
+    corpora_help = 'TOML file with one table per corpus.'
+    command.add_argument(
+        '--corpora',
+        type=pathlib.Path,
+        required=True,
+        help=corpora_help,
+    )
+    # corpus label option
+    corpus_help = 'Label of a corpus to run on (repeatable; default: every corpus).'
+    command.add_argument('--corpus', action='append', help=corpus_help)
+    # loop corpus option
+    loop_help = (
+        'Label of a corpus whose wiki the loop of fresh seeds runs on'
+        ' (repeatable; default: none, and a full gate runs no loop).'
+    )
+    command.add_argument('--loop', action='append', default=[], help=loop_help)
+    # fresh seeds option
+    fresh_help = (
+        'How many fresh seeds the loop runs on each of its wikis (default: 200).'
+    )
+    command.add_argument('--fresh', type=int, default=200, help=fresh_help)
+    # sample option
+    sample_help = (
+        'The fixed sample of merges a full gate replays with no cache: one'
+        ' merge in N (default: 20).'
+    )
+    command.add_argument('--sample', type=int, default=20, help=sample_help)
+    # cache folder option
+    cache_help = 'Folder that keeps what v1 did on each merge.'
+    command.add_argument('--cache', type=pathlib.Path, required=True, help=cache_help)
+    # jobs option
+    jobs_help = (
+        'How many steps of a layer run at once, and how many trees or merges'
+        " a step runs at once (default: every step, and each command's own)."
+    )
+    command.add_argument('--jobs', type=int, help=jobs_help)
+    # work folder option
+    work_help = 'New folder each step makes its work folder in.'
+    command.add_argument('--work', type=pathlib.Path, required=True, help=work_help)
+    # output folder option
+    out_help = "Folder for the result file, and each step's results and log."
+    command.add_argument('--out', type=pathlib.Path, required=True, help=out_help)
+    # fixed instant option
+    now_help = f'RFC 3339 instant every side runs at (default: {_NOW}).'
+    command.add_argument('--now', type=_instant, help=now_help)
     summary = 'Build the oracle checkout, or hold oracle.toml level with v1.'
     command = commands.add_parser('oracle', help=summary, description=summary)
     actions = command.add_subparsers(dest='action', required=True)
@@ -597,6 +673,8 @@ def _run(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
         return _interpreters(parser, options)
     if options.command == _MERGES:
         return _merges(parser, options)
+    if options.command == _GATE:
+        return _gate(parser, options)
     if options.command == _CONTAINER:
         return _container(parser, options)
     # read the registry
@@ -1601,6 +1679,112 @@ def _merges(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int
     if failed:
         return 1
     shutil.rmtree(work)
+    return 0
+
+
+def _gate(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
+    """Run the layers of a gate, time each, and return the exit code."""
+    # read the corpora and the sides, which every step reads again
+    try:
+        declared = {}
+        if options.sides is not None:
+            declared = config.load_sides(options.sides)
+        corpora = config.load_corpora(options.corpora)
+    except ValueError as e:
+        parser.error(f'{e}')
+    # resolve the corpora, and those of the loop among them
+    labels = options.corpus or list(corpora)
+    unknown = [label for label in labels if label not in corpora]
+    if unknown:
+        parser.error(f'{options.corpora} declares no corpus named {unknown!r}.')
+    twice = sorted({label for label in labels if labels.count(label) > 1})
+    if twice:
+        parser.error(f'--corpus names a corpus twice: {twice!r}.')
+    if not labels:
+        parser.error(f'{options.corpora} declares no corpus.')
+    outside = [label for label in options.loop if label not in labels]
+    if outside:
+        parser.error(f'--loop names {outside!r}, which the gate does not run on.')
+    for name in ('fresh', 'sample', 'jobs'):
+        value = getattr(options, name)
+        if (value is not None) and (value < 1):
+            parser.error(f'--{name} must be at least 1, got {value}.')
+    # resolve the engine
+    if options.engine is not None:
+        if options.engine == suite.REFERENCE:
+            parser.error(f'--engine names {options.engine!r}, the side v1 runs as.')
+        try:
+            _sides([options.engine], declared, path=options.sides)
+        except ValueError as e:
+            parser.error(f'{e}')
+    # a gate that failed leaves its trees in its work folder
+    work = options.work.resolve()
+    if os.path.lexists(work):
+        parser.error(f'Work folder {work} exists; the gate makes it new.')
+    out = options.out.resolve()
+    planned = gate.layers(
+        options.kind,
+        corpora=options.corpora.resolve(),
+        labels=labels,
+        loop=options.loop,
+        work=work,
+        out=out,
+        cache=options.cache.resolve(),
+        engine=options.engine,
+        sides=options.sides.resolve() if options.sides is not None else None,
+        fresh=options.fresh,
+        sample=options.sample,
+        jobs=options.jobs,
+        now=options.now,
+    )
+    if options.engine is None:
+        print(f'{_GATE}: no engine is named: no layer compares two engines', flush=True)
+    # run each layer, and write the result file again as each one ends
+    out.mkdir(parents=True, exist_ok=True)
+    document: dict[str, Any] = {
+        'gate': options.kind,
+        'engine': options.engine,
+        'corpora': labels,
+        'loop': options.loop,
+        'started': dt.datetime.now(dt.UTC).isoformat(timespec='seconds'),
+        'host': {'platform': platform.platform(), 'processors': os.cpu_count()},
+        'layers': [],
+    }
+    codes = []
+    for done in gate.run(planned, jobs=options.jobs):
+        row = {
+            'name': done.layer.name,
+            'part': done.layer.part,
+            'exit': done.code,
+            'seconds': done.seconds,
+            'cpu': done.cpu,
+            'parallelism': done.parallelism,
+            'load': done.load,
+            'steps': [
+                {**dataclasses.asdict(step), 'argv': list(planned_.argv)}
+                for step, planned_ in zip(done.steps, done.layer.steps)
+            ],
+        }
+        document['layers'].append(row)
+        text = json.dumps(document, indent=2)
+        (out / f'{_GATE}.json').write_text(text + '\n', encoding='utf-8')
+        # print the layer, and each step that did not end as expected
+        print(
+            f'{done.layer.name} ({done.layer.part}): exit {done.code},'
+            f' {done.seconds:.0f} s, {done.cpu:.0f} s of processor time,'
+            f' {done.parallelism:.1f} processors, load {done.load:.1f} at its start',
+            flush=True,
+        )
+        for step, planned_ in zip(done.steps, done.layer.steps):
+            if step.code != 0:
+                print(f'  {step.name}: exit {step.code}: {planned_.log}', flush=True)
+        codes.extend(step.code for step in done.steps)
+    # an exit code but 0 and 1 is an error of a step, or of the harness
+    if any(code not in (0, 1) for code in codes):
+        return 2
+    if any(codes):
+        return 1
+    shutil.rmtree(work, ignore_errors=True)
     return 0
 
 

@@ -54,6 +54,13 @@ python -m parity interpreters --corpora CORPORA --work DIR --out DIR
 # replay the merges of each corpus's history and compare the sides on each
 python -m parity merges [--engine NAME] [--sides SIDES] --corpora CORPORA \
     [--cache DIR] [--new] [--sample N] [--commit COMMIT] [--jobs N] --work DIR --out DIR
+
+# run a gate: the layers of the harness on the corpora, each timed
+python -m parity gate {full,daily} [--engine NAME] [--sides SIDES] --corpora CORPORA \
+    [--loop LABEL] --cache DIR [--jobs N] --work DIR --out DIR
+
+# run a command in the Linux container
+python -m parity container [--commit COMMIT] [--out DIR] COMMAND [ARG ...]
 ```
 
 A side name is `oracle`, `alt` or `crossed`, the three v1 sides that
@@ -257,6 +264,9 @@ git refuses) costs the run no other result: its row holds the error, the
 traceback goes to stderr, the other merges run on, and the run exits 2 with its
 work folder left in place.
 
+`gate` runs a full or a daily gate (Gates, below) and exits with the highest
+exit code of its steps, as that section says.
+
 `container` runs one command in the Linux container (Container, below) and exits
 with that command's exit code. It exits 2 with a message when it is given no
 command, when `--commit` names no commit, and when Docker is not installed or
@@ -266,7 +276,7 @@ The sections below are the rules of the harness, one part each: the oracle,
 sides, snapshots, comparison, caches, the matrix, the fixture families, the
 perturbation, the merge history, the interpreters run, the registry, the
 self-check, the CLI suite, the replay, with the account a whole replay gives of
-v1's tests and kinds, and the container.
+v1's tests and kinds, the gates, and the container.
 
 ## Oracle
 
@@ -1844,6 +1854,82 @@ A run passes when it has no difference and no finding:
 
 A test that is skipped, or fails as its mark expects, records no call. The
 result file lists it with its outcome, and it is no finding of the replay.
+
+## Gates
+
+A gate is the harness run whole on the corpora: its layers, one after the other,
+each timed. `python -m parity gate` runs one, and `parity/gate.py` names its
+layers. A layer is one harness command, or that command once for each corpus,
+and every command of a gate is a step: a process of its own, with a work folder,
+an output folder and a log below the gate's.
+
+- **Full gate.** It first checks the harness with v1 alone: the self-check and
+  the registry check, the replay of v1's tests with its controls, the fixture
+  families, the perturbation in both modes, and the fixed sample of the merge
+  history with no cache. With an engine it then compares v1 with the engine on
+  the corpora, on the fixture families and on the perturbation in both modes. It
+  ends with the whole merge history: v1 alone on every merge the cache does not
+  hold, which stores them, then the engine on every merge.
+- **Daily gate.** The comparison with the engine on fresh snapshots, without the
+  loop of fresh seeds, and the merges made since the last gate: the engine on
+  every merge the cache does not hold, against v1 as it runs there, and then v1
+  alone on those merges, which stores them.
+- **No engine.** Without `--engine` a gate has no layer that compares two
+  engines, and says so. A full gate is then the check of the harness and the
+  fill of the cache, and a daily gate the fill alone.
+- **Oracle.** Every gate starts with `oracle check`, so a gate fails while this
+  branch is not level with v1. The check reads the remote-tracking references:
+  fetch first.
+- **Loop.** `--loop LABEL` (repeatable) names the corpora whose wikis the loop
+  of fresh seeds runs on, `--fresh N` seeds each (default 200). The first of
+  them also takes the registry check, which one corpus proves; with none, the
+  first corpus of the gate takes it and no loop runs.
+- **Order.** The layers run one after the other, so the time of a layer is its
+  own. The steps of a layer run side by side. `--jobs N` bounds how many steps
+  run at once, and is handed to the commands that run several trees or merges at
+  once.
+- **Times.** For each step the gate records the exit code, the seconds on the
+  clock, and the processor seconds of the command with every process it waited
+  for, which are the sides it ran. For each layer it records the seconds from
+  its first step's start to its last step's end, the sum of its steps' processor
+  seconds, their quotient (how many processors the layer kept busy) and the
+  host's load average when the layer started. Other work on the host shows in
+  the load and stretches the seconds; time a gate on a host that does nothing
+  else.
+- **Result.** `<out>/gate.json` holds the gate, the engine, the corpora, when it
+  started, the host and one row for each layer with its steps and their
+  arguments. It is written again as each layer ends, so a gate that is cut short
+  leaves the layers it ran. A step writes its results to `<out>/<layer>/`, or
+  `<out>/<layer>/<corpus>/` where the layer has a step for each corpus, and what
+  it prints to a file of that name with `.txt`.
+- **Exit code.** Every layer runs, whatever the one before it showed. The gate
+  exits 0 when every step did, 1 when a step exited 1 and none higher, and 2
+  when a step ended any other way. It exits 2 with a message, before a step
+  runs: on a corpora or sides file of the wrong shape, on an unknown corpus or
+  side, on a corpus named twice, on a `--loop` corpus the gate does not run on,
+  on a count below one, and on a work folder that exists. A gate that passed
+  removes its work folder; one that did not leaves the trees its steps kept.
+
+| Layer                   | Part         | Gate                  | Command                                                             |
+| ----------------------- | ------------ | --------------------- | ------------------------------------------------------------------- |
+| `oracle`                | `oracle`     | both                  | `oracle check`                                                      |
+| `selfcheck`             | `self-check` | full                  | `selfcheck --side oracle`, a step for each corpus                   |
+| `registry`              | `self-check` | full                  | `registry --side oracle` on one corpus                              |
+| `replay`                | `self-check` | full                  | `replay`                                                            |
+| `fixtures`              | `self-check` | full                  | `fixtures`                                                          |
+| `perturb-corpus`        | `self-check` | full                  | `perturb corpus`, a step for each corpus                            |
+| `perturb-loop`          | `self-check` | full, with `--loop`   | `perturb loop --corpora` on the loop's corpora, with `--fresh`      |
+| `merges-sample`         | `self-check` | full                  | `merges --sample`, with no cache                                    |
+| `matrix`                | `corpora`    | both, with an engine  | `matrix --a oracle --b ENGINE --registered`, a step for each corpus |
+| `fixtures-engine`       | `corpora`    | both, with an engine  | `fixtures --engine`                                                 |
+| `perturb-corpus-engine` | `corpora`    | both, with an engine  | `perturb corpus --engine`, a step for each corpus                   |
+| `perturb-loop-engine`   | `corpora`    | full, with both       | `perturb loop --engine --corpora` on the loop's corpora             |
+| `merges-engine`         | `history`    | daily, with an engine | `merges --engine --cache --new`, before `merges`                    |
+| `merges`                | `history`    | both                  | `merges --cache`                                                    |
+| `merges-engine`         | `history`    | full, with an engine  | `merges --engine --cache`, after `merges`                           |
+
+The cache of the merge history is keyed on the path a merge ran at, so every
+gate of a host takes the same `--work`.
 
 ## Container
 
