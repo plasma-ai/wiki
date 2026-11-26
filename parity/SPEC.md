@@ -1173,8 +1173,10 @@ it.
 
 - **Tests.** The tests are those pytest collects from the root of the oracle
   checkout under v1's own settings: every test file and every doctest. The
-  harness's own tests on v1's branch (`tests/test_parity`) are left out. A test
-  that v1's settings leave out has no home and needs none.
+  harness's own tests on v1's branch (`tests/test_parity`) are left out. v1's
+  settings leave out the one test that downloads from the network: it is not
+  collected and has no home here, and runs once for each release candidate, on
+  each side.
 - **Homes.** A test takes the first home that holds it.
 
 | Home     | Holds a test when                                                                                   |

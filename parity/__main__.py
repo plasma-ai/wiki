@@ -34,9 +34,14 @@ refuses.
 call they made again as a command line, on the trees the call found. With
 no ``--engine`` it replays every call on v1 under two hash seeds, makes the
 recorded format calls again and runs its controls; with one it replays the
-calls of the ported commands on v1 and on that side. It exits 0 when the
-sides differ in nothing and v1's command lines do what the calls did in
-their tests, and 1 otherwise. It exits 2 as ``suite`` does.
+calls of the ported commands on v1 and on that side. With no ``--engine``
+and no ``--test`` it ends with an account of v1 itself: every test v1
+collects has a home, and the kind list gives every notice and issue kind
+one. It exits 0 when the sides differ in nothing, v1's command lines do
+what the calls did in their tests, no call that is not routed for it runs
+on input outside the supported set, and the account holds; it exits 1
+otherwise. It exits 2 as ``suite`` does, and on a routing table or a kind
+list that breaks its rules.
 
 The registry lists what a second engine may do differently from v1, and two
 builds of v1 have nothing registered between them. ``matrix`` therefore
