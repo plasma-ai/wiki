@@ -31,6 +31,10 @@ A side name is `oracle` or `campaign`, the two v1 sides that
 `parity/oracle.toml` names (Oracle, below), or a side that the `SIDES` file
 declares. `SIDES` may not declare a side under the name of a v1 side.
 
+Every command reads `parity/oracle.toml` and asks git where the repository and
+its main checkout are, whichever sides a run names. So the harness needs git on
+`PATH`, and its folder must lie in a checkout of the repository.
+
 `--corpus LABEL` (repeatable) picks corpora; the default is every corpus of the
 file. `--now` sets the fixed instant and `--seed` the seed of the matrix sample.
 `matrix` also takes `--stage NAME` (repeatable) and `--keep`, which leaves the

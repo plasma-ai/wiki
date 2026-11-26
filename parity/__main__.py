@@ -417,8 +417,8 @@ def _no_hits(report: Mapping[str, Any]) -> list[str]:
 
 def _header(sides: Sequence[Side], *, now: str) -> dict[str, Any]:
     """Return what a result file records about the host and the sides."""
-    # read the host's git under the caller's environment; a host with no git
-    # records an empty version and no system config
+    # read the host's git under the caller's environment; a host with no
+    # system config file records none
     git = snapshot._git(['--version'], check=False) or ''
     system = snapshot._git(['config', '--system', '--list'], check=False) or ''
     host = {

@@ -15,14 +15,14 @@ import pytest
 
 from parity import matrix, runner, selfcheck, side
 
-from .conftest import NOW, _needs_engine
+from .conftest import NOW, _needs_git
 
 __all__ = [
     'test_one_engine_against_itself_shows_no_difference',
     'test_doctored_side_shows_exactly_its_difference',
 ]
 
-pytestmark = _needs_engine
+pytestmark = _needs_git
 
 
 def test_one_engine_against_itself_shows_no_difference(

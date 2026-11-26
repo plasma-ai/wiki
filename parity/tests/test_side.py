@@ -18,7 +18,7 @@ import pytest
 
 from parity import side
 
-from .conftest import NOW, _needs_engine
+from .conftest import NOW, _needs_git
 
 __all__ = [
     'test_side_runs_under_the_built_environment_alone',
@@ -101,7 +101,7 @@ def test_side_runs_under_the_built_environment_alone(
     assert report['offset'] == '+0545'
 
 
-@_needs_engine
+@_needs_git
 @pytest.mark.parametrize(
     argnames=('wrote', 'identified'),
     argvalues=[('once', True), ('twice', False), ('never', False)],

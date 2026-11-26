@@ -20,8 +20,8 @@ from parity import oracle, runner, side
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 #: the instant every side's clock is fixed at
 NOW = '2026-01-02T03:04:05Z'
-# gates the tests that run a real side on the committed corpus
-_needs_engine = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
+# gates the tests that need git: the oracle checkout and the committed corpus
+_needs_git = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
 # gates the tests that rely on a permission denial
 _needs_unprivileged = pytest.mark.skipif(
     os.geteuid() == 0,

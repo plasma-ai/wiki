@@ -16,7 +16,7 @@ import pytest
 
 from parity import oracle
 
-from .conftest import _git
+from .conftest import _git, _needs_git
 
 __all__ = [
     'test_venv_that_differs_from_its_side_is_refused',
@@ -25,7 +25,7 @@ __all__ = [
     'test_check_follows_the_oracle_from_the_pending_branch_to_a_sync',
 ]
 
-pytestmark = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
+pytestmark = _needs_git
 
 
 @pytest.mark.parametrize(

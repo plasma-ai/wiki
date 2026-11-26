@@ -18,7 +18,7 @@ import pytest
 
 from parity import __main__ as cli, oracle, runner, selfcheck, side
 
-from .conftest import NOW, _needs_engine
+from .conftest import NOW, _needs_git
 
 __all__ = [
     'test_v1_sides_run_as_the_oracle_names_them',
@@ -26,7 +26,7 @@ __all__ = [
     'test_keep_leaves_the_snapshot_and_every_tree',
     'test_run_that_would_compare_nothing_is_refused',
     'test_harness_error_exits_2',
-    'test_oracle_command_that_cannot_run_exits_2',
+    'test_oracle_check_tells_a_failed_check_from_a_run_that_cannot_start',
     'test_failed_selfcheck_keeps_its_streams_and_trees',
 ]
 
@@ -48,7 +48,7 @@ sys.exit(result.returncode)
 _DESCRIBE = "import os; print(os.environ['EXAMPLE'], os.environ['WIKI_FREEZE_TIME'])"
 
 
-@_needs_engine
+@_needs_git
 def test_v1_sides_run_as_the_oracle_names_them(
     tmp_path: pathlib.Path,
     corpus: runner.Corpus,
@@ -81,7 +81,7 @@ def test_v1_sides_run_as_the_oracle_names_them(
         assert facts['libyaml'] == build.libyaml
 
 
-@_needs_engine
+@_needs_git
 @pytest.mark.parametrize(
     argnames=('declared', 'code'),
     argvalues=[(True, 0), (False, 1)],
@@ -149,7 +149,7 @@ def test_matrix_command_strips_only_a_declared_notice(
     assert not (work / 'example').exists()
 
 
-@_needs_engine
+@_needs_git
 def test_keep_leaves_the_snapshot_and_every_tree(
     tmp_path: pathlib.Path,
     corpus: runner.Corpus,
@@ -178,7 +178,7 @@ def test_keep_leaves_the_snapshot_and_every_tree(
         assert (tree / corpus.root / '_index.md').is_file()
 
 
-@_needs_engine
+@_needs_git
 @pytest.mark.parametrize(
     argnames=('broken', 'message'),
     argvalues=[
@@ -339,23 +339,45 @@ def test_harness_error_exits_2(
     assert not out.exists()
 
 
-def test_oracle_command_that_cannot_run_exits_2(
+@pytest.mark.parametrize(
+    argnames=('broken', 'code', 'message'),
+    argvalues=[
+        # the file names a commit that is not the merge base with v1
+        pytest.param('base', 1, 'base: FAILED', marks=_needs_git),
+        # the host has no git, so the command cannot read the repository
+        ('git', 2, 'FileNotFoundError'),
+    ],
+    ids=['base', 'git'],
+)
+def test_oracle_check_tells_a_failed_check_from_a_run_that_cannot_start(
     tmp_path: pathlib.Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
+    broken: str,
+    code: int,
+    message: str,
 ) -> None:
-    """An ``oracle check`` that cannot run is exit 2, not the exit 1 of a failed check.
+    """A failed ``oracle check`` is exit 1, and one that cannot run is exit 2.
 
-    On a host with no git the command cannot read the repository. It
-    prints the traceback and exits 2, so a gate that reads exit 1 as an
-    oracle file that fell behind v1 never takes a broken run for one.
+    The gate of every pull request reads the exit code alone. An oracle
+    file that names another commit than the merge base with v1 fails
+    ``base``: the command prints the verdict and exits 1. On a host with
+    no git the command cannot read the repository: it prints the traceback
+    and exits 2, so a gate that reads exit 1 as an oracle file that fell
+    behind v1 never takes a broken run for one.
     """
-    monkeypatch.setenv('PATH', f'{tmp_path}')
-    assert cli.main(['oracle', 'check']) == 2
-    assert 'FileNotFoundError' in capsys.readouterr().err
+    if broken == 'base':
+        named = dataclasses.replace(oracle.load(), commit='0' * 40)
+        monkeypatch.setattr(oracle, 'load', lambda: named)
+    else:
+        monkeypatch.setenv('PATH', f'{tmp_path}')
+    # the command as the gate runs it
+    assert cli.main(['oracle', 'check', '--skip', 'level']) == code
+    printed = capsys.readouterr()
+    assert message in (printed.out if broken == 'base' else printed.err)
 
 
-@_needs_engine
+@_needs_git
 def test_failed_selfcheck_keeps_its_streams_and_trees(
     tmp_path: pathlib.Path,
     corpus: runner.Corpus,

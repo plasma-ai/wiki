@@ -15,7 +15,7 @@ import pytest
 
 from parity import cache, matrix, runner, side
 
-from .conftest import NOW, _needs_engine
+from .conftest import NOW, _needs_git
 
 __all__ = [
     'test_work_folder_below_a_wiki_is_refused',
@@ -54,7 +54,7 @@ def test_work_folder_below_a_wiki_is_refused(tmp_path: pathlib.Path) -> None:
     assert not (tmp_path / 'work').exists()
 
 
-@_needs_engine
+@_needs_git
 def test_unknown_stage_is_refused(
     tmp_path: pathlib.Path,
     corpus: runner.Corpus,
@@ -69,7 +69,7 @@ def test_unknown_stage_is_refused(
         runner.run(plan, [], now=NOW, only=['query', 'wirte'])
 
 
-@_needs_engine
+@_needs_git
 def test_sides_that_fail_alike_are_reported(
     tmp_path: pathlib.Path,
     corpus: runner.Corpus,
@@ -99,7 +99,7 @@ def test_sides_that_fail_alike_are_reported(
     assert not any(matrix._ABSENT in name for name in no_hit)
 
 
-@_needs_engine
+@_needs_git
 def test_cold_stage_starts_without_the_cache_folder(
     tmp_path: pathlib.Path,
     corpus: runner.Corpus,
@@ -120,7 +120,7 @@ def test_cold_stage_starts_without_the_cache_folder(
     assert not (tree / corpus.root / cache.CACHE).exists()
 
 
-@_needs_engine
+@_needs_git
 def test_continued_stage_runs_each_side_on_each_tree(
     tmp_path: pathlib.Path,
     corpus: runner.Corpus,
@@ -141,7 +141,7 @@ def test_continued_stage_runs_each_side_on_each_tree(
     }
 
 
-@_needs_engine
+@_needs_git
 def test_write_outside_the_tree_is_reported(
     tmp_path: pathlib.Path,
     corpus: runner.Corpus,
