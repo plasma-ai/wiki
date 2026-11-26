@@ -26,6 +26,7 @@ from parity import (
     runner,
     selfcheck,
     side,
+    suite,
     terminal,
 )
 
@@ -48,6 +49,7 @@ __all__ = [
     'test_replay_command_records_and_replays_v1s_tests',
     'test_failed_replay_keeps_its_output_and_trees',
     'test_row_for_a_test_the_replay_holds_fails_the_replay',
+    'test_whole_replay_accounts_for_v1s_tests_and_kinds',
     'test_replay_that_would_prove_nothing_is_refused',
 ]
 
@@ -98,6 +100,55 @@ _TESTS = 'tests/test_cli/test_regressions.py'
 # one small file of v1's core tests, two of whose tests the routing table names
 _CORE_TESTS = 'tests/test_core/test_read.py'
 
+# a checkout of tests shaped like v1's, small enough to replay whole: a core
+# test with a pending update, which the `argv` control doctors, and an update
+# that writes, which the `side` control doctors; a core test that calls
+# nothing the recorder records; and the helper module of the CLI tests
+_CHECKOUT = {
+    'pytest.ini': '[pytest]\n',
+    'tests/__init__.py': '',
+    'tests/test_core/__init__.py': '',
+    'tests/test_core/test_calls.py': """
+from wiki.core.wiki import Wiki
+
+
+def _wiki(path):
+    wiki = Wiki(path)
+    wiki.init(name='root')
+    (path / 'notes').mkdir()
+    page = '---\\ndesc: About alpha.\\n---\\n\\n# Alpha\\n\\nThe alpha page.\\n'
+    (path / 'notes' / 'alpha.md').write_text(page, encoding='utf-8')
+    return wiki
+
+
+def test_update(tmp_path):
+    wiki = _wiki(tmp_path)
+    assert wiki.update(check=True)
+    assert wiki.update()
+
+
+def test_python(tmp_path):
+    assert _wiki(tmp_path)
+""",
+    'tests/test_core/test_format.py': '',
+    'tests/test_cli/__init__.py': '',
+    'tests/test_cli/conftest.py': """
+import os, pathlib, shutil, subprocess, sys
+
+VENV_BIN = pathlib.Path(sys.executable).parent
+WIKI = shutil.which('wiki', path=VENV_BIN)
+
+
+def _wiki(cwd, *args):
+    env = dict(os.environ)
+    env['PATH'] = f'{VENV_BIN}{os.pathsep}{env["PATH"]}'
+    env['HOME'] = str(cwd)
+    return subprocess.run(
+        [WIKI, *args], cwd=cwd, capture_output=True, text=True, env=env
+    )
+""",
+    'tests/test_cli/test_commands.py': '',
+}
 # a describe command: what it prints comes from the side's own environment
 _DESCRIBE = "import os; print(os.environ['EXAMPLE'], os.environ['WIKI_FREEZE_TIME'])"
 
@@ -893,6 +944,80 @@ def test_row_for_a_test_the_replay_holds_fails_the_replay(
     assert cli.main(argv) == 1
     lines = capsys.readouterr().out.splitlines()
     assert f'  unneeded: {held}: every call of the test replays as its command' in lines
+
+
+@_needs_git
+def test_whole_replay_accounts_for_v1s_tests_and_kinds(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A replay of every test of v1 alone ends with the account, and fails on it.
+
+    The command runs with no ``--test`` on a small checkout in the place
+    of v1's tests. The routing table is empty, so the test that calls
+    nothing the recorder records has no home, and the kind list leaves
+    out one kind of the engine. The command exits 1 and prints both
+    findings, and no other: both controls find a call to doctor and are
+    reported. The result file holds the findings beside the homes and
+    the kind list.
+    """
+    checkout = tmp_path / 'checkout'
+    for relpath, text in _CHECKOUT.items():
+        path = checkout / relpath
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding='utf-8')
+    python = suite.source(oracle.load()).python
+    small = suite.Source(python=python, checkout=checkout)
+    monkeypatch.setattr(suite, 'source', lambda named: small)
+    table = tmp_path / 'routing.toml'
+    table.write_text('', encoding='utf-8')
+    monkeypatch.setattr(routing, 'PATH', table)
+    # give every kind of the committed list but one the perturbation for a home
+    committed = kinds.load()
+    lines = []
+    for family in kinds.FAMILIES:
+        lines.append(f'[{family}]\n')
+        lines.extend(
+            f'{kind} = "{kinds.PERTURBATION}"\n'
+            for kind in committed[family]
+            if kind != 'link_add'
+        )
+    listed = tmp_path / 'kinds.toml'
+    listed.write_text(''.join(lines), encoding='utf-8')
+    monkeypatch.setattr(kinds, 'PATH', listed)
+    out = tmp_path / 'out'
+    argv = ['replay', '--jobs', '0']
+    argv += ['--work', f'{tmp_path / "work"}', '--out', f'{out}']
+    assert cli.main(argv) == 1
+    printed = capsys.readouterr().out.splitlines()
+    homeless = 'tests/test_core/test_calls.py::test_python'
+    expected = [
+        f'  homeless: {homeless}',
+        '  kind: notice link_add: the list gives it no home',
+    ]
+    assert [line for line in printed if line.startswith('  ')] == expected
+    document = json.loads((out / 'replay.json').read_text(encoding='utf-8'))
+    assert [
+        (finding['kind'], finding['subject']) for finding in document['findings']
+    ] == [
+        ('homeless', homeless),
+        ('kind', 'notice link_add'),
+    ]
+    assert document['controls'] == {
+        'argv': {'doctored': 1, 'reported': 1},
+        'side': {'doctored': 5, 'reported': 5},
+    }
+    assert document['homes']['homeless'] == [homeless]
+    assert document['homes']['homes'] == {
+        'routed': 0,
+        'suite': 0,
+        'replay': 1,
+        'format': 0,
+    }
+    assert (
+        sum(document['kind_list']['notices'].values()) == len(committed['notices']) - 1
+    )
 
 
 @_needs_git
