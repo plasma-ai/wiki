@@ -20,6 +20,7 @@ __all__ = [
     'test_caches_that_differ_before_the_first_command_are_reported',
     'test_counts_bytes_are_compared_until_a_side_writes_a_page',
     'test_every_later_run_is_compared_with_the_first',
+    'test_read_only_command_may_make_the_folder_of_its_cache_folder',
 ]
 
 # the cache folder of the wiki, as a manifest path
@@ -27,6 +28,9 @@ _FOLDER = 'tree/wiki/.wiki/cache'
 # one page of a slot and its counts cache
 _PATH = 'tree/wiki/page.md'
 _COUNTS = f'{_FOLDER}/word_counts.json'
+# the folder the cache folder goes in, and the manifest content of a folder
+_HOLDER = 'tree/wiki/.wiki'
+_FOLDER_MADE = ('dir', 0o755, 0, None, None)
 # the manifest content two trees may hold the page with
 _HELD = ('file', 0o644, 4, 'a' * 64, None)
 _OTHER = ('file', 0o644, 4, 'b' * 64, None)
@@ -141,6 +145,44 @@ def test_every_later_run_is_compared_with_the_first() -> None:
         detail=_PATH,
     )
     assert found == [expected]
+
+
+@pytest.mark.parametrize(
+    argnames=('held', 'made', 'wrote'),
+    argvalues=[
+        (False, _FOLDER_MADE, []),
+        (True, _FOLDER_MADE, [_HOLDER]),
+        (False, _HELD, [_HOLDER]),
+    ],
+    ids=['made', 'held', 'file'],
+)
+def test_read_only_command_may_make_the_folder_of_its_cache_folder(
+    held: bool,
+    made: tuple,
+    wrote: list[str],
+) -> None:
+    """A read-only command on a wiki with no ``.wiki`` folder may make one.
+
+    Its cache folder has to go somewhere, so the folder above it is the
+    one path outside the caches such a command may touch, and only to
+    make it as a folder. A command that touches a ``.wiki`` folder the
+    tree already held, or puts a file there, wrote outside the caches.
+    """
+    command = matrix.Case(name='map', args=('map',))
+    stage = matrix.Stage(name='query', cases=(command,))
+    baseline = {_PATH: _HELD, **({_HOLDER: _FOLDER_MADE} if held else {})}
+    record = compare.Record(
+        outcome=side.Outcome(stdout=b'', stderr=b'', code=0),
+        touched=(_HOLDER, _FOLDER, _COUNTS),
+        changes={_HOLDER: made, _FOLDER: _FOLDER_MADE, _COUNTS: _HELD},
+        view=_view(),
+    )
+    final = {**baseline, **record.changes}
+    run = compare.Run('one', baseline, _view(), (record,), final)
+    found = compare.stage(stage, [run], folder=_FOLDER)
+    assert found == [
+        compare.Difference('query', 'one', 'map', 'wrote', relpath) for relpath in wrote
+    ]
 
 
 # ------ helpers

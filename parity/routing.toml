@@ -1,0 +1,140 @@
+# The routing table: the tests of v1 that the replay cannot hold, and the
+# check that holds each one in its place. The rules are in SPEC.md, under
+# Replay.
+
+# a test changes the tree, or makes a read fail, while its call runs
+[[route]]
+tests = [
+    "tests/test_core/test_lint.py::test_lint_survives_folder_deleted_before_listing",
+    "tests/test_core/test_lint.py::test_lint_survives_folder_deleted_mid_walk",
+    "tests/test_core/test_lint.py::test_lint_survives_index_deleted_mid_check",
+    "tests/test_core/test_lint.py::test_lint_survives_page_deleted_before_crlf_probe",
+    "tests/test_core/test_lint.py::test_lint_survives_page_deleted_mid_walk",
+    "tests/test_core/test_map.py::test_map_survives_folder_deleted_mid_probe",
+    "tests/test_core/test_map.py::test_map_survives_index_deleted_mid_render",
+    "tests/test_core/test_map.py::test_map_survives_page_deleted_mid_count",
+    "tests/test_core/test_match.py::test_match_survives_page_deleted_mid_scan",
+    "tests/test_core/test_plan.py::test_update_counts_skip_folder_unreadable_before_refresh",
+    "tests/test_core/test_plan.py::test_update_fails_on_folder_unreadable_before_plan",
+    "tests/test_core/test_plan.py::test_update_preserves_concurrent_edit",
+    "tests/test_core/test_plan.py::test_update_survives_folder_deleted_mid_index_read",
+    "tests/test_core/test_plan.py::test_update_survives_folder_deleted_mid_walk",
+    "tests/test_core/test_plan.py::test_update_survives_folder_deleted_mid_write",
+    "tests/test_core/test_plan.py::test_update_survives_folder_replaced_after_walk",
+    "tests/test_core/test_plan.py::test_update_survives_page_deleted_mid_page_pass",
+    "tests/test_core/test_plan.py::test_update_survives_page_deleted_mid_plan",
+    "tests/test_core/test_plan.py::test_update_survives_page_deleted_mid_read",
+    "tests/test_core/test_plan.py::test_update_survives_page_replaced_after_walk",
+    "tests/test_core/test_plan.py::test_update_survives_root_replaced_after_walk",
+]
+to = "rust"
+reason = "The test changes the tree between two steps of one call, through a function it patches. A command starts from the tree as it stood before the call and meets no change."
+
+[[route]]
+tests = [
+    "tests/test_core/test_search.py::test_search_does_not_reread_unchanged_unreadable_pages",
+    "tests/test_core/test_search.py::test_search_notices_unreadable_pages_per_read_attempt",
+    "tests/test_core/test_search.py::test_search_propagates_non_query_operational_errors",
+    "tests/test_core/test_search.py::test_search_retries_indexed_pages_after_a_transient_read_failure",
+]
+to = "rust"
+reason = "The test makes a read of a page, or a statement of the search index, fail through a function it patches. A command reads the same page and runs the same statement without the failure."
+
+# a test gives the engine a clock no command can be given
+[[route]]
+tests = [
+    "tests/test_core/test_update.py::test_update_reads_a_stamp_period_in_the_policy_zone",
+]
+to = "rust"
+reason = "The first update of the test runs under a clock that returns a date with no time, before the test gives the wiki a format with no time. WIKI_FREEZE_TIME renders an instant in the wiki's own format, so no value of it gives that stamp."
+
+# a test leaves the clock running for a command
+[[route]]
+tests = [
+    "tests/test_cli/test_wiki_commands.py::test_blank_wiki_freeze_time_leaves_the_clock_running",
+]
+to = "dropped"
+cite = "tests/test_cli/test_wiki_commands.py::test_blank_wiki_freeze_time_leaves_the_clock_running"
+reason = "The test sets WIKI_FREEZE_TIME to a blank value, which leaves the clock running, and reads the stamp its command writes. A replayed command would write the stamp of its own moment. The CLI suite runs the test on each engine with the test's own assertions."
+
+# a test drives the engine class in a way the command line has no form for
+[[route]]
+tests = [
+    "tests/test_core/test_read.py::test_read_root_without_index_never_escapes",
+    "tests/test_core/test_read.py::test_read_slice_units",
+    "tests/test_core/test_update.py::test_update_mints_a_missing_root",
+]
+to = "dropped"
+cite = "Python API"
+reason = "The test makes the engine object on a folder that declares no wiki and has no index, or that does not exist. The command line refuses such a folder before it reaches the method. One call also asks read for a unit that no option names."
+
+[[route]]
+tests = [
+    "tests/test_core/test_lint.py::test_lint_reports_missing_root_name_without_crashing",
+]
+to = "dropped"
+cite = "Python API"
+reason = "The test keeps one engine object across an edit of the root index, and the object still holds the root name it was made with. A command makes a new object, which reads the name from the tree."
+
+# a test runs under PyYAML's pure-Python loader, which words an error its own way
+[[route]]
+tests = [
+    "tests/test_core/test_format.py::test_colon_error_names_the_line_the_scalar_started_on[pure-continuation-line]",
+    "tests/test_core/test_format.py::test_colon_error_names_the_line_the_scalar_started_on[pure-key-line-after-block]",
+    "tests/test_core/test_format.py::test_colon_error_names_the_line_the_scalar_started_on[pure-key-line]",
+    "tests/test_core/test_format.py::test_colon_error_names_the_line_the_scalar_started_on[pure-third-line]",
+    "tests/test_core/test_format.py::test_colon_error_names_the_line_the_scalar_started_on[pure-typo-line-after-comment]",
+    "tests/test_core/test_format.py::test_colon_error_names_the_line_the_scalar_started_on[pure-typo-line-blank-between]",
+    "tests/test_core/test_format.py::test_colon_error_names_the_line_the_scalar_started_on[pure-typo-line]",
+    "tests/test_core/test_format.py::test_tab_on_the_last_block_line_is_named[pure]",
+    "tests/test_core/test_lint.py::test_lint_flags_frontmatter_a_strict_yaml_reader_rejects[pure-colon-space-desc]",
+    "tests/test_core/test_lint.py::test_lint_flags_frontmatter_a_strict_yaml_reader_rejects[pure-colon-space-title]",
+    "tests/test_core/test_lint.py::test_lint_flags_frontmatter_a_strict_yaml_reader_rejects[pure-control-char-after-non-ascii]",
+    "tests/test_core/test_lint.py::test_lint_flags_frontmatter_a_strict_yaml_reader_rejects[pure-control-char]",
+    "tests/test_core/test_lint.py::test_lint_flags_frontmatter_a_strict_yaml_reader_rejects[pure-trailing-colon]",
+    "tests/test_core/test_lint.py::test_lint_reports_an_escape_naming_no_character[pure-past-unicode]",
+]
+to = "dropped"
+cite = "loader choice"
+reason = "The test takes PyYAML's C loader away, and the pure-Python loader gives the error another text or another line. A command, and a format call made again, run under the C loader the side is built with."
+
+# a test puts a hook file in the wiki, or runs `wiki trust`
+[[route]]
+tests = [
+    "tests/test_cli/test_wiki_commands.py::test_lint_error_keeps_the_notes_before_it",
+    "tests/test_cli/test_wiki_commands.py::test_match_resolution_failure_exits_two",
+    "tests/test_cli/test_wiki_commands.py::test_merge_orders_rows_by_the_wikis_hook[hook-exits]",
+    "tests/test_cli/test_wiki_commands.py::test_merge_orders_rows_by_the_wikis_hook[import-fails]",
+    "tests/test_cli/test_wiki_commands.py::test_merge_orders_rows_by_the_wikis_hook[merge-raises]",
+    "tests/test_cli/test_wiki_commands.py::test_merge_orders_rows_by_the_wikis_hook[sort-raises]",
+    "tests/test_cli/test_wiki_commands.py::test_merge_orders_rows_by_the_wikis_hook[trusted]",
+    "tests/test_cli/test_wiki_commands.py::test_merge_settles_the_stamps_of_a_managed_page[hook-exits]",
+    "tests/test_cli/test_wiki_commands.py::test_merge_settles_the_stamps_of_a_managed_page[untrusted-hook]",
+    "tests/test_cli/test_wiki_commands.py::test_trust_gates_hook_execution",
+    "tests/test_cli/test_wiki_commands.py::test_trust_refuses_non_wiki_path",
+    "tests/test_cli/test_wiki_commands.py::test_trust_store_does_not_mark_home_as_wiki_root",
+    "tests/test_cli/test_wiki_commands.py::test_trust_store_exemption_survives_symlinked_home",
+    "tests/test_cli/test_wiki_commands.py::test_untrusted_hook_refusal_exits_two",
+    "tests/test_cli/test_wiki_commands.py::test_wiki_freeze_time_stamps_the_trust_record",
+]
+to = "dropped"
+cite = "D6"
+reason = "The test's wiki holds a hook file, or the test runs `wiki trust`. A second engine refuses the wiki, merges it without the hook, and has no such command. Under v1 a command that imports the hook leaves a bytecode file beside it, named for the interpreter, and a read-only command leaves it outside the caches."
+
+# a test's error text turns on the process that prints it
+[[route]]
+tests = [
+    "tests/test_core/test_wiki.py::test_settings_reject_malformed_values[nested-past-recursion-limit]",
+]
+to = "dropped"
+cite = "D1"
+reason = "The test's settings file is nested past the interpreter's recursion limit. The text behind `Malformed JSON in .wiki/settings.json: ` is the JSON reader's, and under Python 3.14 it states how much of the stack the process had used. Where the test's process and a command differ in that, no command prints the call's text."
+
+# a test's command copies files over the copies it made before
+[[route]]
+tests = [
+    "tests/test_cli/test_wiki_commands.py::test_install_copies_skill_into_home",
+]
+to = "dropped"
+cite = "D10"
+reason = "The test runs `install` over the copy an earlier `install` left. v1 removes the folder and copies it again with the source's modification times. Where the file system hands a freed inode number out again, a copied file may get its old number back and read as untouched, so the touched sets of two runs of v1 differ. D10 gives `install` a comparison of its own, by the list of paths written."

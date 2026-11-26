@@ -4,6 +4,7 @@ usage: python -m parity matrix --a NAME --b NAME [--registered] [--sides FILE] -
        python -m parity selfcheck --side NAME [--sides FILE] --corpora FILE --work DIR --out DIR
        python -m parity registry --side NAME [--sides FILE] --corpora FILE --work DIR --out DIR
        python -m parity suite [--engine NAME] [--sides FILE] --work DIR --out DIR
+       python -m parity replay [--engine NAME] [--sides FILE] --work DIR --out DIR
        python -m parity oracle ensure [--side NAME]
        python -m parity oracle check [--skip NAME]
 
@@ -28,6 +29,14 @@ its calls went to and the terminal table shows no difference, and 1
 otherwise. It exits 2, before it runs a test, on an unknown side, on an
 engine that no ported command would reach, and on a work folder the harness
 refuses.
+
+``replay`` runs v1's core and CLI tests under a recorder, then runs each
+call they made again as a command line, on the trees the call found. With
+no ``--engine`` it replays every call on v1 under two hash seeds, makes the
+recorded format calls again and runs its controls; with one it replays the
+calls of the ported commands on v1 and on that side. It exits 0 when the
+sides differ in nothing and v1's command lines do what the calls did in
+their tests, and 1 otherwise. It exits 2 as ``suite`` does.
 
 The registry lists what a second engine may do differently from v1, and two
 builds of v1 have nothing registered between them. ``matrix`` therefore
@@ -66,7 +75,10 @@ from . import (
     dispatch,
     oracle,
     ported,
+    record,
     registry,
+    replay,
+    routing,
     runner,
     selfcheck,
     side,
@@ -98,14 +110,16 @@ _YEARS = (1001, 9998)
 _DESCRIPTION = """\
 Run two wiki engines on the same trees and report what they do differently.
 
-matrix, selfcheck, registry and suite exit 0 when every result is the expected
-one, and 1 otherwise. A run that would compare nothing exits 2 with a message,
+matrix, selfcheck, registry, suite and replay exit 0 when every result is the
+expected one, and 1 otherwise. A run that would compare nothing exits 2 with a message,
 before it snapshots anything or runs a test. oracle ensure exits 2 when it
 refuses a checkout or a venv, and oracle check exits 1 when a check fails. An
 error of the harness itself prints its traceback and exits 2.
 """
 # the folder of the CLI suite below the work folder, and its result file
 _SUITE = 'suite'
+# the same for the replay
+_REPLAY = 'replay'
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -184,29 +198,33 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # side name option
             side_help = 'Name of the side to run against itself or a stand-in.'
             command.add_argument('--side', required=True, help=side_help)
-    summary = "Run v1's CLI tests and the terminal table through the dispatcher."
-    command = commands.add_parser('suite', help=summary, description=summary)
-    # engine name option
-    engine_help = 'Name of the side that takes the calls of the ported commands.'
-    command.add_argument('--engine', help=engine_help)
-    # sides file option
-    sides_help = 'TOML file with one table per side, beside the v1 sides.'
-    command.add_argument('--sides', type=pathlib.Path, help=sides_help)
-    # work folder option
-    work_help = 'Folder the harness makes one new folder in.'
-    command.add_argument('--work', type=pathlib.Path, required=True, help=work_help)
-    # output folder option
-    out_help = "Folder for the result file, pytest's output and the saved streams."
-    command.add_argument('--out', type=pathlib.Path, required=True, help=out_help)
-    # test option
-    test_help = (
-        'A test file or test to run, as pytest names it from the oracle'
-        ' checkout (repeatable; default: every CLI test).'
-    )
-    command.add_argument('--test', action='append', help=test_help)
-    # jobs option
-    jobs_help = "How many processes run the tests (default: v1's pytest settings)."
-    command.add_argument('--jobs', type=int, help=jobs_help)
+    summaries = {
+        _SUITE: "Run v1's CLI tests and the terminal table through the dispatcher.",
+        _REPLAY: "Record the calls of v1's tests and replay them as command lines.",
+    }
+    for name, summary in summaries.items():
+        command = commands.add_parser(name, help=summary, description=summary)
+        # engine name option
+        engine_help = 'Name of the side that takes the calls of the ported commands.'
+        command.add_argument('--engine', help=engine_help)
+        # sides file option
+        sides_help = 'TOML file with one table per side, beside the v1 sides.'
+        command.add_argument('--sides', type=pathlib.Path, help=sides_help)
+        # work folder option
+        work_help = 'Folder the harness makes one new folder in.'
+        command.add_argument('--work', type=pathlib.Path, required=True, help=work_help)
+        # output folder option
+        out_help = "Folder for the result file, pytest's output and the saved streams."
+        command.add_argument('--out', type=pathlib.Path, required=True, help=out_help)
+        # test option
+        test_help = (
+            'A test file or test to run, as pytest names it from the oracle'
+            ' checkout (repeatable; default: every test of the command).'
+        )
+        command.add_argument('--test', action='append', help=test_help)
+        # jobs option
+        jobs_help = "How many processes run the tests (default: v1's pytest settings)."
+        command.add_argument('--jobs', type=int, help=jobs_help)
     summary = 'Build the oracle checkout, or hold oracle.toml level with v1.'
     command = commands.add_parser('oracle', help=summary, description=summary)
     actions = command.add_subparsers(dest='action', required=True)
@@ -278,8 +296,10 @@ def _run(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
     """Run the parsed command and return the exit code."""
     if options.command == 'oracle':
         return _oracle(parser, options)
-    if options.command == 'suite':
+    if options.command == _SUITE:
         return _suite(parser, options)
+    if options.command == _REPLAY:
+        return _replay(parser, options)
     # read the registry
     try:
         entries = registry.load()
@@ -459,6 +479,158 @@ def _suite(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
     return 0
 
 
+def _replay(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
+    """Record the calls of v1's tests, replay them, and return the exit code."""
+    # read the registry, the routing table, the ported commands and the sides
+    try:
+        entries = registry.load()
+        routes = routing.load(entries=entries)
+        commands = ported.load()
+        declared = {}
+        if options.sides is not None:
+            declared = config.load_sides(options.sides)
+    except ValueError as e:
+        parser.error(f'{e}')
+    # resolve the sides: v1, and the engine if the run names one
+    names = [suite.REFERENCE]
+    if options.engine is not None:
+        if options.engine == suite.REFERENCE:
+            parser.error(f'--engine names {options.engine!r}, the side v1 runs as.')
+        if not commands:
+            parser.error(
+                f'{ported.PATH.name} lists no command, so no call would reach'
+                f' {options.engine!r}.'
+            )
+        names.append(options.engine)
+    try:
+        chosen = _sides(names, declared, path=options.sides)
+    except ValueError as e:
+        parser.error(f'{e}')
+    # refuse the work folder and probe every side before a test runs
+    work = options.work.resolve() / _REPLAY
+    try:
+        suite.validate(work)
+        header = _header(chosen, now=_NOW)
+    except ValueError as e:
+        parser.error(f'{e}')
+    # each call brings its own clock
+    del header['now']
+    reference, *engines = chosen
+    work.mkdir(parents=True)
+    # record the calls with v1 alone: a record is what v1 did in the test
+    named = suite.source(oracle.load())
+    dispatcher = dispatch.build(work / 'bin', reference=reference)
+    recording = record.run(
+        named,
+        dispatcher,
+        work=work / 'record',
+        only=options.test or (),
+        jobs=options.jobs,
+    )
+    options.out.mkdir(parents=True, exist_ok=True)
+    _save({'pytest.txt': recording.tests.log}, options.out / _REPLAY)
+    # replay every call on v1 under two hash seeds, or the calls of the ported
+    # commands on v1 and on the engine, which also runs each on one thread
+    explained = [test for test, route in routes.items() if route.cite in entries]
+    if engines:
+        sides = [reference, engines[0], replay.threaded(engines[0])]
+        result = replay.run(
+            recording,
+            sides,
+            commands=commands,
+            routed=routes,
+            explained=explained,
+            second=True,
+            jobs=options.jobs,
+        )
+    else:
+        sides = selfcheck._seeded(reference)
+        result = replay.run(
+            recording,
+            sides,
+            routed=routes,
+            explained=explained,
+            jobs=options.jobs,
+        )
+    findings = list(result.findings)
+    document = {
+        **header,
+        'runs': [item.name for item in sides],
+        **result.report,
+        'tests': recording.tests.report['tests'],
+        'deselected': recording.tests.report['deselected'],
+    }
+    # make the format calls again, and run the controls on a whole recording
+    if not engines:
+        found, document['formats'] = replay.formats(
+            recording,
+            named,
+            reference,
+            work=work / 'formats',
+            routed=routes,
+        )
+        findings.extend(found)
+        lines = [json.dumps(entry) + '\n' for entry in recording.formats]
+        _save({'formats.jsonl': ''.join(lines).encode('utf-8')}, options.out / _REPLAY)
+        differing = document['formats']['differing']
+        visible = [test for test in routes if test not in explained]
+        findings.extend(replay.unneeded(visible, result.report, differing))
+        document['controls'] = {}
+        for name in replay.CONTROLS if not options.test else ():
+            found, document['controls'][name] = replay.control(
+                recording,
+                reference,
+                name,
+                jobs=options.jobs,
+            )
+            findings.extend(found)
+    # a whole recording holds the commands of the CLI tests' helper
+    if not options.test:
+        findings.extend(replay.unrecorded(recording))
+    document['findings'] = [dataclasses.asdict(finding) for finding in findings]
+    path = options.out / f'{_REPLAY}.json'
+    path.write_text(json.dumps(document, indent=2) + '\n', encoding='utf-8')
+    _save(result.streams, options.out / _REPLAY)
+    # print how much was replayed, then what is not the expected result
+    counts = result.report['counts']
+    print(
+        f'{_REPLAY}: {counts["calls"]} calls of {counts["tests"]} tests:'
+        f' {counts["replayed"]} replayed, {counts["unformed"]} with no command'
+        f' line, {counts["unfaithful"]} unfaithful; {counts["tests_routed"]}'
+        f' tests routed'
+    )
+    for name, count in counts['commands'].items():
+        print(f'{_REPLAY}: {name}: {count["replayed"]} of {count["calls"]} calls')
+    left = result.report['unrecorded']
+    if left:
+        total = sum(left.values())
+        print(f'{_REPLAY}: {total} commands of {len(left)} tests left no record')
+    if 'formats' in document:
+        made = document['formats']
+        print(f'{_REPLAY}: {made["calls"]} format calls, {made["distinct"]} distinct')
+    for name, count in document.get('controls', {}).items():
+        print(
+            f'{_REPLAY}: control {name}: {count["reported"]} of'
+            f' {count["doctored"]} doctored calls reported'
+        )
+    for finding in findings:
+        line = _line(finding)
+        print(f'  {line}')
+    count = len(result.differences)
+    s = 's' if count != 1 else ''
+    print(f'{_REPLAY}: {count} difference{s}')
+    for difference in result.differences:
+        line = _line(difference)
+        print(f'  {line}')
+    for entry in result.excused:
+        line = _line(entry)
+        print(f'  registered: {line}')
+    if findings or result.differences:
+        return 1
+    shutil.rmtree(work)
+    return 0
+
+
 def _sides(
     names: Sequence[str],
     declared: Mapping[str, Side],
@@ -593,8 +765,8 @@ def _save(streams: Mapping[str, bytes], folder: pathlib.Path) -> None:
         target.write_bytes(stream)
 
 
-def _line(difference: Union[Difference, Excused]) -> str:
-    """Return one difference, or one excused command, as a line of the summary."""
+def _line(difference: Union[Difference, Excused, replay.Finding]) -> str:
+    """Return one difference, excused command or finding as a line of the summary."""
     fields = dataclasses.astuple(difference)
     return ': '.join(field for field in fields if field)
 

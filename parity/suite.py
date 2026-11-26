@@ -178,6 +178,7 @@ def run(
     work: pathlib.Path,
     only: Sequence[str] = (),
     jobs: Optional[int] = None,
+    options: Sequence[str] = (),
 ) -> Result:
     """Run v1's CLI tests with every call sent through ``dispatcher``.
 
@@ -190,6 +191,8 @@ def run(
             names a file or a test, relative to the checkout.
         jobs: How many processes run the tests; ``None`` leaves the count
             to v1's own pytest settings.
+        options: Further options for pytest, which load another plugin of
+            the harness beside this one.
 
     Returns:
         The findings and the report.
@@ -224,6 +227,7 @@ def run(
     cmd += ['-p', 'no:cacheprovider', '--basetemp', f'{work / "tmp"}']
     if jobs is not None:
         cmd += ['-n', f'{jobs}']
+    cmd += options
     cmd += only or [source.folder]
     done = subprocess.run(
         cmd,
