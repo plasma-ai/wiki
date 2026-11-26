@@ -961,7 +961,7 @@ def test_unavailable_fence_is_narrated_inside_a_repository(
     """A fence probe that fails inside a repository narrates the degrade.
 
     With git off PATH the sweep proceeds unfenced, adopting what the
-    repository fences -- frontmatter written into untracked driver
+    repository fences -- frontmatter written into a script's stray
     files, rows minted -- so the operator gets a line naming the
     unavailable fence rather than a silent mutation. Outside a
     repository there is no fence to lose, and the same degrade stays
