@@ -74,6 +74,9 @@ uv sync --inexact --group parity
 uv run --no-sync python -m parity oracle ensure
 uv run --no-sync pytest parity
 
+# run v1's CLI tests through the harness (a new work folder outside any repo)
+uv run --no-sync python -m parity suite --work <dir> --out <dir>
+
 # run pre-commit
 uv run --no-sync pre-commit run [--all-files]
 
@@ -498,7 +501,19 @@ into its venvs by hand: the harness refuses a checkout or a venv that is not
 what the file names. `python -m parity oracle check` holds the file level with
 v1; run it after `git fetch origin` when a work session starts. The three
 scripts the harness runs inside a side's interpreter, `launcher.py`, `facts.py`
-and `judge.py`, import nothing from `parity`.
+and `judge.py`, import nothing from `parity`, and neither does the pytest plugin
+in `parity/plugins/`, which is loaded there by a name of its own.
+
+`python -m parity suite` runs v1's CLI tests (`tests/test_cli` of the oracle
+checkout, unedited) and a short table of commands on a pseudo-terminal
+(`parity/terminal.py`). Every `wiki` call goes through the dispatcher
+(`parity/dispatch.py`), one executable that sends the calls of the ported
+commands to the side `--engine` names and every other call to v1.
+`parity/ported.toml` is the list of ported commands, and a change that ports a
+command adds it there. The tests' own assertions are the verdict; a skipped test
+and an expected failure are findings, and so is a call that does not leave the
+identity record of the side it went to. `parity/plugins/` holds only what the
+oracle's pytest loads, so nothing else may be added to that folder.
 
 ### Run Bracket
 

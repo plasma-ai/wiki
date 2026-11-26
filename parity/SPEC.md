@@ -30,6 +30,9 @@ python -m parity selfcheck --side NAME [--sides SIDES] \
 # check the classifiers of the registry with one side
 python -m parity registry --side NAME [--sides SIDES] \
     --corpora CORPORA --work DIR --out DIR [--release]
+
+# run v1's CLI tests and the terminal table through the dispatcher
+python -m parity suite [--engine NAME] [--sides SIDES] --work DIR --out DIR
 ```
 
 A side name is `oracle` or `campaign`, the two v1 sides that
@@ -115,9 +118,24 @@ and `selfcheck` and `registry` save those of a failed check under
 `<out>/<label>.json`, so each takes an `--out` folder of its own. Result files
 hold corpus paths and text, so they stay outside the repository too.
 
+`suite` takes no corpus: its tests make their own wikis (CLI Suite, below). It
+exits 0 when every test passes and the terminal table shows no difference, and 1
+otherwise. It exits 2 with a message, before it runs a test: on an `--engine`
+that is the v1 side itself or that no file declares, on an `--engine` when
+`parity/ported.toml` lists no command, on a list that breaks a rule of Ported
+Commands, on a side that cannot be started or does not prove its identity, and
+on a work folder it refuses. `--test ID` (repeatable) runs the named test files
+or tests in place of all of them, and `--jobs N` sets how many processes run the
+tests. It makes `<work>/suite`, which must not exist beforehand, and removes it
+when the run passed. It writes `<out>/suite.json`, what pytest printed as
+`<out>/suite/pytest.txt`, and both outputs of each terminal case whose output
+differs under `<out>/suite/`. The first two are written once the tests have run,
+before the terminal table starts, and the result file takes the table when it
+ends: an error of the table leaves the tests' result behind.
+
 The sections below are the rules of the harness, one part each: the oracle,
-sides, snapshots, comparison, caches, the matrix, the registry and the
-self-check.
+sides, snapshots, comparison, caches, the matrix, the registry, the self-check
+and the CLI suite.
 
 ## Oracle
 
@@ -178,7 +196,8 @@ reason = "<why it waits>"
   `parity` folder among them. Harness code that runs there is a script run by
   its path with `-P` (the launcher; `facts.py`, which prints what the
   interpreter is made of; and `judge.py`, which answers the classifiers), never
-  an import of `parity`.
+  an import of `parity`. The pytest plugin of the CLI suite is loaded there by a
+  name of its own, `parity_suite`, from a folder that holds nothing else.
 
 `python -m parity oracle check` holds `oracle.toml` level with v1, by three
 checks. It reads branches as the remote-tracking references hold them, so fetch
@@ -675,3 +694,166 @@ arguments, so one corpus proves them.
 A refusal of the stand-in is an empty stdout, one `Error: ` line behind the
 notice, and exit code 2. The command it refuses is one that writes nothing on
 v1, so the stand-in leaves the tree as a refusal does.
+
+## CLI Suite
+
+v1's CLI tests drive the console script as a subprocess and assert on what it
+prints, returns and writes. The CLI suite runs them against a second engine with
+their own assertions as the verdict, and adds a short table of commands on a
+terminal. It runs v1's tests where v1 runs them: from the oracle checkout, under
+the `oracle` side's interpreter, with v1's own pytest settings. The checkout is
+not edited. One thing changes: every call of `wiki` goes through the dispatcher.
+
+### Dispatcher
+
+The dispatcher is one executable named `wiki`, in a folder that holds nothing
+else. It sends each call to a side and becomes that side's command, so the
+caller's streams, signals and exit code are the side's own.
+
+- **Routing.** A call belongs to its first argument: the name of a command, or a
+  root option such as `--version`. A call whose first argument is a ported
+  command goes to the second engine. Every other call goes to v1, a call with no
+  argument included. With no second engine every call goes to v1.
+- **Sides.** A call runs under the caller's environment with the side's own
+  variables set over it. A side with no identity gets no `WIKI_TRACE`.
+- **Notes.** Before it hands a call on, the dispatcher appends one line of JSON
+  to the file `WIKI_TRACE` names: the side the call goes to, and the ported
+  command if it is one. A call made with no `WIKI_TRACE` is noted in a file of
+  the run's own.
+- **Identity.** A trace file holds the notes of its calls and the identity
+  records the sides left. The records must be exactly those the notes ask for:
+  one record of the side's own for each call to a side that has an identity. A
+  record too few is a call that did not run its side. A record too many is an
+  engine that ran without passing the dispatcher.
+- **Environment.** Whatever calls the dispatcher runs under the built
+  environment of the v1 side (Sides), without `WIKI_FREEZE_TIME`: the tests
+  bring their own clock, the terminal table reads none, and no notice opens a
+  command's stderr.
+
+### Ported Commands
+
+`parity/ported.toml` lists the ported commands: the first arguments of the calls
+a second engine takes. Each porting change adds its commands to the list.
+
+```toml
+commands = ["read", "--version"]
+```
+
+- **Refusals.** A list is refused when it holds a key other than `commands`, a
+  value that is not a list of strings, an empty string, or one command twice.
+- **Nothing ported.** With an empty list no call would reach a second engine, so
+  a run that names one is refused.
+
+### Tests
+
+- **Where.** The tests are the folder `tests/test_cli` of the oracle checkout.
+  The run leaves out what v1's pytest settings leave out, and the result file
+  lists those tests.
+- **Plugin.** v1's tests take the console script from one helper module, which
+  names its path and its folder. A pytest plugin (`parity/plugins`) sets both to
+  the dispatcher. A test then reaches the dispatcher by the helper's runner, by
+  the path, and by the bare name `wiki` on the `PATH` the helper builds, as git
+  does for the merge driver. A helper that is not imported, or does not hold
+  both names, ends the run with an error.
+- **When.** The plugin sets the names as the helper is imported, between the
+  helper's own code and the first module that takes a name from it. v1's test
+  packages import their test modules, so the first import of any of them imports
+  them all, before pytest loads the helper as a `conftest`; an import finder is
+  the one place early enough. Whatever a test module takes from the helper is
+  then the dispatcher: a name it binds, a command it builds while it is
+  imported, a parameter of a test. A call a module makes while it is imported
+  belongs to no test, so it is an `untraced` finding.
+- **Past the helper.** A test that finds the console script without the helper,
+  for example beside the interpreter, runs v1 unseen: v1's console script leaves
+  no identity record. No test of the oracle does. The two tests that run
+  `python -c` test v1's Python code and count as tests with no call.
+- **Trace.** The plugin sets `WIKI_TRACE` to a fresh file before a test's first
+  fixture runs, and the file stays until the next test gets its own. A fixture
+  that several tests share is built inside the first test that asks for it, so
+  its calls count for that test.
+- **Interrupts.** A caller that ignores interrupts, as a shell does for a
+  detached job, hands that on to every process below it. The run takes the
+  interrupt back before pytest starts, so a test that interrupts a command still
+  does.
+- **Where trees go.** pytest's base folder for temporary files lies in the work
+  folder, and pytest writes no cache into the checkout. A work folder inside a
+  repository is refused: `init` registers the merge driver in the repository it
+  finds, and that must be one a test made. A work folder below a folder that
+  holds `.wiki/settings.json` is refused as in Snapshots.
+
+A run passes when it has no finding:
+
+| Finding                                            | Means                                                                 |
+| -------------------------------------------------- | --------------------------------------------------------------------- |
+| `failed`, `error`, `skipped`, `xfailed`, `xpassed` | A test did not pass. A skip and an expected failure are findings too. |
+| `error` or `skipped`, with a test file's name      | The file failed while it was imported, or skipped itself there.       |
+| `identity`                                         | A test's trace file breaks the identity rule of Dispatcher.           |
+| `untraced`                                         | Calls reached the dispatcher with no `WIKI_TRACE`.                    |
+| `unused`                                           | No test called a side of the run, or a ported command.                |
+
+- **Skips.** A test that is skipped, or that fails as its mark expects, asserted
+  nothing about the engine, so it is no pass.
+- **Files.** A test file that is not loaded has no test that runs, so no test's
+  outcome tells of it. Where several processes run the tests, pytest goes on
+  past a file that fails while it is imported. The file is a finding by itself.
+- **Unused.** A run in which a side or a ported command took no call proved
+  nothing about it. A run of some tests only is held to the same rule.
+- **No call.** `tests/test_cli` also holds tests that call no `wiki`: they test
+  v1's Python code in the interpreter. They run and must pass, and the result
+  file shows them with no call.
+- **Counts.** The run prints, and the result file records, how many tests and
+  calls each side took, and the same for each ported command. The number of
+  calls turns on how many processes run the tests, because each process builds a
+  shared fixture again.
+- **Not run.** A run in which pytest collects nothing, or ends on an error of
+  its own, is an error of the harness, never a pass. So is a run that pytest
+  ends as failed while no test and no file is a `failed` or `error` finding.
+
+### Terminal Table
+
+An engine prints other bytes to a terminal than to a pipe, and only a terminal
+turns a typed Ctrl-C into an interrupt. Each case of the table is one command
+with a pseudo-terminal as its three streams. It runs twice on one wiki at one
+path: on the v1 side, and through the dispatcher, which sends it to the side
+that has its command. With no second engine both runs are v1, and the table
+checks itself.
+
+| Case        | Command                               | Typed  | Allowed exit code |
+| ----------- | ------------------------------------- | ------ | ----------------- |
+| `sequences` | `read` of a page with terminal bytes  | none   | 0                 |
+| `error`     | `read` of a page the wiki lacks       | none   | 2                 |
+| `interrupt` | `read` of a page of several megabytes | Ctrl-C | 130               |
+
+- **Wiki.** The v1 side makes the wiki with `init`, and the harness writes the
+  pages. The first page holds a color sequence, a title sequence, a bell, a unit
+  separator and a delete. The long page's body is one line of dots. The table's
+  commands write nothing, so both runs read the same tree.
+- **Terminal.** The pseudo-terminal is the command's controlling terminal, 24
+  rows by 80 columns, and `TERM` is `xterm-256color`. It passes output on as
+  written, echoes nothing that is typed and drops no output on an interrupt. So
+  the harness reads every byte the command wrote, on either stream, in order.
+- **Keys.** Ctrl-C is typed once the command has shown its first bytes. The long
+  page is larger than any terminal buffer in use, so the command is still
+  printing it then. A command that has ended by then takes no key, and its
+  output is compared as it is.
+- **Compared.** The bytes shown and the exit code, where a command ended by a
+  signal has the negated signal number. In the `interrupt` case the length of
+  the page's head that a side shows turns on timing, so each output is compared
+  from where it leaves the page's text. A side that opens its own text with the
+  page's next byte would hide that byte. Inside the long line the next byte is a
+  dot, which no interrupt text starts with. A line end, which one may start
+  with, follows only the page's first lines and its last dot.
+- **Each run by itself.** A run that ends with a code its case does not allow is
+  an `unexpected` difference, as in the matrix. A run that does not leave its
+  identity record is an `identity` difference; for the dispatcher's run that is
+  the identity rule of Dispatcher, for exactly one call.
+
+| Aspect       | Meaning                                         | Detail        |
+| ------------ | ----------------------------------------------- | ------------- |
+| `output`     | the bytes the two runs showed differ            | empty         |
+| `exit`       | the exit codes differ                           | empty         |
+| `unexpected` | a run ended with an exit code its case forbids  | the exit code |
+| `identity`   | a run did not leave the identity record it owes | empty         |
+
+A difference names the table as `terminal`, the run (`dispatcher`, or the v1
+side's name) and the case.

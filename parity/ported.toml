@@ -1,0 +1,6 @@
+# The ported commands: what a second engine runs in place of v1. The rules are
+# in SPEC.md, under CLI Suite.
+
+# the first arguments of the calls a second engine takes; v1 takes every other
+# call
+commands = []
