@@ -20,7 +20,7 @@ python -m parity oracle ensure
 python -m parity oracle check
 
 # compare two sides over the matrix
-python -m parity matrix --a NAME --b NAME [--sides SIDES] \
+python -m parity matrix --a NAME --b NAME [--registered] [--sides SIDES] \
     --corpora CORPORA --work DIR --out DIR
 
 # check the harness itself with one side
@@ -42,12 +42,13 @@ the seed of the matrix sample. `matrix` also takes `--stage NAME` (repeatable)
 and `--keep`, which leaves the snapshot and every tree in the work folder.
 
 The three commands exit 0 when every result is the expected one and 1 otherwise.
-A run that would compare nothing exits 2 with a message, before it snapshots
-anything: a corpora file with no corpus, an unknown corpus label, stage name or
-side name, a side whose `--version` fails or prints nothing, a side that does
-not prove its identity, a v1 side the oracle rules refuse, or a registry file
-that breaks a rule of Registry. An error of the harness itself is a Python
-traceback.
+For `matrix` that is no difference, and no command the registry excuses unless
+`--registered` is given (Registry, Second engine). A run that would compare
+nothing exits 2 with a message, before it snapshots anything: a corpora file
+with no corpus, an unknown corpus label, stage name or side name, a side whose
+`--version` fails or prints nothing, a side that does not prove its identity, a
+v1 side the oracle rules refuse, or a registry file that breaks a rule of
+Registry. An error of the harness itself is a Python traceback.
 
 The harness makes `<work>/<label>` for each corpus; it must not exist
 beforehand. `matrix` removes it at the end unless `--keep` is given. `selfcheck`
@@ -436,11 +437,19 @@ tests = []
   checks it, and `unchecked` says why. An entry with a classifier names tests
   too where a test pins one of its clauses. `tests` is empty until the test
   exists.
-- **Refusals.** Every run reads the file first, and exits 2 on an entry with a
-  missing field, a status or a check outside those above, an approved entry that
-  cites no question, or an unchecked entry that gives no reason. The entries
-  with the check `classifier` must be exactly the entries the harness has a
-  classifier for.
+- **Refusals.** Every run reads the file first, and exits 2 on an entry that is
+  not a table, an entry with a missing field, a field under another name than
+  those above, a field of the wrong shape (`question` is a list of numbers and
+  `tests` a list of strings; every other field is a string), a status or a check
+  outside those above, an approved entry that cites no question, or an unchecked
+  entry that gives no reason. The entries with the check `classifier` must be
+  exactly the entries the harness has a classifier for.
+- **Second engine.** The registry lists what a second engine may do differently
+  from v1. Two builds of v1 have nothing registered between them: the campaign
+  side against the oracle, or one release against the next. A `matrix` run
+  therefore fails on a command the registry excuses, and lists it as
+  `registered`, unless `--registered` says that side `b` is a second engine. The
+  self-check and its doctored checks run one engine and fail the same way.
 - **Release.** `python -m parity registry --release` also exits 1 while an entry
   is proposed, or names no test where tests check it. Without `--release` the
   command prints the same lines and they do not fail it.
@@ -470,11 +479,11 @@ harness did not choose: D1, D2 and D3.
   with no judge leaves every such question unanswered, and the difference stays
   a difference.
 
-| Entry | Excuses                                                             | Holds when                                                                                                                                                                                                                                                                                                                     |
-| ----- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| D1    | `stderr` alone                                                      | After v1's `FutureWarning` lines are dropped, the two streams are equal, or they are equal up to the end of one wiki-written prefix and each then holds a text to the end of its last line. The lines dropped are those whose message the judge's `re` gives for a pattern of the command, each with the source line below it. |
-| D2    | `stderr` alone, or `stdout` alone                                   | `stderr`: both sides exit 2 with an empty stdout, and v1's stderr is a usage error. `stdout`: the arguments hold `--help`, both sides exit 0, v1's stdout opens with `Usage: ` and the other side's is not empty.                                                                                                              |
-| D3    | every aspect that compares two runs, and the refusal's `unexpected` | v1 exits 0 or 1. The other side exits 2, touches nothing, prints nothing on stdout and one `Error: ` line on stderr. The judge calls an input of the command unsupported.                                                                                                                                                      |
+| Entry | Excuses                                                             | Holds when                                                                                                                                                                                                                                                                                                       |
+| ----- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D1    | `stderr` alone                                                      | After v1's `FutureWarning` lines are dropped, the two streams are equal, or they are equal up to the end of one wiki-written prefix and each then ends with one line of text. The lines dropped are those whose message the judge's `re` gives for a pattern of the command, each with the source line below it. |
+| D2    | `stderr` alone, or `stdout` alone                                   | `stderr`: both sides exit 2 with an empty stdout, and v1's stderr is a usage error. `stdout`: the arguments hold `--help`, both sides exit 0, v1's stdout opens with `Usage: ` and the other side's is not empty.                                                                                                |
+| D3    | every aspect that compares two runs, and the refusal's `unexpected` | v1 exits 0 or 1. The other side exits 2, touches nothing, prints nothing on stdout and one `Error: ` line on stderr. The judge calls an input of the command unsupported. A refusal of a settings field names the field.                                                                                         |
 
 - **D1, prefixes.** A text may follow four prefixes. `Error: ` on a `match`
   command, where the judge's `re.compile` raises on the pattern and v1's text is
@@ -485,6 +494,12 @@ harness did not choose: D1, D2 and D3.
   `json.loads` raises on the file's text.
   `Error: Invalid FTS5 query <the query's repr>: `, which needs no judge: the
   text behind it is SQLite's.
+- **D1, one line.** A text runs from the prefix to the end of its line, and that
+  line ends the stream on both sides. A line behind it is not a library's text,
+  so the command is reported. That holds for v1's side too: a text that carries
+  a line break of the input (`re`'s for a pattern such as `[z-<newline>]`,
+  SQLite's for a query that names a column across a line break) is reported and
+  not excused.
 - **D1, patterns.** The pattern of a `match` command is its first positional
   argument, compiled with the flag `i` under `--ignore-case`. The pattern of the
   settings file is its `naming.pattern`.
@@ -501,6 +516,13 @@ harness did not choose: D1, D2 and D3.
   `timestamp.format` and `timestamp.timezone`, and the pattern of a `match`
   command. A value of the JSON text that only Python's reader takes must be
   refused under the `Error: Malformed JSON in .wiki/settings.json: ` prefix.
+- **D3, the refusal's line.** v1 reads the three settings fields only in the
+  commands that use them, so a tree whose field is outside the set would
+  otherwise excuse any one-line error of any command. A refusal of a field must
+  hold the field's name as v1's own settings errors spell it (`naming.pattern`,
+  `timestamp.format`, `timestamp.timezone`), and the field must be one the judge
+  calls unsupported. The line that refuses the pattern of a `match` command is
+  not held to any words: the input is that command's own argument.
 
 The supported set, as the judge decides it:
 
@@ -515,6 +537,11 @@ The supported set, as the judge decides it:
   counts where it is in force: an inline group that sets `i` puts the
   backreferences inside it outside the set, and one that clears it does the
   reverse. The flag `u` changes nothing in a text pattern and is inside the set.
+- **Spellings the walk cannot see.** The judge decides from the parse tree, so a
+  spelling the parser folds into a supported node is inside the set: a comment
+  group `(?#...)`, which leaves no node; a named character `\N{...}`, which is a
+  literal; and `\z`, which Python 3.14 reads as `\Z` and Python 3.13 refuses as
+  a bad escape. A second engine that refuses one of them is reported.
 - **Outside the classifiers.** Five clauses of the three entries have no
   classifier code, so a difference of their kind is reported. Two are a test's
   to hold: the text of a failed plugin download (D1), and typer's two completion
@@ -523,6 +550,12 @@ The supported set, as the judge decides it:
   A pattern past the compiled-size limits, and nesting past the depth limit
   (D3), are limits of the second engine's regex library, and the judge's walk
   does not hold them.
+- **No entry.** One library text has no clause in any entry. `init --settings`
+  with text that is not JSON ends in a parameter error of wiki's own code,
+  `Invalid value: --settings must be valid JSON (<text>).`, whose `<text>` is
+  what Python's `json` raises with. D2 holds a message that opens with
+  `Invalid value: ` byte for byte, and D1 covers JSON text only behind the
+  malformed-settings prefix, so another text there is reported.
 
 ## Self-check
 
@@ -535,6 +568,9 @@ corpus. It runs one engine on both sides.
   one thing in one command: the last command of one stage, so the change cannot
   reach another command's output. Each check runs that one stage and must report
   exactly the differences in the table, on that command, and no other.
+- **Nothing registered.** One engine has nothing registered against itself. A
+  clean or doctored check fails when a classifier excuses any command, whatever
+  it reports.
 
 | Check        | The doctored side                                                      | Stage   | Must show as                                |
 | ------------ | ---------------------------------------------------------------------- | ------- | ------------------------------------------- |
@@ -585,24 +621,25 @@ arguments, so one corpus proves them.
 - **Stand-in.** An edit whose expression matches nothing fails the stand-in: a
   stand-in that prints the real side's words would prove nothing.
 
-| Fixture                     | Entry | Tree        | Command                        | The stand-in                             | Must show as                   |
-| --------------------------- | ----- | ----------- | ------------------------------ | ---------------------------------------- | ------------------------------ |
-| `pattern text`              | D1    | `snapshot`  | `match (`                      | prints another text after `Error: `      | registered                     |
-| `pattern warning`           | D1    | `snapshot`  | `match` with a nested set      | drops the `FutureWarning` lines          | registered                     |
-| `query text`                | D1    | `snapshot`  | `search '"' --raw`             | prints another text after the query      | registered                     |
-| `settings text`             | D1    | `malformed` | `lint`                         | prints another text after the prefix     | registered                     |
-| `changed prefix`            | D1    | `malformed` | `update --check`               | changes the wiki-written prefix          | `stderr`                       |
-| `naming text`               | D1    | `pattern`   | `lint`                         | prints another text after the prefix     | registered                     |
-| `naming warning`            | D1    | `warned`    | `lint`                         | drops the `FutureWarning` lines          | registered                     |
-| `parser message`            | D2    | `snapshot`  | `lint` with an unknown option  | prints the usage error in another layout | registered                     |
-| `parameter message`         | D2    | `snapshot`  | `search --limit 0`             | keeps the message line in another layout | registered                     |
-| `changed parameter message` | D2    | `snapshot`  | `map --depth -1`               | changes the message line                 | `stderr`                       |
-| `help page`                 | D2    | `snapshot`  | `lint --help`                  | prints another page                      | registered                     |
-| `regex construct`           | D3    | `snapshot`  | `match` with a possessive `*+` | refuses                                  | registered                     |
-| `supported construct`       | D3    | `snapshot`  | `match` with a greedy `+`      | refuses                                  | `stderr`, `exit`, `unexpected` |
-| `settings value`            | D3    | `value`     | `lint`                         | refuses under the malformed-JSON prefix  | registered                     |
-| `timestamp directive`       | D3    | `directive` | `lint`                         | refuses                                  | registered                     |
-| `named zone`                | D3    | `zone`      | `lint`                         | refuses                                  | registered                     |
+| Fixture                     | Entry | Tree        | Command                        | The stand-in                             | Must show as                             |
+| --------------------------- | ----- | ----------- | ------------------------------ | ---------------------------------------- | ---------------------------------------- |
+| `pattern text`              | D1    | `snapshot`  | `match (`                      | prints another text after `Error: `      | registered                               |
+| `pattern warning`           | D1    | `snapshot`  | `match` with a nested set      | drops the `FutureWarning` lines          | registered                               |
+| `query text`                | D1    | `snapshot`  | `search '"' --raw`             | prints another text after the query      | registered                               |
+| `settings text`             | D1    | `malformed` | `lint`                         | prints another text after the prefix     | registered                               |
+| `changed prefix`            | D1    | `malformed` | `update --check`               | changes the wiki-written prefix          | `stderr`                                 |
+| `naming text`               | D1    | `pattern`   | `lint`                         | prints another text after the prefix     | registered                               |
+| `naming warning`            | D1    | `warned`    | `lint`                         | drops the `FutureWarning` lines          | registered                               |
+| `parser message`            | D2    | `snapshot`  | `lint` with an unknown option  | prints the usage error in another layout | registered                               |
+| `parameter message`         | D2    | `snapshot`  | `search --limit 0`             | keeps the message line in another layout | registered                               |
+| `changed parameter message` | D2    | `snapshot`  | `map --depth -1`               | changes the message line                 | `stderr`                                 |
+| `help page`                 | D2    | `snapshot`  | `lint --help`                  | prints another page                      | registered                               |
+| `regex construct`           | D3    | `snapshot`  | `match` with a possessive `*+` | refuses                                  | registered                               |
+| `supported construct`       | D3    | `snapshot`  | `match` with a greedy `+`      | refuses                                  | `stderr`, `exit`, `unexpected`           |
+| `settings value`            | D3    | `value`     | `lint`                         | refuses under the malformed-JSON prefix  | registered                               |
+| `timestamp directive`       | D3    | `directive` | `lint`                         | refuses in a line that names the field   | registered                               |
+| `unnamed field`             | D3    | `directive` | `map`                          | refuses in a line that names no field    | `stdout`, `stderr`, `exit`, `unexpected` |
+| `named zone`                | D3    | `zone`      | `lint`                         | refuses in a line that names the field   | registered                               |
 
 | Tree        | Sets in the settings file                  |
 | ----------- | ------------------------------------------ |

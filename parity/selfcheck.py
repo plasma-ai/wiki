@@ -115,6 +115,17 @@ _REFUSED_VALUE = {
     'stderr': [_KEPT, rf'\1{_MALFORMED}NaN at column 12\n'],
     'exit': 2,
 }
+# a refusal of a settings field, in a line that names the field
+_REFUSED_FORMAT = {
+    'stdout': [_WHOLE, ''],
+    'stderr': [_KEPT, r'\1Error: timestamp.format refused by the stand-in.\n'],
+    'exit': 2,
+}
+_REFUSED_ZONE = {
+    'stdout': [_WHOLE, ''],
+    'stderr': [_KEPT, r'\1Error: timestamp.timezone refused by the stand-in.\n'],
+    'exit': 2,
+}
 # a zone file that only the `tzdata` package holds: TZif, one type, UTC
 _ZONES = 'zones'
 _TZIF = (
@@ -317,15 +328,24 @@ FIXTURES = (
         entry='D3',
         tree='directive',
         args=('lint',),
-        edit=_REFUSED,
+        edit=_REFUSED_FORMAT,
         codes=frozenset({0, 1}),
+    ),
+    Fixture(
+        name='unnamed field',
+        entry='D3',
+        tree='directive',
+        args=('map',),
+        edit=_REFUSED,
+        codes=frozenset({0}),
+        shows=(('stdout', ''), ('stderr', ''), ('exit', ''), ('unexpected', 'exit 2')),
     ),
     Fixture(
         name='named zone',
         entry='D3',
         tree='zone',
         args=('lint',),
-        edit=_REFUSED,
+        edit=_REFUSED_ZONE,
         codes=frozenset({0, 1}),
     ),
 )

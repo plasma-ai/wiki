@@ -35,14 +35,23 @@ _INSIDE = (
     r'^\A\b\B\d\D\w\W\s\S.[a-z\d^]|(?:x)(?P<n>y)(?P=n)(z)\2'
     r'(?=a)(?!b)(?<=c)(?<!d)a*?b+?c??d{1,2}\Z$'
 )
-# the prefix a library's text follows in a malformed settings file, and a
-# usage error as v1 prints one that wiki's own code raised
+# the prefixes a library's text follows: in a malformed settings file, and
+# behind an invalid query
 _MALFORMED = b'Error: Malformed JSON in .wiki/settings.json: '
+_QUERY = b"Error: Invalid FTS5 query '\"': "
+# a usage error as v1 prints one that wiki's own code raised, the same in
+# another layout, and one the parser detected
 _USAGE = (
     b"Usage: wiki map [OPTIONS] [name]\nTry 'wiki map --help' for help.\n\n"
     b'Error: Invalid value: --depth must be >= 0.\n'
 )
 _KEPT = b'Error: Invalid value: --depth must be >= 0.\n\nUsage: wiki map [NAME]\n'
+_PARSER = (
+    b"Usage: wiki lint [OPTIONS]\nTry 'wiki lint --help' for help.\n\n"
+    b'Error: No such option: --parity\n'
+)
+# a settings file whose `timestamp.format` is outside the supported set
+_FORMAT = b'{"timestamp": {"format": "%j"}}'
 
 
 @pytest.fixture(scope='module')
@@ -256,6 +265,31 @@ def _record(
             (),
             None,
         ),
+        (
+            ('match', '--ignore-case', r'(a)\1'),
+            None,
+            (b'x\n', b'', 0),
+            (b'', b'Error: No.\n', 2),
+            (),
+            'D3',
+        ),
+        # D3: a settings field is refused in a line that names it
+        (
+            ('read', 'page'),
+            _FORMAT,
+            (b'x\n', b'', 0),
+            (b'', b'Error: timestamp.format: No.\n', 2),
+            (),
+            'D3',
+        ),
+        (
+            ('read', 'page'),
+            _FORMAT,
+            (b'x\n', b'', 0),
+            (b'', b'Error: naming.pattern: No.\n', 2),
+            (),
+            None,
+        ),
         # D3: a settings value is refused as malformed JSON, and no other way
         (
             ('lint',),
@@ -292,6 +326,30 @@ def _record(
         ),
         (
             ('lint',),
+            b'{"parity": ',
+            (b'', _MALFORMED + b'one\n', 2),
+            (b'', _MALFORMED + b'two\nmore\n', 2),
+            (),
+            None,
+        ),
+        (
+            ('lint',),
+            b'{"parity": ',
+            (b'', _MALFORMED + b'one\nmore\n', 2),
+            (b'', _MALFORMED + b'two\n', 2),
+            (),
+            None,
+        ),
+        (
+            ('lint',),
+            b'{"parity": ',
+            (b'', _MALFORMED + b'one\n', 2),
+            (b'', _MALFORMED + b'two\n', 1),
+            (),
+            None,
+        ),
+        (
+            ('lint',),
             b'{"parity": 1}',
             (b'', _MALFORMED + b'one\n', 2),
             (b'', _MALFORMED + b'two\n', 2),
@@ -305,6 +363,23 @@ def _record(
             (b'', _MALFORMED + b'two\n', 2),
             (),
             'D1',
+        ),
+        # D1: a text after the query, behind v1's own prefix
+        (
+            ('search', '"', '--raw'),
+            None,
+            (b'', _QUERY + b'one\n', 2),
+            (b'', _QUERY + b'two\n', 2),
+            (),
+            'D1',
+        ),
+        (
+            ('search', '"', '--raw'),
+            None,
+            (b'', _QUERY + b'one\n', 2),
+            (b'', b"Error: Invalid query '\"': two\n", 2),
+            (),
+            None,
         ),
         # D1: v1's text is another error than its `re` raises on the pattern
         (
@@ -343,10 +418,45 @@ def _record(
             None,
         ),
         (('map', '--depth', '-1'), None, (b'', _USAGE, 1), (b'', _KEPT, 1), (), None),
+        (
+            ('map', '--depth', '-1'),
+            None,
+            (b'', _USAGE, 2),
+            (b'', _KEPT, 2),
+            ('tree/page.md',),
+            None,
+        ),
+        (
+            ('map', '--depth', '-1'),
+            None,
+            (b'x\n', _USAGE, 2),
+            (b'x\n', _KEPT, 2),
+            (),
+            None,
+        ),
+        # D2: the message line of the parser, in the other parser's words
+        (
+            ('lint', '--parity'),
+            None,
+            (b'', _PARSER, 2),
+            (b'', b"error: unexpected argument '--parity'\n", 2),
+            (),
+            'D2',
+        ),
+        (('lint', '--parity'), None, (b'', _PARSER, 2), (b'', b'', 2), (), None),
         # D2: a help page only where help was asked for and shown
         (('lint', '--help'), None, (b'Usage: a\n', b'', 0), (b'b\n', b'', 0), (), 'D2'),
         (('lint',), None, (b'Usage: a\n', b'', 0), (b'b\n', b'', 0), (), None),
         (('lint', '--help'), None, (b'Usage: a\n', b'', 2), (b'b\n', b'', 2), (), None),
+        (
+            ('search', '--', '--help'),
+            None,
+            (b'a\n', b'', 0),
+            (b'b\n', b'', 0),
+            (),
+            None,
+        ),
+        (('lint', '--help'), None, (b'Usage: a\n', b'', 0), (b'', b'', 0), (), None),
     ],
     ids=[
         'refusal',
@@ -359,21 +469,35 @@ def _record(
         'pattern that is an option value',
         'pattern under a short flag',
         'pattern beside a short value',
+        'pattern under a long flag',
+        'field refused by name',
+        'field refused under another name',
         'value refused as malformed',
         'value refused another way',
         'malformed text',
         'malformed with no text',
+        'malformed with a line behind the text',
+        "malformed with a line behind v1's text",
+        'malformed with another exit code',
         'malformed where v1 reads',
         'malformed by the digit limit',
+        'query text',
+        'query text behind another prefix',
         'another error',
         'warning',
         'another warning',
         'kept message',
         'kept message with more',
         'usage error that exits 1',
+        'usage error that wrote',
+        'usage error that printed',
+        'parser message',
+        'parser message with no words',
         'help page',
         'page without help',
         'help that exits 2',
+        'page that is no help',
+        'help with no page',
     ],
 )
 def test_classifier_excuses_only_its_own_frame(
@@ -389,13 +513,16 @@ def test_classifier_excuses_only_its_own_frame(
     """A command is excused under an entry only when the whole frame holds.
 
     Each excused command stands beside neighbors that differ from it in
-    one part of the frame: a refusal that printed, wrote, ran long or met
-    a v1 that refused too; a library's text with no text, or where v1's
-    own reader does not raise; a warning the pattern does not give; a kept
-    message with a line beside it; a page where no help was asked for.
-    Every neighbor stays a difference. The pattern of a ``match`` command
-    is found as the command line finds it, and v1's reader raises on an
-    integer past its digit limit as it does on a syntax error.
+    one part of the frame: a refusal that printed, wrote, ran long, met a
+    v1 that refused too or named another settings field; a library's text
+    with no text, with a line behind it, with another exit code, behind
+    another prefix, or where v1's own reader does not raise; a warning the
+    pattern does not give; a usage error that wrote, printed, said nothing
+    or holds a line beside the kept message; a page where no help was
+    asked for or none was shown. Every neighbor stays a difference. The
+    pattern of a ``match`` command is found as the command line finds it,
+    and v1's reader raises on an integer past its digit limit as it does
+    on a syntax error.
     """
     one = _record(tmp_path, *first, settings=settings)
     two = _record(tmp_path, *second, touched=touched, settings=settings)

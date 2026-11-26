@@ -21,7 +21,6 @@ from parity import classify, registry, runner, selfcheck, side, standin
 from .conftest import NOW
 
 __all__ = [
-    'test_registry_file_is_held_to_the_classifiers',
     'test_registry_file_that_breaks_a_rule_is_refused',
     'test_release_waits_for_every_entry',
     'test_every_classifier_has_fixtures_on_both_sides_of_its_scope',
@@ -32,28 +31,29 @@ __all__ = [
 
 pytestmark = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
 
-# one well-formed entry, as the registry file spells it
-_ENTRY = """
+# a well-formed file, as the registry spells one: an entry for each classifier
+_FILE = """
 [D1]
 scope = "A library's text."
 reason = "It belongs to the library."
 status = "approved"
 question = [7]
 check = "classifier"
+
+[D2]
+scope = "The parser's layout."
+reason = "It belongs to the parser."
+status = "approved"
+question = [7]
+check = "classifier"
+
+[D3]
+scope = "A refusal."
+reason = "It is loud."
+status = "approved"
+question = [7]
+check = "classifier"
 """
-
-
-def test_registry_file_is_held_to_the_classifiers() -> None:
-    """The committed file loads, and names exactly the classifiers there are.
-
-    A classifier with no entry would excuse a difference nobody registered,
-    and an entry that claims a classifier the harness lacks would pass as
-    checked.
-    """
-    entries = registry.load()
-    named = {id for id, entry in entries.items() if entry.check == 'classifier'}
-    assert named == set(classify.CLASSIFIERS)
-    assert all(entry.status in registry.STATUSES for entry in entries.values())
 
 
 @pytest.mark.parametrize(
@@ -66,12 +66,29 @@ def test_registry_file_is_held_to_the_classifiers() -> None:
         ('check = "classifier"', 'check = "none"', 'does not say why'),
         ('check = "classifier"', 'check = "test"', 'names the classifiers'),
         ('[D1]', '[D11]', 'names the classifiers'),
+        ('question = [7]', 'question = 7', 'question of the wrong shape'),
+        ('question = [7]', 'question = ["7"]', 'question of the wrong shape'),
+        ('question = [7]', 'question = [7]\ntests = "abc"', 'tests of the wrong shape'),
+        ('question = [7]', 'question = [7]\ntest = ["abc"]', 'unknown field'),
+        ('[D1]', 'D0 = 1\n\n[D1]', 'is not a table'),
     ],
-    ids=['status', 'question', 'field', 'check', 'unchecked', 'missing', 'unknown'],
+    ids=[
+        'status',
+        'question',
+        'field',
+        'check',
+        'unchecked',
+        'missing',
+        'unknown',
+        'question that is no list',
+        'question that is no number',
+        'tests that are no list',
+        'mistyped field',
+        'entry that is no table',
+    ],
 )
 def test_registry_file_that_breaks_a_rule_is_refused(
     tmp_path: pathlib.Path,
-    monkeypatch: pytest.MonkeyPatch,
     old: str,
     new: str,
     message: str,
@@ -80,14 +97,16 @@ def test_registry_file_that_breaks_a_rule_is_refused(
 
     Each file differs from a well-formed one in one thing: a status or a
     check the registry does not have, an approval that cites no question,
-    a missing field, an unchecked entry that does not say why, and a set
-    of classifier entries that is not the set of classifiers.
+    a missing field, an unchecked entry that does not say why, a set of
+    classifier entries that is not the set of classifiers, a field of the
+    wrong shape or under a name the registry does not have, and an entry
+    that is no table. A list of tests read from a string would name one
+    test per character, and pass for an entry that names its tests.
     """
-    monkeypatch.setattr(classify, 'CLASSIFIERS', {'D1': classify.library_text})
     path = tmp_path / 'differences.toml'
-    path.write_text(_ENTRY, encoding='utf-8')
-    assert list(registry.load(path)) == ['D1']
-    path.write_text(_ENTRY.replace(old, new), encoding='utf-8')
+    path.write_text(_FILE, encoding='utf-8')
+    assert list(registry.load(path)) == ['D1', 'D2', 'D3']
+    path.write_text(_FILE.replace(old, new, 1), encoding='utf-8')
     with pytest.raises(ValueError, match=message):
         registry.load(path)
 

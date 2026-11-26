@@ -22,6 +22,7 @@ from .conftest import NOW
 __all__ = [
     'test_v1_sides_run_as_the_oracle_names_them',
     'test_matrix_command_strips_only_a_declared_notice',
+    'test_matrix_command_passes_an_excused_command_only_when_told',
     'test_run_that_would_compare_nothing_is_refused',
     'test_failed_selfcheck_keeps_its_streams_and_trees',
     'test_registry_command_proves_the_classifiers',
@@ -43,6 +44,16 @@ sys.stderr.buffer.write(stderr)
 sys.exit(result.returncode)
 """
 
+# a side that runs the command it is given and words the text of `re` its
+# own way, as a second engine may
+_WORDED = """
+import subprocess, sys
+result = subprocess.run(sys.argv[1:], capture_output=True)
+stderr = result.stderr.replace(b'unterminated subpattern', b'unclosed group')
+sys.stdout.buffer.write(result.stdout)
+sys.stderr.buffer.write(stderr)
+sys.exit(result.returncode)
+"""
 
 # a describe command: what it prints comes from the side's own environment
 _DESCRIBE = "import os; print(os.environ['EXAMPLE'], os.environ['WIKI_NOW'])"
@@ -151,6 +162,50 @@ def test_matrix_command_strips_only_a_declared_notice(
         assert kept.read_bytes().startswith(side.NOTICE)
     # the snapshot and every clone are gone
     assert not (tmp_path / 'work' / 'example').exists()
+
+
+@pytest.mark.parametrize(
+    argnames=('options', 'code'),
+    argvalues=[([], 1), (['--registered'], 0)],
+    ids=['two builds of v1', 'second engine'],
+)
+def test_matrix_command_passes_an_excused_command_only_when_told(
+    tmp_path: pathlib.Path,
+    corpus: runner.Corpus,
+    engine: side.Side,
+    capsys: pytest.CaptureFixture[str],
+    options: list[str],
+    code: int,
+) -> None:
+    """A difference the registry lists passes only against a second engine.
+
+    The second side words the text of an invalid pattern its own way, which
+    the registry excuses in a second engine. Between two builds of v1
+    nothing is registered, so the command lists the excused command and
+    exits 1, and exits 0 only where ``--registered`` says what the second
+    side is.
+    """
+    sides = tmp_path / 'sides.toml'
+    worded = [sys.executable, '-c', _WORDED, *engine.argv]
+    sides.write_text(f'[worded]\nargv = {json.dumps(worded)}\n', encoding='utf-8')
+    corpora = tmp_path / 'corpora.toml'
+    corpora.write_text(
+        f'[example]\n'
+        f'checkout = {json.dumps(f"{corpus.checkout}")}\n'
+        f'root = {json.dumps(corpus.root)}\n',
+        encoding='utf-8',
+    )
+    argv = [
+        'matrix',
+        *('--sides', f'{sides}', '--a', 'oracle', '--b', 'worded'),
+        *('--corpora', f'{corpora}', '--stage', 'query'),
+        *('--work', f'{tmp_path / "work"}', '--out', f'{tmp_path / "out"}'),
+        *('--now', NOW),
+    ]
+    assert cli.main([*argv, *options]) == code
+    lines = capsys.readouterr().out.splitlines()
+    assert 'example: 0 differences' in lines
+    assert '  registered: query: worded: match (: D1' in lines
 
 
 @pytest.mark.parametrize(
@@ -313,6 +368,7 @@ def test_registry_command_proves_the_classifiers(
         'changed prefix',
         'changed parameter message',
         'supported construct',
+        'unnamed field',
     }
     # the snapshot and every clone are gone
     assert not (tmp_path / 'work' / 'example').exists()

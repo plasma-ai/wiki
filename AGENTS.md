@@ -471,7 +471,9 @@ changes the spec and the matching doctored check in the same commit.
 comparison may excuse. A classifier (`parity/classify.py`) recognizes an entry's
 difference, and `python -m parity registry` proves each one with one side
 against a stand-in: on fixtures inside the entry's scope and on one just outside
-it, which must still be reported. A change to the registry or to a classifier
+it, which must still be reported. The registry is for a second engine: between
+two builds of v1 nothing is registered, so `matrix` fails on an excused command
+unless `--registered` is given. A change to the registry or to a classifier
 changes the entry, the spec and the fixtures in the same commit, and its pull
 request names the question whose Decision line approves it. Two sides that fail
 the same way agree on everything, so each matrix case names the exit codes it

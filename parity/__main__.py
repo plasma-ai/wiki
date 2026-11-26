@@ -1,6 +1,6 @@
 """Command line of the parity harness.
 
-usage: python -m parity matrix --a NAME --b NAME [--sides FILE] --corpora FILE --work DIR --out DIR
+usage: python -m parity matrix --a NAME --b NAME [--registered] [--sides FILE] --corpora FILE --work DIR --out DIR
        python -m parity selfcheck --side NAME [--sides FILE] --corpora FILE --work DIR --out DIR
        python -m parity registry --side NAME [--sides FILE] --corpora FILE --work DIR --out DIR
        python -m parity oracle ensure [--side NAME]
@@ -15,6 +15,11 @@ registry file the harness cannot hold to its classifiers -- exits 2 before
 it snapshots anything. A side is one the sides file declares, or a v1 side
 of ``oracle.toml``. ``registry --release`` also exits 1 while an entry of
 the registry is not ready for a release.
+
+The registry lists what a second engine may do differently from v1, and two
+builds of v1 have nothing registered between them. ``matrix`` therefore
+counts a command the registry excuses as a result that is not the expected
+one, unless ``--registered`` says side ``b`` is a second engine.
 
 ``oracle ensure`` builds the oracle checkout and the venvs of its sides, and
 exits 2 when it refuses a checkout or a venv. ``oracle check`` holds
@@ -65,6 +70,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if name == 'matrix':
             command.add_argument('--a', required=True)
             command.add_argument('--b', required=True)
+            command.add_argument('--registered', action='store_true')
             command.add_argument('--stage', action='append', choices=matrix.STAGES)
             command.add_argument('--keep', action='store_true')
         else:
@@ -178,7 +184,11 @@ def _matrix(
     work: pathlib.Path,
     options: argparse.Namespace,
 ) -> tuple[dict[str, Any], bool]:
-    """Run the matrix on one corpus and save the streams that differ."""
+    """Run the matrix on one corpus and save the streams that differ.
+
+    The run passes with no difference, and with no excused command unless
+    ``--registered`` lets the registry's differences pass.
+    """
     plan = runner.prepare(corpus, work=work, seed=options.seed)
     result = runner.run(
         plan,
@@ -198,7 +208,8 @@ def _matrix(
         print(f'  registered: {_line(excused)}')
     for name in _no_hits(result.report):
         print(f'  found nothing: {name}')
-    return dict(result.report), not result.differences
+    passed = (not result.differences) and (options.registered or not result.excused)
+    return dict(result.report), passed
 
 
 def _selfcheck(

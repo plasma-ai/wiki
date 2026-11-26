@@ -19,6 +19,11 @@ STATUSES = ('proposed', 'approved')
 #: what checks an entry: a classifier, tests, or nothing
 CHECKS = ('classifier', 'test', 'none')
 
+# the fields of an entry: those that hold text, and those that hold a list,
+# with what the list holds
+_TEXTS = ('scope', 'reason', 'status', 'check', 'unchecked')
+_LISTS = {'question': int, 'tests': str}
+
 
 @dataclasses.dataclass(frozen=True)
 class Entry:
@@ -51,16 +56,32 @@ def load(path: Optional[pathlib.Path] = None) -> dict[str, Entry]:
     """Return the entries of the registry file, by id.
 
     Raises:
-        ValueError: If an entry lacks a field or holds a value outside
-            the allowed ones, if an approved entry cites no question, or
-            if the entries checked by a classifier are not exactly the
-            ids :data:`classify.CLASSIFIERS` holds.
+        ValueError: If an entry is no table, lacks a field, or holds a
+            field or a value outside the allowed ones, if an approved
+            entry cites no question, or if the entries checked by a
+            classifier are not exactly the ids
+            :data:`classify.CLASSIFIERS` holds.
 
     """
     path = path or PATH
     data = tomllib.loads(path.read_text(encoding='utf-8'))
     result = {}
     for id, table in data.items():
+        if not isinstance(table, dict):
+            raise ValueError(f'{path.name}: {id} is not a table.')
+        # hold every field to its shape: a string read as a list would name
+        # one test per character
+        for name, value in table.items():
+            if name in _TEXTS:
+                shaped = isinstance(value, str)
+            elif name in _LISTS:
+                shaped = isinstance(value, list) and all(
+                    type(item) is _LISTS[name] for item in value
+                )
+            else:
+                raise ValueError(f'{path.name}: {id} has the unknown field {name!r}.')
+            if not shaped:
+                raise ValueError(f'{path.name}: {id} has a {name} of the wrong shape.')
         try:
             entry = Entry(
                 id=id,

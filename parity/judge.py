@@ -16,13 +16,13 @@ answer comes from the interpreter the side runs, so it holds for that side's
 - ``kind: format`` with ``format``, a ``strftime`` string: ``outside``.
 - ``kind: zone`` with ``key``, an IANA name: ``outside``.
 - ``kind: settings`` with ``data``, the base64 of a settings file's bytes:
-  ``error``, ``values``, ``outside``, and ``pattern``, the ``regex`` answer
-  for its ``naming.pattern``.
+  ``error``, ``values``, ``fields``, ``outside``, and ``pattern``, the
+  ``regex`` answer for its ``naming.pattern``.
 
 ``error`` is the text of what the library raised, or null. ``warnings``
 holds the text of each ``FutureWarning`` of ``re``. ``outside`` names each
 reason the input is outside the supported set, and is empty for an input
-inside it.
+inside it. ``fields`` names the fields of a settings file that are outside it.
 
 Run with ``-P`` so the script's folder stays off ``sys.path``.
 """
@@ -156,14 +156,16 @@ def settings(data: bytes) -> dict[str, Any]:
 
     ``error`` is the text ``json.loads`` raises with; bytes that are not
     UTF-8 never reach it. ``values`` names what the JSON text holds that
-    only Python's reader takes. ``outside`` holds those and the reasons of
-    the three fields an engine supports a fixed set of: ``naming.pattern``,
-    ``timestamp.format`` and ``timestamp.timezone``. ``pattern`` is the
-    :func:`regex` answer for ``naming.pattern``, or null without one.
+    only Python's reader takes. ``fields`` names those of the three fields
+    an engine supports a fixed set of that lie outside it:
+    ``naming.pattern``, ``timestamp.format`` and ``timestamp.timezone``.
+    ``outside`` holds the values and each field's reasons. ``pattern`` is
+    the :func:`regex` answer for ``naming.pattern``, or null without one.
     """
     result: dict[str, Any] = {
         'error': None,
         'values': [],
+        'fields': [],
         'outside': [],
         'pattern': None,
     }
@@ -179,21 +181,23 @@ def settings(data: bytes) -> dict[str, Any]:
         result['error'] = f'{e}'
         return result
     result['values'] = _values(text)
-    outside = list(result['values'])
     naming = value.get('naming') if isinstance(value, dict) else None
     stamps = value.get('timestamp') if isinstance(value, dict) else None
+    # gather each field's reasons
+    reasons: dict[str, list[str]] = {}
     if isinstance(naming, dict) and isinstance(naming.get('pattern'), str):
         result['pattern'] = regex(naming['pattern'])
-        for reason in result['pattern']['outside']:
-            outside.append(f'naming.pattern: {reason}')
+        reasons['naming.pattern'] = result['pattern']['outside']
     if isinstance(stamps, dict):
         if isinstance(stamps.get('format'), str):
-            for reason in timestamp(stamps['format'])['outside']:
-                outside.append(f'timestamp.format: {reason}')
+            reasons['timestamp.format'] = timestamp(stamps['format'])['outside']
         if isinstance(stamps.get('timezone'), str) and stamps['timezone']:
-            for reason in zone(stamps['timezone'])['outside']:
-                outside.append(f'timestamp.timezone: {reason}')
-    result['outside'] = outside
+            reasons['timestamp.timezone'] = zone(stamps['timezone'])['outside']
+    result['fields'] = [field for field, found in reasons.items() if found]
+    result['outside'] = [
+        *result['values'],
+        *(f'{field}: {reason}' for field, found in reasons.items() for reason in found),
+    ]
     return result
 
 

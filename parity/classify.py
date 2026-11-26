@@ -194,7 +194,8 @@ def refusal(command: Command, judge: Optional[Judge]) -> bool:
 
     v1 ran the command. The second side wrote nothing, printed one error
     line and exited 2, and v1's own interpreter calls an input of the
-    command unsupported. A settings value is refused as malformed JSON.
+    command unsupported. A settings value is refused as malformed JSON, and
+    a settings field in a line that names the field.
     """
     first, second = command.first.outcome, command.second.outcome
     if (first.code not in (0, 1)) or (second.code != 2):
@@ -206,8 +207,12 @@ def refusal(command: Command, judge: Optional[Judge]) -> bool:
     settings = _settings(command, judge)
     if settings['values']:
         return second.stderr.startswith(_MALFORMED)
+    # hold the refusal of a settings field to the field's name: v1 reads the
+    # field in some commands only, so any other error would pass for one
+    if any(field.encode('utf-8') in second.stderr for field in settings['fields']):
+        return True
     pattern = _pattern(command, judge)
-    return bool(settings['outside']) or bool(pattern and pattern['outside'])
+    return bool(pattern and pattern['outside'])
 
 
 #: the classifier of each registry entry that has one, by the entry's id
@@ -338,7 +343,13 @@ def _pattern(command: Command, judge: Optional[Judge]) -> Optional[dict[str, Any
 def _settings(command: Command, judge: Optional[Judge]) -> dict[str, Any]:
     """Return the judge's answer for the settings file v1 found."""
     if (judge is None) or (command.first.settings is None):
-        return {'error': None, 'values': [], 'outside': [], 'pattern': None}
+        return {
+            'error': None,
+            'values': [],
+            'fields': [],
+            'outside': [],
+            'pattern': None,
+        }
     data = base64.b64encode(command.first.settings).decode('ascii')
     return judge.ask(kind='settings', data=data)
 
@@ -347,7 +358,7 @@ def _tails(first: bytes, second: bytes, prefix: bytes) -> Optional[tuple[bytes, 
     """Return what each stream holds behind its last line that opens with ``prefix``.
 
     ``None`` unless the streams are equal up to the end of that prefix and
-    each then holds some text to the end of its last line.
+    each then ends with one line of text.
     """
     start = first.rfind(b'\n' + prefix) + 1
     if (start == 0) and not first.startswith(prefix):
@@ -356,6 +367,7 @@ def _tails(first: bytes, second: bytes, prefix: bytes) -> Optional[tuple[bytes, 
     if first[:cut] != second[:cut]:
         return None
     tails = (first[cut:], second[cut:])
-    if any((len(tail) < 2) or not tail.endswith(b'\n') for tail in tails):
+    # hold each text to its line: a line behind it is no library's text
+    if any((len(tail) < 2) or (tail.find(b'\n') != len(tail) - 1) for tail in tails):
         return None
     return tails[0][:-1], tails[1][:-1]
