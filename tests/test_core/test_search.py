@@ -91,11 +91,13 @@ def test_search_serves_an_edited_page_by_its_current_text_alone(
     second one, so a term the edit removed stops matching and the page
     comes back once for a term both versions hold.
     """
+    # the page answers for its first text
     wiki = _make_wiki(tmp_path, folders={'core': []})
     page = tmp_path / 'core' / 'page.md'
     page.write_text('# page\n\nSharedtoken firsttoken draft.\n', encoding='utf-8')
     assert [path for path, _, _ in wiki.search('firsttoken')] == ['core/page.md']
 
+    # an edit replaces the row: the old term is gone, the shared term hits once
     page.write_text('# page\n\nSharedtoken secondtoken revision.\n', encoding='utf-8')
     assert wiki.search('firsttoken') == []
     assert [path for path, _, _ in wiki.search('secondtoken')] == ['core/page.md']

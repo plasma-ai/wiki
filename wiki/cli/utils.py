@@ -23,8 +23,8 @@ from wiki.constants import (
     DEFAULT_WIKI_NAME,
     WIKI_CONFIG_DIR,
     WIKI_DIR,
+    WIKI_FREEZE_TIME,
     WIKI_INDEX,
-    WIKI_NOW,
     WIKI_SETTINGS,
 )
 from wiki.core.event import Event
@@ -62,10 +62,10 @@ _MERGE_DRIVER = (
     ' else git merge-file -L ours -L base -L theirs --marker-size=%L %A %O %B; fi'
 )
 
-# the line a command opens stderr with while WIKI_NOW fixes the clock, so the
-# test seam is never silent in a shell it leaked into
+# the line a command opens stderr with while WIKI_FREEZE_TIME fixes the
+# clock, so the test seam is never silent in a shell it leaked into
 _PINNED_CLOCK_NOTICE = (
-    f'{WIKI_NOW} is set: timestamps use its fixed instant, not the clock.'
+    f'{WIKI_FREEZE_TIME} is set: timestamps use its fixed instant, not the clock.'
 )
 
 # the .gitattributes blocks mapping files to the merge driver, each a comment
@@ -87,9 +87,9 @@ def command(
     beside typer's own usage errors, so exit 1 is left to mean exactly
     the command's own nonzero outcome and a script gating on one can
     never read a failed run as the other. A command run under a set
-    ``WIKI_NOW`` opens stderr with one fixed line; an invalid value is a
-    command error, raised before the command does anything. A private
-    command never reads the variable.
+    ``WIKI_FREEZE_TIME`` opens stderr with one fixed line; an invalid
+    value is a command error, raised before the command does anything.
+    A private command never reads the variable.
     """
 
     def decorator(f: Callable, /) -> Callable:
@@ -100,8 +100,8 @@ def command(
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
                 # NOTE: a private command's exit code is its caller's protocol
-                # (git reads the merge driver's as the merge outcome), so a
-                # WIKI_NOW the command never reads must not fail it
+                #   (git reads the merge driver's as the merge outcome), so a
+                #   WIKI_FREEZE_TIME the command never reads must not fail it
                 if (not private) and (_pinned_now() is not None):
                     typer.echo(_PINNED_CLOCK_NOTICE, err=True)
                 return f(*args, **kwargs)

@@ -4,13 +4,11 @@
 # holds the file level with v1.
 
 # the oracle commit: the merge base of this branch and `base`
-commit = "d901e2bfec6e4f3117c4136eacf8a3496d90fdb5"
+commit = "4c870777b1eb38c7f40aed00ac3ed09eabc3f0db"
 # what `wiki --version` prints at that commit
 version = "1.9.0"
 # the branch v1 lives on
 base = "dev"
-# the branch that holds the oracle commit until `base` holds it
-pending = "stopgap-1.9.1"
 
 # the oracle side: the interpreter and the packages that define parity
 [sides.oracle]
