@@ -2,17 +2,23 @@
 
 The runs of a perturbation are covered through the command line; this module
 carries what a perturbation owes a run: the same tree every time for one
-seed, every operator on every tree, the kinds its changes name, the three
-trees its stages run on, and the small trees and the seeds of a loop.
+seed, every operator on every tree, no write out of its checkout, the kinds
+its changes name, the edits v1 restamps and the ones it leaves, a page its
+tag finds, the three trees its stages run on, and the small trees and the
+seeds of a loop.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import datetime as dt
 import hashlib
+import json
+import os
 import pathlib
 import shutil
 import sys
+import zoneinfo
 
 import pytest
 
@@ -23,8 +29,14 @@ from .conftest import NOW, _git, _needs_git
 __all__ = [
     'test_one_seed_gives_one_perturbation',
     'test_operators_draw_only_what_the_indexes_list',
+    'test_index_that_is_a_symlink_is_never_written',
+    'test_write_that_leads_out_of_the_checkout_is_refused',
     'test_perturbed_trees_show_the_kinds_their_changes_name',
+    'test_operator_alone_shows_every_kind_it_names',
+    'test_edit_at_a_time_its_stamp_covers_is_not_restamped',
+    'test_time_a_stamp_covers_outlasts_later_writes',
     'test_page_stamped_since_its_commit_names_no_restamp',
+    'test_search_by_the_tag_that_finds_nothing_is_a_finding',
     'test_stages_of_a_perturbation_run_on_its_three_trees',
     'test_kind_list_that_disagrees_with_the_operators_is_refused',
     'test_kind_that_no_tree_shows_is_a_finding',
@@ -45,6 +57,15 @@ sys.stdout.write(f'{indexed} {marked}')
 """
 # a home that is a test of v1, as the kind list names one
 _HELD = 'tests/test_core/test_plan.py::test_update_preserves_concurrent_edit'
+# the form of a stamp under the default timestamp policy
+_DEFAULT = '%Y-%m-%dT%H:%M:%SZ'
+# timestamp policies of a wiki's own: an offset in every stamp, and a stamp
+# that names a day, which is read in the policy's zone
+_POLICIES = {
+    'default': {},
+    'zone': {'timezone': 'Asia/Kolkata', 'format': '%d/%m/%Y %H:%M:%S %z'},
+    'day': {'timezone': 'America/New_York', 'format': '%Y-%m-%d'},
+}
 
 
 @_needs_git
@@ -133,6 +154,83 @@ def test_operators_draw_only_what_the_indexes_list(tmp_path: pathlib.Path) -> No
 
 
 @_needs_git
+def test_index_that_is_a_symlink_is_never_written(
+    tmp_path: pathlib.Path,
+    corpus: runner.Corpus,
+) -> None:
+    """A folder whose index is a symlink is left alone under every seed.
+
+    A clone keeps the target of a symlink as it is written, so a write to
+    such an index would change the file the link names, in the checkout the
+    clone was taken from. The folder has a row in the index above it and a
+    page of its own; no operator changes the index, the file it points at
+    or the page.
+    """
+    outside = tmp_path / 'outside.md'
+    row = '[[linked/page|page]]: A page.'
+    outside.write_bytes(fixtures._index('linked', 'A linked index.', [row]))
+    held = (outside.read_bytes(), outside.stat().st_mtime_ns)
+    source = tmp_path / 'source'
+    shutil.copytree(corpus.checkout, source, symlinks=True)
+    root = source / corpus.root
+    (root / 'linked').mkdir()
+    (root / 'linked' / '_index.md').symlink_to(outside)
+    page = fixtures._page('linked/page', 'A page.', 'A body.')
+    (root / 'linked' / 'page.md').write_bytes(page)
+    lines = (root / '_index.md').read_text(encoding='utf-8').split('\n')
+    at = lines.index('***')
+    lines[at:at] = ['[[linked/_index|linked]]: A linked index.', '']
+    (root / '_index.md').write_text('\n'.join(lines), encoding='utf-8')
+    for seed in range(12):
+        checkout = tmp_path / f'{seed}'
+        shutil.copytree(source, checkout, symlinks=True)
+        done = perturb.apply(checkout, root=corpus.root, seed=seed, stands=root)
+        changed = {relpath for paths in done.applied.values() for relpath in paths}
+        assert not {relpath for relpath in changed if relpath.startswith('linked')}
+        assert (outside.read_bytes(), outside.stat().st_mtime_ns) == held
+        assert (checkout / corpus.root / 'linked' / 'page.md').read_bytes() == page
+
+
+@_needs_git
+@pytest.mark.parametrize(
+    argnames='linked',
+    argvalues=['root', 'settings', 'settings folder', 'ignore file'],
+)
+def test_write_that_leads_out_of_the_checkout_is_refused(
+    tmp_path: pathlib.Path,
+    corpus: runner.Corpus,
+    linked: str,
+) -> None:
+    """A perturbation writes no file through a link that leaves its checkout.
+
+    The wiki root, the settings file, the folder that holds it and the
+    ignore file at the top of the checkout are each a symlink to a place
+    outside it here. The perturbation is refused, and what lies outside
+    stays as it was: a rename of the root's folders, a pattern in the
+    settings and a pattern in the ignore file would each have landed there.
+    """
+    checkout = tmp_path / 'checkout'
+    shutil.copytree(corpus.checkout, checkout, symlinks=True)
+    relpath = {
+        'root': corpus.root,
+        'settings': f'{corpus.root}/{runner.WIKI_SETTINGS}',
+        'settings folder': f'{corpus.root}/.wiki',
+        'ignore file': '.gitignore',
+    }[linked]
+    inside = checkout / relpath
+    outside = tmp_path / 'outside'
+    if os.path.lexists(inside):
+        inside.rename(outside)
+    else:
+        outside.write_bytes(b'*.log\n')
+    inside.symlink_to(outside)
+    held = manifest.scan(tmp_path, skip=frozenset({'checkout'}))
+    with pytest.raises(ValueError, match='leads out of'):
+        perturb.apply(checkout, root=corpus.root, seed=0, stands=checkout / corpus.root)
+    assert manifest.scan(tmp_path, skip=frozenset({'checkout'})) == held
+
+
+@_needs_git
 def test_perturbed_trees_show_the_kinds_their_changes_name(
     tmp_path: pathlib.Path,
     corpus: runner.Corpus,
@@ -178,6 +276,116 @@ def test_perturbed_trees_show_the_kinds_their_changes_name(
 
 
 @_needs_git
+@pytest.mark.parametrize(
+    argnames='name',
+    argvalues=[operator.name for operator in perturb.operators() if operator.change],
+)
+def test_operator_alone_shows_every_kind_it_names(
+    tmp_path: pathlib.Path,
+    corpus: runner.Corpus,
+    engine: side.Side,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+) -> None:
+    """Each operator shows v1 the kinds it names with no other operator's help.
+
+    Several operators name one kind, and on a tree that all of them changed
+    one that does not cause the kind would pass on another's change. Here
+    one operator applies, on a converged wiki that shows none of the kinds
+    by itself: its change names every kind the operator names, and the tap
+    meets each of them. The operator that tags a page applies too, since a
+    stage searches by its tag; it names no kind.
+    """
+    alone = tuple(
+        operator
+        for operator in perturb.operators()
+        if (operator.name in (name, 'add-tags')) or operator.stage
+    )
+    monkeypatch.setattr(perturb, 'operators', lambda: alone)
+    plan, done = perturb.prepare(corpus, work=tmp_path / 'work', seed=5, loop=True)
+    (operator,) = [operator for operator in alone if operator.name == name]
+    expected = done.expected[perturb.EDITED]
+    assert set(expected['notices']) == set(operator.notices)
+    assert set(expected['issues']) == set(operator.issues)
+    shown = runner.tap(plan, engine, now=NOW)
+    assert set(operator.notices) <= set(shown['notices'])
+    assert set(operator.issues) <= set(shown['issues'])
+
+
+@_needs_git
+@pytest.mark.parametrize(argnames='policy', argvalues=list(_POLICIES))
+def test_edit_at_a_time_its_stamp_covers_is_not_restamped(
+    tmp_path: pathlib.Path,
+    corpus: runner.Corpus,
+    engine: side.Side,
+    policy: str,
+) -> None:
+    """v1 restamps an edit made far from the page's stamp, and no edit the stamp covers.
+
+    v1 reads a page that git holds with its stamp as edited since, unless
+    the page was last written in the period its stamp names or in the
+    minute after: that write is the one that stamped it. The perturbation
+    leaves pages on both sides of the rule, under the wiki's own form and
+    zone of a stamp. ``update`` restamps each page it left far from its
+    stamp and none it left at a time the stamp covers, and a page listed as
+    covered that ``update`` restamps is a finding.
+    """
+    checkout = _stamped(tmp_path / 'checkout', corpus, _POLICIES[policy])
+    stamped = dataclasses.replace(corpus, checkout=checkout)
+    plan, done = perturb.prepare(stamped, work=tmp_path / 'work', seed=5, loop=True)
+    findings, shown = perturb.check(plan, done, engine, now=NOW)
+    assert findings == []
+    edited = set(done.applied['dirty-edit'])
+    restamped = set(shown[perturb.EDITED]['restamped'])
+    assert done.kept
+    assert set(done.kept) < edited
+    assert not (restamped & set(done.kept))
+    assert restamped & edited
+    assert 'restamp' in done.expected[perturb.EDITED]['notices']
+    # a page that is restamped while the perturbation lists it as covered
+    (far, *_) = sorted(restamped & edited)
+    doctored = dataclasses.replace(done, kept=(far,))
+    findings, _ = perturb.check(plan, doctored, engine, now=NOW)
+    assert [(finding.kind, finding.subject) for finding in findings] == [
+        ('stamp', f'example seed 5: {far}'),
+        ('stamp', f'example seed 5: {far}'),
+    ]
+
+
+@_needs_git
+def test_time_a_stamp_covers_outlasts_later_writes(
+    tmp_path: pathlib.Path,
+    corpus: runner.Corpus,
+) -> None:
+    """A page left at a time its stamp covers stays there whatever is added to it.
+
+    The operators that add a link or a marker to a body draw among all
+    pages, and a later write at one of the two fixed times would turn the
+    edit into one made since the stamp. Under every seed here each covered
+    page ends within the minute its stamp opens, and under some seed a
+    later operator wrote to one.
+    """
+    root = corpus.checkout / corpus.root
+    again = 0
+    for seed in range(12):
+        checkout = tmp_path / f'{seed}'
+        shutil.copytree(corpus.checkout, checkout, symlinks=True)
+        done = perturb.apply(checkout, root=corpus.root, seed=seed, stands=root)
+        for page in done.kept:
+            path = checkout / corpus.root / page
+            (line,) = [
+                line
+                for line in path.read_text(encoding='utf-8').split('\n')
+                if line.startswith('updated: ')
+            ]
+            stamp = dt.datetime.strptime(line.removeprefix('updated: '), _DEFAULT)
+            since = path.stat().st_mtime - stamp.replace(tzinfo=dt.UTC).timestamp()
+            assert 0 <= since < 60
+            again += sum(paths.count(page) for paths in done.applied.values()) > 1
+    assert again
+
+
+@_needs_git
 def test_page_stamped_since_its_commit_names_no_restamp(
     tmp_path: pathlib.Path,
     corpus: runner.Corpus,
@@ -203,6 +411,46 @@ def test_page_stamped_since_its_commit_names_no_restamp(
     findings, shown = perturb.check(plan, done, engine, now=NOW)
     assert findings == []
     assert 'restamp' not in shown[perturb.EDITED]['notices']
+
+
+@_needs_git
+def test_search_by_the_tag_that_finds_nothing_is_a_finding(
+    tmp_path: pathlib.Path,
+    corpus: runner.Corpus,
+    engine: side.Side,
+) -> None:
+    """A run in which no side finds a page by the perturbation's tag has a finding.
+
+    The operator that tags pages names no kind, so nothing else would
+    notice that it had stopped working. Each mode searches by the tag: a
+    loop in its short stage, and a corpus in the matrix, whose own sample
+    could have drawn a tag the wiki held before. The search finds a page of
+    the perturbed wiki, and it is a finding where the tagged page does not
+    hold the word the search names.
+    """
+    loop, done = perturb.prepare(corpus, work=tmp_path / 'loop', seed=5, loop=True)
+    word, tag = done.tagged
+    assert tag == perturb.TAG
+    whole, _ = perturb.prepare(corpus, work=tmp_path / 'corpus', seed=5, loop=False)
+    (query,) = [stage for stage in whole.stages if stage.name == 'query']
+    assert ('search', word, '--tag', tag) in [case.args for case in query.cases]
+    result = runner.run(loop, [engine], now=NOW, only=[perturb.EDITED])
+    assert perturb.unfound(done, result.report) == []
+    doctored = dataclasses.replace(done, tagged=('absentword', tag))
+    stages = perturb.stages(doctored, root=corpus.root, loop=True)
+    result = runner.run(
+        dataclasses.replace(loop, stages=stages),
+        [engine],
+        now=NOW,
+        only=[perturb.EDITED],
+    )
+    assert perturb.unfound(doctored, result.report) == [
+        replay.Finding(
+            kind='tag',
+            subject=f'example seed 5: edited: search absentword --tag {tag}',
+            detail='no side finds a page',
+        )
+    ]
 
 
 @_needs_git
@@ -398,3 +646,38 @@ def test_seed_list_that_breaks_a_rule_is_refused(
     path.write_text('seeds = [7, 0, 3]\n', encoding='utf-8')
     assert perturb.load_seeds(path) == (7, 0, 3)
     assert len(perturb.load_seeds()) == 20
+
+
+# ------ helpers
+
+
+def _stamped(
+    checkout: pathlib.Path,
+    corpus: runner.Corpus,
+    policy: dict[str, str],
+) -> pathlib.Path:
+    """Copy the checkout of ``corpus`` under a timestamp policy, and return the copy.
+
+    Every stamp is written again in the form and the zone ``policy``
+    names, the settings name the policy, and the copy is committed, so git
+    holds every page with the stamp it has.
+    """
+    shutil.copytree(corpus.checkout, checkout, symlinks=True)
+    if not policy:
+        return checkout
+    root = checkout / corpus.root
+    zone = zoneinfo.ZoneInfo(policy['timezone'])
+    for path in root.rglob('*.md'):
+        lines = path.read_text(encoding='utf-8').split('\n')
+        for number, line in enumerate(lines):
+            key, _, value = line.partition(': ')
+            if key in ('created', 'updated'):
+                instant = dt.datetime.strptime(value, _DEFAULT).replace(tzinfo=dt.UTC)
+                stamp = instant.astimezone(zone).strftime(policy['format'])
+                lines[number] = f'{key}: {stamp}'
+        path.write_text('\n'.join(lines), encoding='utf-8')
+    settings = json.loads((root / runner.WIKI_SETTINGS).read_text(encoding='utf-8'))
+    text = json.dumps({**settings, 'timestamp': policy}, indent=2) + '\n'
+    (root / runner.WIKI_SETTINGS).write_text(text, encoding='utf-8')
+    _git(checkout, 'commit', '-q', '-a', '-m', 'stamps')
+    return checkout

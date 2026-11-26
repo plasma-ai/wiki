@@ -69,7 +69,9 @@ Both hold every perturbation to the kinds its operators name, and a run of
 every tree holds the kind list to the kinds it shows. They exit 0 when no
 tree shows a difference or a finding, and 1 otherwise. They exit 2, before a
 tree is written, as ``fixtures`` does, on a seed list or a kind list that
-breaks its rules, and on a kind list that disagrees with the operators.
+breaks its rules, and on a kind list that disagrees with the operators. A
+tree that ends in an error under a seed is printed and recorded, the others
+run on, and the run then exits 2.
 
 The registry lists what a second engine may do differently from v1, and two
 builds of v1 have nothing registered between them. ``matrix`` therefore
@@ -985,10 +987,15 @@ def _perturb(parser: argparse.ArgumentParser, options: argparse.Namespace) -> in
         unknown = [label for label in labels if label not in corpora]
         if unknown:
             parser.error(f'{options.corpora} declares no corpus named {unknown!r}.')
+        twice = sorted({label for label in labels if labels.count(label) > 1})
+        if twice:
+            parser.error(f'--corpus names a corpus twice: {twice!r}.')
         if not labels:
             parser.error(f'{options.corpora} declares no corpus.')
     if loop and options.every and (options.family is not None):
         parser.error('--every runs every tree, and --family names some.')
+    if loop and (options.jobs is not None) and (options.jobs < 1):
+        parser.error(f'--jobs must be at least 1, got {options.jobs}.')
     # resolve the sides: v1, and the engine if the run names one
     names = [suite.REFERENCE]
     if options.engine is not None:
@@ -1004,8 +1011,10 @@ def _perturb(parser: argparse.ArgumentParser, options: argparse.Namespace) -> in
     work = options.work.resolve() / _PERTURB
     try:
         fixtures.validate(work)
-        if not loop:
-            for label in labels:
+        for label in labels:
+            if loop:
+                perturb.carvable(corpora[label])
+            else:
                 runner.validate(corpora[label], work=work / _RUNS / label)
         header = _header(chosen, now=options.now)
     except ValueError as e:
@@ -1015,10 +1024,7 @@ def _perturb(parser: argparse.ArgumentParser, options: argparse.Namespace) -> in
     # each corpus in a repository of its own
     trees = [corpora[label] for label in labels]
     if loop and (options.corpora is not None):
-        try:
-            trees = [perturb.carve(tree, work / _TREES) for tree in trees]
-        except ValueError as e:
-            parser.error(f'{e}')
+        trees = [perturb.carve(tree, work / _TREES) for tree in trees]
     elif loop:
         try:
             trees, left = perturb.trees(
@@ -1061,26 +1067,46 @@ def _perturb(parser: argparse.ArgumentParser, options: argparse.Namespace) -> in
         loop=loop,
         second=bool(engines),
     )
+
+    def attempt(tree: Corpus, seed: int) -> Union[perturb.Trial, Exception]:
+        """Run one tree under one seed, and return the trial or the error that ended it."""
+        # NOTE: an error must not take the results of the other trials with
+        #   it: a loop runs for hours, and one copy that fails would end it
+        try:
+            return trial(tree, seed)
+        except Exception as e:
+            traceback.print_exc()
+            return e
+
     options.out.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
     rows: dict[str, list[dict[str, Any]]] = {tree.label: [] for tree in trees}
     shown = []
     failed = 0
+    errors = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
-        tried = pool.map(trial, *zip(*pairs))
-        for done in tried:
-            rows[done.label].append(_tried(done, header, out=options.out, loop=loop))
-            shown.extend(done.shown.values())
-            failed += done.failed
-    # a tree of a loop has one result file, with a row for each seed
-    if loop:
-        for label, held in rows.items():
-            document = {**header, 'corpus': label, 'seeds': held}
-            text = json.dumps(document, indent=2)
-            (options.out / f'{label}.json').write_text(text + '\n', encoding='utf-8')
+        tried = pool.map(attempt, *zip(*pairs))
+        for (tree, seed), done in zip(pairs, tried):
+            label = tree.label
+            if isinstance(done, Exception):
+                error = f'{type(done).__name__}: {done}'
+                print(f'{label} seed {seed}: error: {error}')
+                rows[label].append({'seed': seed, 'error': error})
+                errors += 1
+            else:
+                rows[label].append(_tried(done, header, out=options.out, loop=loop))
+                shown.extend(done.shown.values())
+                failed += done.failed
+            # a tree of a loop has one result file, with a row for each seed
+            # that has ended
+            if loop:
+                document = {**header, 'corpus': label, 'seeds': rows[label]}
+                text = json.dumps(document, indent=2)
+                path = options.out / f'{label}.json'
+                path.write_text(text + '\n', encoding='utf-8')
     # a run of every tree holds the kind list to the kinds the trees show
     findings = []
-    if not (options.corpus or (loop and options.family)):
+    if not (options.corpus or (loop and options.family) or errors):
         findings = perturb.unshown(listed, shown)
     for finding in findings:
         line = _line(finding)
@@ -1093,6 +1119,7 @@ def _perturb(parser: argparse.ArgumentParser, options: argparse.Namespace) -> in
         'seeds': seeds,
         'trees': [tree.label for tree in trees],
         'failed': failed,
+        'errors': errors,
         'findings': [dataclasses.asdict(finding) for finding in findings],
         'seconds': seconds,
     }
@@ -1100,10 +1127,13 @@ def _perturb(parser: argparse.ArgumentParser, options: argparse.Namespace) -> in
     path.write_text(json.dumps(document, indent=2) + '\n', encoding='utf-8')
     s = 's' if len(seeds) != 1 else ''
     on = 'trees' if len(trees) != 1 else 'tree'
+    ended = f', {errors} ended in an error' if errors else ''
     print(
         f'{_PERTURB}: {len(seeds)} seed{s} on {len(trees)} {on}: {failed} of'
-        f' {len(pairs)} failed, {seconds:.0f} s'
+        f' {len(pairs)} failed{ended}, {seconds:.0f} s'
     )
+    if errors:
+        return 2
     if failed or findings:
         return 1
     shutil.rmtree(work)
@@ -1122,7 +1152,9 @@ def _tried(
     A corpus has one result file, ``<out>/<label>.json``. In a loop only a
     tree that failed under a seed gets one, ``<out>/<label>/<seed>.json``,
     and every other is the row this returns. The streams of a case that
-    differs are saved beside the result file.
+    differs are saved beside the result file. A search by the
+    perturbation's tag that found nothing is a finding; any other search
+    that found nothing is printed and fails nothing.
     """
     result = done.result
     row = {

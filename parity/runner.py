@@ -217,8 +217,10 @@ def run(
 
     Raises:
         ValueError: If two sides share a name (a kept tree is filed under
-            it), or if ``only`` names no stage of the plan: a run of no
-            stage would report no difference.
+            it), if ``only`` names no stage of the plan (a run of no stage
+            would report no difference), or if the settings file a stage
+            writes leads out of its tree (see
+            :func:`parity.snapshot.confine`).
 
     """
     # refuse sides that share a name
@@ -411,6 +413,10 @@ def _run_stage(
     Returns:
         The run, and the manifest the clone ended with.
 
+    Raises:
+        ValueError: If the settings file the stage writes leads out of the
+            clone.
+
     """
     slot = plan.work / _SLOT
     # a snapshot becomes the slot's tree; a tree a stage left is a whole slot
@@ -423,6 +429,7 @@ def _run_stage(
     else:
         snapshot.clone(origin, slot)
     if stage.settings is not None:
+        snapshot.confine(plan.root / WIKI_SETTINGS, slot / _TREE)
         (plan.root / WIKI_SETTINGS).write_text(stage.settings, encoding='utf-8')
     if stage.change is not None:
         stage.change(slot / _TREE)

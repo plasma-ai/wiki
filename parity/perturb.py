@@ -18,8 +18,10 @@ and holds the perturbation to the kinds its operators name.
 from __future__ import annotations
 
 import dataclasses
+import datetime as dt
 import functools
 import json
+import math
 import os
 import pathlib
 import posixpath
@@ -27,6 +29,7 @@ import random
 import subprocess
 import time
 import tomllib
+import zoneinfo
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Optional
 
@@ -57,12 +60,19 @@ EXAMPLE = 'hello'
 
 # how often an operator applies at most: the seed draws the count
 _MOST = 2
-# the two modification times of a file the perturbation writes, in seconds
-# since the epoch: long before any stamp a wiki holds (2001-09-09), so the
-# file reads as stamped after its last edit, and long after (2033-05-18), so
-# it reads as edited since
+# the two modification times of a file that keeps no time of its own, in
+# seconds since the epoch (2001-09-09 and 2033-05-18): both lie far from any
+# stamp a wiki holds, so at either the Python engine reads a page that git
+# holds with its stamp as edited since
 _EARLY = 1_000_000_000
 _LATE = 2_000_000_000
+# how many seconds after the instant of a stamp the Python engine still
+# reads a file's last write as the one that stamped it
+_GRACE = 60
+# the form of a stamp under the default timestamp policy, and under a policy
+# that names a zone and no format
+_STAMP = '%Y-%m-%dT%H:%M:%SZ'
+_ZONED = '%Y-%m-%dT%H:%M:%S%z'
 # what the names the perturbation makes start with: lowercase ASCII letters,
 # with a number behind them, pass the default naming policy and one that asks
 # for identifiers
@@ -75,7 +85,8 @@ _GRAMMAR = frozenset('[]|#')
 # patterns that name them
 _EXCLUDED = 'perturbedexcluded'
 _IGNORED = 'perturbedignored'
-# how long a desc must be before the Python engine notes its length
+# how long the desc of the long-desc operator is: above the 500 characters
+# from which the Python engine notes a desc's length
 _LONG = 600
 _INDEX = '_index.md'
 _FENCE = '---'
@@ -132,6 +143,9 @@ class Perturbation:
             perturbation leaves, and the name of its stage for a tree a
             staged operator makes of that one.
         page: A page the perturbation edited, for ``read``.
+        kept: The pages an edit left at a time their stamp covers. The
+            Python engine reads such an edit as the write that stamped the
+            page, and must not restamp it.
         tagged: A body word and a tag of one page the perturbation tagged.
         conflicts: The files :func:`conflict` plants its markers in.
 
@@ -142,6 +156,7 @@ class Perturbation:
     applied: Mapping[str, tuple[str, ...]]
     expected: Mapping[str, Mapping[str, tuple[str, ...]]]
     page: str
+    kept: tuple[str, ...]
     tagged: tuple[str, ...]
     conflicts: tuple[str, ...]
 
@@ -156,7 +171,8 @@ class Trial:
         perturbation: What the perturbation did.
         result: What the run of the stages found.
         findings: The kinds a change put into a tree that the tree does
-            not show.
+            not show, the pages restamped under a time their stamp covers,
+            and the searches by the perturbation's tag that found nothing.
         shown: What the tap printed for each tree of the perturbation, by
             the tree's name.
         failed: Whether the sides differ or a finding stands. Between two
@@ -206,7 +222,8 @@ def run(
 
     Raises:
         ValueError: If :func:`parity.runner.validate` refuses the corpus or
-            the folder.
+            the folder, or if a file the perturbation writes leads out of
+            the snapshot (see :func:`apply`).
 
     """
     started = time.monotonic()
@@ -215,6 +232,7 @@ def run(
     result = runner.run(plan, sides, now=now)
     reference, *_ = sides
     findings, shown = check(plan, done, reference, now=now)
+    findings.extend(unfound(done, result.report))
     failed = bool(result.differences or findings or (result.excused and not second))
     if loop or not failed:
         runner.discard(plan)
@@ -253,6 +271,12 @@ def apply(
     Returns:
         What the perturbation did.
 
+    Raises:
+        ValueError: If the wiki root, or a file an operator writes, leads
+            out of the checkout through a symlink (see
+            :func:`parity.snapshot.confine`): a clone would hand the write
+            to the tree it was taken from.
+
     """
     tree = _Tree(checkout, root=root, stands=stands)
     for operator in operators():
@@ -283,6 +307,7 @@ def apply(
         applied={name: tuple(paths) for name, paths in tree.applied.items()},
         expected=expected,
         page=tree.edited,
+        kept=tuple(tree.kept),
         tagged=tree.tagged,
         conflicts=conflicts,
     )
@@ -299,9 +324,10 @@ def prepare(
 
     The stages of the plan are those of the matrix, on the tree the
     perturbation leaves, and then the perturbation's own (:func:`stages`).
-    In a loop the short stage of the perturbation stands in for the matrix.
-    A stage of the corpus's own names pages the perturbation may have
-    moved, so none runs.
+    The matrix searches by the perturbation's tag: a wiki may hold tags of
+    its own, and the sample would draw one of those. In a loop the short
+    stage of the perturbation stands in for the matrix. A stage of the
+    corpus's own names pages the perturbation may have moved, so none runs.
 
     Args:
         corpus: The wiki to perturb.
@@ -315,7 +341,8 @@ def prepare(
 
     Raises:
         ValueError: If :func:`parity.runner.validate` refuses the corpus or
-            the folder.
+            the folder, or if a file the perturbation writes leads out of
+            the snapshot (see :func:`apply`).
 
     """
     done = []
@@ -329,8 +356,14 @@ def prepare(
     bare = dataclasses.replace(corpus, stages=(), alone=loop)
     plan = runner.prepare(bare, work=work, seed=seed, change=change)
     (perturbation,) = done
+    held = plan.stages
+    # the matrix searches by the perturbation's tag, not by one the sample drew
+    if not loop:
+        sample = dataclasses.replace(plan.sample, tagged=perturbation.tagged)
+        plan = dataclasses.replace(plan, sample=sample)
+        held = matrix.stages(sample)
     own = stages(perturbation, root=corpus.root, loop=loop)
-    return dataclasses.replace(plan, stages=(*plan.stages, *own)), perturbation
+    return dataclasses.replace(plan, stages=(*held, *own)), perturbation
 
 
 def stages(done: Perturbation, *, root: str, loop: bool) -> tuple[Stage, ...]:
@@ -399,7 +432,8 @@ def check(
     The tap of ``reference`` runs once on each tree of the perturbation:
     the one it leaves, and the one each stage with a change makes of it. A
     kind a change put into a tree and the tap does not meet there is a
-    finding: the operator did not do what it names.
+    finding: the operator did not do what it names. So is a page that an
+    edit left at a time its stamp covers and that ``update`` restamps.
 
     Args:
         plan: The plan of the perturbed wiki, from :func:`prepare`.
@@ -427,7 +461,36 @@ def check(
                     subject = f'{plan.corpus.label} seed {done.seed}: {label} {kind}'
                     detail = f'the tree {name} does not show it'
                     findings.append(Finding('kind', subject, detail))
+        for page in done.kept:
+            if page in shown[name]['restamped']:
+                subject = f'{plan.corpus.label} seed {done.seed}: {page}'
+                detail = f'the tree {name} restamps it under a time its stamp covers'
+                findings.append(Finding('stamp', subject, detail))
     return findings, shown
+
+
+def unfound(done: Perturbation, report: Mapping[str, Any]) -> list[Finding]:
+    """Return a finding for each search by the perturbation's tag that found nothing.
+
+    The operator that tags pages names no kind, so the search is what holds
+    it: a run in which no side finds a page by the tag compares nothing
+    there.
+
+    Args:
+        done: What the perturbation did.
+        report: The report of the run, from :func:`parity.runner.run`.
+
+    """
+    findings = []
+    label = report['corpus']
+    for stage in report['stages']:
+        name = stage['name']
+        for case in stage['cases']:
+            tagged = case['args'][-2:] == ['--tag', TAG]
+            if tagged and (case['name'] in stage['no_hit']):
+                subject = f'{label} seed {done.seed}: {name}: {case["name"]}'
+                findings.append(Finding('tag', subject, 'no side finds a page'))
+    return findings
 
 
 def targets() -> dict[str, frozenset[str]]:
@@ -602,13 +665,12 @@ def carve(corpus: Corpus, folder: pathlib.Path) -> Corpus:
         The corpus of the new checkout.
 
     Raises:
-        ValueError: If the wiki root of the corpus is not a folder.
+        ValueError: If :func:`carvable` refuses the corpus.
         RuntimeError: If the copy or the commit fails.
 
     """
+    carvable(corpus)
     source = corpus.checkout / corpus.root
-    if os.path.islink(source) or not os.path.isdir(source):
-        raise ValueError(f'Corpus {corpus.label!r}: {source} is not a folder.')
     checkout = folder / corpus.label
     root = checkout / corpus.root
     root.parent.mkdir(parents=True)
@@ -623,8 +685,26 @@ def carve(corpus: Corpus, folder: pathlib.Path) -> Corpus:
     return Corpus(label=corpus.label, checkout=checkout, root=corpus.root)
 
 
+def carvable(corpus: Corpus) -> None:
+    """Refuse a corpus whose wiki :func:`carve` cannot copy; copy nothing.
+
+    Raises:
+        ValueError: If the wiki root of the corpus is not a folder.
+
+    """
+    source = corpus.checkout / corpus.root
+    if os.path.islink(source) or not os.path.isdir(source):
+        raise ValueError(f'Corpus {corpus.label!r}: {source} is not a folder.')
+
+
 def unindex(checkout: pathlib.Path, *, root: str) -> None:
-    """Delete every index of the wiki at ``root`` below ``checkout``."""
+    """Delete every index of the wiki at ``root`` below ``checkout``.
+
+    Raises:
+        ValueError: If the wiki root leads out of the checkout.
+
+    """
+    snapshot.confine(checkout / root, checkout)
     for folder, folders, names in os.walk(checkout / root):
         folders[:] = [name for name in folders if not name.startswith('.')]
         if _INDEX in names:
@@ -639,12 +719,15 @@ def conflict(checkout: pathlib.Path, *, root: str, paths: Sequence[str]) -> None
         root: The wiki root, relative to the checkout.
         paths: The files, relative to the wiki root.
 
+    Raises:
+        ValueError: If one of the files leads out of the checkout.
+
     """
     for relpath in paths:
         path = checkout / root / relpath
         text = _read(path)
         lines = '\n'.join(_CONFLICT)
-        _write(path, f'{_ended(text)}\n{lines}\n', late=True)
+        _write(path, f'{_ended(text)}\n{lines}\n', moment=_LATE, checkout=checkout)
 
 
 def operators() -> tuple[Operator, ...]:
@@ -668,12 +751,7 @@ def operators() -> tuple[Operator, ...]:
             notices=('index_truncated',),
             issues=('truncated_index',),
         ),
-        Operator(
-            name='dirty-edit',
-            change=_dirty_edit,
-            notices=('restamp',),
-            issues=('requires_update',),
-        ),
+        Operator(name='dirty-edit', change=_dirty_edit, notices=('restamp',)),
         Operator(
             name='strip-frontmatter',
             change=_strip_frontmatter,
@@ -801,7 +879,11 @@ class _Tree:
             root: The wiki root, relative to the checkout.
             stands: The path the wiki root has when the commands run.
 
+        Raises:
+            ValueError: If the wiki root leads out of the checkout.
+
         """
+        snapshot.confine(checkout / root, checkout)
         self.checkout = checkout
         self.root = checkout / root
         self.stands = stands
@@ -810,16 +892,20 @@ class _Tree:
         self.operator = ''
         self.applied: dict[str, list[str]] = {}
         self.expected: dict[str, set[str]] = {family: set() for family in FAMILIES}
-        # what the stages of a run name
+        # what the stages of a run name, and the pages an edit left at a time
+        # their stamp covers
         self.edited = ''
         self.tagged: tuple[str, ...] = ()
+        self.kept: list[str] = []
         # how many names the perturbation has made, what it made, the folders
-        # it renamed (the new path and the old), and the files it left with
-        # the late time
+        # it renamed (the new path and the old), and the time each file keeps
+        # that was given one
         self._made = 0
         self._own: set[str] = set()
         self._renamed: list[tuple[str, str]] = []
-        self._late: set[str] = set()
+        self._times: dict[str, int] = {}
+        # the form and the zone of the stamps the wiki writes
+        self._policy = _policy(self.root)
         # the targets of the rows each index held when it was first read
         self._listings: dict[str, frozenset[str]] = {}
         # the indexed folders, the pages and the indexes, each checked when
@@ -936,8 +1022,8 @@ class _Tree:
         row = f'[[{page}|{posixpath.basename(page)}]]: {_desc("page")}'
         indexed = fixtures._index(folder, _desc('folder'), [row]).decode('utf-8')
         text = fixtures._page(page, _desc('page'), _body('page')).decode('utf-8')
-        self.write(index, indexed, generator=generator, late=False)
-        self.write(f'{page}.md', text, generator=generator, late=False)
+        self.write(index, indexed, generator=generator)
+        self.write(f'{page}.md', text, generator=generator)
         self._folders.append(folder)
         self._indexes.append(index)
         self._pages.append(f'{page}.md')
@@ -961,6 +1047,10 @@ class _Tree:
         self._listings = {
             _moved(index, folder, target): rows
             for index, rows in self._listings.items()
+        }
+        self._times = {
+            _moved(relpath, folder, target): moment
+            for relpath, moment in self._times.items()
         }
         self._renamed.append((target, folder))
         return target
@@ -986,6 +1076,28 @@ class _Tree:
             stamps.append([field for field in fields if _key(field) == 'updated'])
         return bool(stamps[0]) and (stamps[0] == stamps[1])
 
+    def covered(self: _Tree, relpath: str, generator: random.Random) -> Optional[int]:
+        """Return a time that the stamp of the page at ``relpath`` covers, if one is known.
+
+        The time lies in the minute that opens at the instant the stamp
+        names, and the seed draws the second: at the first, the time
+        renders to the stamp itself. ``None`` for a page whose stamp names
+        no instant under the wiki's policy, or one that no time between the
+        two fixed ones reaches.
+        """
+        stamp = self._stamp(relpath)
+        start = _instant(stamp, self._policy)
+        if start is None:
+            return None
+        moment = math.ceil(start.timestamp()) + generator.randrange(_GRACE - 1)
+        if not (_EARLY < moment < _LATE) or not _covers(stamp, moment, self._policy):
+            return None
+        return moment
+
+    def covers(self: _Tree, relpath: str, moment: int) -> bool:
+        """Return whether the stamp of the page at ``relpath`` covers the time ``moment``."""
+        return _covers(self._stamp(relpath), moment, self._policy)
+
     def read(self: _Tree, relpath: str) -> str:
         """Return the text of the file at ``relpath``."""
         return _read(self.root / relpath)
@@ -996,7 +1108,7 @@ class _Tree:
         text: str,
         *,
         generator: random.Random,
-        late: Optional[bool] = None,
+        moment: Optional[int] = None,
     ) -> None:
         """Write ``text`` to the file at ``relpath`` and note the change.
 
@@ -1004,22 +1116,23 @@ class _Tree:
             relpath: The file, relative to the wiki root.
             text: The whole text of the file.
             generator: The generator to draw with.
-            late: Whether the file reads as edited since any stamp it
-                holds. ``None`` lets the seed draw it. A file that an
-                earlier change left late stays late.
+            moment: The modification time the file gets and keeps: a later
+                write leaves the file at it. ``None`` gives the file the
+                time it keeps, or one of the two fixed times, which the
+                seed draws.
+
+        Raises:
+            ValueError: If the file leads out of the checkout.
 
         """
-        if late is None:
-            late = generator.random() < 0.5
-        if late or (relpath in self._late):
-            self._late.add(relpath)
-            late = True
+        if moment is None:
+            moment = self._times.get(relpath) or generator.choice((_EARLY, _LATE))
+        else:
+            self._times[relpath] = moment
         # an index keeps listing what it listed before its first change
         if posixpath.basename(relpath) == _INDEX:
             self._listing(relpath)
-        path = self.root / relpath
-        path.parent.mkdir(parents=True, exist_ok=True)
-        _write(path, text, late=late)
+        _write(self.root / relpath, text, moment=moment, checkout=self.checkout)
         self.note(relpath)
 
     def note(self: _Tree, relpath: str) -> None:
@@ -1044,7 +1157,9 @@ class _Tree:
         Dot folders, symlinks and a wiki declared inside the wiki are left
         alone: no engine manages what lies there as part of this wiki. So
         is a name that opens with a dash, which a command line would read
-        as an option.
+        as an option. A folder whose index is a symlink is not listed, and
+        neither are its pages: a write to the index would go through the
+        link.
         """
         pending = ['']
         while pending:
@@ -1056,7 +1171,8 @@ class _Tree:
                 declared = os.path.isfile(path / WIKI_SETTINGS)
                 if plain and not (name.startswith(('.', '-')) or declared):
                     pending.append(posixpath.join(folder, name))
-            if _INDEX not in names:
+            index = self.root / folder / _INDEX
+            if os.path.islink(index) or not os.path.isfile(index):
                 continue
             self._folders.append(folder)
             self._indexes.append(posixpath.join(folder, _INDEX))
@@ -1120,6 +1236,20 @@ class _Tree:
         fields, _ = _split(self.read(posixpath.join(relpath, _INDEX)))
         return bool(fields) and ((relpath in self._own) or self._listed(relpath))
 
+    def _stamp(self: _Tree, relpath: str) -> str:
+        """Return the ``updated`` stamp of the page at ``relpath`` as its line spells it.
+
+        Empty for a page with no such field, or one that runs over
+        several lines.
+        """
+        fields, _ = _split(self.read(relpath))
+        for field in fields:
+            if (_key(field) == 'updated') and (len(field) == 1):
+                (line,) = field
+                _, _, value = line.partition(':')
+                return value.strip()
+        return ''
+
     def _listed(self: _Tree, relpath: str) -> bool:
         """Return whether the indexes list the page or folder ``relpath``, up to the root.
 
@@ -1161,7 +1291,7 @@ class _Tree:
         """Write a new page into a folder whose index stands, and return it."""
         name = posixpath.join(self.folder(generator), self.name())
         text = fixtures._page(name, _desc('page'), _body('page')).decode('utf-8')
-        self.write(f'{name}.md', text, generator=generator, late=False)
+        self.write(f'{name}.md', text, generator=generator)
         self._pages.append(f'{name}.md')
         self._own.add(f'{name}.md')
         return f'{name}.md'
@@ -1197,18 +1327,31 @@ def _rename_folder(tree: _Tree, generator: random.Random) -> None:
 
 
 def _dirty_edit(tree: _Tree, generator: random.Random) -> None:
-    """Add a paragraph to a page and leave its stamp as it was.
+    """Add a paragraph to two pages and leave their stamps as they were.
 
-    The first edit of a tree reads as made since the stamp; the seed draws
-    the others.
+    Each is a page that git holds with the stamp it has, where one is
+    left. One gets a time far from its stamp: the Python engine reads the
+    page as edited since, and restamps it. The other gets a time its stamp
+    covers, where the stamp names an instant: the engine reads that write
+    as the one that stamped the page, and leaves the stamp. The seed draws
+    which of the two takes its page first, so a tree that holds one such
+    page shows either.
     """
-    page = tree.page(generator, held=True)
-    late = (not tree.edited) or (generator.random() < 0.5)
-    text = _ended(tree.read(page))
-    tree.write(page, f'{text}\n{_body("paragraph")}\n', generator=generator, late=late)
-    tree.edited = tree.edited or page
-    if late and tree.held(page):
-        tree.expect(notices=['restamp'], issues=['requires_update'])
+    for near in generator.sample((False, True), k=2):
+        page = tree.page(generator, held=True)
+        moment = tree.covered(page, generator) if near else None
+        if moment is None:
+            moment = generator.choice((_EARLY, _LATE))
+        text = _ended(tree.read(page))
+        text = f'{text}\n{_body("paragraph")}\n'
+        tree.write(page, text, generator=generator, moment=moment)
+        tree.edited = tree.edited or page
+        if not tree.held(page):
+            continue
+        if tree.covers(page, moment):
+            tree.kept.append(page)
+        else:
+            tree.expect(notices=['restamp'])
 
 
 def _strip_frontmatter(tree: _Tree, generator: random.Random) -> None:
@@ -1478,7 +1621,8 @@ def _gitignored_row(tree: _Tree, generator: random.Random) -> None:
     path = tree.checkout / '.gitignore'
     held = _read(path) if path.is_file() else ''
     if f'{_IGNORED}*' not in held.split('\n'):
-        _write(path, f'{_ended(held)}{_IGNORED}*\n', late=False)
+        text = f'{_ended(held)}{_IGNORED}*\n'
+        _write(path, text, moment=_EARLY, checkout=tree.checkout)
     _add_row(tree, generator, index=index, name=name, desc='A row for an ignored page.')
     tree.expect(notices=['gitignore_skip'], issues=['gitignored_link_target'])
 
@@ -1504,6 +1648,52 @@ def _add_row(
     at = lines.index(_DELIMITER)
     lines[at:at] = [f'[[{target}|{name}]]: {desc}', '']
     tree.write(index, '\n'.join(lines), generator=generator)
+
+
+def _policy(root: pathlib.Path) -> tuple[str, dt.tzinfo]:
+    """Return the form and the zone of the stamps the wiki at ``root`` writes.
+
+    They are what the Python engine makes of the ``timestamp`` block of the
+    settings: the format it names, or the default one, which spells the
+    offset out where the block names a zone and no format.
+    """
+    path = root / WIKI_SETTINGS
+    settings = json.loads(_read(path)) if path.is_file() else {}
+    block = settings.get('timestamp', {})
+    name = block.get('timezone')
+    zone = zoneinfo.ZoneInfo(name) if name else dt.UTC
+    return block.get('format', _ZONED if name else _STAMP), zone
+
+
+def _instant(stamp: str, policy: tuple[str, dt.tzinfo]) -> Optional[dt.datetime]:
+    """Return the instant ``stamp`` names under ``policy``, if it has the policy's form.
+
+    A stamp with no offset is read in the policy's zone.
+    """
+    form, zone = policy
+    try:
+        moment = dt.datetime.strptime(stamp, form)
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=zone)
+    return moment
+
+
+def _covers(stamp: str, moment: int, policy: tuple[str, dt.tzinfo]) -> bool:
+    """Return whether ``stamp`` covers a file last written at ``moment``.
+
+    The Python engine reads such a write as the one that stamped the file:
+    the time renders to the stamp under ``policy``, or lies within the
+    grace after the instant the stamp names.
+    """
+    form, zone = policy
+    modified = dt.datetime.fromtimestamp(moment, zone)
+    if modified.strftime(form) == stamp:
+        return True
+    start = _instant(stamp, policy)
+    grace = dt.timedelta(seconds=_GRACE)
+    return (start is not None) and (start <= modified < start + grace)
 
 
 def _moved(relpath: str, source: str, target: str) -> str:
@@ -1610,11 +1800,23 @@ def _read(path: pathlib.Path) -> str:
         return handle.read()
 
 
-def _write(path: pathlib.Path, text: str, *, late: bool) -> None:
-    """Write ``text`` to ``path`` as it is, at one of the two fixed times."""
+def _write(
+    path: pathlib.Path, text: str, *, moment: int, checkout: pathlib.Path
+) -> None:
+    """Write ``text`` to ``path`` as it is, and set its modification time to ``moment``.
+
+    Every file the perturbation writes is written here, with the folders
+    above it that are missing.
+
+    Raises:
+        ValueError: If the path leads out of ``checkout`` (see
+            :func:`parity.snapshot.confine`).
+
+    """
+    snapshot.confine(path, checkout)
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(
         path, 'w', encoding='utf-8', errors='surrogateescape', newline=''
     ) as handle:
         handle.write(text)
-    moment = _LATE if late else _EARLY
     os.utime(path, (moment, moment))

@@ -73,6 +73,26 @@ def clone(source: pathlib.Path, target: pathlib.Path) -> None:
         raise RuntimeError(f'cp failed (exit {result.returncode}): {error!r}')
 
 
+def confine(path: pathlib.Path, tree: pathlib.Path) -> None:
+    """Refuse a path that leads out of the tree at ``tree``.
+
+    A clone keeps the target of a symlink as it is written, so a write
+    through a link that points out of the clone changes another tree: the
+    checkout the clone was taken from, where the target is absolute.
+
+    Raises:
+        ValueError: If ``path`` lies outside ``tree`` once every symlink on
+            it is resolved.
+
+    """
+    held = pathlib.Path(os.path.realpath(tree))
+    resolved = pathlib.Path(os.path.realpath(path))
+    if not resolved.is_relative_to(held):
+        raise ValueError(
+            f'Refusing to write {path}: it leads out of {tree}, to {resolved}.'
+        )
+
+
 def refresh(tree: pathlib.Path, *, env: Mapping[str, str]) -> None:
     """Refresh the git index of the clone at ``tree``, if it is a repository.
 

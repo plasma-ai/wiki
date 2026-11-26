@@ -591,7 +591,9 @@ a kind only where its change shows it whatever else the perturbation did: draw a
 page, an index or a folder through the tree's own methods, which hand out what
 the engine left and keep the operators off each other's files. One seed gives
 one tree, byte for byte: draw only from the generator the operator is handed,
-and write only through the tree, which gives every file one of two fixed times.
+and write only through the tree, which sets every file's time (one of two fixed
+times far from any stamp, or the time an operator gives the file, which the file
+then keeps) and refuses a path that leads out of the checkout through a symlink.
 A new operator goes into `operators()`, with a row in the spec's table, and each
 kind it names takes the home `perturbation` in `parity/kinds.toml`; a run exits
 2 while the list and the operators disagree. `parity/seeds.toml` holds the seeds

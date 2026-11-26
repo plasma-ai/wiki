@@ -191,20 +191,26 @@ ones, and `--jobs N` sets how many trees run at once. `--engine`, `--sides`,
 `--corpus` and `--now` are those of the other commands. Both exit 0 when no tree
 shows a difference or a finding, and 1 otherwise. They exit 2 with a message,
 before a tree is written: on what `fixtures` refuses of an engine, a tree and a
-work folder; on a corpus the harness cannot snapshot; on a seed list or a kind
-list that breaks a rule; on a kind list that disagrees with the operators
-(Perturbation, Kinds); on `--fresh` with `--seed`, or with a count below one;
-and on `--family` or `--every` with `--corpora`. They make `<work>/perturb`,
-which must not exist beforehand, and remove it when the run passed. A corpus
-gets a result file `<out>/<label>.json` in the form `matrix` writes, with the
-seed, what the perturbation did, the kinds each of its trees showed and the
-findings; the streams of a case that differs are saved under
+work folder; on a corpus the harness cannot snapshot, a corpus named twice, and
+in a loop a corpus whose wiki root is no folder; on a seed list or a kind list
+that breaks a rule; on a kind list that disagrees with the operators
+(Perturbation, Kinds); on `--fresh` with `--seed`, or with a count below one; on
+`--jobs` below one; and on `--family` or `--every` with `--corpora`. They make
+`<work>/perturb`, which must not exist beforehand, and remove it when the run
+passed. A corpus gets a result file `<out>/<label>.json` in the form `matrix`
+writes, with the seed, what the perturbation did, the kinds each of its trees
+showed and the findings; the streams of a case that differs are saved under
 `<out>/<label>/<stage>/`. A tree of a loop gets `<out>/<label>.json` with one
-row for each seed (differences, findings, excused commands, seconds), and for
-each seed that failed the whole result as `<out>/<label>/<seed>.json`, with the
-streams under `<out>/<label>/<seed>/<stage>/`. `<out>/perturb.json` records the
-run: the mode, the seeds, the trees, how many failed, and the findings of the
-whole run. A corpus that failed keeps its perturbed snapshot under
+row for each seed (differences, findings, excused commands, seconds), written
+again as each seed ends, and for each seed that failed the whole result as
+`<out>/<label>/<seed>.json`, with the streams under
+`<out>/<label>/<seed>/<stage>/`. A tree that ends in an error under a seed (a
+copy or a tap that fails, a write that is refused) costs the run no other
+result: its line and its row hold the error, the traceback goes to stderr, the
+other trees and seeds run on, and the run exits 2 with its work folder left in
+place. `<out>/perturb.json` records the run: the mode, the seeds, the trees, how
+many failed, how many ended in an error, and the findings of the whole run. A
+corpus that failed keeps its perturbed snapshot under
 `<work>/perturb/runs/<label>/<seed>/`, because its checkout may move on; a tree
 of a loop is written again from its seed.
 
@@ -401,6 +407,12 @@ Every tree a side runs on is a clone of that snapshot, placed at one path:
   commit and no checkout in a clone. Its one git write is the index refresh.
 - **Cold stages.** A stage marked cold removes `<root>/.wiki/cache` from its
   clone before the first command.
+- **Links out of a clone.** A clone keeps the target of a symlink as it is
+  written, so a write through a link that points out of the clone changes
+  another tree: the live checkout, where the target is absolute. The harness
+  writes two things into a clone, the settings file of a stage that sets one and
+  the files of a perturbation. Each path is resolved first, and a path that
+  leads out of the clone is refused with an error.
 
 ## Comparison
 
@@ -608,13 +620,15 @@ trees; on the other two v1 runs, and the refusal is the second engine's own.
 
 ## Perturbation
 
-The corpora and the fixture bases are converged: `update` writes almost nothing
+The corpora and the example wiki are converged: `update` writes almost nothing
 there and `lint` reports almost nothing. A perturbation changes a tree by a
 seed, the way hands, tools and merges change a wiki, so that the read-only
-commands have something to report and `update` something to take in.
-`python -m parity perturb` perturbs trees and runs each as a corpus. The
-operators are in `parity/perturb.py`. A perturbation runs no engine: it edits
-files, and what the engines make of the edits is what the run compares.
+commands have something to report and `update` something to take in. The fixture
+families are not converged: most hold malformed pages by design, and show kinds
+with no perturbation at all (Kinds, Limits). `python -m parity perturb` perturbs
+trees and runs each as a corpus. The operators are in `parity/perturb.py`. A
+perturbation runs no engine: it edits files, and what the engines make of the
+edits is what the run compares.
 
 - **Seed.** One seed, one tree and one path for the wiki to stand at give one
   perturbation, byte for byte. Each operator draws from a generator of its own,
@@ -634,8 +648,15 @@ files, and what the engines make of the edits is what the run compares.
   body or a row to an index draw among all, and their changes add up. A tree
   that runs short gets new pages and folders, in the form the engine writes
   under its default settings. Dot folders, symlinks, a wiki declared inside the
-  wiki and names that open with a dash are never drawn. A file is read and
-  written with its line ends and its bytes as they are.
+  wiki and names that open with a dash are never drawn, and neither is a folder
+  whose index is a symlink, with its pages. A file is read and written with its
+  line ends and its bytes as they are.
+- **Writes.** Every file a perturbation writes goes through one function, which
+  refuses a path that leads out of the checkout (Snapshots, Links out of a
+  clone). So does the wiki root itself, before a folder is renamed or an index
+  deleted. A wiki whose settings file, settings folder or top `.gitignore` is a
+  symlink out of its checkout therefore cannot be perturbed: the tree ends in an
+  error under every seed.
 - **Names.** A name the perturbation makes is `perturbed` and a number, which
   the default naming policy and one that asks for identifiers both take. The two
   invalid names end in `[`, which is link grammar and so denied by every policy.
@@ -643,11 +664,18 @@ files, and what the engines make of the edits is what the run compares.
   is cut short next, and no later operator adds to its folder: an index that was
   cut takes no row, so a file added beside it would show less than its operator
   names.
-- **Times.** Every file the perturbation writes gets one of two fixed
-  modification times: long before any stamp a wiki holds, so the file reads as
-  stamped after its last edit, or long after, so it reads as edited since. The
-  seed draws which, and a file left late stays late. The first `dirty-edit` of a
-  tree is late.
+- **Times.** v1 reads a page that git holds with its `updated` stamp, and whose
+  text differs from the committed one, as edited since the stamp, and restamps
+  it. It makes one exception: a page last written in the period its stamp names
+  under the wiki's timestamp policy (a second, or a day under a date format), or
+  within 60 seconds after the instant the stamp names, was written by the run
+  that stamped it. A perturbation sets the modification time of every file it
+  writes. The default is one of two fixed times, 2001-09-09 and 2033-05-18,
+  which the seed draws: both lie far from any stamp a wiki holds, so v1 restamps
+  at either. `dirty-edit` also leaves a page at a time its stamp covers: the
+  instant the stamp names under the wiki's own format and zone, plus 0 to 58
+  seconds, which the seed draws. A time an operator gives a file stays with the
+  file, whatever a later operator adds to it.
 - **Three trees.** The operators without a stage leave the tree `edited`. Two
   more trees come from it, each by one staged operator: `unindexed`, where every
   index is deleted and `update` builds each again, and `conflicted`, where a
@@ -656,8 +684,10 @@ files, and what the engines make of the edits is what the run compares.
   first command, and every file of such a tree is hashed at the first scan.
 - **Corpus mode.** `perturb corpus` snapshots a corpus, perturbs the snapshot
   and runs the stages of the matrix (Matrix) on the edited tree, then the stages
-  `unindexed` and `conflicted`. It runs once for each corpus, under a fresh seed
-  that the result file records, or under the seed `--seed` names.
+  `unindexed` and `conflicted`. The matrix's search by tag names the
+  perturbation's tag, where its own sample could have drawn a tag the wiki held
+  before. It runs once for each corpus, under a fresh seed that the result file
+  records, or under the seed `--seed` names.
 - **Loop mode.** `perturb loop` runs many seeds on small trees, each seed on
   each tree, several at once. In place of the matrix it runs the short stage
   `edited`, then `unindexed` and `conflicted`. With no `--corpora` the trees are
@@ -689,35 +719,35 @@ files, and what the engines make of the edits is what the run compares.
 | `unindexed`  | the perturbed snapshot without any index     | `lint --json`, `update --check --full`, `update --full`, `update --check`, `lint --json`, `map`.                                                                                                                                                                                            |
 | `conflicted` | the perturbed snapshot with conflict markers | `lint --json`, `update --check` and `update`, which both must exit 2, `map`.                                                                                                                                                                                                                |
 
-| Operator            | Change                                                                                                                                                       | Notice kinds it names    | Issue kinds it names     |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------ | ------------------------ |
-| `rename-folder`     | renames an indexed folder below the root, with all it holds                                                                                                  | `link_add`               | `requires_update`        |
-| `truncate-index`    | cuts an index short, inside its block or before it                                                                                                           | `index_truncated`        | `truncated_index`        |
-| `dirty-edit`        | adds a paragraph to a page and leaves its stamp: a page that git holds with that stamp, where one is left, and then the first edit of a tree names the kinds | `restamp`                | `requires_update`        |
-| `strip-frontmatter` | takes the block off a page                                                                                                                                   | `page_adopt`             | `bare_page`              |
-| `blank-stamps`      | leaves both stamps of a page with no value                                                                                                                   |                          | `requires_update`        |
-| `shuffle-keys`      | puts the fields of a page's block in another order                                                                                                           |                          | `requires_update`        |
-| `add-tags`          | gives a page two tags, one of them the perturbation's own, so a search by tag finds a page                                                                   |                          |                          |
-| `missing-desc`      | puts the placeholder `...` in place of a page's desc                                                                                                         | `desc_missing`           |                          |
-| `long-desc`         | gives a page a desc of more than 500 characters                                                                                                              | `desc_long`              |                          |
-| `bare-file`         | adds a page with no block                                                                                                                                    | `page_adopt`, `link_add` | `bare_page`              |
-| `crlf-file`         | adds a page whose lines end in CR LF                                                                                                                         | `crlf_notice`            |                          |
-| `other-file`        | adds a file that is no page                                                                                                                                  | `link_add`               |                          |
-| `stale-link`        | adds a link to a page that does not exist to a body                                                                                                          | `link_stale`             |                          |
-| `directory-link`    | adds a link that names a folder, not its index, to a body                                                                                                    |                          | `directory_link`         |
-| `absolute-link`     | adds a link to a page by its absolute path, as the wiki stands when the commands run, to a body                                                              |                          | `absolute_link`          |
-| `outside-link`      | adds a link that leaves the wiki to a body                                                                                                                   |                          | `outside_link`           |
-| `region-marker`     | adds the end of a region that never started to a body                                                                                                        |                          | `region_marker`          |
-| `invalid-page`      | adds a page whose name ends in `[`                                                                                                                           | `name_skip`              | `invalid_page_name`      |
-| `invalid-folder`    | adds a folder whose name ends in `[`, with a page inside                                                                                                     | `name_skip`              | `invalid_folder_name`    |
-| `drift-row`         | changes the desc of a row of an index: a row whose page has a desc of its own, which the engine writes over the row's                                        | `desc_overwrite`         | `requires_update`        |
-| `drop-row`          | takes a row out of an index: a row whose entry stands, so the engine adds it again                                                                           | `link_add`               | `requires_update`        |
-| `broken-row`        | adds a row for a page that does not exist to an index                                                                                                        | `link_prune`             | `broken_link`            |
-| `symlink-row`       | adds a symlink to a page, and a row for it                                                                                                                   | `symlink_skip`           | `symlink_link_target`    |
-| `excluded-row`      | adds a page, a row for it, and an exclude pattern that names the page to the wiki's settings, which it makes if absent                                       | `exclude_skip`           | `excluded_link_target`   |
-| `gitignored-row`    | adds a page, a row for it, and a pattern that names the page to the `.gitignore` at the top of the checkout; needs a repository                              | `gitignore_skip`         | `gitignored_link_target` |
-| `delete-indexes`    | deletes every index; staged, on `unindexed`                                                                                                                  | `index_create`           | `missing_index`          |
-| `conflict-markers`  | ends a page and an index in the lines a merge leaves around a conflict; staged, on `conflicted`                                                              |                          | `conflict_markers`       |
+| Operator            | Change                                                                                                                                                                                                                                                                                               | Notice kinds it names    | Issue kinds it names     |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | ------------------------ |
+| `rename-folder`     | renames an indexed folder below the root, with all it holds                                                                                                                                                                                                                                          | `link_add`               | `requires_update`        |
+| `truncate-index`    | cuts an index short, inside its block or before it                                                                                                                                                                                                                                                   | `index_truncated`        | `truncated_index`        |
+| `dirty-edit`        | adds a paragraph to two pages and leaves their stamps: pages that git holds with those stamps, where they are left. One gets a time far from its stamp and names the kind. The other gets a time its stamp covers and names none: v1 must leave its stamp. The seed draws which takes its page first | `restamp`                |                          |
+| `strip-frontmatter` | takes the block off a page                                                                                                                                                                                                                                                                           | `page_adopt`             | `bare_page`              |
+| `blank-stamps`      | leaves both stamps of a page with no value                                                                                                                                                                                                                                                           |                          | `requires_update`        |
+| `shuffle-keys`      | puts the fields of a page's block in another order                                                                                                                                                                                                                                                   |                          | `requires_update`        |
+| `add-tags`          | gives a page two tags, one of them the perturbation's own, so a search by tag finds a page                                                                                                                                                                                                           |                          |                          |
+| `missing-desc`      | puts the placeholder `...` in place of a page's desc                                                                                                                                                                                                                                                 | `desc_missing`           |                          |
+| `long-desc`         | gives a page a desc of more than 500 characters                                                                                                                                                                                                                                                      | `desc_long`              |                          |
+| `bare-file`         | adds a page with no block                                                                                                                                                                                                                                                                            | `page_adopt`, `link_add` | `bare_page`              |
+| `crlf-file`         | adds a page whose lines end in CR LF                                                                                                                                                                                                                                                                 | `crlf_notice`            |                          |
+| `other-file`        | adds a file that is no page                                                                                                                                                                                                                                                                          | `link_add`               |                          |
+| `stale-link`        | adds a link to a page that does not exist to a body                                                                                                                                                                                                                                                  | `link_stale`             |                          |
+| `directory-link`    | adds a link that names a folder, not its index, to a body                                                                                                                                                                                                                                            |                          | `directory_link`         |
+| `absolute-link`     | adds a link to a page by its absolute path, as the wiki stands when the commands run, to a body                                                                                                                                                                                                      |                          | `absolute_link`          |
+| `outside-link`      | adds a link that leaves the wiki to a body                                                                                                                                                                                                                                                           |                          | `outside_link`           |
+| `region-marker`     | adds the end of a region that never started to a body                                                                                                                                                                                                                                                |                          | `region_marker`          |
+| `invalid-page`      | adds a page whose name ends in `[`                                                                                                                                                                                                                                                                   | `name_skip`              | `invalid_page_name`      |
+| `invalid-folder`    | adds a folder whose name ends in `[`, with a page inside                                                                                                                                                                                                                                             | `name_skip`              | `invalid_folder_name`    |
+| `drift-row`         | changes the desc of a row of an index: a row whose page has a desc of its own, which the engine writes over the row's                                                                                                                                                                                | `desc_overwrite`         | `requires_update`        |
+| `drop-row`          | takes a row out of an index: a row whose entry stands, so the engine adds it again                                                                                                                                                                                                                   | `link_add`               | `requires_update`        |
+| `broken-row`        | adds a row for a page that does not exist to an index                                                                                                                                                                                                                                                | `link_prune`             | `broken_link`            |
+| `symlink-row`       | adds a symlink to a page, and a row for it                                                                                                                                                                                                                                                           | `symlink_skip`           | `symlink_link_target`    |
+| `excluded-row`      | adds a page, a row for it, and an exclude pattern that names the page to the wiki's settings, which it makes if absent                                                                                                                                                                               | `exclude_skip`           | `excluded_link_target`   |
+| `gitignored-row`    | adds a page, a row for it, and a pattern that names the page to the `.gitignore` at the top of the checkout; needs a repository                                                                                                                                                                      | `gitignore_skip`         | `gitignored_link_target` |
+| `delete-indexes`    | deletes every index; staged, on `unindexed`                                                                                                                                                                                                                                                          | `index_create`           | `missing_index`          |
+| `conflict-markers`  | ends a page and an index in the lines a merge leaves around a conflict; staged, on `conflicted`                                                                                                                                                                                                      |                          | `conflict_markers`       |
 
 ### Kinds
 
@@ -727,13 +757,25 @@ its kind compares less than the table says.
 - **Tap.** A command line prints the text of a notice and not its kind. So the
   tap of the reference side (`parity/tap.py`) runs `lint` and then `update` on
   the wiki inside v1's interpreter, as the command line runs them, and prints
-  the kind of each issue and of each notice they met, and the text of the error
-  if `update` refused. It runs once on each of the three trees: a fresh clone of
+  the kind of each issue and of each notice they met, the path of each file
+  `update` restamped as edited since its stamp, and the text of the error if
+  `update` refused. It runs once on each of the three trees: a fresh clone of
   the snapshot at the path every side runs at, changed as the tree's stage
   changes it. The tap writes to that clone, and no run is compared on it.
 - **Named kinds.** Each change names the kinds it put into its tree, where the
   table says it does. A named kind that the tap does not meet on that tree is a
-  `kind` finding, and the run fails: the operator did not do what it names.
+  `kind` finding, and the run fails: the operator did not do what it names. A
+  kind is named only where the change by itself shows it: `lint` does not judge
+  the stamp of a hand-edited page, so `dirty-edit` names no issue.
+- **Covered stamps.** A page that `dirty-edit` left at a time its stamp covers,
+  and that git holds with that stamp, must not be among the files the tap's
+  `update` restamps. One that is restamped is a `stamp` finding: the harness and
+  v1 read the stamp, the format or the zone differently.
+- **Tag.** `add-tags` names no kind, so the search holds it. Every run searches
+  by the perturbation's tag, for a body word of a page it tagged: a loop in the
+  stage `edited`, a corpus in the matrix. A search by that tag that finds no
+  page on any side is a `tag` finding. Any other search that finds nothing is
+  printed and fails nothing, as in `matrix`.
 - **One home.** The kinds the operators name are exactly the kinds whose home in
   `parity/kinds.toml` is `perturbation`. A run exits 2 on a list that gives a
   kind that home and no operator names it, and on an operator that names a kind
@@ -743,7 +785,16 @@ its kind compares less than the table says.
   perturbation and that no tree of the run shows is a `kind` finding.
 - **Limits.** A wiki whose settings make a stale link an issue shows
   `link_stale` as an issue, and the notice the operator names is then a finding.
-  No corpus and no small tree has such settings.
+  No corpus and no small tree has such settings. A kind that a tree shows before
+  it is perturbed is not held to the operator there: the tap meets it whatever
+  the operator did. Most fixture families show such kinds (`control`,
+  `frontmatter`, `names` and the two `stamps` families among them); the example
+  wiki and the corpora show none. A kind that several operators cause is not
+  held to each of them by a run either: `restamp` shows wherever an operator
+  changes a file git holds and leaves its stamp. A test applies each operator
+  alone on a converged wiki and holds it to the kinds it names. A stamp in
+  quotes, or one that runs over several lines, is not read: `dirty-edit` then
+  leaves both pages far from their stamps.
 
 ## Registry
 

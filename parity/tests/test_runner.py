@@ -3,12 +3,15 @@
 The matrix runs themselves are covered through the self-check and the
 command line; this module carries the planning refusals, the rules that
 hold for one side by itself, and what the runner gives each stage: a
-cold start, a run per pair of sides, and a scan of the whole slot.
+cold start, a run per pair of sides, a scan of the whole slot, and settings
+that stay inside its tree.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import pathlib
+import shutil
 import sys
 
 import pytest
@@ -24,6 +27,7 @@ __all__ = [
     'test_cold_stage_starts_without_the_cache_folder',
     'test_continued_stage_runs_each_side_on_each_tree',
     'test_write_outside_the_tree_is_reported',
+    'test_settings_that_lead_out_of_the_tree_are_not_written',
 ]
 
 # a side that runs no wiki command and succeeds, for the tests that read
@@ -162,3 +166,31 @@ def test_write_outside_the_tree_is_reported(
     }
     path = f'home/{_STRAY}'
     assert {('straying', 'tree', path), ('straying', 'touched', path)} <= found
+
+
+@_needs_git
+def test_settings_that_lead_out_of_the_tree_are_not_written(
+    tmp_path: pathlib.Path,
+    corpus: runner.Corpus,
+) -> None:
+    """A stage writes no settings through a link that leaves its tree.
+
+    A clone keeps the target of a symlink as it is written, so the settings
+    of a stage would land in the file the link names: in the checkout the
+    snapshot was taken from, where the target is absolute. The run is
+    refused, and the file outside the tree stays as it was.
+    """
+    checkout = tmp_path / 'checkout'
+    shutil.copytree(corpus.checkout, checkout, symlinks=True)
+    outside = tmp_path / 'settings.json'
+    settings = checkout / corpus.root / runner.WIKI_SETTINGS
+    settings.rename(outside)
+    settings.symlink_to(outside)
+    held = outside.read_bytes()
+    idle = side.Side(name='idle', argv=_IDLE, notice=False)
+    linked = dataclasses.replace(corpus, checkout=checkout)
+    plan = runner.prepare(linked, work=tmp_path / 'work')
+    stage = matrix.Stage(name='set', cases=plan.stages[0].cases, settings='{}\n')
+    with pytest.raises(ValueError, match='leads out of'):
+        runner.run(dataclasses.replace(plan, stages=(stage,)), [idle], now=NOW)
+    assert outside.read_bytes() == held

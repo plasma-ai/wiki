@@ -7,8 +7,9 @@ interpreter, the way the command line runs them, and prints the kinds they
 met: ``issues`` holds the kind of each issue ``lint`` returned, and
 ``notices`` the kind of each notice either call emitted, both sorted. A
 command line prints the text of a notice and not its kind, so the kinds are
-read where the engine still holds them. ``refused`` is the text of the error
-``update`` raised, or null.
+read where the engine still holds them. ``restamped`` holds the path of each
+file ``update`` restamped as edited since its stamp, relative to the root.
+``refused`` is the text of the error ``update`` raised, or null.
 
 ``update`` writes, so the tap runs on a tree of its own that nothing is
 compared on. Run with ``-P`` so the script's folder stays off ``sys.path``.
@@ -31,10 +32,14 @@ def main() -> None:
 
     _, root = sys.argv
     notices = []
+    restamped = []
 
     def _capture(event: Any, **kwargs: Any) -> Any:
         """Keep the kind of one notice, as the ``lint --json`` document spells it."""
-        notices.append(event.name.removesuffix('_EVENT').lower())
+        kind = event.name.removesuffix('_EVENT').lower()
+        notices.append(kind)
+        if kind == 'restamp':
+            restamped.append(event.path)
         return event
 
     wiki = resolve_wiki(root)
@@ -48,6 +53,7 @@ def main() -> None:
     kinds = {
         'issues': sorted(set(issues)),
         'notices': sorted(set(notices)),
+        'restamped': sorted(restamped),
         'refused': refused,
     }
     print(json.dumps(kinds))

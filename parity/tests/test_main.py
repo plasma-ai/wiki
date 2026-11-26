@@ -13,7 +13,7 @@ import pathlib
 import shutil
 import sys
 from collections.abc import Sequence
-from typing import Optional
+from typing import Any, Optional
 
 import pytest
 
@@ -63,6 +63,7 @@ __all__ = [
     'test_fresh_seeds_are_printed_before_a_tree_runs',
     'test_failed_perturbation_keeps_its_result_and_its_streams',
     'test_whole_perturbation_run_holds_the_kind_list',
+    'test_tree_that_ends_in_an_error_leaves_the_other_results',
     'test_perturbation_run_that_would_compare_nothing_is_refused',
 ]
 
@@ -1481,6 +1482,53 @@ def test_whole_perturbation_run_holds_the_kind_list(
 
 
 @_needs_git
+def test_tree_that_ends_in_an_error_leaves_the_other_results(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tree that ends in an error under one seed costs the loop no other result.
+
+    A copy or a tap that fails ends one tree under one seed, and a loop
+    of many seeds runs for hours. The seed that ended in an error is
+    printed and recorded with the error, every other seed has its row, and
+    the command exits 2: the run is not a whole one.
+    """
+    run = perturb.run
+
+    def flaky(tree: runner.Corpus, seed: int, **kwargs: Any) -> perturb.Trial:
+        """Run the tree under the seed, unless the seed is the one that fails."""
+        if seed == 4:
+            raise RuntimeError('cp failed (exit 1)')
+        return run(tree, seed, **kwargs)
+
+    monkeypatch.setattr(perturb, 'run', flaky)
+    out = tmp_path / 'out'
+    work = tmp_path / 'work'
+    argv = ['perturb', 'loop', '--family', 'hello', '--jobs', '1']
+    argv += ['--seed', '4', '--seed', '3']
+    argv += ['--work', f'{work}', '--out', f'{out}', '--now', NOW]
+    assert cli.main(argv) == 2
+    captured = capsys.readouterr()
+    lines = captured.out.splitlines()
+    assert lines[:2] == [
+        'hello seed 4: error: RuntimeError: cp failed (exit 1)',
+        'hello seed 3: 0 differences',
+    ]
+    assert lines[-1].startswith(
+        'perturb: 2 seeds on 1 tree: 0 of 2 failed, 1 ended in an error'
+    )
+    assert 'RuntimeError: cp failed (exit 1)' in captured.err
+    document = json.loads((out / 'hello.json').read_text(encoding='utf-8'))
+    first, second = document['seeds']
+    assert first == {'seed': 4, 'error': 'RuntimeError: cp failed (exit 1)'}
+    assert (second['seed'], second['differences']) == (3, 0)
+    document = json.loads((out / 'perturb.json').read_text(encoding='utf-8'))
+    assert (document['failed'], document['errors']) == (0, 1)
+    assert (work / 'perturb').is_dir()
+
+
+@_needs_git
 @pytest.mark.parametrize(
     argnames=('broken', 'message'),
     argvalues=[
@@ -1493,6 +1541,9 @@ def test_whole_perturbation_run_holds_the_kind_list(
         ('corpus', 'no --corpora file declares one'),
         ('named', '--corpora names the trees of the loop'),
         ('label', 'declares no corpus named'),
+        ('twice', '--corpus names a corpus twice'),
+        ('rootless', 'is not a folder'),
+        ('jobs', '--jobs must be at least 1'),
         ('kinds', 'no operator names it'),
         ('seeds', 'seeds must be a list'),
         ('work', 'exists'),
@@ -1512,11 +1563,12 @@ def test_perturbation_run_that_would_compare_nothing_is_refused(
     An engine that is v1 itself or that no file declares, a tree the loop
     does not have, every tree and some at once, fresh seeds that are none
     or come with named ones, a corpus with no file to declare it or that
-    its file does not declare, trees named twice over, a kind list that
-    disagrees with the operators, a seed list that breaks a rule, and a
-    work folder that exists or lies in a repository: the command exits 2
-    with a message, writes no tree and no result file, and leaves a work
-    folder that was there as it stood.
+    its file does not declare, trees named twice over, a corpus named
+    twice, a corpus whose wiki root is no folder behind one whose root is,
+    no tree at a time, a kind list that disagrees with the operators, a
+    seed list that breaks a rule, and a work folder that exists or lies in
+    a repository: the command exits 2 with a message, writes no tree and no
+    result file, and leaves a work folder that was there as it stood.
     """
     out = tmp_path / 'out'
     work = tmp_path / 'work'
@@ -1535,6 +1587,10 @@ def test_perturbation_run_that_would_compare_nothing_is_refused(
         listed.write_text('seeds = []\n', encoding='utf-8')
         monkeypatch.setattr(perturb, 'PATH', listed)
     corpora = _corpora_file(tmp_path, corpus)
+    if broken == 'rootless':
+        checkout = json.dumps(f'{corpus.checkout}')
+        with open(corpora, 'a', encoding='utf-8') as handle:
+            handle.write(f'[rootless]\ncheckout = {checkout}\nroot = "nowhere"\n')
     extra = {
         'reference': ['--family', 'hello', '--engine', 'oracle'],
         'unknown': ['--family', 'hello', '--engine', 'absent'],
@@ -1545,6 +1601,9 @@ def test_perturbation_run_that_would_compare_nothing_is_refused(
         'corpus': ['--corpus', 'example'],
         'named': ['--corpora', f'{corpora}', '--family', 'hello'],
         'label': ['--corpora', f'{corpora}', '--corpus', 'absent'],
+        'twice': ['--corpora', f'{corpora}', '--corpus', 'example'] * 2,
+        'rootless': ['--corpora', f'{corpora}', '--seed', '3'],
+        'jobs': ['--family', 'hello', '--seed', '3', '--jobs', '0'],
         'seeds': ['--family', 'hello'],
     }
     argv = ['perturb', 'loop', '--work', f'{work}', '--out', f'{out}']
