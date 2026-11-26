@@ -7,6 +7,7 @@ merges.
 
 from __future__ import annotations
 
+import functools
 import json
 import pathlib
 
@@ -124,14 +125,15 @@ def test_full_gate_names_every_layer_in_order(tmp_path: pathlib.Path) -> None:
     Without an engine no layer compares two engines; without a loop corpus
     no loop runs. A layer whose command takes a corpus has a step for each.
     """
-    places = {
-        'corpora': tmp_path / 'corpora.toml',
-        'work': tmp_path / 'work',
-        'out': tmp_path / 'out',
-        'cache': tmp_path / 'cache',
-    }
+    layers = functools.partial(
+        gate.layers,
+        corpora=tmp_path / 'corpora.toml',
+        work=tmp_path / 'work',
+        out=tmp_path / 'out',
+        cache=tmp_path / 'cache',
+    )
     labels = ['corpus-a', 'corpus-b']
-    alone = gate.layers(gate.FULL, labels=labels, loop=[], **places)
+    alone = layers(gate.FULL, labels=labels, loop=[])
     assert [layer.name for layer in alone] == [
         'oracle',
         'selfcheck',
@@ -143,9 +145,7 @@ def test_full_gate_names_every_layer_in_order(tmp_path: pathlib.Path) -> None:
         'merges',
     ]
     assert [step.name for step in alone[1].steps] == labels
-    both = gate.layers(
-        gate.FULL, labels=labels, loop=['corpus-b'], engine='engine', **places
-    )
+    both = layers(gate.FULL, labels=labels, loop=['corpus-b'], engine='engine')
     assert [layer.name for layer in both] == [
         'oracle',
         'selfcheck',
@@ -162,9 +162,7 @@ def test_full_gate_names_every_layer_in_order(tmp_path: pathlib.Path) -> None:
         'merges',
         'merges-engine',
     ]
-    daily = gate.layers(
-        gate.DAILY, labels=labels, loop=['corpus-b'], engine='engine', **places
-    )
+    daily = layers(gate.DAILY, labels=labels, loop=['corpus-b'], engine='engine')
     assert [layer.name for layer in daily] == [
         'oracle',
         'matrix',

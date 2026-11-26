@@ -358,7 +358,7 @@ def stamp(oracle: Oracle, name: str) -> Stamp:
     )
 
 
-def held(
+def stored(
     plan: Plan,
     merges: Sequence[Merge],
     *,
@@ -417,7 +417,7 @@ def run(
         ValueError: If two sides share a name.
 
     """
-    names = [runner.name for runner in sides]
+    names = [item.name for item in sides]
     if len(set(names)) != len(names):
         raise ValueError(f'Sides must have different names, got {names!r}.')
     # answer from the cache alone where no side has to run
@@ -567,8 +567,8 @@ def _work(
 ) -> list[Replayed]:
     """Replay ``merges`` one after the other in one repository, as one worker."""
     logging.basicConfig(level=logging.INFO, format='%(message)s')
-    home = plan.work / _WORKER.format(index=index)
-    _repository(home / _TREE, plan)
+    folder = plan.work / _WORKER.format(index=index)
+    _repository(folder / _TREE, plan)
     # the judge: the reference side's interpreter, under the variables its
     # commands get
     judge = None
@@ -582,9 +582,10 @@ def _work(
     for merge in merges:
         slot = plan.at / merge.commit
         slot.parent.mkdir(parents=True, exist_ok=True)
-        home.rename(slot)
+        folder.rename(slot)
         # NOTE: an error must not take the other merges with it: a replay
         #   runs for hours, and one checkout that fails would end it
+        failed = False
         try:
             done, held = _replay(
                 plan,
@@ -601,12 +602,17 @@ def _work(
         except Exception as e:
             traceback.print_exc()
             done = Replayed(commit=merge.commit, error=f'{type(e).__name__}: {e}')
-            held = {}
+            failed = True
         finally:
-            slot.rename(home)
+            slot.rename(folder)
+        # a pass that was cut short may leave a lock or half a merge behind
+        if failed:
+            shutil.rmtree(folder)
+            _repository(folder / _TREE, plan)
+            held = {}
         _log(plan, done)
         result.append(done)
-    shutil.rmtree(home)
+    shutil.rmtree(folder)
     return result
 
 
@@ -676,10 +682,10 @@ def _replay(
             entry = _load(store, key)
     reference, *others = sides
     passes = {}
-    for runner_ in others if entry is not None else sides:
-        passes[runner_.name], held = _pass(plan, merge, runner_, slot, held, now=now)
+    for item in others if entry is not None else sides:
+        passes[item.name], held = _pass(plan, merge, item, slot, held, now=now)
     # stand the cached pass beside the others, on the trees they started from
-    names = [runner_.name for runner_ in sides]
+    names = [item.name for item in sides]
     if entry is not None:
         first = passes[others[0].name]
         passes[reference.name] = _restored(entry, reference.name, first)
@@ -709,7 +715,7 @@ def _replay(
 def _pass(
     plan: Plan,
     merge: Merge,
-    runner_: Side,
+    item: Side,
     slot: pathlib.Path,
     held: dict[str, Entry],
     *,
@@ -720,7 +726,7 @@ def _pass(
     Args:
         plan: The snapshot.
         merge: The merge.
-        runner_: The side.
+        item: The side.
         slot: The folder the merge runs in; its tree is the repository.
         held: The manifest the slot ended the last pass with.
         now: RFC 3339 instant for ``WIKI_FREEZE_TIME``.
@@ -744,9 +750,9 @@ def _pass(
             shutil.rmtree(slot / folder)
         (slot / folder).mkdir()
     (slot / _HOME / '.gitconfig').write_bytes(b'')
-    env = side.environment(runner_, slot / _HOME, now=now)
+    env = side.environment(item, slot / _HOME, now=now)
     # register the side's merge driver, as an engine registers its own
-    driver = ' '.join(shlex.quote(part) for part in runner_.argv)
+    driver = ' '.join(shlex.quote(part) for part in item.argv)
     snapshot._git(['config', 'merge.wiki.name', _DRIVER_NAME], cwd=tree, env=plain)
     snapshot._git(
         ['config', 'merge.wiki.driver', f'{driver} {_DRIVER_ARGS}'],
@@ -760,7 +766,7 @@ def _pass(
     }
     # merge the other parents: git commits a merge that ends clean
     spent = _spent()
-    outcome, calls = _merge(runner_, rest, tree=tree, env=env, now=now)
+    outcome, calls = _merge(item, rest, tree=tree, env=env, now=now)
     cpu = _spent() - spent
     listing = snapshot._git(['ls-files', '-u', '-z'], cwd=tree, env=plain)
     unmerged = tuple(row for row in listing.split('\0') if row)
@@ -782,7 +788,7 @@ def _pass(
     ]
     runs = [
         Run(
-            name=runner_.name,
+            name=item.name,
             baseline=baseline,
             view=none,
             records=(record,),
@@ -801,7 +807,7 @@ def _pass(
             settings = (tree / root / WIKI_SETTINGS).read_bytes()
             args = [*case.args, '--path', f'{tree / root}']
             spent = _spent()
-            outcome = side.run(runner_, args, cwd=slot / _CWD, env=env)
+            outcome = side.run(item, args, cwd=slot / _CWD, env=env)
             cpu += _spent() - spent
             # scan where the command may write: its wiki, the home and the
             # neutral folder
@@ -824,7 +830,7 @@ def _pass(
         stages.append(stage)
         runs.append(
             Run(
-                name=runner_.name,
+                name=item.name,
                 baseline=baseline,
                 view=first_view,
                 records=tuple(records),
@@ -848,7 +854,7 @@ def _pass(
 
 
 def _merge(
-    runner_: Side,
+    item: Side,
     parents: Sequence[str],
     *,
     tree: pathlib.Path,
@@ -886,7 +892,7 @@ def _merge(
     identity = True
     with tempfile.TemporaryDirectory() as folder:
         trace = pathlib.Path(folder) / 'trace'
-        if runner_.identity:
+        if item.identity:
             env[TRACE] = f'{trace}'
         result = subprocess.run(
             cmd,
@@ -897,11 +903,10 @@ def _merge(
             timeout=side._TIMEOUT,
         )
         # every call of the driver is the engine the side names
-        if runner_.identity:
+        if item.identity:
             lines = trace.read_bytes().splitlines() if trace.is_file() else []
             calls = len(lines)
-            expected = json.dumps(dict(runner_.identity)).encode('utf-8')
-            identity = all(line == expected for line in lines)
+            identity = all(_identified(line, item.identity) for line in lines)
     outcome = Outcome(
         stdout=result.stdout,
         stderr=result.stderr,
@@ -909,6 +914,15 @@ def _merge(
         identity=identity,
     )
     return outcome, calls
+
+
+def _identified(line: bytes, expected: Mapping[str, str]) -> bool:
+    """Return whether ``line`` of a trace file is the identity record ``expected``."""
+    try:
+        record = json.loads(line)
+    except ValueError:
+        return False
+    return record == dict(expected)
 
 
 def _stage(root: str) -> Stage:

@@ -259,8 +259,8 @@ def layers(
         # the engine on the merges of the day, each against v1 as it runs
         # there; the layer below then keeps what v1 did
         if kind == DAILY:
-            fresh_ = [*replayed, *second, '--cache', f'{cache}', '--new']
-            result.append(layer('merges-engine', _HISTORY, fresh_))
+            newest = [*replayed, *second, '--cache', f'{cache}', '--new']
+            result.append(layer('merges-engine', _HISTORY, newest))
     # v1 on every merge the cache does not hold, then the engine on them all
     result.append(layer('merges', _HISTORY, [*replayed, '--cache', f'{cache}']))
     if (engine is not None) and (kind == FULL):

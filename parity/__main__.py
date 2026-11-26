@@ -1594,31 +1594,31 @@ def _merges(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int
             at=work / _AT,
         )
         # resolve the merges to replay
-        chosen_ = list(plan.merges)
+        picked = list(plan.merges)
         if options.sample is not None:
-            chosen_ = merges.sample(chosen_, options.sample)
+            picked = merges.sample(picked, options.sample)
         if options.commit:
-            chosen_ = [
+            picked = [
                 merge
-                for merge in chosen_
+                for merge in picked
                 if any(merge.commit.startswith(commit) for commit in options.commit)
             ]
         if options.new and (options.cache is not None) and (stamped is not None):
-            known = merges.held(
+            known = merges.stored(
                 plan,
-                chosen_,
+                picked,
                 now=options.now,
                 store=options.cache,
                 stamped=stamped,
             )
-            chosen_ = [merge for merge in chosen_ if merge not in known]
-        count = len(chosen_)
+            picked = [merge for merge in picked if merge not in known]
+        count = len(picked)
         s = 's' if count != 1 else ''
         print(f'{label}: {count} merge{s} of {len(plan.merges)} to replay', flush=True)
         replayed = {}
         tried = merges.run(
             plan,
-            chosen_,
+            picked,
             sides,
             now=options.now,
             second=bool(engines),
@@ -1629,7 +1629,7 @@ def _merges(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int
         for done in tried:
             replayed[done.commit] = done
             _save(done.streams, options.out / label / done.commit)
-        ordered = [replayed[merge.commit] for merge in chosen_]
+        ordered = [replayed[merge.commit] for merge in picked]
         counts = merges.summary(ordered)
         seconds = round(time.monotonic() - started, 1)
         rows = [
@@ -1761,8 +1761,8 @@ def _gate(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
             'parallelism': done.parallelism,
             'load': done.load,
             'steps': [
-                {**dataclasses.asdict(step), 'argv': list(planned_.argv)}
-                for step, planned_ in zip(done.steps, done.layer.steps)
+                {**dataclasses.asdict(timed), 'argv': list(step.argv)}
+                for timed, step in zip(done.steps, done.layer.steps)
             ],
         }
         document['layers'].append(row)
@@ -1775,9 +1775,9 @@ def _gate(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
             f' {done.parallelism:.1f} processors, load {done.load:.1f} at its start',
             flush=True,
         )
-        for step, planned_ in zip(done.steps, done.layer.steps):
-            if step.code != 0:
-                print(f'  {step.name}: exit {step.code}: {planned_.log}', flush=True)
+        for timed, step in zip(done.steps, done.layer.steps):
+            if timed.code != 0:
+                print(f'  {step.name}: exit {timed.code}: {step.log}', flush=True)
         codes.extend(step.code for step in done.steps)
     # an exit code but 0 and 1 is an error of a step, or of the harness
     if any(code not in (0, 1) for code in codes):
