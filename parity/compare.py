@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import posixpath
 from collections.abc import Mapping, Sequence
 from typing import Optional
 
@@ -163,7 +164,10 @@ def _alone(stage: Stage, run: Run, *, folder: str) -> list[Difference]:
     """Check one run against the rules that need no second side."""
     found: list[tuple[str, str, str]] = []
     state: _State = dict(run.baseline)
+    # the folder the cache folder goes in
+    holder = posixpath.dirname(folder)
     for case, record in zip(stage.cases, run.records):
+        held = state.get(holder) is not None
         state.update(record.changes)
         # the command ran: it ended as its case is built to, under a fixed clock,
         # on the engine the side names
@@ -173,10 +177,15 @@ def _alone(stage: Stage, run: Run, *, folder: str) -> list[Difference]:
             found.append((case.name, 'notice', ''))
         if not record.outcome.identity:
             found.append((case.name, 'identity', ''))
-        # a read-only command writes nothing outside the caches
+        # a read-only command writes nothing outside the caches; where the
+        # folder its cache folder goes in is missing, it may make that folder
         if case.writes:
             continue
+        made = state.get(holder)
         for relpath in record.touched:
+            fresh = (relpath == holder) and not held
+            if fresh and (made is not None) and (made[0] == 'dir'):
+                continue
             if not _within(relpath, folder):
                 found.append((case.name, 'wrote', relpath))
     # the tree holds what the commands left: the scans between commands hash

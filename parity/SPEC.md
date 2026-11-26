@@ -336,7 +336,9 @@ home and the neutral folder) before the first command and after each one.
   the manifest unchanged, so the two rules see different things.
 - **Read-only commands.** `lint`, `update --check`, `read`, `match`, `map` and
   `search` may touch nothing outside `<root>/.wiki/cache`. This is checked on
-  each side by itself.
+  each side by itself. One path is allowed: where the wiki has no `.wiki` folder
+  yet, a command that writes a cache makes that folder to put the cache folder
+  in. The two sides are still compared on it, as on any path.
 - **Allowed exit codes.** Two sides that fail the same way agree on everything,
   so each case names the exit codes it allows, and each side is checked by
   itself. A command that must succeed allows 0 (`update`, `new`, `map`, `read`).
