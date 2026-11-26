@@ -20,6 +20,13 @@ from parity import oracle, runner, side
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 #: the instant every side's clock is fixed at
 NOW = '2026-01-02T03:04:05Z'
+# gates the tests that run a real side on the committed corpus
+_needs_engine = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
+# gates the tests that rely on a permission denial
+_needs_unprivileged = pytest.mark.skipif(
+    os.geteuid() == 0,
+    reason='needs a non-root user',
+)
 
 
 def _git(cwd: pathlib.Path, *args: str) -> str:
@@ -61,10 +68,12 @@ def corpus(
     is. READ-ONLY: the harness snapshots the checkout and runs only in
     its clones.
     """
+    # copy the example wiki
     checkout = tmp_path_factory.mktemp('parity') / 'checkout'
     root = checkout / 'hello'
     ignore = shutil.ignore_patterns('cache', '.obsidian')
     shutil.copytree(REPO_ROOT / 'examples' / 'hello', root, ignore=ignore)
+    # add the folders through the CLI
     home = checkout.parent / 'home'
     home.mkdir()
     env = side.environment(engine, home, now=NOW)
@@ -72,6 +81,7 @@ def corpus(
         args = ['new', folder, '--desc', f'About {folder}.', '--content', 'Text.']
         made = side.run(engine, [*args, '--path', f'{root}'], cwd=home, env=env)
         assert made.code == 0, made.stderr
+    # write the pages and a non-Markdown file
     pages = {
         'guides/setup.md': (
             'desc: Installing the widget.\ntags: [install, widget]',
@@ -91,8 +101,10 @@ def corpus(
         (root / relpath).write_text(text, encoding='utf-8')
     snippet = 'widget appears in plain code here\n'
     (root / 'core' / 'snippet.txt').write_text(snippet, encoding='utf-8')
+    # converge the wiki
     updated = side.run(engine, ['update', '--path', f'{root}'], cwd=home, env=env)
     assert updated.code == 0, updated.stderr
+    # commit under no config but the repository's own
     _git(checkout, 'init', '-q', '-b', 'main')
     _git(checkout, 'add', '-A')
     _git(checkout, 'commit', '-q', '-m', 'wiki')

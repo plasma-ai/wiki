@@ -18,4 +18,4 @@ OFFLINE_MODE = 'OFFLINE_MODE'
 #: environment variable overriding the user-global config home
 WIKI_CONFIG_DIR = 'WIKI_CONFIG_DIR'
 #: environment variable fixing the instant every clock read returns (test seam)
-WIKI_NOW = 'WIKI_NOW'
+WIKI_FREEZE_TIME = 'WIKI_FREEZE_TIME'

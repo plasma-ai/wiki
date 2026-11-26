@@ -164,7 +164,6 @@ def _rank(
         # alone: SQLite evaluates a statement's result columns for each row
         # that enters the best set as it scans, so a snippet selected here is
         # built for the rows stored first on every query, whatever their size
-        # (only trusted module constants interpolate; values bind via ?)
         ranked = 'SELECT rowid FROM notes_fts WHERE notes_fts MATCH ?'
         parameters: list[object] = [expression, expression]
         # scope to the subtree: the folder itself or any folder below it
@@ -181,6 +180,8 @@ def _rank(
         # select the ranked rows with a snippet of the body, in the same
         # order; the unary + keeps the rowid test a filter over one match
         # scan, where a rowid lookup would run the match once per ranked row
+        # (only trusted module constants and the statement text built from them
+        # above interpolate; values bind via ?)
         sql = (
             'SELECT path, '
             f"snippet(notes_fts, 4, '{_SNIPPET_START}', '{_SNIPPET_END}', "
@@ -298,7 +299,8 @@ def _refresh(
         for relpath in sorted(removed):
             if relpath in rowids:
                 connection.execute(
-                    'DELETE FROM notes_fts WHERE rowid = ?', (rowids[relpath],)
+                    'DELETE FROM notes_fts WHERE rowid = ?',
+                    (rowids[relpath],),
                 )
             connection.execute('DELETE FROM files WHERE path = ?', (relpath,))
         # reindex changed pages in path order, so the rows and the read
@@ -327,7 +329,8 @@ def _refresh(
             folder = str(pathlib.PurePath(relpath).parent)
             if relpath in rowids:
                 connection.execute(
-                    'DELETE FROM notes_fts WHERE rowid = ?', (rowids[relpath],)
+                    'DELETE FROM notes_fts WHERE rowid = ?',
+                    (rowids[relpath],),
                 )
             connection.execute(
                 'INSERT INTO files(path, mtime_ns, size) VALUES (?, ?, ?) '

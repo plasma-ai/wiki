@@ -11,14 +11,11 @@ import stat
 from collections.abc import Mapping
 from typing import Optional
 
-__all__ = [
-    'Entry',
-    'scan',
-    'touched',
-    'changes',
-]
+__all__ = []
 
-# files hashed at once: the digest releases the interpreter lock
+# files hashed at once: the digest releases the interpreter lock, so the
+# hashes run in parallel; the count is a tuning choice with no constraint
+# behind it -- more threads shorten a scan until the cores or the disk bound it
 _HASH_THREADS = 8
 
 
@@ -86,6 +83,7 @@ def scan(
     """
     result = {}
     pending = []
+    # walk the tree
     stack = ['']
     while stack:
         folder = stack.pop()
@@ -98,6 +96,7 @@ def scan(
             relpath = f'{folder}/{item.name}' if folder else item.name
             if relpath in skip:
                 continue
+            # build the entry
             status = item.stat(follow_symlinks=False)
             kind = _kind(status.st_mode)
             target = None
@@ -117,6 +116,7 @@ def scan(
                 mtime=status.st_mtime,
                 ctime_ns=status.st_ctime_ns,
             )
+            # keep a known digest
             if kind == 'file':
                 digest = None
                 if previous is not None:

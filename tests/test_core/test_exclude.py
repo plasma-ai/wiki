@@ -66,6 +66,279 @@ __all__ = [
     'test_gitignored_link_target_names_the_cause',
 ]
 
+# seeds the sub-lists, the random paths and the fuzz draws
+_SEED = 7
+# seeded sub-lists of the hand-written patterns, and the longest of them
+_CORNER_SUBLISTS = 30
+_CORNER_SUBLIST_SIZE = 12
+# random paths joined from the hand-written names, and their deepest nesting
+_CORNER_RANDOM_PATHS = 400
+_CORNER_DEPTH = 5
+# fuzz rounds, and the patterns drawn in each
+_FUZZ_ROUNDS = 40
+_FUZZ_ROUND_SIZE = 8
+# share of fuzzed patterns that wrap a class body, and the longest body
+_FUZZ_CLASS_RATE = 0.8
+_FUZZ_CLASS_SIZE = 6
+# longest free-form fuzzed pattern
+_FUZZ_PATTERN_SIZE = 10
+# share of fuzzed path segments that are one character a class may hold
+_FUZZ_SINGLE_RATE = 0.5
+# deepest nesting of a fuzzed path, and its longest segment
+_FUZZ_DEPTH = 4
+_FUZZ_NAME_SIZE = 4
+# hand-written patterns, each one the settings accept
+_CORNER_PATTERNS = [
+    # trailing slash, anchoring and floating
+    'vendor/',
+    'vendor',
+    '/vendor',
+    '/vendor/',
+    'a/b/',
+    'a/b',
+    'foo.md',
+    '*.md',
+    'notes',
+    'x',
+    'b',
+    'c',
+    # '**' forms
+    '**',
+    '**/',
+    '/**',
+    '/**/',
+    '**/x',
+    'a/**',
+    'a/**/',
+    'a/**/b',
+    '**/**/x',
+    'a/**/**/b',
+    'a/**/**',
+    '**/a/**',
+    'a**b',
+    '***',
+    'a/***/b',
+    '**x',
+    'x**',
+    '/**/x',
+    'a/**/b/**/c',
+    '**/**',
+    '**/*',
+    '*/**',
+    '*',
+    '?',
+    '/*',
+    '*/*',
+    # classes and '/'
+    '[/]',
+    'a[!/]b',
+    '[a/b]',
+    '[.-0]',
+    'a[.-0]c',
+    '[!.-0]',
+    '[/-z]',
+    # negated, reversed and odd ranges
+    '[!a]',
+    '[!]a]',
+    '[!-]',
+    '[!]',
+    '[!z-a]',
+    '[z-a]',
+    '[z-ab]',
+    '[b-a-c]',
+    '[z-a!x]',
+    '[z-a!]',
+    '[z-a^x]',
+    '[z-a[x]',
+    '[a-c-e]',
+    '[--z]',
+    '[!--z]',
+    '[]-a]',
+    '[!]-a]',
+    '[a-]',
+    '[-a]',
+    '[!-a]',
+    '[a--b]',
+    '[a&&b]',
+    '[a~~b]',
+    '[a||b]',
+    '[^a]',
+    '[[:alpha:]]',
+    '[[a]',
+    '[a[b]',
+    '[!^]',
+    '[]',
+    '[]]',
+    '[]x]',
+    '[!]x]',
+    '[!]]',
+    '[ab]*',
+    'file?.[ch]',
+    '[é-ü]',
+    '[!é]',
+    '[😀-😂]',
+    '[\x00-\x1f]',
+    '[ -~]',
+    '[!\n]',
+    '[\n]',
+    # an unclosed '['
+    '[x',
+    'a[',
+    '[',
+    '[!',
+    'a[b/c]',
+    '[a/',
+    '[!a',
+    # braces and regex metacharacters, all literal
+    '{a,b}',
+    'a{1,2}',
+    '{}',
+    'a.b',
+    'a+b',
+    '(x)',
+    '$x',
+    '^x',
+    'a|b',
+    '#x',
+    'x y',
+    'foo ',
+    ' foo',
+    '<!-- a comment -->',
+    '.hidden',
+    'a.',
+    '-',
+    '~',
+    '&',
+    '|',
+    # non-ASCII names (composed and decomposed) and case
+    'é.md',
+    'e\u0301.md',
+    '€*',
+    '😀',
+    '?.md',
+    'Foo',
+    'ß',
+    'İ',
+    # newlines
+    'a\nb',
+    '*\n*',
+    'x\n',
+    '**/a\nb/**',
+    'a\nb/c',
+    '[\n-\r]',
+    # deep anchored literals, and patterns listed twice
+    'a/b/c',
+    '/a/b/c',
+    'vendor',
+    '*.md',
+    'deep/er/path/x',
+]
+# hand-written path segments
+_CORNER_NAMES = [
+    'a',
+    'b',
+    'c',
+    'x',
+    'z',
+    'vendor',
+    'notes',
+    'foo.md',
+    'Foo',
+    'foo',
+    'foo ',
+    ' foo',
+    'a.b',
+    'aXb',
+    'axxb',
+    'ab',
+    'a+b',
+    'aab',
+    '(x)',
+    '$x',
+    '^x',
+    'a|b',
+    '#x',
+    'x y',
+    '{a,b}',
+    'a{1,2}',
+    '{}',
+    'a1',
+    '[x',
+    'a[',
+    '[',
+    '[!',
+    '[a',
+    '[!a',
+    '!',
+    '^',
+    ']',
+    '-',
+    '..x',
+    '.hidden',
+    'a.',
+    '&',
+    '~',
+    '|',
+    '\\',
+    'a\\b',
+    '\\d',
+    'é.md',
+    'e\u0301.md',
+    'ë',
+    'é',
+    'e\u0301',
+    '€',
+    '€x',
+    '😀',
+    '😁',
+    '😃',
+    'ß',
+    'İ',
+    'i',
+    'a\nb',
+    '\n',
+    'x\n',
+    '\nx',
+    'a\rb',
+    '\x00',
+    '\x1f',
+    ' ',
+    'q',
+    'file1.c',
+    'file1.h',
+    'file12.c',
+    'temp1',
+    'build',
+    'drafts',
+    'cache',
+    '<!-- a comment -->',
+    'x.md',
+    'notes.md',
+    'deep',
+    'er',
+    'path',
+    '0',
+    ':',
+    '[]',
+    '[]]',
+    'x]',
+    '***',
+    'a**b',
+    '*',
+]
+# folders each hand-written name is nested under, and nests
+_CORNER_PARENTS = ['a', 'x', 'vendor', 'a\nb', 'é', 'a/b', 'deep/er']
+# characters of a free-form fuzzed pattern, the weightier ones repeated
+_FUZZ_PATTERN_CHARS = 'ab/*?[]!-^&~|{},.\n é€😀#<>$()+:zA' + 'ab*[]/-!'
+# characters of a fuzzed class body, the weightier ones repeated
+_FUZZ_CLASS_CHARS = '!-]^az&~|[é/0.!-]' + '--!]za'
+# characters of a fuzzed path segment, the weightier ones repeated
+_FUZZ_NAME_CHARS = 'ab-z!^&]\n[ é€😀#.{},:A~|\\*?' + 'abab'
+# characters a fuzzed path puts where a pattern holds a wildcard
+_FUZZ_FILL_CHARS = ['', 'a', 'z', '!', '\n', 'é']
+# characters a fuzzed path puts where a pattern holds a class
+_FUZZ_MEMBER_CHARS = ['a', 'b', '-', '!', 'z', '^']
+
 
 # ------ policy validation
 
@@ -322,11 +595,11 @@ def test_exclusion_names_the_pattern_a_full_scan_names(
     """
     root = tmp_path.resolve()
     _make_wiki(root)
-    rng = random.Random(_SEED)
+    generator = random.Random(_SEED)
     if source == 'corners':
-        cases = _corner_cases(rng)
+        cases = _corner_cases(generator)
     else:
-        cases = _fuzz_cases(rng, root, classes=(source == 'class-fuzz'))
+        cases = _fuzz_cases(generator, root, classes=(source == 'class-fuzz'))
     kinds = set()
     for patterns, paths in cases:
         _set_exclude_patterns(root, patterns)
@@ -1305,269 +1578,6 @@ def test_gitignored_link_target_names_the_cause(tmp_path: pathlib.Path) -> None:
 
 # ------ helpers
 
-# seeds the sub-lists, the random paths and the fuzz draws
-_SEED = 7
-# seeded sub-lists of the hand-written patterns, and the longest of them
-_CORNER_SUBLISTS = 30
-_CORNER_SUBLIST_SIZE = 12
-# random paths joined from the hand-written names, and their deepest nesting
-_CORNER_RANDOM_PATHS = 400
-_CORNER_DEPTH = 5
-# fuzz rounds, and the patterns drawn in each
-_FUZZ_ROUNDS = 40
-_FUZZ_ROUND_SIZE = 8
-# hand-written patterns, each one the settings accept
-_CORNER_PATTERNS = [
-    # trailing slash, anchoring and floating
-    'vendor/',
-    'vendor',
-    '/vendor',
-    '/vendor/',
-    'a/b/',
-    'a/b',
-    'foo.md',
-    '*.md',
-    'notes',
-    'x',
-    'b',
-    'c',
-    # '**' forms
-    '**',
-    '**/',
-    '/**',
-    '/**/',
-    '**/x',
-    'a/**',
-    'a/**/',
-    'a/**/b',
-    '**/**/x',
-    'a/**/**/b',
-    'a/**/**',
-    '**/a/**',
-    'a**b',
-    '***',
-    'a/***/b',
-    '**x',
-    'x**',
-    '/**/x',
-    'a/**/b/**/c',
-    '**/**',
-    '**/*',
-    '*/**',
-    '*',
-    '?',
-    '/*',
-    '*/*',
-    # classes and '/'
-    '[/]',
-    'a[!/]b',
-    '[a/b]',
-    '[.-0]',
-    'a[.-0]c',
-    '[!.-0]',
-    '[/-z]',
-    # negated, reversed and odd ranges
-    '[!a]',
-    '[!]a]',
-    '[!-]',
-    '[!]',
-    '[!z-a]',
-    '[z-a]',
-    '[z-ab]',
-    '[b-a-c]',
-    '[z-a!x]',
-    '[z-a!]',
-    '[z-a^x]',
-    '[z-a[x]',
-    '[a-c-e]',
-    '[--z]',
-    '[!--z]',
-    '[]-a]',
-    '[!]-a]',
-    '[a-]',
-    '[-a]',
-    '[!-a]',
-    '[a--b]',
-    '[a&&b]',
-    '[a~~b]',
-    '[a||b]',
-    '[^a]',
-    '[[:alpha:]]',
-    '[[a]',
-    '[a[b]',
-    '[!^]',
-    '[]',
-    '[]]',
-    '[]x]',
-    '[!]x]',
-    '[!]]',
-    '[ab]*',
-    'file?.[ch]',
-    '[é-ü]',
-    '[!é]',
-    '[😀-😂]',
-    '[\x00-\x1f]',
-    '[ -~]',
-    '[!\n]',
-    '[\n]',
-    # an unclosed '['
-    '[x',
-    'a[',
-    '[',
-    '[!',
-    'a[b/c]',
-    '[a/',
-    '[!a',
-    # braces and regex metacharacters, all literal
-    '{a,b}',
-    'a{1,2}',
-    '{}',
-    'a.b',
-    'a+b',
-    '(x)',
-    '$x',
-    '^x',
-    'a|b',
-    '#x',
-    'x y',
-    'foo ',
-    ' foo',
-    '<!-- a comment -->',
-    '.hidden',
-    'a.',
-    '-',
-    '~',
-    '&',
-    '|',
-    # non-ASCII names (composed and decomposed) and case
-    'é.md',
-    'e\u0301.md',
-    '€*',
-    '😀',
-    '?.md',
-    'Foo',
-    'ß',
-    'İ',
-    # newlines
-    'a\nb',
-    '*\n*',
-    'x\n',
-    '**/a\nb/**',
-    'a\nb/c',
-    '[\n-\r]',
-    # deep anchored literals, and patterns listed twice
-    'a/b/c',
-    '/a/b/c',
-    'vendor',
-    '*.md',
-    'deep/er/path/x',
-]
-# hand-written path segments
-_CORNER_NAMES = [
-    'a',
-    'b',
-    'c',
-    'x',
-    'z',
-    'vendor',
-    'notes',
-    'foo.md',
-    'Foo',
-    'foo',
-    'foo ',
-    ' foo',
-    'a.b',
-    'aXb',
-    'axxb',
-    'ab',
-    'a+b',
-    'aab',
-    '(x)',
-    '$x',
-    '^x',
-    'a|b',
-    '#x',
-    'x y',
-    '{a,b}',
-    'a{1,2}',
-    '{}',
-    'a1',
-    '[x',
-    'a[',
-    '[',
-    '[!',
-    '[a',
-    '[!a',
-    '!',
-    '^',
-    ']',
-    '-',
-    '..x',
-    '.hidden',
-    'a.',
-    '&',
-    '~',
-    '|',
-    '\\',
-    'a\\b',
-    '\\d',
-    'é.md',
-    'e\u0301.md',
-    'ë',
-    'é',
-    'e\u0301',
-    '€',
-    '€x',
-    '😀',
-    '😁',
-    '😃',
-    'ß',
-    'İ',
-    'i',
-    'a\nb',
-    '\n',
-    'x\n',
-    '\nx',
-    'a\rb',
-    '\x00',
-    '\x1f',
-    ' ',
-    'q',
-    'file1.c',
-    'file1.h',
-    'file12.c',
-    'temp1',
-    'build',
-    'drafts',
-    'cache',
-    '<!-- a comment -->',
-    'x.md',
-    'notes.md',
-    'deep',
-    'er',
-    'path',
-    '0',
-    ':',
-    '[]',
-    '[]]',
-    'x]',
-    '***',
-    'a**b',
-    '*',
-]
-# folders each hand-written name is nested under, and nests
-_CORNER_PARENTS = ['a', 'x', 'vendor', 'a\nb', 'é', 'a/b', 'deep/er']
-# characters of a free-form fuzzed pattern, the weightier ones repeated
-_FUZZ_PATTERN_CHARS = 'ab/*?[]!-^&~|{},.\n é€😀#<>$()+:zA' + 'ab*[]/-!'
-# characters of a fuzzed class body, the weightier ones repeated
-_FUZZ_CLASS_CHARS = '!-]^az&~|[é/0.!-]' + '--!]za'
-# characters of a fuzzed path segment, the weightier ones repeated
-_FUZZ_NAME_CHARS = 'ab-z!^&]\n[ é€😀#.{},:A~|\\*?' + 'abab'
-# characters a fuzzed path puts where a pattern holds a wildcard
-_FUZZ_FILL_CHARS = ['', 'a', 'z', '!', '\n', 'é']
-# characters a fuzzed path puts where a pattern holds a class
-_FUZZ_MEMBER_CHARS = ['a', 'b', '-', '!', 'z', '^']
-
 
 def _scan(policy: list[tuple[str, re.Pattern[str]]], relative: str) -> Optional[str]:
     """Return the first pattern, in list order, matching a path or an ancestor."""
@@ -1584,7 +1594,10 @@ def _kind(named: Optional[str]) -> Optional[str]:
     """Return the kind of pattern a verdict names, ``None`` when it names none."""
     if named is None:
         return None
-    return 'wildcard' if any(char in named for char in '*?[') else 'literal'
+    if any(char in named for char in '*?['):
+        return 'wildcard'
+    else:
+        return 'literal'
 
 
 def _walkable(paths: set[str]) -> list[str]:
@@ -1596,7 +1609,7 @@ def _walkable(paths: set[str]) -> list[str]:
     return sorted(path for path in paths if not ({'', '.'} & set(path.split('/'))))
 
 
-def _corner_cases(rng: random.Random) -> Iterator[tuple[list[str], list[str]]]:
+def _corner_cases(generator: random.Random) -> Iterator[tuple[list[str], list[str]]]:
     """Yield the hand-written policies, each with the hand-written paths."""
     paths = set(_CORNER_NAMES)
     for name in _CORNER_NAMES:
@@ -1604,8 +1617,8 @@ def _corner_cases(rng: random.Random) -> Iterator[tuple[list[str], list[str]]]:
             paths.add(f'{parent}/{name}')
             paths.add(f'{name}/{parent}')
     for _ in range(_CORNER_RANDOM_PATHS):
-        depth = rng.randint(1, _CORNER_DEPTH)
-        paths.add('/'.join(rng.choice(_CORNER_NAMES) for _ in range(depth)))
+        depth = generator.randint(1, _CORNER_DEPTH)
+        paths.add('/'.join(generator.choice(_CORNER_NAMES) for _ in range(depth)))
     walkable = _walkable(paths)
     # the whole list both ways round, so each pattern shadows and is shadowed
     yield _CORNER_PATTERNS, walkable
@@ -1614,61 +1627,69 @@ def _corner_cases(rng: random.Random) -> Iterator[tuple[list[str], list[str]]]:
     for pattern in dict.fromkeys(_CORNER_PATTERNS):
         yield [pattern], walkable
     for _ in range(_CORNER_SUBLISTS):
-        size = rng.randint(1, _CORNER_SUBLIST_SIZE)
-        yield rng.sample(_CORNER_PATTERNS, size), walkable
+        size = generator.randint(1, _CORNER_SUBLIST_SIZE)
+        yield generator.sample(_CORNER_PATTERNS, size), walkable
 
 
 def _fuzz_cases(
-    rng: random.Random,
+    generator: random.Random,
     root: pathlib.Path,
+    *,
     classes: bool,
 ) -> Iterator[tuple[list[str], list[str]]]:
     """Yield fuzzed policies, each with paths built from its patterns.
 
     Each round draws patterns, keeps the ones the settings accept, and
-    yields them as one list and one at a time. With ``classes``, four
-    draws in five wrap a class body, and half the path segments are
-    single characters a class is likely to hold.
+    yields them as one list and one at a time. With ``classes``, most
+    draws wrap a class body, and many path segments are single
+    characters a class is likely to hold.
     """
     for _ in range(_FUZZ_ROUNDS):
-        drawn = [_fuzz_pattern(rng, classes) for _ in range(_FUZZ_ROUND_SIZE)]
+        drawn = [
+            _fuzz_pattern(generator, classes=classes) for _ in range(_FUZZ_ROUND_SIZE)
+        ]
         patterns = [pattern for pattern in drawn if _accepted(root, pattern)]
         paths = set()
         for pattern in patterns:
-            path = _fuzz_match(rng, pattern)
+            path = _fuzz_match(generator, pattern)
             paths.update([path, f'a/{path}', f'{path}/b'])
         for _ in range(_FUZZ_ROUND_SIZE):
-            depth = rng.randint(1, 4)
-            paths.add('/'.join(_fuzz_name(rng, classes) for _ in range(depth)))
+            depth = generator.randint(1, _FUZZ_DEPTH)
+            paths.add(
+                '/'.join(_fuzz_name(generator, classes=classes) for _ in range(depth))
+            )
         walkable = _walkable(paths)
         yield patterns, walkable
         for pattern in patterns:
             yield [pattern], walkable
 
 
-def _fuzz_pattern(rng: random.Random, classes: bool) -> str:
+def _fuzz_pattern(generator: random.Random, *, classes: bool) -> str:
     """Draw one pattern: free-form, or wrapped around a class body."""
-    if classes and (rng.random() < 0.8):
-        body = ''.join(rng.choice(_FUZZ_CLASS_CHARS) for _ in range(rng.randint(0, 6)))
-        head = rng.choice(['', 'a', '*'])
-        close = rng.choice([']', ']', ']x', ''])
-        tail = rng.choice(['', '*', '/b'])
+    if classes and (generator.random() < _FUZZ_CLASS_RATE):
+        size = generator.randint(0, _FUZZ_CLASS_SIZE)
+        body = ''.join(generator.choice(_FUZZ_CLASS_CHARS) for _ in range(size))
+        head = generator.choice(['', 'a', '*'])
+        close = generator.choice([']', ']', ']x', ''])
+        tail = generator.choice(['', '*', '/b'])
         return f'{head}[{body}{close}{tail}'
-    return ''.join(rng.choice(_FUZZ_PATTERN_CHARS) for _ in range(rng.randint(1, 10)))
+    size = generator.randint(1, _FUZZ_PATTERN_SIZE)
+    return ''.join(generator.choice(_FUZZ_PATTERN_CHARS) for _ in range(size))
 
 
-def _fuzz_name(rng: random.Random, classes: bool) -> str:
+def _fuzz_name(generator: random.Random, *, classes: bool) -> str:
     """Draw one path segment."""
-    if classes and (rng.random() < 0.5):
-        return rng.choice(_FUZZ_CLASS_CHARS + 'bcy`{1~+,é\n')
-    return ''.join(rng.choice(_FUZZ_NAME_CHARS) for _ in range(rng.randint(1, 4)))
+    if classes and (generator.random() < _FUZZ_SINGLE_RATE):
+        return generator.choice(_FUZZ_CLASS_CHARS + 'bcy`{1~+,é\n')
+    size = generator.randint(1, _FUZZ_NAME_SIZE)
+    return ''.join(generator.choice(_FUZZ_NAME_CHARS) for _ in range(size))
 
 
-def _fuzz_match(rng: random.Random, pattern: str) -> str:
+def _fuzz_match(generator: random.Random, pattern: str) -> str:
     """Return a path ``pattern`` is likely to match: its wildcards filled in."""
-    path = pattern.strip('/').replace('**', rng.choice(['a', 'a/b', 'é']))
-    path = re.sub(r'[*?]', lambda _: rng.choice(_FUZZ_FILL_CHARS), path)
-    return re.sub(r'\[[^\]/]*\]', lambda _: rng.choice(_FUZZ_MEMBER_CHARS), path)
+    path = pattern.strip('/').replace('**', generator.choice(['a', 'a/b', 'é']))
+    path = re.sub(r'[*?]', lambda _: generator.choice(_FUZZ_FILL_CHARS), path)
+    return re.sub(r'\[[^\]/]*\]', lambda _: generator.choice(_FUZZ_MEMBER_CHARS), path)
 
 
 def _accepted(root: pathlib.Path, pattern: str) -> bool:

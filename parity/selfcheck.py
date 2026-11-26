@@ -1,4 +1,7 @@
-"""The harness self-check: one side against itself, clean and doctored."""
+"""Functions for the harness self-check.
+
+The self-check runs one side against itself, clean and doctored.
+"""
 
 from __future__ import annotations
 
@@ -10,19 +13,15 @@ import sys
 from collections.abc import Mapping
 from typing import Any
 
-from . import cache, doctor, runner
+from . import doctor, runner
+from .cache import CACHE
 from .compare import Difference
+from .doctor import COUNTS_KEY, INDEX_PATH, SCHEMA_TABLE
 from .matrix import Case
-from .runner import Corpus, Plan
+from .runner import WIKI_SETTINGS, Corpus, Plan
 from .side import Side
 
-__all__ = [
-    'CHECKS',
-    'Check',
-    'run',
-    'clean',
-    'doctored',
-]
+__all__ = []
 
 #: the doctored checks: the name of each, what its doctored side changes
 #: (a kind of :data:`doctor.KINDS`), and the stage whose last command it
@@ -49,8 +48,8 @@ CHECKS = (
 _SEEDS = ('1', '2')
 # the paths a doctored side acts on, relative to the wiki root
 _EXTRA = 'parity_doctored.md'
-_COUNTS = f'{cache.CACHE}/word_counts.json'
-_SEARCH = f'{cache.CACHE}/search.db'
+_COUNTS = f'{CACHE}/word_counts.json'
+_SEARCH = f'{CACHE}/search.db'
 # where the trees of a failed check are filed, below the work folder
 _FAILED = 'failed'
 
@@ -98,7 +97,7 @@ def run(
             the end when every check passed. Otherwise it keeps the
             snapshot and, under ``failed/<check>``, the trees of every run
             of each failed check.
-        now: RFC 3339 instant for ``WIKI_NOW``.
+        now: RFC 3339 instant for ``WIKI_FREEZE_TIME``.
         seed: Seed of the matrix sample.
 
     Returns:
@@ -128,7 +127,7 @@ def clean(plan: Plan, base: Side, *, now: str, keep: bool = False) -> Check:
     Args:
         plan: The snapshot to run on.
         base: The engine both sides run.
-        now: RFC 3339 instant for ``WIKI_NOW``.
+        now: RFC 3339 instant for ``WIKI_FREEZE_TIME``.
         keep: Whether to leave the tree of every run in the plan's
             :attr:`~parity.runner.Plan.kept` folder.
 
@@ -137,7 +136,13 @@ def clean(plan: Plan, base: Side, *, now: str, keep: bool = False) -> Check:
 
     """
     found = runner.run(plan, _seeded(base), now=now, keep=keep)
-    return Check('clean', (), found.differences, found.report, found.streams)
+    return Check(
+        name='clean',
+        expected=(),
+        found=found.differences,
+        report=found.report,
+        streams=found.streams,
+    )
 
 
 def doctored(
@@ -156,7 +161,7 @@ def doctored(
         plan: The snapshot to run on.
         base: The engine both sides run.
         name: Name of a row of :data:`CHECKS`.
-        now: RFC 3339 instant for ``WIKI_NOW``.
+        now: RFC 3339 instant for ``WIKI_FREEZE_TIME``.
         keep: Whether to leave the tree of every run in the plan's
             :attr:`~parity.runner.Plan.kept` folder.
 
@@ -169,13 +174,15 @@ def doctored(
             side tells its target by the command's arguments.
 
     """
-    (kind, stage) = next(row[1:] for row in CHECKS if row[0] == name)
+    # find the stage's last command
+    ((kind, stage),) = ((kind, stage) for check, kind, stage in CHECKS if check == name)
     (planned,) = (planned for planned in plan.stages if planned.name == stage)
     case = planned.cases[-1]
     target = runner.command(case, plan.root)
     commands = [runner.command(other, plan.root) for other in planned.cases]
     if commands.count(target) != 1:
-        raise ValueError(f'Stage {stage} runs its last command more than once.')
+        raise ValueError(f'Stage {stage!r} runs its last command more than once.')
+    # wrap the second side in the doctor
     one, two = _seeded(base)
     # -P keeps the harness's own modules off the wrapper's import path
     argv = (
@@ -193,13 +200,14 @@ def doctored(
         Difference(stage, changed.name, case.name, aspect, detail)
         for aspect, detail in _shows_as(name, kind, case, plan.corpus)
     )
+    # run the one stage
     found = runner.run(plan, [one, changed], now=now, only=[stage], keep=keep)
     return Check(
-        f'doctored {name}',
-        expected,
-        found.differences,
-        found.report,
-        found.streams,
+        name=f'doctored {name}',
+        expected=expected,
+        found=found.differences,
+        report=found.report,
+        streams=found.streams,
     )
 
 
@@ -236,7 +244,7 @@ def _acts_on(name: str) -> str:
         return _COUNTS
     if name in ('index', 'schema'):
         return _SEARCH
-    return runner.WIKI_SETTINGS
+    return WIKI_SETTINGS
 
 
 def _shows_as(
@@ -253,18 +261,18 @@ def _shows_as(
         (code,) = case.codes
         return [('exit', ''), ('unexpected', f'exit {code ^ 1}')]
     if kind == 'counts':
-        return [('cache', f'word_counts.json: {doctor.COUNTS_KEY}')]
+        return [('cache', f'word_counts.json: {COUNTS_KEY}')]
     if kind == 'index':
         return [
-            ('cache', f'search.db: files: {doctor.INDEX_PATH}'),
-            ('cache', f'search.db: notes_fts: {doctor.INDEX_PATH}'),
+            ('cache', f'search.db: files: {INDEX_PATH}'),
+            ('cache', f'search.db: notes_fts: {INDEX_PATH}'),
         ]
     if kind == 'schema':
-        return [('cache', f'search.db: schema: {doctor.SCHEMA_TABLE}')]
+        return [('cache', f'search.db: schema: {SCHEMA_TABLE}')]
     target = _acts_on(name)
     # a path of the cache folder is compared by the cache rule alone
-    if target.startswith(f'{cache.CACHE}/'):
-        return [('cache', f'file list: {target[len(cache.CACHE) + 1 :]}')]
+    if target.startswith(f'{CACHE}/'):
+        return [('cache', f'file list: {target[len(CACHE) + 1 :]}')]
     relpath = runner.manifest_path(corpus, target)
     # a byte or a mode changed in place leaves the file's inode and mtime
     if kind in ('file', 'mode'):
