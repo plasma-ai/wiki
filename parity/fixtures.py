@@ -55,6 +55,8 @@ _COMMIT = {
     'GIT_COMMITTER_EMAIL': 'parity@example.invalid',
     'GIT_COMMITTER_DATE': f'{_WRITTEN} +0000',
 }
+# the switches that keep git from starting maintenance behind a command
+_QUIET = ('-c', 'gc.auto=0', '-c', 'maintenance.auto=false')
 # the bytes of the control family: a color sequence, a title sequence that
 # its bell ends, a unit separator and a delete
 _COLOR = '\x1b[31m'
@@ -426,7 +428,9 @@ def _commit(checkout: pathlib.Path, message: str) -> None:
     """Make the folder ``checkout`` a repository with one commit of all it holds.
 
     The commit is made under a fixed identity and date, and under no config
-    but the repository's own.
+    but the repository's own. Git starts no maintenance behind it: a commit
+    of many files would otherwise pack them in the background, and take
+    files away under a clone of the checkout.
 
     Raises:
         RuntimeError: If git cannot commit the tree.
@@ -442,7 +446,7 @@ def _commit(checkout: pathlib.Path, message: str) -> None:
     )
     for command in commands:
         result = subprocess.run(
-            ['git', '-C', f'{checkout}', *command],
+            ['git', *_QUIET, '-C', f'{checkout}', *command],
             env=env,
             capture_output=True,
             text=True,

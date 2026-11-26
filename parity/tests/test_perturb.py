@@ -346,7 +346,9 @@ def test_wiki_of_a_corpus_is_copied_into_a_repository_of_its_own(
     """A loop takes the wiki of a corpus without the checkout around it.
 
     The copy holds the wiki at the path it has in its checkout, committed
-    as it stands, and nothing else of the checkout. The checkout is read
+    as it stands, and nothing else of the checkout. Its objects are packed
+    before a clone is taken: git would otherwise pack a large commit in the
+    background and take files away under the clone. The checkout is read
     and not written. A corpus whose wiki root is no folder is refused.
     """
     before = manifest.scan(corpus.checkout)
@@ -356,6 +358,7 @@ def test_wiki_of_a_corpus_is_copied_into_a_repository_of_its_own(
     assert _git(carved.checkout, 'status', '--porcelain') == ''
     assert _git(carved.checkout, 'ls-files') == _git(corpus.checkout, 'ls-files')
     assert _git(carved.checkout, 'rev-list', '--count', 'HEAD') == '1'
+    assert _git(carved.checkout, 'count-objects') == '0 objects, 0 kilobytes'
     after = manifest.scan(corpus.checkout)
     assert {relpath: entry.content for relpath, entry in after.items()} == {
         relpath: entry.content for relpath, entry in before.items()

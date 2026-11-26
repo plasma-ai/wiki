@@ -239,9 +239,9 @@ def apply(
 ) -> Perturbation:
     """Perturb the wiki at ``root`` below ``checkout``, in place.
 
-    Every operator applies at least once, and the seed draws where and how
-    often. Each operator draws from a generator of its own, so a new
-    operator moves no other's draws.
+    Every operator the tree can take applies at least once, and the seed
+    draws where and how often. Each operator draws from a generator of its
+    own, so a new operator moves no other's draws.
 
     Args:
         checkout: The checkout to change: a clone, never a live tree.
@@ -617,6 +617,9 @@ def carve(corpus: Corpus, folder: pathlib.Path) -> Corpus:
     if ignore.is_file():
         snapshot.clone(ignore, checkout / '.gitignore')
     fixtures._commit(checkout, f'the wiki of {corpus.label}')
+    # a large wiki is one file for each object until git packs them, and a
+    # loop clones the repository many times for every seed
+    snapshot._git(['gc', '--quiet'], cwd=checkout)
     return Corpus(label=corpus.label, checkout=checkout, root=corpus.root)
 
 
