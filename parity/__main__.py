@@ -76,9 +76,9 @@ run on, and the run then exits 2.
 
 ``campaign`` compares the campaign side, v1 as its consumers run it, with
 the oracle over the matrix on each corpus. Whatever differs runs once more
-on the crossed side, the campaign side's interpreter under the oracle's
-packages, which says whether the interpreter or a package causes it. It
-also asks both interpreters what they make of every code point, and reads
+with the crossed side, the campaign side's interpreter under the oracle's
+packages, which says whether the interpreter, a package or both cause it.
+It also asks both interpreters what they make of every code point, and reads
 every name of each wiki for a code point they do not agree on. It exits 0
 when no corpus shows a difference, an excused command or such a name, and 1
 otherwise. It exits 2, before it snapshots anything, as ``matrix`` does, and
@@ -1348,6 +1348,17 @@ def _campaign(parser: argparse.ArgumentParser, options: argparse.Namespace) -> i
             print(f'  registered: {line} ({causes[excused]})')
         for name in _no_hits(trial.result.report):
             print(f'  found nothing: {name}')
+        # print what the second run shows of the crossed side alone
+        if trial.again is not None:
+            found = [item for item in trial.alone if isinstance(item, Difference)]
+            count = len(found)
+            s = 's' if count != 1 else ''
+            print(f'{label}: {count} difference{s} of the crossed side alone')
+            for item in trial.alone:
+                line = _line(item)
+                if isinstance(item, Excused):
+                    line = f'registered: {line}'
+                print(f'  {line}')
         # print the names that hold a changed code point
         count = len(trial.hits)
         s = 's' if count != 1 else ''

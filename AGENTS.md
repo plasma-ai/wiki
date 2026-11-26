@@ -608,14 +608,15 @@ so run the loop again on the committed seeds.
 `python -m parity campaign` compares the `campaign` side with the oracle over
 the matrix on a snapshot of each corpus (`parity/campaign.py`), with no
 perturbation: it asks what the consumers' interpreter makes of the wikis' real
-names and text. The stages that differ run once more on the `crossed` side,
-which lays each difference to the interpreter or to a package, so `crossed`
-keeps the campaign side's interpreter and the oracle side's constraints file
-whenever either moves. The run also asks both interpreters what they make of
-every code point (`parity/points.py`) and reads every name below the wiki root
-for a code point they do not agree on; such a name fails the corpus even where
-the matrix shows no difference. A property an engine starts to read from the
-Unicode tables goes into `PROPERTIES` there and into the spec's table.
+names and text. The stages that differ run once more on all three sides, and
+what the `crossed` side does there lays each difference to the interpreter, to a
+package or to both, so `crossed` keeps the campaign side's interpreter and the
+oracle side's constraints file whenever either moves. The run also asks both
+interpreters what they make of every code point (`parity/points.py`) and reads
+the name of the wiki root and every name below it for a code point they do not
+agree on; such a name fails the corpus even where the matrix shows no
+difference. A property an engine starts to read from the Unicode tables goes
+into `PROPERTIES` there and into the spec's table.
 
 `python -m parity container` runs one command in the Linux container
 (`parity/container.py`, `parity/Dockerfile`): the Ubuntu release of the CI

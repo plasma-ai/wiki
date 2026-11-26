@@ -229,9 +229,10 @@ it when the corpus passed; a corpus that failed keeps its snapshot there,
 because its checkout may move on. A corpus gets a result file
 `<out>/<label>.json` in the form `matrix` writes, with the three sides, how many
 code points the two interpreters do not agree on, the second run with the cause
-of each difference, and the names the scan read and found. The streams of a case
-that differs are saved under `<out>/<label>/<stage>/`, and those of the second
-run under `<out>/<label>/crossed/<stage>/`.
+of each difference and what the crossed side shows alone, and the names the scan
+read and found. The streams of a case that differs are saved under
+`<out>/<label>/<stage>/`, and those of the second run under
+`<out>/<label>/crossed/<stage>/`.
 
 `container` runs one command in the Linux container (Container, below) and exits
 with that command's exit code. It exits 2 with a message when it is given no
@@ -841,13 +842,28 @@ oracle's tables.
   registered between them, so a command the registry excuses fails the corpus
   too.
 - **Second run.** Where the two sides differ, the stages that show it run once
-  more on the same snapshot, `crossed` against `oracle`. `crossed` shares its
-  interpreter with `campaign` and its packages with `oracle`. A difference that
-  `crossed` shows as well, at the same stage, case, aspect and detail, has the
-  cause `interpreter`; one it does not show has the cause `packages`. An excused
-  command is given a cause the same way. A rule that a run breaks by itself
-  (`wrote`, `unexpected`, `notice`, `identity`) is no difference between the
-  sides: it starts no second run and has no cause.
+  more on the same snapshot, on all three sides. `crossed` shares its
+  interpreter with `campaign` and its packages with `oracle`. Each of its runs
+  is compared, by the rules of Comparison and with no registry entry asked, with
+  the reference and with the `campaign` run it stands for.
+- **Cause.** A difference between `campaign` and `oracle` gets its cause from
+  what `crossed` does at the same stage, case, aspect and detail. The cause is
+  `packages` where `crossed` does not differ from `oracle`, `interpreter` where
+  it differs from `oracle` and not from `campaign`, and `both` where it differs
+  from each: a stream that `crossed` prints a third way is laid to both. An
+  excused command is given a cause the same way, with every aspect of its
+  command counted. A rule that a run breaks by itself (`wrote`, `unexpected`,
+  `notice`, `identity`, a tree at `(end)`) is no difference between the sides:
+  it starts no second run and has no cause.
+- **Crossed alone.** Whatever the second run shows of a `crossed` run that the
+  first run does not show of the `campaign` run it stands for is listed apart: a
+  difference from the oracle, a rule the run broke by itself, or an excused
+  command. It is printed below the corpus's differences and recorded as
+  `rerun.alone`.
+- **Runs that stand for none.** A stage that continues another runs each side on
+  the tree each side left. In the second run it therefore holds `crossed` on the
+  tree of `campaign` and `campaign` on the tree of `crossed`, which stand for no
+  run of the first. The result file records them, and no cause reads them.
 - **Crossing.** A run exits 2 on an oracle file whose `crossed` side names
   another interpreter or other Unicode tables than `campaign`, or another
   constraints file or libyaml than `oracle`: such a side tells the two causes
@@ -864,12 +880,13 @@ names against the tables themselves.
   point: the properties in the table below. A code point with a property the two
   interpreters do not agree on is a changed one. The result file records how
   many there are, and for how many each property differs.
-- **Scan.** The run reads the name of every file and folder below the wiki root
-  of the snapshot, whatever the wiki excludes: an engine reads a name before it
-  can exclude it. It follows no symlink and reads nothing below a `.git` folder.
-  A name that holds a changed code point fails the corpus, and the result file
+- **Scan.** The run reads the name of the wiki root of the snapshot, which names
+  the wiki where its index names none, and the name of every file and folder
+  below it, whatever the wiki excludes: an engine reads a name before it can
+  exclude it. It follows no symlink and reads nothing below a `.git` folder. A
+  name that holds a changed code point fails the corpus, and the result file
   lists its path with each such code point and the properties that differ for
-  it.
+  it; the path of the root is `.`.
 
 | Read through  | Properties                                                                                                                                                                                                                     |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
