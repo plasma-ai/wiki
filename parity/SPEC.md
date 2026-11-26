@@ -653,10 +653,10 @@ edits is what the run compares.
   line ends and its bytes as they are.
 - **Writes.** Every file a perturbation writes goes through one function, which
   refuses a path that leads out of the checkout (Snapshots, Links out of a
-  clone). So does the wiki root itself, before a folder is renamed or an index
-  deleted. A wiki whose settings file, settings folder or top `.gitignore` is a
-  symlink out of its checkout therefore cannot be perturbed: the tree ends in an
-  error under every seed.
+  clone). The wiki root is checked the same way, before a folder is renamed or
+  an index deleted. A wiki whose settings file, settings folder or top
+  `.gitignore` is a symlink out of its checkout therefore cannot be perturbed:
+  the tree ends in an error under every seed.
 - **Names.** A name the perturbation makes is `perturbed` and a number, which
   the default naming policy and one that asks for identifiers both take. The two
   invalid names end in `[`, which is link grammar and so denied by every policy.
