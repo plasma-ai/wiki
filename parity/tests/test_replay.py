@@ -11,7 +11,9 @@ replayed command runs on a real side.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
+import os
 import pathlib
 import sys
 from collections.abc import Sequence
@@ -27,10 +29,12 @@ __all__ = [
     'test_every_recorded_call_replays_as_its_command_line',
     'test_call_no_command_line_states_is_a_finding',
     'test_replay_that_departs_from_the_call_is_a_finding',
+    'test_command_is_held_to_what_the_call_left_and_printed',
     'test_routed_test_is_no_finding',
     'test_difference_fails_a_routed_test_unless_a_registry_entry_explains_it',
     'test_clock_a_test_fixes_is_the_clock_of_the_replay',
     'test_tree_its_owner_cannot_read_is_replayed_sealed',
+    'test_entry_a_test_wrote_is_among_the_trees_of_its_calls',
     'test_second_engine_takes_the_calls_of_the_ported_commands',
     'test_doctored_replay_is_reported',
     'test_format_calls_are_recorded_and_made_again',
@@ -79,7 +83,8 @@ def _wiki(path):
 """
 
 # one call of each recorded method, with a result of each kind: a pending
-# and a finished update, issues, a hit and a miss, and a call that raises
+# and a finished update, issues, a hit and a miss, a pattern that starts
+# with a dash, and a call that raises
 _COMMANDS = (
     _HEAD
     + """
@@ -96,7 +101,7 @@ def test_every_command(tmp_path):
     assert wiki.search('alpha', limit=1)
     assert wiki.search('zqxjkv') == []
     assert wiki.match('ALPHA', name='notes', ignore_case=True)
-    assert wiki.match('zqxjkv') == []
+    assert wiki.match('-zqxjkv') == []
     assert 'notes' in wiki.map(depth=1, words=False)
     with pytest.raises(FileNotFoundError):
         wiki.read('missing')
@@ -228,6 +233,24 @@ def test_sealed(tmp_path):
             wiki.lint()
     finally:
         (tmp_path / 'notes').chmod(0o755)
+"""
+)
+
+# a test whose call reads a file that nothing of the call names: an ignore
+# file beside the test's folder, which only the repository's own config names
+_ASIDE = (
+    _HEAD
+    + """
+import subprocess
+
+
+def test_aside(tmp_path):
+    wiki = _wiki(tmp_path)
+    ignore = tmp_path.parent / 'aside_ignore'
+    ignore.write_text('alpha.md\\n', encoding='utf-8')
+    for args in (['init', '-q'], ['config', 'core.excludesFile', str(ignore)]):
+        subprocess.run(['git', '-C', str(tmp_path), *args], check=True)
+    assert wiki.update()
 """
 )
 
@@ -383,6 +406,49 @@ def test_replay_that_departs_from_the_call_is_a_finding(
     assert problem in unfaithful[0].detail
 
 
+def test_command_is_held_to_what_the_call_left_and_printed(
+    tmp_path: pathlib.Path,
+    engine: side.Side,
+) -> None:
+    """Each part of what a call did is held by itself.
+
+    Three recorded calls are changed after the fact, each in one thing.
+    An ``update`` replayed under another clock writes the same files
+    with other stamps, which only the tree tells. A ``read`` whose test
+    is said to have written a page, with the bytes it had, wrote a path
+    the command does not write. And a helper command whose test is said
+    to have read another stdout does not print what the test read.
+    """
+    recording = _record(tmp_path, engine, core=_COMMANDS, cli=_CLI)
+    sides = selfcheck._seeded(engine)
+
+    def problems(call: record.Call) -> list[str]:
+        """Return what the replay of the one call ``call`` finds unfaithful."""
+        result = replay.run(dataclasses.replace(recording, calls=(call,)), sides)
+        assert result.differences == ()
+        return [
+            part for finding in result.findings for part in finding.detail.split('; ')
+        ]
+
+    core = [call for call in recording.calls if call.source == 'core']
+    # the second update of the test, which wrote the stamps, under another clock
+    wrote = [call for call in core if call.command == 'update'][1]
+    env = {**wrote.env, 'WIKI_FREEZE_TIME': '2001-02-03T04:05:06Z'}
+    found = problems(dataclasses.replace(wrote, env=env))
+    assert found
+    assert all(problem.startswith('tree: ') for problem in found)
+    # a read, with a page its test wrote again as it was
+    read = next(call for call in core if call.command == 'read')
+    (page,) = read.after.folder.glob('*/notes/alpha.md')
+    os.utime(page, ns=(1, 1))
+    relpath = page.relative_to(read.after.folder).as_posix()
+    assert problems(read) == [f'written: {relpath}']
+    # a helper command, with another stdout than its test read
+    shown = next(call for call in recording.calls if call.source == 'cli')
+    outcome = {**shown.outcome, 'stdout': 'another text'}
+    assert problems(dataclasses.replace(shown, outcome=outcome)) == ['stdout']
+
+
 def test_routed_test_is_no_finding(tmp_path: pathlib.Path, engine: side.Side) -> None:
     """A test the routing table names may have calls the replay cannot hold.
 
@@ -490,6 +556,38 @@ def test_tree_its_owner_cannot_read_is_replayed_sealed(
     ]
     result = replay.run(recording, selfcheck._seeded(engine))
     assert (result.findings, result.differences) == ((), ())
+
+
+def test_entry_a_test_wrote_is_among_the_trees_of_its_calls(
+    tmp_path: pathlib.Path,
+    engine: side.Side,
+) -> None:
+    """A file a test writes beside its folder is there for the replayed command.
+
+    The test keeps an ignore file outside its own folder, and only the
+    config of its repository names it. The engine notes the page that
+    file makes git ignore. No argument or variable of the call names the
+    file, so it is one of the call's trees because the test wrote it.
+    Without it the command leaves the same tree and prints no such note,
+    and the replay is of another scenario: the notices tell.
+    """
+    recording = _record(tmp_path, engine, core=_ASIDE)
+    assert recording.tests.report['counts']['outcomes'] == {'passed': 1}
+    (call,) = recording.calls
+    assert 'aside_ignore' in call.trees
+    assert any('aside_ignore' in notice for notice in call.notices)
+    result = replay.run(recording, selfcheck._seeded(engine))
+    assert (result.findings, result.differences) == ((), ())
+    # the same call on trees that lack the file
+    names = tuple(name for name in call.before.names if name != 'aside_ignore')
+    before = dataclasses.replace(call.before, names=names)
+    after = dataclasses.replace(call.after, names=names)
+    lacking = dataclasses.replace(call, before=before, after=after)
+    recording = dataclasses.replace(recording, calls=(lacking,))
+    result = replay.run(recording, selfcheck._seeded(engine))
+    assert [(finding.kind, finding.detail) for finding in result.findings] == [
+        ('unfaithful', 'the command prints other notices than the call emitted')
+    ]
 
 
 def test_second_engine_takes_the_calls_of_the_ported_commands(
