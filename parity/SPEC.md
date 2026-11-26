@@ -162,7 +162,8 @@ reason = "<why it waits>"
 `python -m parity oracle check` holds `oracle.toml` level with v1, by three
 checks. It reads branches as the remote-tracking references hold them, so fetch
 first. It exits 1 when a check fails, and `--skip NAME` (repeatable) leaves one
-out.
+out. An error of the harness itself exits 2 from the `oracle` commands as well,
+so exit 1 always means that a check failed.
 
 | Check     | Holds when                                                                                        |
 | --------- | ------------------------------------------------------------------------------------------------- |

@@ -26,6 +26,7 @@ __all__ = [
     'test_keep_leaves_the_snapshot_and_every_tree',
     'test_run_that_would_compare_nothing_is_refused',
     'test_harness_error_exits_2',
+    'test_oracle_command_that_cannot_run_exits_2',
     'test_failed_selfcheck_keeps_its_streams_and_trees',
 ]
 
@@ -336,6 +337,22 @@ def test_harness_error_exits_2(
     assert 'FileNotFoundError' in capsys.readouterr().err
     assert not work.exists()
     assert not out.exists()
+
+
+def test_oracle_command_that_cannot_run_exits_2(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An ``oracle check`` that cannot run is exit 2, not the exit 1 of a failed check.
+
+    On a host with no git the command cannot read the repository. It
+    prints the traceback and exits 2, so a gate that reads exit 1 as an
+    oracle file that fell behind v1 never takes a broken run for one.
+    """
+    monkeypatch.setenv('PATH', f'{tmp_path}')
+    assert cli.main(['oracle', 'check']) == 2
+    assert 'FileNotFoundError' in capsys.readouterr().err
 
 
 @_needs_engine
