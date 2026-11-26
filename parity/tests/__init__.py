@@ -12,6 +12,8 @@ from .test_matrix import *
 from .test_oracle import *
 from .test_ported import *
 from .test_registry import *
+from .test_replay import *
+from .test_routing import *
 from .test_runner import *
 from .test_selfcheck import *
 from .test_side import *

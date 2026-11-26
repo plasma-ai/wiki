@@ -77,6 +77,9 @@ uv run --no-sync pytest parity
 # run v1's CLI tests through the harness (a new work folder outside any repo)
 uv run --no-sync python -m parity suite --work <dir> --out <dir>
 
+# record the calls of v1's core and CLI tests and replay them as commands
+uv run --no-sync python -m parity replay --work <dir> --out <dir>
+
 # run pre-commit
 uv run --no-sync pre-commit run [--all-files]
 
@@ -501,8 +504,8 @@ into its venvs by hand: the harness refuses a checkout or a venv that is not
 what the file names. `python -m parity oracle check` holds the file level with
 v1; run it after `git fetch origin` when a work session starts. The three
 scripts the harness runs inside a side's interpreter, `launcher.py`, `facts.py`
-and `judge.py`, import nothing from `parity`, and neither does the pytest plugin
-in `parity/plugins/`, which is loaded there by a name of its own.
+and `judge.py`, import nothing from `parity`, and neither do the modules in
+`parity/plugins/`, which are loaded there by names of their own.
 
 `python -m parity suite` runs v1's CLI tests (`tests/test_cli` of the oracle
 checkout, unedited) and a short table of commands on a pseudo-terminal
@@ -513,7 +516,21 @@ commands to the side `--engine` names and every other call to v1.
 command adds it there. The tests' own assertions are the verdict; a skipped test
 and an expected failure are findings, and so is a call that does not leave the
 identity record of the side it went to. `parity/plugins/` holds only what the
-oracle's pytest loads, so nothing else may be added to that folder.
+oracle's interpreter loads, so nothing else may be added to that folder.
+
+`python -m parity replay` runs v1's core and CLI tests under a recorder
+(`parity/plugins/parity_record.py`) and then runs each call they made again as a
+command line, on a copy of the tree the call found (`parity/replay.py`). The
+sides are compared by the rules of the matrix, and v1's side is also held to
+what the call did in its test: a replay that does not repeat the test's own call
+compares another scenario. A call with no command line and a call v1's command
+line does not repeat are findings, never skips, unless `parity/routing.toml`
+names the test with the check that holds it in the replay's place. A row for a
+test the replay holds is a finding too, so the table stays as short as the
+replay allows. The recorder also keeps the format calls of `test_format.py`,
+which the replay makes again in v1. A change to a recorded method's command
+line, to a row of the fidelity table or to the routing rules changes the spec
+and its test in `parity/tests/test_replay.py` in the same commit.
 
 ### Run Bracket
 

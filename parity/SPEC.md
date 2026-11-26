@@ -33,6 +33,9 @@ python -m parity registry --side NAME [--sides SIDES] \
 
 # run v1's CLI tests and the terminal table through the dispatcher
 python -m parity suite [--engine NAME] [--sides SIDES] --work DIR --out DIR
+
+# record the calls of v1's tests and replay them as command lines
+python -m parity replay [--engine NAME] [--sides SIDES] --work DIR --out DIR
 ```
 
 A side name is `oracle` or `campaign`, the two v1 sides that
@@ -133,9 +136,19 @@ differs under `<out>/suite/`. The first two are written once the tests have run,
 before the terminal table starts, and the result file takes the table when it
 ends: an error of the table leaves the tests' result behind.
 
+`replay` takes no corpus either: it runs on the trees v1's tests make (Replay,
+below). It exits 0 when the sides differ in nothing and it has no finding, and 1
+otherwise. It exits 2 with a message, before it runs a test, on what `suite`
+refuses and on a routing table that breaks a rule of Routing. `--test` and
+`--jobs` are those of `suite`. It makes `<work>/replay`, which must not exist
+beforehand, and removes it when the run passed. It writes `<out>/replay.json`,
+what pytest printed as `<out>/replay/pytest.txt`, the recorded format calls as
+`<out>/replay/formats.jsonl`, and both streams of every run of each call that
+differs or is unfaithful under `<out>/replay/`.
+
 The sections below are the rules of the harness, one part each: the oracle,
-sides, snapshots, comparison, caches, the matrix, the registry, the self-check
-and the CLI suite.
+sides, snapshots, comparison, caches, the matrix, the registry, the self-check,
+the CLI suite and the replay.
 
 ## Oracle
 
@@ -196,8 +209,9 @@ reason = "<why it waits>"
   `parity` folder among them. Harness code that runs there is a script run by
   its path with `-P` (the launcher; `facts.py`, which prints what the
   interpreter is made of; and `judge.py`, which answers the classifiers), never
-  an import of `parity`. The pytest plugin of the CLI suite is loaded there by a
-  name of its own, `parity_suite`, from a folder that holds nothing else.
+  an import of `parity`. The pytest plugins of the CLI suite and of the replay
+  are loaded there by names of their own (`parity_suite`, `parity_record`), from
+  a folder that holds the harness's plugins and nothing else.
 
 `python -m parity oracle check` holds `oracle.toml` level with v1, by three
 checks. It reads branches as the remote-tracking references hold them, so fetch
@@ -859,3 +873,201 @@ checks itself.
 
 A difference names the table as `terminal`, the run (`dispatcher`, or the v1
 side's name) and the case.
+
+## Replay
+
+v1's core tests call the engine in process, and assert on what a call returns,
+raises, writes and reports. The replay takes those tests as a source of inputs.
+It runs them unchanged under v1 with a recorder, and then runs every call they
+made again as a command line, on the tree the call found, on each side. Two
+sides that agree on every byte there agree on everything the tests assert, if
+the command line does what the test's call did. So the replay has two verdicts
+for each call: the sides are compared by the rules of Comparison and Caches, and
+v1's side is held to the call (Fidelity, below).
+
+- **Where.** The tests are the folders `tests/test_core` and `tests/test_cli` of
+  the oracle checkout, run as the CLI suite runs its tests, with every call of
+  `wiki` sent to v1: a record is what v1 did in the test.
+- **Sides.** With no second engine the replay runs every call on v1 twice, under
+  `PYTHONHASHSEED=1` and `PYTHONHASHSEED=2`, and checks itself (Controls). With
+  one it runs the calls of the ported commands (CLI Suite, Ported Commands) on
+  v1, on the engine, and on the engine with `WIKI_THREADS=1`.
+- **Nothing registered.** Between two builds of v1 a call that a classifier
+  excuses is a `registered` finding. Against a second engine it is listed.
+
+### Recorder
+
+The recorder is a pytest plugin (`parity/plugins`). It stands in for seven
+methods of the engine class (`update`, `lint`, `read`, `search`, `match`, `map`
+and `new`) and for the module the CLI tests' helper starts commands with.
+
+- **Outermost calls.** A call of a recorded method is one record. What that
+  method calls in turn is part of it, and so is a call another thread makes
+  while it runs.
+- **Command line.** A call is written as the arguments of its command in the
+  output mode that prints the most: `update --full`, `lint --json`,
+  `match --lines`, `search --json`. A value of the test goes into an option as
+  `--option=value`, and the positionals follow `--`, so a value that starts with
+  a dash is still a value. The wiki is named with `--path`. A command of the
+  helper is recorded with its own arguments.
+- **Clock.** Each call runs under a fixed clock, and the record holds its
+  instant as `WIKI_FREEZE_TIME`. The recorder sets the variable for the call
+  unless the test set it. A test that puts its own clock method on the engine
+  keeps it: the recorder listens to the stamps it returns, and the instant is
+  the one that renders as that stamp under the wiki's zone and format. For a
+  command of the helper the recorder takes the notice line out of the stderr the
+  test reads, and the record keeps the stream as the command wrote it.
+- **Trees.** The trees of a call are top entries of the temporary folder of its
+  pytest process: every entry the test has made or written by then, and every
+  entry the call names in its arguments, its working directory, its wiki root or
+  a variable of its environment. Each process runs under a home of its own in
+  that folder, so the home is one of them. The recorder copies the trees before
+  the call and after it, with library calls: a test may leave no `cp` on `PATH`.
+  A copy keeps modes and modification times. A folder or a file its owner cannot
+  read is opened for the copy and closed again; the record lists its true mode.
+- **Environment.** The record holds the whole environment of the call and its
+  working directory.
+- **Kinds.** For each test the recorder counts the notice kinds the engine
+  emitted in process and the issue kinds `lint` returned.
+
+A call has no command line, and is `unformed`, when an argument is no string or
+integer where the command takes one, when `read` is asked for a unit it has no
+option for, when the test's clock gave two stamps or a stamp that no instant
+renders as, when the call names the whole temporary folder, or when the helper
+did not capture a stream, or when a tree cannot be copied. A command that cannot
+be started on the trees is unformed too.
+
+### Playing a Call
+
+- **Place.** For each side the trees of the call are cloned from the copy made
+  before the call to their own paths, and the temporary folder of the call's
+  process holds nothing else. Sealed paths get their true modes back. The side
+  runs the command under the recorded environment and working directory, with
+  its own variables set over them.
+- **Order.** The calls of one pytest process may name the same paths, so they
+  are replayed one after the other. The calls of two processes share no path and
+  run side by side.
+- **Compared.** The scans cover the temporary folder of the process. Paths at or
+  below a `.git` folder are left out: a copy leaves each index stale, and each
+  side refreshes it as it goes. The cache rule is applied to every wiki whose
+  cache folder a side holds before or after the command, and to the wiki of an
+  engine call.
+- **Exit codes and notice.** A replayed call brings no list of allowed exit
+  codes and no notice rule of its own. Fidelity holds v1's side to the test, and
+  the comparison holds the other sides to v1: a side prints the clock notice
+  exactly when v1's command did.
+- **Read-only.** `lint`, `read`, `match`, `map`, `search` and `update --check`
+  are held to the read-only rule of Comparison.
+
+### Fidelity
+
+A replay that runs another scenario than the test's call can still compare equal
+on both sides, and it then says nothing about the test. So v1's command line
+must do what the call did:
+
+| The call                 | v1's command line                                                                                                              |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| raised an error          | exits 2, and its stderr ends with `Error: ` and the error's text                                                               |
+| `update` returned a list | exits 0 and prints the count of the list; under `--check` it exits 1 for a list that is not empty, and names the list in order |
+| `lint` returned issues   | exits 1 for a list that is not empty, and the issues of its JSON document have the texts of the list, in order                 |
+| `read` returned text     | exits 0 and prints the text                                                                                                    |
+| `map` returned text      | exits 0 and prints the text; for an empty text it prints nothing, or that the wiki is empty                                    |
+| `new` returned a path    | exits 0 and names the path                                                                                                     |
+| `search` returned hits   | exits 0 and prints as many, or exits 1 for none                                                                                |
+| `match` returned hits    | exits 0 and prints as many lines, or exits 1 for none                                                                          |
+| emitted notices          | prints each notice, in the call's order: on stderr for `update` and `map`, among the notes of the document for `lint`          |
+| was a helper command     | has the same exit code and the same two streams, read as text the way the helper read them                                     |
+
+Every call is also held to its trees. The manifest the command leaves must be
+the one the copy made after the call holds, and the command must write the paths
+the call wrote. Cache folders and `.git` folders are left out of both. A copy
+keeps a path's modification time and not its inode, so "wrote" means here: the
+path was made or removed, or it is no folder and its modification time or its
+content changed. Both the test's trees and the command's are read that way.
+
+A call that breaks a row is `unfaithful`. An unformed or unfaithful call is a
+finding under its test, never a skip, unless the routing table names the test.
+
+### Routing
+
+`parity/routing.toml` is the routing table: the tests of v1 that the replay
+cannot hold, each with the check that holds it in the replay's place.
+
+```toml
+[[route]]
+tests = ["tests/test_core/test_x.py::test_name"]
+to = "rust"
+target = ""
+cite = ""
+reason = "<why the replay cannot hold the tests>"
+```
+
+- **Tests.** The id of a test function routes every parameter set of it; an id
+  with its parameters routes that one.
+- **To.** `rust`: a test of the second engine's own suite holds the tests.
+  `probe`: a function of its probe does. `dropped`: nothing does. `target` names
+  the test or the function, and is empty until it exists.
+- **Cite.** A dropped row cites what it rests on: the id of a registry entry,
+  the id of the test that replaces the dropped ones, or a part of v1 that a
+  second engine does not have (`trust`, `hooks`, `frontmatter memo`,
+  `loader choice`, `Python API`). No other row cites.
+- **Refusals.** A table is refused when it holds a key other than `route`, a row
+  that is no table, a field outside those above or of the wrong shape, a row
+  with no test or no reason, a `to` outside the three, a dropped row that cites
+  nothing it may cite, another row that cites, or one test in two rows.
+- **Routed calls.** The calls of a routed test are replayed and compared like
+  any other. A call with no command line and an unfaithful call are no findings
+  there. A difference between the sides still fails the run, unless the row
+  cites a registry entry: what the sides differ in on such a test is that
+  entry's difference, and it is listed in the result file only.
+- **Unneeded rows.** Where every call is replayed, a row for a test whose calls
+  all replay as their commands, with no difference, is an `unneeded` finding:
+  the replay holds that test.
+
+### Format Calls
+
+The recorder also records every call the tests of
+`tests/test_core/test_format.py` make to a public function of
+`wiki.core.format`, whoever makes it: the test, or the engine under it. The
+outermost call counts. A record holds the function, the arguments and the
+outcome as JSON, how often the call was made, and the tests that made it. Equal
+calls are one record.
+
+- **JSON form.** A string, a number, a boolean, `null` and a list are
+  themselves. A tuple, a set and a mapping are objects marked with the key `~`,
+  each with its `items`; a set lists its members in the order of their JSON
+  text. An outcome is `returned` with the value, or `raised` with the error's
+  type and text. A value with no such form makes the call a `format` finding.
+- **Made again.** With no second engine the replay makes every recorded call
+  again, in a fresh interpreter of v1's side, under each of the two hash seeds
+  (`parity/plugins/parity_values.py`). A call that gives another outcome there
+  than in its test turns on something its arguments do not hold, and is a
+  `format` finding unless every test that made it is routed.
+
+### Controls
+
+With no second engine, and no `--test`, a replay ends with two controls on its
+own recording. Each doctors the replay and must be reported.
+
+| Control | Doctored                                                                                                     | Must show as                                  |
+| ------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------- |
+| `argv`  | the argument mapping: every `update` call that found pending changes under `--check` runs without the option | every one of those calls unfaithful           |
+| `side`  | one side: a wrapper changes one byte of stdout on the first faithful call                                    | exactly one `stdout` difference, on that call |
+
+A control that doctors no call, or that the replay does not report in full, is a
+`control` finding.
+
+A run passes when it has no difference and no finding:
+
+| Finding                                   | Means                                                                     |
+| ----------------------------------------- | ------------------------------------------------------------------------- |
+| `failed`, `error`, `identity`, `untraced` | The tests did not run under the recorder as v1 runs them (CLI Suite).     |
+| `unformed`                                | No command line states a call of the test.                                |
+| `unfaithful`                              | v1's command line does not do what a call of the test did.                |
+| `registered`                              | A registry entry excused a call between two builds of v1.                 |
+| `unneeded`                                | The routing table names a test the replay holds.                          |
+| `format`                                  | A format call has no JSON form, or gives another outcome when made again. |
+| `control`                                 | A doctored replay was not reported.                                       |
+
+A test that is skipped, or fails as its mark expects, records no call. The
+result file lists it with its outcome, and it is no finding of the replay.

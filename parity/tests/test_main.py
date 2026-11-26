@@ -21,6 +21,7 @@ from parity import (
     oracle,
     ported,
     registry,
+    routing,
     runner,
     selfcheck,
     side,
@@ -43,6 +44,9 @@ __all__ = [
     'test_failed_suite_keeps_its_output_and_trees',
     'test_suite_whose_terminal_table_cannot_run_keeps_the_tests_result',
     'test_suite_that_would_prove_nothing_is_refused',
+    'test_replay_command_records_and_replays_v1s_tests',
+    'test_failed_replay_keeps_its_output_and_trees',
+    'test_replay_that_would_prove_nothing_is_refused',
 ]
 
 # a side that runs the command it is given and prints everything but the
@@ -89,6 +93,8 @@ os.execv(sys.argv[2], sys.argv[2:])
 
 # two of v1's CLI tests: they call `map`, `init` and `read`
 _TESTS = 'tests/test_cli/test_regressions.py'
+# one small file of v1's core tests, two of whose tests the routing table names
+_CORE_TESTS = 'tests/test_core/test_read.py'
 
 # a describe command: what it prints comes from the side's own environment
 _DESCRIBE = "import os; print(os.environ['EXAMPLE'], os.environ['WIKI_FREEZE_TIME'])"
@@ -760,6 +766,141 @@ def test_suite_that_would_prove_nothing_is_refused(
     assert raised.value.code == 2
     assert message in capsys.readouterr().err
     assert sorted(tmp_path.rglob('*')) == held
+    assert not out.exists()
+
+
+@_needs_git
+@pytest.mark.parametrize(
+    argnames=('second', 'commands'),
+    argvalues=[(None, []), ('campaign', ['read'])],
+    ids=['v1 alone', 'second engine'],
+)
+def test_replay_command_records_and_replays_v1s_tests(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    second: Optional[str],
+    commands: list[str],
+) -> None:
+    """The replay passes with v1 alone, and with v1's other build as engine.
+
+    One of v1's core test files runs from the oracle checkout under the
+    recorder. With no engine every call is replayed on v1 under two hash
+    seeds, and the two tests of the file that the routing table names
+    keep the run green though no command repeats their calls. With
+    ``read`` ported, the ``read`` calls alone are replayed, on v1, on the
+    campaign side and on that side with one thread. The result file
+    records each call with its runs, and the work folder is gone.
+    """
+    listed = tmp_path / 'ported.toml'
+    listed.write_text(f'commands = {json.dumps(commands)}\n', encoding='utf-8')
+    monkeypatch.setattr(ported, 'PATH', listed)
+    monkeypatch.chdir(tmp_path)
+    out = tmp_path / 'out'
+    work = tmp_path / 'work'
+    argv = ['replay', '--test', _CORE_TESTS, '--jobs', '0']
+    argv += ['--work', work.name, '--out', out.name]
+    if second is not None:
+        argv += ['--engine', second]
+    assert cli.main(argv) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert 'replay: 0 differences' in lines
+    document = json.loads((out / 'replay.json').read_text(encoding='utf-8'))
+    assert document['findings'] == []
+    counts = document['counts']
+    assert counts['tests_routed'] == 2
+    assert counts['unformed'] + counts['unfaithful'] > 0
+    runs = ['oracle seed 1', 'oracle seed 2']
+    if second is not None:
+        runs = ['oracle', second, f'{second} on one thread']
+        assert list(counts['commands']) == ['core read']
+    assert document['runs'] == runs
+    replayed = [call for call in document['calls'] if call['runs']]
+    assert replayed
+    assert all(list(call['runs']) == runs for call in replayed)
+    assert ('formats' in document) == (second is None)
+    assert b' passed' in (out / 'replay' / 'pytest.txt').read_bytes()
+    assert not (work / 'replay').exists()
+
+
+@_needs_git
+def test_failed_replay_keeps_its_output_and_trees(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A replay that fails leaves what is needed to see why.
+
+    With an empty routing table, the calls of the file that no command
+    repeats are findings, so the command exits 1. It prints each one
+    under its test, and keeps pytest's output, both streams of every run
+    of an unfaithful call, and the work folder, which holds the copies of
+    the trees.
+    """
+    table = tmp_path / 'routing.toml'
+    table.write_text('', encoding='utf-8')
+    monkeypatch.setattr(routing, 'PATH', table)
+    out = tmp_path / 'out'
+    work = tmp_path / 'work'
+    argv = ['replay', '--test', _CORE_TESTS, '--jobs', '0']
+    argv += ['--work', f'{work}', '--out', f'{out}']
+    assert cli.main(argv) == 1
+    lines = capsys.readouterr().out.splitlines()
+    test = f'{_CORE_TESTS}::test_read_slice_units'
+    assert f"  unformed: {test}: read has no option for the unit 'paragraphs'" in lines
+    assert f'  unfaithful: {test}: exit code 2, the call asks for 0' in lines
+    document = json.loads((out / 'replay.json').read_text(encoding='utf-8'))
+    assert {finding['kind'] for finding in document['findings']} == {
+        'unformed',
+        'unfaithful',
+    }
+    assert list((out / 'replay').glob('* oracle seed 2.err'))
+    assert list((work / 'replay' / 'record' / 'store').rglob('before'))
+
+
+@_needs_git
+@pytest.mark.parametrize(
+    argnames=('broken', 'message'),
+    argvalues=[
+        ('reference', "--engine names 'oracle'"),
+        ('unported', 'lists no command'),
+        ('table', 'gives no reason'),
+        ('work', 'exists'),
+    ],
+)
+def test_replay_that_would_prove_nothing_is_refused(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    broken: str,
+    message: str,
+) -> None:
+    """A replay that would prove nothing is refused before it runs a test.
+
+    An engine that is v1 itself and an engine no ported command would
+    reach would replay v1 against v1 under another name, and a routing
+    table that breaks its rules would take tests out of the replay with
+    nothing behind them. The command exits 2 with a message, and writes
+    no result file.
+    """
+    listed = tmp_path / 'ported.toml'
+    text = 'commands = []\n' if broken == 'unported' else 'commands = ["read"]\n'
+    listed.write_text(text, encoding='utf-8')
+    monkeypatch.setattr(ported, 'PATH', listed)
+    table = tmp_path / 'routing.toml'
+    row = '[[route]]\ntests = ["tests/a.py::test_b"]\nto = "rust"\n'
+    table.write_text(row if broken == 'table' else '', encoding='utf-8')
+    monkeypatch.setattr(routing, 'PATH', table)
+    out = tmp_path / 'out'
+    work = tmp_path / 'work'
+    if broken == 'work':
+        (work / 'replay').mkdir(parents=True)
+    second = 'oracle' if broken == 'reference' else 'campaign'
+    argv = ['replay', '--engine', second, '--work', f'{work}', '--out', f'{out}']
+    with pytest.raises(SystemExit) as raised:
+        cli.main(argv)
+    assert raised.value.code == 2
+    assert message in capsys.readouterr().err
     assert not out.exists()
 
 
