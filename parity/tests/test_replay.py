@@ -1272,7 +1272,8 @@ def test_format_calls_are_recorded_and_made_again(
     come back as what they were when the call is made again in a fresh
     interpreter, and a call that raises raises again. A
     call whose outcome turns on a value the test patched gives another
-    outcome there, which is a finding.
+    outcome there, which is a finding. A routing row for a format test is
+    needed only while one of its calls does that.
     """
     recording = _record(tmp_path, engine, formats=_FORMATS)
     counts = sorted((entry['function'], entry['count']) for entry in recording.formats)
@@ -1290,12 +1291,23 @@ def test_format_calls_are_recorded_and_made_again(
     findings, report = replay.formats(recording, source, engine, work=work)
     assert findings == []
     assert (report['calls'], report['distinct']) == (6, 5)
+    # a row for a test whose format calls all give their outcome again is
+    # not needed
+    (test,) = {test for entry in recording.formats for test in entry['tests']}
+    played = replay.run(recording, selfcheck._seeded(engine)).report
+    unneeded = replay.unneeded([test], played, report['differing'], [test])
+    assert [(finding.kind, finding.subject) for finding in unneeded] == [
+        ('unneeded', test)
+    ]
     recording = _record(tmp_path / 'other', engine, formats=_HIDDEN)
     work = tmp_path / 'made again'
-    findings, _ = replay.formats(recording, source, engine, work=work)
+    findings, report = replay.formats(recording, source, engine, work=work)
     assert [(finding.kind, finding.subject) for finding in findings] == [
         ('format', 'match_link_row')
     ]
+    (test,) = report['differing']
+    played = replay.run(recording, selfcheck._seeded(engine)).report
+    assert replay.unneeded([test], played, report['differing'], [test]) == []
 
 
 def test_format_call_with_no_json_form_is_a_finding(
@@ -1372,10 +1384,18 @@ def test_kind_list_is_held_to_the_engine_and_to_the_replay(
     )
     test = lint.test
     issue = lint.kinds['issues'][0]
-    result = replay.run(recording, selfcheck._seeded(engine))
+    seeded = selfcheck._seeded(engine)
+    result = replay.run(recording, seeded)
     shown = [row['kinds'] for row in result.report['calls']]
     assert any('link_add' in row['notices'] for row in shown)
     assert any(issue in row['issues'] for row in shown)
+    # a command line that prints no notice, and a lint that ends before its
+    # document, show none of the kinds their calls met
+    silent = dataclasses.replace(update, argv=('--version',))
+    ended = dataclasses.replace(lint, argv=(*lint.argv, '--nope'))
+    only = dataclasses.replace(recording, calls=(silent, ended))
+    rows = replay.run(only, seeded).report['calls']
+    assert [row['kinds'] for row in rows] == [{'notices': [], 'issues': []}] * 2
     # every kind at home in the perturbation, but two the test shows
     listed = {
         family: dict.fromkeys(recording.known[family], kinds.PERTURBATION)
@@ -1446,6 +1466,11 @@ def test_every_test_has_one_home(tmp_path: pathlib.Path, engine: side.Side) -> N
     python = suite.source(oracle.load()).python
     source = suite.Source(python=python, checkout=tmp_path / 'checkout')
     dispatcher = dispatch.build(tmp_path / 'bin', reference=engine)
+    # the harness's own tests on v1's branch are no tests of v1
+    own = tmp_path / 'checkout' / 'tests' / 'test_parity'
+    own.mkdir()
+    (own / '__init__.py').write_text('', encoding='utf-8')
+    (own / 'test_own.py').write_text('def test_own():\n    pass\n', encoding='utf-8')
     collected = homes.collect(source, dispatcher, work=tmp_path / 'collect')
     cli, core = 'tests/test_cli/test_commands.py', 'tests/test_core/test_calls.py'
     assert collected == (
