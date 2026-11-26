@@ -3,8 +3,9 @@
 The whole of v1's CLI suite runs through the command line in
 ``test_main``. This module holds each rule of the run against a small
 folder of tests shaped like v1's: a helper module that names the console
-script, and tests that call it. The tests run under the oracle side's
-pytest, and their calls reach real sides.
+script, tests that call it, and packages that import their test modules.
+The tests run under the oracle side's pytest, and their calls reach real
+sides.
 """
 
 from __future__ import annotations
@@ -24,7 +25,9 @@ from .conftest import _needs_git
 
 __all__ = [
     'test_every_call_of_a_test_goes_through_the_dispatcher',
+    'test_what_a_module_takes_at_import_is_the_dispatcher',
     'test_test_that_does_not_pass_is_a_finding',
+    'test_test_file_that_is_not_loaded_is_a_finding',
     'test_ported_commands_go_to_the_second_engine',
     'test_call_that_does_not_prove_its_side_is_a_finding',
     'test_call_outside_the_dispatcher_or_a_trace_is_a_finding',
@@ -35,6 +38,9 @@ __all__ = [
 ]
 
 pytestmark = _needs_git
+
+# the folder of the tests, relative to their checkout, as in v1
+_FOLDER = 'tests/test_cli'
 
 # a helper module shaped like the one v1's CLI tests take the console script
 # from: the script beside the interpreter, and its folder at the head of PATH
@@ -92,6 +98,26 @@ def test_with_it_again(shared):
     assert _wiki('--version').returncode == 0
 """
 
+# a module that takes the console script while it is imported: as a command
+# it keeps, as a parameter of a test, and in a call it makes there and then
+_EARLY = """
+import subprocess
+
+import pytest
+
+from .conftest import WIKI, _env
+
+ARGV = [WIKI, '--version']
+DONE = subprocess.run(ARGV, env=_env())
+
+
+@pytest.mark.parametrize('path', [WIKI])
+def test_by_what_the_module_kept(path):
+    assert DONE.returncode == 0
+    assert subprocess.run(ARGV, env=_env()).returncode == 0
+    assert subprocess.run([path, '--version'], env=_env()).returncode == 0
+"""
+
 # one test for each outcome a test can have
 _OUTCOMES = """
 import pytest
@@ -140,6 +166,23 @@ from .conftest import _wiki
 def test_pair():
     assert _wiki('--version').returncode == 0
     assert _wiki('--help').returncode == 0
+"""
+
+# a test file that fails while it is imported, and one that skips itself there
+_UNLOADABLE = """
+import nothing_here
+"""
+_UNWANTED = """
+import pytest
+
+pytest.skip('left out', allow_module_level=True)
+"""
+
+# a helper module that ends the run as failed though every test passed
+_FAILING = f"""{_HELPER}
+
+def pytest_sessionfinish(session):
+    session.exitstatus = 1
 """
 
 # a test that calls through the dispatcher, one that runs the engine by its
@@ -257,6 +300,26 @@ def test_every_call_of_a_test_goes_through_the_dispatcher(
     assert result.report['counts']['sides'] == {engine.name: {'tests': 5, 'calls': 6}}
 
 
+def test_what_a_module_takes_at_import_is_the_dispatcher(
+    tmp_path: pathlib.Path,
+    engine: side.Side,
+) -> None:
+    """A test module never sees the console script of its own venv.
+
+    The helper names the dispatcher before a test module imports it. So a
+    command the module builds at import and a path it hands a test as a
+    parameter both reach the dispatcher, and count for the test that runs
+    them. A call the module makes while it is imported belongs to no test,
+    and is reported as one.
+    """
+    result = _run(tmp_path, _EARLY, reference=engine)
+    assert result.findings == (suite.Finding('untraced', '1 call'),)
+    (test,) = result.report['tests']
+    assert test['outcome'] == 'passed'
+    assert test['calls'] == {engine.name: 2}
+    assert test['identified'] is True
+
+
 def test_test_that_does_not_pass_is_a_finding(
     tmp_path: pathlib.Path,
     engine: side.Side,
@@ -285,6 +348,31 @@ def test_test_that_does_not_pass_is_a_finding(
         'xpassed': 1,
     }
     assert b'RuntimeError: teardown' in result.log
+
+
+@pytest.mark.parametrize(
+    argnames=('other', 'jobs', 'outcome'),
+    argvalues=[(_UNLOADABLE, 2, 'error'), (_UNWANTED, None, 'skipped')],
+    ids=['fails in workers', 'skips itself'],
+)
+def test_test_file_that_is_not_loaded_is_a_finding(
+    tmp_path: pathlib.Path,
+    engine: side.Side,
+    other: str,
+    jobs: Optional[int],
+    outcome: str,
+) -> None:
+    """A test file that is not loaded is reported, though no test of it ran.
+
+    Where workers run the tests, pytest goes on past a file that fails
+    while it is imported, and a file may skip itself there. No report of
+    a test names such a file. Its tests would be missing from a run that
+    passes, so the file itself is reported, with the outcome its tests
+    would have had.
+    """
+    result = _run(tmp_path, _PAIR, reference=engine, other=other, jobs=jobs)
+    assert result.findings == (suite.Finding(outcome, f'{_FOLDER}/test_other.py'),)
+    assert result.report['counts']['outcomes'] == {outcome: 1, 'passed': 1}
 
 
 def test_ported_commands_go_to_the_second_engine(
@@ -414,30 +502,42 @@ def test_side_that_no_test_called_is_a_finding(
 
 
 @pytest.mark.parametrize(
-    argnames=('helper', 'body', 'jobs'),
+    argnames=('helper', 'body', 'other', 'jobs'),
     argvalues=[
-        (_SEAMLESS, _CALLS, None),
-        (_SEAMLESS, _CALLS, 2),
-        (_HELPER, '', None),
+        (_SEAMLESS, _CALLS, '', None),
+        (_SEAMLESS, _CALLS, '', 2),
+        (_HELPER, '', '', None),
+        (_HELPER, _PAIR, _UNLOADABLE, None),
+        (_FAILING, _PAIR, '', None),
     ],
-    ids=['seam', 'seam in workers', 'empty'],
+    ids=['seam', 'seam in workers', 'empty', 'unloadable file', 'exit code'],
 )
 def test_run_that_ran_no_test_is_an_error(
     tmp_path: pathlib.Path,
     engine: side.Side,
     helper: str,
     body: str,
+    other: str,
     jobs: Optional[int],
 ) -> None:
     """A run that cannot point the tests at the dispatcher is no result.
 
     A helper module that names the console script another way leaves the
     tests calling the script of their own venv, and a folder with no test
-    runs nothing. Either would end with nothing to report, so the run
-    raises instead of returning a result that reads as a pass.
+    runs nothing. One process stops at a test file it cannot load and runs
+    no test. And a run that pytest ends as failed, with every test passed,
+    failed in a way no row tells. Each would end with nothing to report,
+    so the run raises instead of returning a result that reads as a pass.
     """
     with pytest.raises(RuntimeError, match='did not run the tests'):
-        _run(tmp_path, body, reference=engine, helper=helper, jobs=jobs)
+        _run(
+            tmp_path,
+            body,
+            reference=engine,
+            helper=helper,
+            other=other,
+            jobs=jobs,
+        )
 
 
 def test_run_started_with_interrupts_ignored_still_interrupts(
@@ -470,24 +570,31 @@ def _run(
     engine: Optional[side.Side] = None,
     commands: Sequence[str] = (),
     helper: str = _HELPER,
+    other: str = '',
     settings: str = '[pytest]\n',
     jobs: Optional[int] = None,
 ) -> suite.Result:
     """Run a folder of tests shaped like v1's through a new dispatcher.
 
-    The folder holds ``helper`` as its helper module and ``body`` as its
-    one test module, and runs under the oracle side's interpreter with
-    ``settings`` as its pytest settings.
+    The folder holds ``helper`` as its helper module, ``body`` as its test
+    module and ``other`` as a second one, and runs under the oracle side's
+    interpreter with ``settings`` as its pytest settings. As in v1, each
+    package imports what it holds, so the first import of the helper
+    imports the test module too; ``other`` is a module no package names.
     """
     checkout = tmp_path / 'checkout'
-    folder = checkout / 'tests' / 'test_cli'
+    folder = checkout / _FOLDER
     folder.mkdir(parents=True)
     (checkout / 'pytest.ini').write_text(settings, encoding='utf-8')
-    (checkout / 'tests' / '__init__.py').write_text('', encoding='utf-8')
-    (folder / '__init__.py').write_text('', encoding='utf-8')
+    package = 'from .test_cli import *\n'
+    (checkout / 'tests' / '__init__.py').write_text(package, encoding='utf-8')
+    package = 'from .test_calls import *\n' if body else ''
+    (folder / '__init__.py').write_text(package, encoding='utf-8')
     (folder / 'conftest.py').write_text(helper, encoding='utf-8')
     if body:
         (folder / 'test_calls.py').write_text(body, encoding='utf-8')
+    if other:
+        (folder / 'test_other.py').write_text(other, encoding='utf-8')
     python = suite.source(oracle.load()).python
     source = suite.Source(python=python, checkout=checkout)
     work = tmp_path / 'work'

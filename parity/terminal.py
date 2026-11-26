@@ -40,7 +40,9 @@ DISPATCHED = 'dispatcher'
 # the pages of the table's wiki: one whose body holds what a terminal acts on
 # (a color sequence, a title sequence, a bell, a unit separator and a delete),
 # one too long for any terminal to take whole, so the command that prints it
-# is still printing when a key is typed, and one the wiki does not hold
+# is still printing when a key is typed, and one the wiki does not hold. The
+# long page's body is one line of dots: wherever a side leaves it, the page's
+# next byte is none that the side's own text for the interrupt would start with
 _STYLED = 'styled'
 _LONG = 'long'
 _ABSENT = 'absent'
@@ -49,10 +51,10 @@ _STYLED_TEXT = (
     b'\x1b[31mred\x1b[0m \x1b]0;title\x07 bell \x07 unit \x1f delete \x7f end\n'
 )
 _LONG_HEAD = b'---\nname: long\ndesc: Long.\n---\n\n# long\n\n'
-_LONG_LINE = b'line %07d of the long page\n'
-# how many lines the long page holds: several megabytes, where the largest
-# terminal buffer in use holds less than one
-_LONG_LINES = 150_000
+_LONG_FILL = b'.'
+# how many bytes the long page's line holds: several megabytes, where the
+# largest terminal buffer in use holds less than one
+_LONG_SIZE = 4_000_000
 # the key a terminal turns into an interrupt of the command in its foreground
 _INTERRUPT = b'\x03'
 # the terminal every command sees: its type, its rows and its columns
@@ -189,8 +191,8 @@ def run(
     if made.code != 0:
         error = made.stderr.decode('utf-8', 'replace').strip()
         raise RuntimeError(f'init failed (exit {made.code}): {error!r}')
-    lines = (_LONG_LINE % number for number in range(_LONG_LINES))
-    pages = {_STYLED: _STYLED_TEXT, _LONG: _LONG_HEAD + b''.join(lines)}
+    line = _LONG_FILL * _LONG_SIZE + b'\n'
+    pages = {_STYLED: _STYLED_TEXT, _LONG: _LONG_HEAD + line}
     for name, text in pages.items():
         (root / f'{name}.md').write_bytes(text)
     env = {'TERM': _TERM, **built}
@@ -296,14 +298,13 @@ def show(
         os.close(slave)
     output = b''
     deadline = time.monotonic() + _TIMEOUT
+    late = f'{list(argv)!r} did not end within {_TIMEOUT} seconds.'
     try:
         while True:
             left = max(0.0, deadline - time.monotonic())
             ready, _, _ = select.select([master], [], [], left)
             if not ready:
-                raise RuntimeError(
-                    f'{list(argv)!r} did not end within {_TIMEOUT} seconds.'
-                )
+                raise RuntimeError(late)
             try:
                 chunk = os.read(master, _CHUNK)
             except OSError as e:
@@ -315,12 +316,19 @@ def show(
                 break
             output += chunk
             if keys:
-                os.write(master, keys)
+                # a command that has ended takes no key; what it showed is
+                # still read to its end
+                with contextlib.suppress(OSError):
+                    os.write(master, keys)
                 keys = b''
-        code = process.wait(timeout=max(0.0, deadline - time.monotonic()))
+        try:
+            code = process.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(late) from None
     finally:
-        # the command leads a session of its own: end whatever it left
-        with contextlib.suppress(ProcessLookupError):
+        # the command leads a session of its own: end whatever it left. macOS
+        # refuses the signal where the command has ended and is not yet reaped
+        with contextlib.suppress(ProcessLookupError, PermissionError):
             os.killpg(process.pid, signal.SIGKILL)
         process.wait()
         os.close(master)

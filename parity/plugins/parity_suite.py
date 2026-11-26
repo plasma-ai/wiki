@@ -4,10 +4,12 @@ usage: <pytest of a v1 venv> -p parity_suite --parity-plan PLAN <tests>
 
 v1's CLI tests take the console script from one helper module, as its
 ``WIKI`` path and its ``VENV_BIN`` folder. The plugin points both at the
-dispatcher of the run, so every call a test makes, by the path or by the
-bare name, goes where the dispatcher sends it. It gives each test a trace
-file of its own through ``WIKI_TRACE``, and writes one result file: every
-test with its outcome and its trace file, and every test left out.
+dispatcher of the run as the helper is imported, before any module takes a
+name from it, so every call a test makes, by the path or by the bare name,
+goes where the dispatcher sends it. It gives each test a trace file of its
+own through ``WIKI_TRACE``, and writes one result file: every test with its
+outcome and its trace file, every test file that was not loaded, and every
+test left out.
 
 ``PLAN`` is a JSON object: ``helper`` is the helper module's name, ``wiki``
 the dispatcher, ``traces`` the folder for the trace files and ``result`` the
@@ -17,12 +19,15 @@ nothing from ``parity``, and its folder holds nothing else.
 
 from __future__ import annotations
 
+import importlib.abc
+import importlib.machinery
 import json
 import os
 import pathlib
 import sys
 from collections.abc import Sequence
-from typing import Any
+from types import ModuleType
+from typing import Any, Optional, Union
 
 import pytest
 
@@ -42,8 +47,78 @@ _DESELECTED = 'parity_deselected'
 _MAIN = 'main'
 
 _PLAN = pytest.StashKey[dict[str, Any]]()
+_POINTED = pytest.StashKey[bool]()
 _LEFT = pytest.StashKey[list[str]]()
 _COUNT = pytest.StashKey[int]()
+
+
+class _Finder:
+    """Finds the helper module, to point it at the dispatcher as it is imported.
+
+    v1's test packages import their test modules, so the first import of
+    any module of the tests imports them all, the helper among them. An
+    import finder is the one place that runs between the helper's body and
+    the first module that takes a name from it.
+    """
+
+    def __init__(self: _Finder, config: pytest.Config) -> None:
+        """Initialize the finder for the run of ``config``."""
+        self.config = config
+
+    def find_spec(
+        self: _Finder,
+        fullname: str,
+        path: Optional[Sequence[str]],
+        target: Optional[ModuleType] = None,
+    ) -> Optional[importlib.machinery.ModuleSpec]:
+        """Return the helper's spec as the next finder that knows it gives it.
+
+        The loader of the spec is wrapped, so pytest's own loader still
+        rewrites the helper's assertions.
+        """
+        if fullname != _plan(self.config)['helper']:
+            return None
+        for finder in sys.meta_path:
+            if finder is self:
+                continue
+            spec = finder.find_spec(fullname, path, target)
+            if spec is not None:
+                spec.loader = _Loader(spec.loader, self.config)
+                return spec
+        return None
+
+
+class _Loader(importlib.abc.Loader):
+    """Loads the helper module as its own loader does, then points it."""
+
+    def __init__(self: _Loader, loader: Any, config: pytest.Config) -> None:
+        """Initialize the loader around the helper's own ``loader``."""
+        self.loader = loader
+        self.config = config
+
+    def __getattr__(self: _Loader, name: str) -> Any:
+        """Return what the helper's own loader holds under ``name``."""
+        return getattr(self.loader, name)
+
+    def create_module(
+        self: _Loader,
+        spec: importlib.machinery.ModuleSpec,
+    ) -> Optional[ModuleType]:
+        """Create the module as the helper's own loader does."""
+        return self.loader.create_module(spec)
+
+    def exec_module(self: _Loader, module: ModuleType) -> None:
+        """Run the helper's body, then set its two names to the dispatcher.
+
+        A helper without both names is left as it is: the run is refused
+        once the tests are collected.
+        """
+        self.loader.exec_module(module)
+        if hasattr(module, _WIKI) and hasattr(module, _BIN):
+            wiki = _plan(self.config)['wiki']
+            setattr(module, _WIKI, wiki)
+            setattr(module, _BIN, pathlib.Path(wiki).parent)
+            self.config.stash[_POINTED] = True
 
 
 class _Collector:
@@ -54,6 +129,17 @@ class _Collector:
         self.config = config
         self.rows: dict[str, dict[str, str]] = {}
         self.deselected: set[str] = set()
+
+    def pytest_collectreport(self: _Collector, report: pytest.CollectReport) -> None:
+        """Handle the report of one collected file: note one that was not loaded.
+
+        A file that fails while it is imported, or skips itself there, has
+        no test that runs, so no report of a test names it. Where workers
+        run the tests, pytest goes on with the other files.
+        """
+        if not report.passed:
+            row = {'id': report.nodeid, 'outcome': _outcome(report), 'trace': ''}
+            self.rows[report.nodeid] = row
 
     def pytest_runtest_logreport(self: _Collector, report: pytest.TestReport) -> None:
         """Handle the report of one phase of one test."""
@@ -79,7 +165,7 @@ class _Collector:
             'tests': [self.rows[id] for id in sorted(self.rows)],
             'deselected': sorted(self.deselected),
         }
-        path = pathlib.Path(self.config.stash[_PLAN]['result'])
+        path = pathlib.Path(_plan(self.config)['result'])
         path.write_text(json.dumps(document, indent=1) + '\n', encoding='utf-8')
 
 
@@ -90,10 +176,19 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     group.addoption('--parity-plan', type=pathlib.Path, required=True, help=plan_help)
 
 
+@pytest.hookimpl(tryfirst=True)
+def pytest_load_initial_conftests(early_config: pytest.Config) -> None:
+    """Watch for the helper module before pytest imports any module of the tests.
+
+    Whatever a module takes from the helper is then the dispatcher: a name
+    it binds, a command it builds while it is imported, a parameter of a
+    test.
+    """
+    sys.meta_path.insert(0, _Finder(early_config))
+
+
 def pytest_configure(config: pytest.Config) -> None:
-    """Read the plan, and gather outcomes in the process that reports them."""
-    plan: pathlib.Path = config.option.parity_plan
-    config.stash[_PLAN] = json.loads(plan.read_text(encoding='utf-8'))
+    """Gather outcomes in the process that reports them."""
     config.stash[_LEFT] = []
     config.stash[_COUNT] = 0
     if not hasattr(config, 'workerinput'):
@@ -106,38 +201,24 @@ def pytest_deselected(items: Sequence[pytest.Item]) -> None:
         item.config.stash[_LEFT].append(item.nodeid)
 
 
-@pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(
     config: pytest.Config,
     items: list[pytest.Item],
 ) -> None:
-    """Point the helper module and the collected test modules at the dispatcher.
-
-    A test module binds the helper's ``WIKI`` under its own name when it
-    imports it, so the name is set in every module that holds the helper's
-    value.
+    """Refuse to run tests that were not pointed at the dispatcher.
 
     Raises:
-        pytest.UsageError: If the helper module is not imported, or does not
-            hold the two names: the tests would then call the console script
-            of their own venv, and the run would prove nothing.
+        pytest.UsageError: If the helper module was not imported, or does
+            not hold the two names: the tests would then call the console
+            script of their own venv, and the run would prove nothing.
 
     """
-    if not items:
-        return
-    plan = config.stash[_PLAN]
-    helper = sys.modules.get(plan['helper'])
-    if (helper is None) or not (hasattr(helper, _WIKI) and hasattr(helper, _BIN)):
+    if items and not config.stash.get(_POINTED, False):
+        helper = _plan(config)['helper']
         raise pytest.UsageError(
-            f'{plan["helper"]} does not name the console script as {_WIKI}'
-            f' and {_BIN}; the tests cannot be pointed at the dispatcher.'
+            f'{helper} does not name the console script as {_WIKI} and'
+            f' {_BIN}; the tests cannot be pointed at the dispatcher.'
         )
-    found = getattr(helper, _WIKI)
-    modules = {getattr(item, 'module', None) for item in items}
-    for module in (helper, *modules):
-        if (module is not None) and (getattr(module, _WIKI, None) == found):
-            setattr(module, _WIKI, plan['wiki'])
-    setattr(helper, _BIN, pathlib.Path(plan['wiki']).parent)
 
 
 def pytest_sessionfinish(session: pytest.Session) -> None:
@@ -159,18 +240,33 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     worker = getattr(config, 'workerinput', {}).get('workerid', _MAIN)
     config.stash[_COUNT] += 1
     name = f'{worker}-{config.stash[_COUNT]}'
-    os.environ[TRACE] = os.path.join(config.stash[_PLAN]['traces'], name)
+    os.environ[TRACE] = os.path.join(_plan(config)['traces'], name)
     item.user_properties.append((_PROPERTY, name))
 
 
 # ------ helper functions
 
 
-def _outcome(report: pytest.TestReport) -> str:
-    """Return what one phase of a test says about the test's outcome."""
+def _plan(config: pytest.Config) -> dict[str, Any]:
+    """Return the plan of the run, read once.
+
+    The helper module is imported before pytest configures the run, so
+    the plan is read from the options pytest has parsed by then.
+    """
+    if _PLAN not in config.stash:
+        path: pathlib.Path = config.known_args_namespace.parity_plan
+        config.stash[_PLAN] = json.loads(path.read_text(encoding='utf-8'))
+    return config.stash[_PLAN]
+
+
+def _outcome(report: Union[pytest.TestReport, pytest.CollectReport]) -> str:
+    """Return what one phase of a test says about the test's outcome.
+
+    The report of a collected file reads as a phase around the tests.
+    """
     expected = hasattr(report, 'wasxfail')
     if report.failed:
-        if report.when == 'call':
+        if getattr(report, 'when', None) == 'call':
             return 'failed'
         return 'error'
     if report.skipped:

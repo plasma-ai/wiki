@@ -395,8 +395,9 @@ def _suite(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
         chosen = _sides(names, declared, path=options.sides)
     except ValueError as e:
         parser.error(f'{e}')
-    # refuse the work folder and probe every side before a test runs
-    work = options.work / _SUITE
+    # refuse the work folder and probe every side before a test runs. pytest
+    # runs in the oracle checkout, so it is handed the folder's full path
+    work = options.work.resolve() / _SUITE
     try:
         suite.validate(work)
         header = _header(chosen, now=_NOW)
@@ -419,21 +420,21 @@ def _suite(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
         only=options.test or (),
         jobs=options.jobs,
     )
-    table = terminal.run(reference, dispatcher, work=work / 'terminal')
-    # write the result file, pytest's output and the streams that differ
-    document = {
-        **header,
-        'ported': list(dispatcher.commands),
-        **result.report,
-        'terminal': {
-            'cases': table.report,
-            'differences': [dataclasses.asdict(item) for item in table.differences],
-        },
-    }
+    # write the result file and pytest's output before the terminal table
+    # runs, so an error of the table leaves the tests' result behind
+    document = {**header, 'ported': list(dispatcher.commands), **result.report}
     options.out.mkdir(parents=True, exist_ok=True)
-    text = json.dumps(document, indent=2)
-    (options.out / f'{_SUITE}.json').write_text(text + '\n', encoding='utf-8')
-    _save({'pytest.txt': result.log, **table.streams}, options.out / _SUITE)
+    path = options.out / f'{_SUITE}.json'
+    path.write_text(json.dumps(document, indent=2) + '\n', encoding='utf-8')
+    _save({'pytest.txt': result.log}, options.out / _SUITE)
+    table = terminal.run(reference, dispatcher, work=work / 'terminal')
+    # add the table to the result file, and write the streams that differ
+    document['terminal'] = {
+        'cases': table.report,
+        'differences': [dataclasses.asdict(item) for item in table.differences],
+    }
+    path.write_text(json.dumps(document, indent=2) + '\n', encoding='utf-8')
+    _save(table.streams, options.out / _SUITE)
     # print how much ran on each side, then what is not the expected result
     counts = result.report['counts']
     outcomes = ', '.join(

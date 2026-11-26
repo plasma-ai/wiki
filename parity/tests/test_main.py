@@ -41,6 +41,7 @@ __all__ = [
     'test_registry_command_proves_the_classifiers',
     'test_suite_command_runs_v1s_tests_and_the_terminal_table',
     'test_failed_suite_keeps_its_output_and_trees',
+    'test_suite_whose_terminal_table_cannot_run_keeps_the_tests_result',
     'test_suite_that_would_prove_nothing_is_refused',
 ]
 
@@ -75,6 +76,15 @@ import os, sys
 if 'read' in sys.argv[1:]:
     sys.exit(7)
 os.execv(sys.argv[1], sys.argv[1:])
+"""
+
+# an engine that runs the command it is given, and on every ``read`` makes
+# the folder its first argument names
+_SQUATTER = """
+import os, sys
+if 'read' in sys.argv[2:]:
+    os.makedirs(sys.argv[1], exist_ok=True)
+os.execv(sys.argv[2], sys.argv[2:])
 """
 
 # two of v1's CLI tests: they call `map`, `init` and `read`
@@ -568,15 +578,18 @@ def test_suite_command_runs_v1s_tests_and_the_terminal_table(
     calls of ``read`` go to the campaign side, which is the same commit:
     the tests pass on both, and the command prints how many calls each
     side took. The result file records each test with its calls, and the
-    work folder is gone.
+    work folder is gone. The folders are named from where the command is
+    started, though pytest runs in the oracle checkout, and pytest leaves
+    no cache in that checkout.
     """
     listed = tmp_path / 'ported.toml'
     listed.write_text(f'commands = {json.dumps(commands)}\n', encoding='utf-8')
     monkeypatch.setattr(ported, 'PATH', listed)
+    monkeypatch.chdir(tmp_path)
     out = tmp_path / 'out'
     work = tmp_path / 'work'
     argv = ['suite', '--test', _TESTS, '--jobs', '0']
-    argv += ['--work', f'{work}', '--out', f'{out}']
+    argv += ['--work', work.name, '--out', out.name]
     if second is not None:
         argv += ['--engine', second]
     assert cli.main(argv) == 0
@@ -602,6 +615,7 @@ def test_suite_command_runs_v1s_tests_and_the_terminal_table(
     assert f'suite: {names[-1]}: ' in '\n'.join(lines)
     assert b'2 passed' in (out / 'suite' / 'pytest.txt').read_bytes()
     assert not (work / 'suite').exists()
+    assert not (named.checkout / '.pytest_cache').exists()
 
 
 @_needs_git
@@ -617,7 +631,8 @@ def test_failed_suite_keeps_its_output_and_trees(
     test that reads a page fails on its own assertion and every case of
     the terminal table differs, so the command exits 1. It prints the
     failed test and each difference, and keeps pytest's output, both
-    outputs of the differing cases, and the work folder.
+    outputs of the differing cases, and the work folder, which holds the
+    wikis the tests made.
     """
     relay = tmp_path / 'relay.py'
     relay.write_text(_UNREADABLE, encoding='utf-8')
@@ -641,6 +656,45 @@ def test_failed_suite_keeps_its_output_and_trees(
     stream = out / 'suite' / f'error {terminal.DISPATCHED}.out'
     assert stream.read_bytes() == b''
     assert (work / 'suite' / 'terminal' / 'tree' / 'wiki' / '_index.md').is_file()
+    trees = work / 'suite' / 'tests' / 'tmp'
+    assert list(trees.rglob(runner.WIKI_SETTINGS))
+
+
+@_needs_git
+def test_suite_whose_terminal_table_cannot_run_keeps_the_tests_result(
+    tmp_path: pathlib.Path,
+    engine: side.Side,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An error of the terminal table does not take the tests' result with it.
+
+    The second engine passes every test, and with its first ``read`` it
+    makes a folder where the terminal table makes its own, so the table
+    ends in an error of the harness. The command exits 2 with the
+    traceback. The result file and pytest's output are written by then:
+    they hold the tests' outcomes and no table.
+    """
+    out = tmp_path / 'out'
+    work = tmp_path / 'work'
+    relay = tmp_path / 'relay.py'
+    relay.write_text(_SQUATTER, encoding='utf-8')
+    taken = work / 'suite' / 'terminal' / 'home'
+    prefix = json.dumps([sys.executable, f'{relay}', f'{taken}', *engine.argv])
+    sides = tmp_path / 'sides.toml'
+    sides.write_text(f'[squatter]\nargv = {prefix}\n', encoding='utf-8')
+    listed = tmp_path / 'ported.toml'
+    listed.write_text('commands = ["read"]\n', encoding='utf-8')
+    monkeypatch.setattr(ported, 'PATH', listed)
+    argv = ['suite', '--test', _TESTS, '--jobs', '0']
+    argv += ['--sides', f'{sides}', '--engine', 'squatter']
+    argv += ['--work', f'{work}', '--out', f'{out}']
+    assert cli.main(argv) == 2
+    assert 'FileExistsError' in capsys.readouterr().err
+    document = json.loads((out / 'suite.json').read_text(encoding='utf-8'))
+    assert [test['outcome'] for test in document['tests']] == ['passed'] * 2
+    assert 'terminal' not in document
+    assert b'2 passed' in (out / 'suite' / 'pytest.txt').read_bytes()
 
 
 @_needs_git

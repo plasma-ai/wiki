@@ -129,7 +129,9 @@ or tests in place of all of them, and `--jobs N` sets how many processes run the
 tests. It makes `<work>/suite`, which must not exist beforehand, and removes it
 when the run passed. It writes `<out>/suite.json`, what pytest printed as
 `<out>/suite/pytest.txt`, and both outputs of each terminal case whose output
-differs under `<out>/suite/`.
+differs under `<out>/suite/`. The first two are written once the tests have run,
+before the terminal table starts, and the result file takes the table when it
+ends: an error of the table leaves the tests' result behind.
 
 The sections below are the rules of the harness, one part each: the oracle,
 sides, snapshots, comparison, caches, the matrix, the registry, the self-check
@@ -749,11 +751,22 @@ commands = ["read", "--version"]
   lists those tests.
 - **Plugin.** v1's tests take the console script from one helper module, which
   names its path and its folder. A pytest plugin (`parity/plugins`) sets both to
-  the dispatcher after collection, in the helper and in every test module that
-  imported the path. A test then reaches the dispatcher by the helper's runner,
-  by the path, and by the bare name `wiki` on the `PATH` the helper builds, as
-  git does for the merge driver. A helper that does not hold both names ends the
-  run with an error.
+  the dispatcher. A test then reaches the dispatcher by the helper's runner, by
+  the path, and by the bare name `wiki` on the `PATH` the helper builds, as git
+  does for the merge driver. A helper that is not imported, or does not hold
+  both names, ends the run with an error.
+- **When.** The plugin sets the names as the helper is imported, between the
+  helper's own code and the first module that takes a name from it. v1's test
+  packages import their test modules, so the first import of any of them imports
+  them all, before pytest loads the helper as a `conftest`; an import finder is
+  the one place early enough. Whatever a test module takes from the helper is
+  then the dispatcher: a name it binds, a command it builds while it is
+  imported, a parameter of a test. A call a module makes while it is imported
+  belongs to no test, so it is an `untraced` finding.
+- **Past the helper.** A test that finds the console script without the helper,
+  for example beside the interpreter, runs v1 unseen: v1's console script leaves
+  no identity record. No test of the oracle does. The two tests that run
+  `python -c` test v1's Python code and count as tests with no call.
 - **Trace.** The plugin sets `WIKI_TRACE` to a fresh file before a test's first
   fixture runs, and the file stays until the next test gets its own. A fixture
   that several tests share is built inside the first test that asks for it, so
@@ -773,12 +786,16 @@ A run passes when it has no finding:
 | Finding                                            | Means                                                                 |
 | -------------------------------------------------- | --------------------------------------------------------------------- |
 | `failed`, `error`, `skipped`, `xfailed`, `xpassed` | A test did not pass. A skip and an expected failure are findings too. |
+| `error` or `skipped`, with a test file's name      | The file failed while it was imported, or skipped itself there.       |
 | `identity`                                         | A test's trace file breaks the identity rule of Dispatcher.           |
 | `untraced`                                         | Calls reached the dispatcher with no `WIKI_TRACE`.                    |
 | `unused`                                           | No test called a side of the run, or a ported command.                |
 
 - **Skips.** A test that is skipped, or that fails as its mark expects, asserted
   nothing about the engine, so it is no pass.
+- **Files.** A test file that is not loaded has no test that runs, so no test's
+  outcome tells of it. Where several processes run the tests, pytest goes on
+  past a file that fails while it is imported. The file is a finding by itself.
 - **Unused.** A run in which a side or a ported command took no call proved
   nothing about it. A run of some tests only is held to the same rule.
 - **No call.** `tests/test_cli` also holds tests that call no `wiki`: they test
@@ -789,7 +806,8 @@ A run passes when it has no finding:
   calls turns on how many processes run the tests, because each process builds a
   shared fixture again.
 - **Not run.** A run in which pytest collects nothing, or ends on an error of
-  its own, is an error of the harness, never a pass.
+  its own, is an error of the harness, never a pass. So is a run that pytest
+  ends as failed while no test and no file is a `failed` or `error` finding.
 
 ### Terminal Table
 
@@ -808,19 +826,23 @@ checks itself.
 
 - **Wiki.** The v1 side makes the wiki with `init`, and the harness writes the
   pages. The first page holds a color sequence, a title sequence, a bell, a unit
-  separator and a delete. The table's commands write nothing, so both runs read
-  the same tree.
+  separator and a delete. The long page's body is one line of dots. The table's
+  commands write nothing, so both runs read the same tree.
 - **Terminal.** The pseudo-terminal is the command's controlling terminal, 24
   rows by 80 columns, and `TERM` is `xterm-256color`. It passes output on as
   written, echoes nothing that is typed and drops no output on an interrupt. So
   the harness reads every byte the command wrote, on either stream, in order.
 - **Keys.** Ctrl-C is typed once the command has shown its first bytes. The long
   page is larger than any terminal buffer in use, so the command is still
-  printing it then.
+  printing it then. A command that has ended by then takes no key, and its
+  output is compared as it is.
 - **Compared.** The bytes shown and the exit code, where a command ended by a
   signal has the negated signal number. In the `interrupt` case the length of
   the page's head that a side shows turns on timing, so each output is compared
-  from where it leaves the page's text.
+  from where it leaves the page's text. A side that opens its own text with the
+  page's next byte would hide that byte. Inside the long line the next byte is a
+  dot, which no interrupt text starts with. A line end, which one may start
+  with, follows only the page's first lines and its last dot.
 - **Each run by itself.** A run that ends with a code its case does not allow is
   an `unexpected` difference, as in the matrix. A run that does not leave its
   identity record is an `identity` difference; for the dispatcher's run that is

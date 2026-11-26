@@ -29,12 +29,15 @@ pytestmark = _needs_git
 _CODES = {'sequences': 0, 'error': 2, 'interrupt': 130}
 # an engine that runs the command it is given and changes one thing: it
 # ignores interrupts, it writes a byte of its own at the end, or it ends with
-# another exit code
+# another exit code. Or it runs nothing: it writes one line and ends
 _DOCTOR = """
 import os, signal, subprocess, sys
 mode, argv = sys.argv[1], sys.argv[2:]
-if mode == 'deaf':
+if mode in ('deaf', 'short'):
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+if mode == 'short':
+    os.write(1, b'error: no' + bytes([10]))
+    sys.exit(2)
 if mode in ('deaf', 'plain'):
     os.execv(argv[0], argv)
 # outlive the interrupt of the command
@@ -107,8 +110,18 @@ def test_table_shows_no_difference_between_v1_and_itself(
             },
         ),
         ('plain', 'another', {(case, 'identity', '') for case in _CODES}),
+        (
+            'short',
+            None,
+            {(case, aspect, '') for case in _CODES for aspect in ('output', 'identity')}
+            | {
+                (case, aspect, detail)
+                for case in ('sequences', 'interrupt')
+                for aspect, detail in (('exit', ''), ('unexpected', 'exit 2'))
+            },
+        ),
     ],
-    ids=['output', 'exit code', 'interrupt', 'identity'],
+    ids=['output', 'exit code', 'interrupt', 'identity', 'ended early'],
 )
 def test_engine_that_differs_on_a_terminal_is_reported(
     tmp_path: pathlib.Path,
@@ -123,7 +136,9 @@ def test_engine_that_differs_on_a_terminal_is_reported(
     command and changes one thing: a byte of the output, the exit code,
     the answer to an interrupt, or the build it is expected to be. The
     table reports exactly that, on the dispatcher's run, and keeps both
-    outputs where they differ.
+    outputs where they differ. An engine that ends after one line, before
+    the Ctrl-C of its case is typed, is reported the same way: the key it
+    no longer takes is no error of the table.
     """
     doctor = tmp_path / 'doctor.py'
     doctor.write_text(_DOCTOR, encoding='utf-8')

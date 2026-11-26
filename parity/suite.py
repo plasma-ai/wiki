@@ -51,6 +51,8 @@ _BOOT = (
 # the exit codes pytest ends with when every test ran: all passed, or some
 # did not
 _RAN = (0, 1)
+# the outcomes that make pytest end with the second of them
+_FAILED = ('failed', 'error')
 # seconds the tests may run -- a run this long has hung
 _TIMEOUT = 3_600
 # how many lines of pytest's output an error of the run quotes
@@ -82,7 +84,10 @@ class Item:
     Attributes:
         id: The test's id, as pytest names it.
         outcome: ``passed``, ``failed`` (its own assertion), ``error`` (its
-            setup or teardown), ``skipped``, ``xfailed`` or ``xpassed``.
+            setup or teardown), ``skipped``, ``xfailed`` or ``xpassed``. A
+            test file that was not loaded is an item too, with the file as
+            its id: ``error`` if it failed, ``skipped`` if it skipped
+            itself.
         calls: How many calls of the test each side took, by name.
         commands: How many of its calls of each ported command the second
             engine took.
@@ -192,7 +197,8 @@ def run(
     Raises:
         ValueError: If :func:`validate` refuses ``work``.
         RuntimeError: If pytest ends without running the tests: it found
-            none, or it could not start them.
+            none, it could not start them, or it ends as failed with no
+            test and no file that failed.
 
     """
     validate(work)
@@ -228,13 +234,19 @@ def run(
         stderr=subprocess.STDOUT,
         timeout=_TIMEOUT,
     )
-    if (done.returncode not in _RAN) or not result.is_file():
+    data = None
+    if (done.returncode in _RAN) and result.is_file():
+        data = json.loads(result.read_text(encoding='utf-8'))
+        # a run that failed owes a row that says what failed
+        failed = any(row['outcome'] in _FAILED for row in data['tests'])
+        if (done.returncode != 0) and not failed:
+            data = None
+    if data is None:
         tail = done.stdout.decode('utf-8', 'replace').splitlines()[-_TAIL:]
         raise RuntimeError(
             f'pytest did not run the tests (exit {done.returncode}): {tail!r}'
         )
     # read every test's outcome, and its calls from its trace file
-    data = json.loads(result.read_text(encoding='utf-8'))
     items = []
     for row in data['tests']:
         tally = dispatch.tally(dispatcher, traces / row['trace'])
