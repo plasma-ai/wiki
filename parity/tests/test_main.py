@@ -16,7 +16,16 @@ from typing import Optional
 
 import pytest
 
-from parity import __main__ as cli, oracle, registry, runner, selfcheck, side
+from parity import (
+    __main__ as cli,
+    oracle,
+    ported,
+    registry,
+    runner,
+    selfcheck,
+    side,
+    terminal,
+)
 
 from .conftest import NOW, _needs_git
 
@@ -30,6 +39,9 @@ __all__ = [
     'test_oracle_check_tells_a_failed_check_from_a_run_that_cannot_start',
     'test_failed_selfcheck_keeps_its_streams_and_trees',
     'test_registry_command_proves_the_classifiers',
+    'test_suite_command_runs_v1s_tests_and_the_terminal_table',
+    'test_failed_suite_keeps_its_output_and_trees',
+    'test_suite_that_would_prove_nothing_is_refused',
 ]
 
 # a side that runs the command it is given and prints everything but the
@@ -56,6 +68,17 @@ sys.stdout.buffer.write(result.stdout)
 sys.stderr.buffer.write(stderr)
 sys.exit(result.returncode)
 """
+
+# a side that runs the command it is given, unless the command is `read`
+_UNREADABLE = """
+import os, sys
+if 'read' in sys.argv[1:]:
+    sys.exit(7)
+os.execv(sys.argv[1], sys.argv[1:])
+"""
+
+# two of v1's CLI tests: they call `map`, `init` and `read`
+_TESTS = 'tests/test_cli/test_regressions.py'
 
 # a describe command: what it prints comes from the side's own environment
 _DESCRIBE = "import os; print(os.environ['EXAMPLE'], os.environ['WIKI_FREEZE_TIME'])"
@@ -523,6 +546,167 @@ def test_registry_command_proves_the_classifiers(
     # the snapshot and every clone are gone
     assert not (work / 'example').exists()
     assert cli.main([*argv, '--release']) == (1 if waits else 0)
+
+
+@_needs_git
+@pytest.mark.parametrize(
+    argnames=('second', 'commands'),
+    argvalues=[(None, []), ('campaign', ['read'])],
+    ids=['v1 alone', 'second engine'],
+)
+def test_suite_command_runs_v1s_tests_and_the_terminal_table(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    second: Optional[str],
+    commands: list[str],
+) -> None:
+    """The CLI suite passes with v1 alone, and with v1's other build as engine.
+
+    Two of v1's own tests run from the oracle checkout, then the terminal
+    table. With no engine every call is v1's. With ``read`` ported, the
+    calls of ``read`` go to the campaign side, which is the same commit:
+    the tests pass on both, and the command prints how many calls each
+    side took. The result file records each test with its calls, and the
+    work folder is gone.
+    """
+    listed = tmp_path / 'ported.toml'
+    listed.write_text(f'commands = {json.dumps(commands)}\n', encoding='utf-8')
+    monkeypatch.setattr(ported, 'PATH', listed)
+    out = tmp_path / 'out'
+    work = tmp_path / 'work'
+    argv = ['suite', '--test', _TESTS, '--jobs', '0']
+    argv += ['--work', f'{work}', '--out', f'{out}']
+    if second is not None:
+        argv += ['--engine', second]
+    assert cli.main(argv) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert 'suite: 2 tests: 2 passed; 0 left out' in lines
+    assert 'suite: 0 tests called no side' in lines
+    assert 'terminal: 0 differences' in lines
+    document = json.loads((out / 'suite.json').read_text(encoding='utf-8'))
+    named = oracle.load()
+    names = ['oracle'] if second is None else ['oracle', second]
+    assert [record['name'] for record in document['sides']] == names
+    assert {record['identity']['build'] for record in document['sides']} == {
+        named.commit
+    }
+    assert document['ported'] == commands
+    assert [test['outcome'] for test in document['tests']] == ['passed'] * 2
+    counts = document['counts']
+    assert set(counts['sides']) == set(names)
+    assert all(count['calls'] for count in counts['sides'].values())
+    assert set(counts['commands']) == set(commands)
+    sent = {name for case in document['terminal']['cases'] for name in case['sent']}
+    assert sent == {names[-1]}
+    assert f'suite: {names[-1]}: ' in '\n'.join(lines)
+    assert b'2 passed' in (out / 'suite' / 'pytest.txt').read_bytes()
+    assert not (work / 'suite').exists()
+
+
+@_needs_git
+def test_failed_suite_keeps_its_output_and_trees(
+    tmp_path: pathlib.Path,
+    engine: side.Side,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A suite that fails leaves what is needed to see why.
+
+    The second engine answers ``--version`` and fails every ``read``. The
+    test that reads a page fails on its own assertion and every case of
+    the terminal table differs, so the command exits 1. It prints the
+    failed test and each difference, and keeps pytest's output, both
+    outputs of the differing cases, and the work folder.
+    """
+    relay = tmp_path / 'relay.py'
+    relay.write_text(_UNREADABLE, encoding='utf-8')
+    prefix = json.dumps([sys.executable, f'{relay}', *engine.argv])
+    sides = tmp_path / 'sides.toml'
+    sides.write_text(f'[unreadable]\nargv = {prefix}\n', encoding='utf-8')
+    listed = tmp_path / 'ported.toml'
+    listed.write_text('commands = ["read"]\n', encoding='utf-8')
+    monkeypatch.setattr(ported, 'PATH', listed)
+    out = tmp_path / 'out'
+    work = tmp_path / 'work'
+    argv = ['suite', '--test', _TESTS, '--jobs', '0']
+    argv += ['--sides', f'{sides}', '--engine', 'unreadable']
+    argv += ['--work', f'{work}', '--out', f'{out}']
+    assert cli.main(argv) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert f'  failed: {_TESTS}::test_broken_pipe_is_quiet' in lines
+    assert 'terminal: 9 differences' in lines
+    assert '  terminal: dispatcher: error: unexpected: exit 7' in lines
+    assert b'1 failed, 1 passed' in (out / 'suite' / 'pytest.txt').read_bytes()
+    stream = out / 'suite' / f'error {terminal.DISPATCHED}.out'
+    assert stream.read_bytes() == b''
+    assert (work / 'suite' / 'terminal' / 'tree' / 'wiki' / '_index.md').is_file()
+
+
+@_needs_git
+@pytest.mark.parametrize(
+    argnames=('broken', 'message'),
+    argvalues=[
+        # the engine
+        ('reference', 'the side v1 runs as'),
+        ('unknown', 'No side is named'),
+        ('unported', 'lists no command'),
+        # the list of ported commands
+        ('list', 'unknown key'),
+        # the work folder
+        ('work', 'the harness makes it new'),
+        ('repository', 'lies inside the repository'),
+        ('wiki', 'which holds .wiki/settings.json'),
+    ],
+    ids=['reference', 'unknown', 'unported', 'list', 'work', 'repository', 'wiki'],
+)
+def test_suite_that_would_prove_nothing_is_refused(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    broken: str,
+    message: str,
+) -> None:
+    """A suite run that would prove nothing, or write where it must not, is no pass.
+
+    An engine that is v1 itself or that no file declares, an engine no
+    ported command would reach, and a list of ported commands that breaks
+    its rules would each run v1 against v1 under another name. A work
+    folder inside a repository would let a test's ``init`` register the
+    merge driver there, and one below a wiki would fail every test that
+    makes a wiki. The command exits 2 with a message instead, before it
+    runs a test or writes a result file.
+    """
+    listed = tmp_path / 'ported.toml'
+    texts = {
+        'unported': 'commands = []\n',
+        'list': 'commands = ["read"]\nrest = "v1"\n',
+    }
+    text = texts.get(broken, 'commands = ["read"]\n')
+    listed.write_text(text, encoding='utf-8')
+    monkeypatch.setattr(ported, 'PATH', listed)
+    out = tmp_path / 'out'
+    work = tmp_path / 'work'
+    if broken == 'work':
+        (work / 'suite').mkdir(parents=True)
+    elif broken == 'repository':
+        (tmp_path / 'repository' / '.git').mkdir(parents=True)
+        work = tmp_path / 'repository' / 'work'
+    elif broken == 'wiki':
+        (tmp_path / 'outer' / '.wiki').mkdir(parents=True)
+        settings = tmp_path / 'outer' / '.wiki' / 'settings.json'
+        settings.write_text('{}', encoding='utf-8')
+        work = tmp_path / 'outer' / 'work'
+    engines = {'reference': 'oracle', 'unknown': 'absent'}
+    second = engines.get(broken, 'campaign')
+    argv = ['suite', '--engine', second, '--work', f'{work}', '--out', f'{out}']
+    held = sorted(tmp_path.rglob('*'))
+    with pytest.raises(SystemExit) as raised:
+        cli.main(argv)
+    assert raised.value.code == 2
+    assert message in capsys.readouterr().err
+    assert sorted(tmp_path.rglob('*')) == held
+    assert not out.exists()
 
 
 # ------ helpers

@@ -3,6 +3,7 @@
 usage: python -m parity matrix --a NAME --b NAME [--registered] [--sides FILE] --corpora FILE --work DIR --out DIR
        python -m parity selfcheck --side NAME [--sides FILE] --corpora FILE --work DIR --out DIR
        python -m parity registry --side NAME [--sides FILE] --corpora FILE --work DIR --out DIR
+       python -m parity suite [--engine NAME] [--sides FILE] --work DIR --out DIR
        python -m parity oracle ensure [--side NAME]
        python -m parity oracle check [--skip NAME]
 
@@ -19,6 +20,14 @@ cannot hold to its classifiers -- exits 2 before it snapshots anything. A
 side is one the sides file declares, or a v1 side of ``oracle.toml``.
 ``registry --release`` also exits 1 while an entry of the registry is not
 ready for a release.
+
+``suite`` runs v1's CLI tests and the terminal table through the dispatcher,
+which sends the calls of the ported commands to the side ``--engine`` names
+and every other call to v1. It exits 0 when every test passes on the sides
+its calls went to and the terminal table shows no difference, and 1
+otherwise. It exits 2, before it runs a test, on an unknown side, on an
+engine that no ported command would reach, and on a work folder the harness
+refuses.
 
 The registry lists what a second engine may do differently from v1, and two
 builds of v1 have nothing registered between them. ``matrix`` therefore
@@ -43,6 +52,7 @@ import logging
 import pathlib
 import platform
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -51,7 +61,19 @@ import traceback
 from collections.abc import Mapping, Sequence
 from typing import Any, Optional, Union
 
-from . import config, oracle, registry, runner, selfcheck, side, snapshot
+from . import (
+    config,
+    dispatch,
+    oracle,
+    ported,
+    registry,
+    runner,
+    selfcheck,
+    side,
+    snapshot,
+    suite,
+    terminal,
+)
 from .classify import Excused
 from .compare import Difference
 from .matrix import STAGES
@@ -76,12 +98,14 @@ _YEARS = (1001, 9998)
 _DESCRIPTION = """\
 Run two wiki engines on the same trees and report what they do differently.
 
-matrix, selfcheck and registry exit 0 when every result is the expected one,
-and 1 otherwise. A run that would compare nothing exits 2 with a message,
-before it snapshots anything. oracle ensure exits 2 when it refuses a checkout
-or a venv, and oracle check exits 1 when a check fails. An error of the
-harness itself prints its traceback and exits 2.
+matrix, selfcheck, registry and suite exit 0 when every result is the expected
+one, and 1 otherwise. A run that would compare nothing exits 2 with a message,
+before it snapshots anything or runs a test. oracle ensure exits 2 when it
+refuses a checkout or a venv, and oracle check exits 1 when a check fails. An
+error of the harness itself prints its traceback and exits 2.
 """
+# the folder of the CLI suite below the work folder, and its result file
+_SUITE = 'suite'
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -160,6 +184,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # side name option
             side_help = 'Name of the side to run against itself or a stand-in.'
             command.add_argument('--side', required=True, help=side_help)
+    summary = "Run v1's CLI tests and the terminal table through the dispatcher."
+    command = commands.add_parser('suite', help=summary, description=summary)
+    # engine name option
+    engine_help = 'Name of the side that takes the calls of the ported commands.'
+    command.add_argument('--engine', help=engine_help)
+    # sides file option
+    sides_help = 'TOML file with one table per side, beside the v1 sides.'
+    command.add_argument('--sides', type=pathlib.Path, help=sides_help)
+    # work folder option
+    work_help = 'Folder the harness makes one new folder in.'
+    command.add_argument('--work', type=pathlib.Path, required=True, help=work_help)
+    # output folder option
+    out_help = "Folder for the result file, pytest's output and the saved streams."
+    command.add_argument('--out', type=pathlib.Path, required=True, help=out_help)
+    # test option
+    test_help = (
+        'A test file or test to run, as pytest names it from the oracle'
+        ' checkout (repeatable; default: every CLI test).'
+    )
+    command.add_argument('--test', action='append', help=test_help)
+    # jobs option
+    jobs_help = "How many processes run the tests (default: v1's pytest settings)."
+    command.add_argument('--jobs', type=int, help=jobs_help)
     summary = 'Build the oracle checkout, or hold oracle.toml level with v1.'
     command = commands.add_parser('oracle', help=summary, description=summary)
     actions = command.add_subparsers(dest='action', required=True)
@@ -231,6 +278,8 @@ def _run(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
     """Run the parsed command and return the exit code."""
     if options.command == 'oracle':
         return _oracle(parser, options)
+    if options.command == 'suite':
+        return _suite(parser, options)
     # read the registry
     try:
         entries = registry.load()
@@ -318,6 +367,94 @@ def _oracle(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int
         oracle.ensure(named, names=options.side)
     except ValueError as e:
         parser.error(f'{e}')
+    return 0
+
+
+def _suite(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
+    """Run the CLI suite and return the exit code."""
+    # read the ported commands and the sides
+    try:
+        commands = ported.load()
+        declared = {}
+        if options.sides is not None:
+            declared = config.load_sides(options.sides)
+    except ValueError as e:
+        parser.error(f'{e}')
+    # resolve the sides: v1, and the engine if the run names one
+    names = [suite.REFERENCE]
+    if options.engine is not None:
+        if options.engine == suite.REFERENCE:
+            parser.error(f'--engine names {options.engine!r}, the side v1 runs as.')
+        if not commands:
+            parser.error(
+                f'{ported.PATH.name} lists no command, so no call would reach'
+                f' {options.engine!r}.'
+            )
+        names.append(options.engine)
+    try:
+        chosen = _sides(names, declared, path=options.sides)
+    except ValueError as e:
+        parser.error(f'{e}')
+    # refuse the work folder and probe every side before a test runs
+    work = options.work / _SUITE
+    try:
+        suite.validate(work)
+        header = _header(chosen, now=_NOW)
+    except ValueError as e:
+        parser.error(f'{e}')
+    # the tests bring their own clock, and the terminal table reads none
+    del header['now']
+    reference, *engines = chosen
+    work.mkdir(parents=True)
+    dispatcher = dispatch.build(
+        work / 'bin',
+        reference=reference,
+        engine=engines[0] if engines else None,
+        commands=commands,
+    )
+    result = suite.run(
+        suite.source(oracle.load()),
+        dispatcher,
+        work=work / 'tests',
+        only=options.test or (),
+        jobs=options.jobs,
+    )
+    table = terminal.run(reference, dispatcher, work=work / 'terminal')
+    # write the result file, pytest's output and the streams that differ
+    document = {
+        **header,
+        'ported': list(dispatcher.commands),
+        **result.report,
+        'terminal': {
+            'cases': table.report,
+            'differences': [dataclasses.asdict(item) for item in table.differences],
+        },
+    }
+    options.out.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(document, indent=2)
+    (options.out / f'{_SUITE}.json').write_text(text + '\n', encoding='utf-8')
+    _save({'pytest.txt': result.log, **table.streams}, options.out / _SUITE)
+    # print how much ran on each side, then what is not the expected result
+    counts = result.report['counts']
+    outcomes = ', '.join(
+        f'{count} {outcome}' for outcome, count in counts['outcomes'].items()
+    )
+    left = len(result.report['deselected'])
+    print(f'{_SUITE}: {counts["tests"]} tests: {outcomes}; {left} left out')
+    for name, count in {**counts['sides'], **counts['commands']}.items():
+        print(f'{_SUITE}: {name}: {count["calls"]} calls of {count["tests"]} tests')
+    print(f'{_SUITE}: {counts["uncalled"]} tests called no side')
+    for finding in result.findings:
+        print(f'  {finding.kind}: {finding.subject}')
+    count = len(table.differences)
+    s = 's' if count != 1 else ''
+    print(f'{terminal.STAGE}: {count} difference{s}')
+    for difference in table.differences:
+        line = _line(difference)
+        print(f'  {line}')
+    if result.findings or table.differences:
+        return 1
+    shutil.rmtree(work)
     return 0
 
 
