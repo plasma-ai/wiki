@@ -8,7 +8,7 @@ usage: python -m parity matrix --a NAME --b NAME [--registered] [--sides FILE] -
        python -m parity fixtures [--engine NAME] [--sides FILE] [--every] --work DIR --out DIR
        python -m parity perturb corpus [--engine NAME] [--sides FILE] --corpora FILE [--seed N] --work DIR --out DIR
        python -m parity perturb loop [--engine NAME] [--sides FILE] [--corpora FILE] [--seed N | --fresh N] --work DIR --out DIR
-       python -m parity campaign --corpora FILE --work DIR --out DIR
+       python -m parity interpreters --corpora FILE --work DIR --out DIR
        python -m parity oracle ensure [--side NAME]
        python -m parity oracle check [--skip NAME]
        python -m parity container [--commit COMMIT] [--out DIR] COMMAND [ARG ...]
@@ -74,15 +74,16 @@ breaks its rules, and on a kind list that disagrees with the operators. A
 tree that ends in an error under a seed is printed and recorded, the others
 run on, and the run then exits 2.
 
-``campaign`` compares the campaign side, v1 as its consumers run it, with
-the oracle over the matrix on each corpus. Whatever differs runs once more
-with the crossed side, the campaign side's interpreter under the oracle's
-packages, which says whether the interpreter, a package or both cause it.
-It also asks both interpreters what they make of every code point, and reads
-every name of each wiki for a code point they do not agree on. It exits 0
-when no corpus shows a difference, an excused command or such a name, and 1
-otherwise. It exits 2, before it snapshots anything, as ``matrix`` does, and
-on an oracle file whose crossed side does not cross the other two.
+``interpreters`` compares the alt side, v1 under a second interpreter and
+its own packages, with the oracle over the matrix on each corpus. Whatever
+differs runs once more with the crossed side, the alt side's interpreter
+under the oracle's packages, which says whether the interpreter, a package
+or both cause it. It also asks both interpreters what they make of every
+code point, and reads every name of each wiki for a code point they do not
+agree on. It exits 0 when no corpus shows a difference, an excused command
+or such a name, and 1 otherwise. It exits 2, before it snapshots anything,
+as ``matrix`` does, and on an oracle file whose crossed side does not cross
+the other two.
 
 The registry lists what a second engine may do differently from v1, and two
 builds of v1 have nothing registered between them. ``matrix`` therefore
@@ -128,12 +129,12 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Optional, Union
 
 from . import (
-    campaign,
     config,
     container,
     dispatch,
     fixtures,
     homes,
+    interpreters,
     kinds,
     oracle,
     perturb,
@@ -173,7 +174,7 @@ _YEARS = (1001, 9998)
 _DESCRIPTION = """\
 Run two wiki engines on the same trees and report what they do differently.
 
-matrix, selfcheck, registry, suite, replay, fixtures, perturb and campaign exit 0 when every
+matrix, selfcheck, registry, suite, replay, fixtures, perturb and interpreters exit 0 when every
 result is the expected one, and 1 otherwise. A run that would compare nothing exits 2 with a message,
 before it snapshots anything or runs a test. oracle ensure exits 2 when it
 refuses a checkout or a venv, and oracle check exits 1 when a check fails. An
@@ -194,8 +195,8 @@ _CORPUS = 'corpus'
 _LOOP = 'loop'
 # the seeds a fresh one is drawn from: every whole number of 32 bits
 _SEEDS = 2**32
-# the command that compares the campaign side with the oracle
-_CAMPAIGN = 'campaign'
+# the command that compares the alt side with the oracle
+_INTERPRETERS = 'interpreters'
 # the command that runs another in the Linux container
 _CONTAINER = 'container'
 
@@ -396,8 +397,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # jobs option
             jobs_help = 'How many trees are run at once (default: one per processor).'
             mode.add_argument('--jobs', type=int, help=jobs_help)
-    summary = 'Compare the campaign side with the oracle, and read the names.'
-    command = commands.add_parser(_CAMPAIGN, help=summary, description=summary)
+    summary = 'Compare the alt side with the oracle, and read the names.'
+    command = commands.add_parser(_INTERPRETERS, help=summary, description=summary)
     # corpora file option
     corpora_help = 'TOML file with one table per corpus.'
     command.add_argument(
@@ -526,8 +527,8 @@ def _run(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
         return _fixtures(parser, options)
     if options.command == _PERTURB:
         return _perturb(parser, options)
-    if options.command == _CAMPAIGN:
-        return _campaign(parser, options)
+    if options.command == _INTERPRETERS:
+        return _interpreters(parser, options)
     if options.command == _CONTAINER:
         return _container(parser, options)
     # read the registry
@@ -1270,12 +1271,12 @@ def _perturb_seeds(options: argparse.Namespace) -> list[int]:
     return list(perturb.load_seeds())
 
 
-def _campaign(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
-    """Compare the campaign side with the oracle on each corpus, and return the exit code."""
+def _interpreters(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
+    """Compare the alt side with the oracle on each corpus, and return the exit code."""
     # read the registry, the oracle file and the corpora
     try:
         entries = registry.load()
-        campaign.validate(oracle.load())
+        interpreters.validate(oracle.load())
         corpora = config.load_corpora(options.corpora)
     except ValueError as e:
         parser.error(f'{e}')
@@ -1290,7 +1291,7 @@ def _campaign(parser: argparse.ArgumentParser, options: argparse.Namespace) -> i
     if not labels:
         parser.error(f'{options.corpora} declares no corpus.')
     # resolve the three v1 sides
-    names = [campaign.REFERENCE, campaign.COMPARED, campaign.CROSSED]
+    names = [interpreters.REFERENCE, interpreters.COMPARED, interpreters.CROSSED]
     try:
         chosen = _sides(names, {}, path=None)
     except ValueError as e:
@@ -1306,19 +1307,19 @@ def _campaign(parser: argparse.ArgumentParser, options: argparse.Namespace) -> i
     header['registry'] = {id: entry.status for id, entry in entries.items()}
     # ask the two interpreters what they make of every code point
     reference, compared, _ = chosen
-    changed = campaign.changed(reference, compared)
+    changed = interpreters.changed(reference, compared)
     properties = collections.Counter(
         name for differing in changed.values() for name in differing
     )
     header['points'] = {'changed': len(changed), 'properties': dict(properties)}
     count = len(changed)
     s = 's' if count != 1 else ''
-    print(f'{_CAMPAIGN}: the sides differ on {count} code point{s}', flush=True)
+    print(f'{_INTERPRETERS}: the sides differ on {count} code point{s}', flush=True)
     # run each corpus and write its result file
     options.out.mkdir(parents=True, exist_ok=True)
     failed = False
     for label in labels:
-        trial = campaign.run(
+        trial = interpreters.run(
             corpora[label],
             sides=chosen,
             changed=changed,
@@ -1326,12 +1327,12 @@ def _campaign(parser: argparse.ArgumentParser, options: argparse.Namespace) -> i
             now=options.now,
             seed=options.seed,
         )
-        document = {**header, **campaign.report(trial, changed)}
+        document = {**header, **interpreters.report(trial, changed)}
         text = json.dumps(document, indent=2)
         (options.out / f'{label}.json').write_text(text + '\n', encoding='utf-8')
         _save(trial.result.streams, options.out / label)
         if trial.again is not None:
-            _save(trial.again.streams, options.out / label / campaign.CROSSED)
+            _save(trial.again.streams, options.out / label / interpreters.CROSSED)
         # print the differences with their causes, and the searches that
         # found nothing
         causes = {cause.item: cause.cause for cause in trial.causes}
@@ -1365,7 +1366,7 @@ def _campaign(parser: argparse.ArgumentParser, options: argparse.Namespace) -> i
         print(f'{label}: {count} name{s} of {trial.names} with a changed code point')
         for hit in trial.hits:
             path = hit.path.encode('utf-8', 'backslashreplace').decode('utf-8')
-            spelled = ' '.join(campaign.spell(point) for point in hit.points)
+            spelled = ' '.join(interpreters.spell(point) for point in hit.points)
             print(f'  {path}: {spelled}')
         failed = failed or trial.failed
     if failed:

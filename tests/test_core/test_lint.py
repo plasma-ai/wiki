@@ -150,7 +150,7 @@ def test_lint_names_the_failing_naming_rule(tmp_path: pathlib.Path) -> None:
     A rejection that names the rule is diagnosable on its own; the message
     carries no remediation how-to.
     """
-    # an identifier-policy wiki (the strict project-wiki seed shape)
+    # an identifier-policy wiki (a strict policy seeded at init)
     wiki = Wiki(tmp_path)
     wiki.init(
         name='root',

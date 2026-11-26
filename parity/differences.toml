@@ -128,8 +128,8 @@ status = "approved"
 question = [7]
 check = "none"
 unchecked = """
-Against the pinned oracle the entry produces no difference. The campaign \
-side is compared with the oracle on all corpora instead.\
+Against the pinned oracle the entry produces no difference. The alt side \
+is compared with the oracle on all corpora instead.\
 """
 
 [D8]

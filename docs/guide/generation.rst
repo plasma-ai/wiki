@@ -212,7 +212,7 @@ would destroy authored content or race a concurrent editor:
   link when its prune is announced.
 - **Paths the enclosing git repository ignores** are excluded from the walk
   the same way ``exclude.patterns`` paths are: what the repo fences out of
-  version control is not wiki content, so a driver's stray output is never
+  version control is not wiki content, so a script's stray output is never
   adopted, never gains a minted ``_index.md``, and never draws a parent link
   row. A wiki whose root and root ``_index.md`` both read as gitignored is
   exempt — the fence never empties a deliberately unindexed wiki.

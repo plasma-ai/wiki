@@ -1,6 +1,6 @@
-"""Test the ``parity.campaign`` module.
+"""Test the ``parity.interpreters`` module.
 
-Drives the campaign run as a gate does, through the command line: the
+Drives the interpreters run as a gate does, through the command line: the
 three v1 sides of the oracle file run the matrix on a snapshot of a small
 checkout, and the verdict is the exit code plus the result file. The scan
 of the names and the refusal of an oracle file are held by themselves.
@@ -18,12 +18,12 @@ from typing import Optional
 
 import pytest
 
-from parity import __main__ as cli, campaign, oracle, runner, side
+from parity import __main__ as cli, interpreters, oracle, runner, side
 
 from .conftest import NOW, WORDED, _git, _needs_git
 
 __all__ = [
-    'test_campaign_command_compares_the_sides_and_reads_the_names',
+    'test_interpreters_command_compares_the_sides_and_reads_the_names',
     'test_difference_runs_once_more_with_the_crossed_side',
     'test_excused_command_fails_the_run_and_gets_a_cause',
     'test_scan_reads_every_name_of_the_wiki_and_no_other',
@@ -52,11 +52,11 @@ os.execv(sys.argv[2], sys.argv[2:])
 
 @pytest.fixture(scope='module')
 def changed() -> dict[int, tuple[str, ...]]:
-    """Return the code points the oracle and the campaign side do not agree on."""
+    """Return the code points the oracle and the alt side do not agree on."""
     named = oracle.load()
-    reference = oracle.side(named, campaign.REFERENCE)
-    compared = oracle.side(named, campaign.COMPARED)
-    return campaign.changed(reference, compared)
+    reference = oracle.side(named, interpreters.REFERENCE)
+    compared = oracle.side(named, interpreters.COMPARED)
+    return interpreters.changed(reference, compared)
 
 
 @pytest.mark.parametrize(
@@ -64,16 +64,16 @@ def changed() -> dict[int, tuple[str, ...]]:
     argvalues=[None, 'alike', 'apart'],
     ids=['plain names', 'a name both sides read alike', 'a name one side refuses'],
 )
-def test_campaign_command_compares_the_sides_and_reads_the_names(
+def test_interpreters_command_compares_the_sides_and_reads_the_names(
     tmp_path: pathlib.Path,
     corpus: runner.Corpus,
     engine: side.Side,
     changed: Mapping[int, Sequence[str]],
     name: Optional[str],
 ) -> None:
-    """A campaign run passes on a wiki both sides and both tables agree on.
+    """An interpreters run passes on a wiki both sides and both tables agree on.
 
-    The example wiki reads the same to the oracle and the campaign side
+    The example wiki reads the same to the oracle and the alt side
     over the whole matrix, and its names are plain, so the command exits 0
     with no second run and removes its snapshot. One more page fails the
     run, named with a code point the two interpreters hold different
@@ -94,14 +94,14 @@ def test_campaign_command_compares_the_sides_and_reads_the_names(
     out = tmp_path / 'out'
     work = tmp_path / 'work'
     argv = [
-        'campaign',
+        'interpreters',
         *('--corpora', f'{corpora}'),
         *('--work', f'{work}', '--out', f'{out}', '--now', NOW),
     ]
     assert cli.main(argv) == int(name is not None)
     document = json.loads((out / 'example.json').read_text(encoding='utf-8'))
     # the three v1 sides ran
-    sides = [campaign.REFERENCE, campaign.COMPARED, campaign.CROSSED]
+    sides = [interpreters.REFERENCE, interpreters.COMPARED, interpreters.CROSSED]
     assert [record['name'] for record in document['sides']] == sides
     # the two that are compared differ only on the name one of them refuses,
     # and the crossed side repeats each difference
@@ -114,7 +114,7 @@ def test_campaign_command_compares_the_sides_and_reads_the_names(
     if name == 'apart':
         assert differences
         assert len(rerun['causes']) == len(differences)
-        assert {row['cause'] for row in rerun['causes']} == {campaign.INTERPRETER}
+        assert {row['cause'] for row in rerun['causes']} == {interpreters.INTERPRETER}
     else:
         assert differences == []
         assert rerun is None
@@ -126,7 +126,7 @@ def test_campaign_command_compares_the_sides_and_reads_the_names(
     assert document['names']['read'] > 0
     hits = []
     if point is not None:
-        differing = {campaign.spell(point): list(changed[point])}
+        differing = {interpreters.spell(point): list(changed[point])}
         hits = [{'path': f'guides/{chr(point)}.md', 'points': differing}]
     assert document['names']['hits'] == hits
     # the snapshot of a run that failed stays, and no other
@@ -141,13 +141,13 @@ def test_difference_runs_once_more_with_the_crossed_side(
 ) -> None:
     """A difference is laid to the side the crossed side goes with, or to both.
 
-    The campaign side is handed out as a side that fails every ``read``,
+    The alt side is handed out as a side that fails every ``read``,
     ``match`` and ``search``, and the crossed side as one that fails every
     ``read`` the same way, every ``search`` its own way and every ``map``.
     The stages that hold those commands run once more, the last of them
     with each side on the tree each side left. A difference on a ``read``
     is laid to the interpreter, which the crossed side shares with the
-    campaign side: the two did the same. One on a ``match`` is laid to a
+    alt side: the two did the same. One on a ``match`` is laid to a
     package: the crossed side did what the oracle did. One on a ``search``
     is laid to both: the crossed side did neither. An exit code the case
     forbids is a rule the run broke by itself and gets no cause, and what
@@ -158,8 +158,8 @@ def test_difference_runs_once_more_with_the_crossed_side(
     script = tmp_path / 'broken.py'
     script.write_text(_BROKEN, encoding='utf-8')
     fails = {
-        campaign.COMPARED: 'read:7,match:7,search:7',
-        campaign.CROSSED: 'read:7,search:9,map:9',
+        interpreters.COMPARED: 'read:7,match:7,search:7',
+        interpreters.CROSSED: 'read:7,search:9,map:9',
     }
     _doctor(
         monkeypatch,
@@ -169,16 +169,16 @@ def test_difference_runs_once_more_with_the_crossed_side(
     out = tmp_path / 'out'
     work = tmp_path / 'work'
     argv = [
-        'campaign',
+        'interpreters',
         *('--corpora', f'{corpora}'),
         *('--work', f'{work}', '--out', f'{out}', '--now', NOW),
     ]
     assert cli.main(argv) == 1
     document = json.loads((out / 'example.json').read_text(encoding='utf-8'))
     # the stages that differ ran once more, on all three sides
-    reference = campaign.REFERENCE
-    compared = campaign.COMPARED
-    crossed = campaign.CROSSED
+    reference = interpreters.REFERENCE
+    compared = interpreters.COMPARED
+    crossed = interpreters.CROSSED
     rerun = document['rerun']
     assert rerun['side'] == crossed
     assert [stage['name'] for stage in rerun['stages']] == ['query', 'write', 'cross']
@@ -194,17 +194,17 @@ def test_difference_runs_once_more_with_the_crossed_side(
         if aspect in ('stdout', 'stderr', 'exit')
     }
     assert streams == {
-        ('read', campaign.INTERPRETER),
-        ('match', campaign.PACKAGES),
-        ('search', campaign.BOTH),
+        ('read', interpreters.INTERPRETER),
+        ('match', interpreters.PACKAGES),
+        ('search', interpreters.BOTH),
     }
     assert 'unexpected' not in {aspect for _, _, aspect, _ in causes}
     # a run on the tree another side left is answered by the crossed run on
     # that tree
     on = f'{compared} on {reference}'
-    assert (on, 'search', 'exit', campaign.BOTH) in causes
+    assert (on, 'search', 'exit', interpreters.BOTH) in causes
     # what the crossed side shows alone is recorded under the runs that stand
-    # for a run of the campaign side
+    # for a run of the alt side
     alone = rerun['alone']
     stood = {
         crossed,
@@ -218,23 +218,23 @@ def test_difference_runs_once_more_with_the_crossed_side(
     # the summary names the cause of each line, none for a broken rule, and
     # lists the crossed side's own lines
     lines = capsys.readouterr().out.splitlines()
-    for cause in (campaign.INTERPRETER, campaign.PACKAGES, campaign.BOTH):
+    for cause in (interpreters.INTERPRETER, interpreters.PACKAGES, interpreters.BOTH):
         assert any(line.endswith(f': exit ({cause})') for line in lines)
     assert any(line.endswith(': unexpected: exit 7') for line in lines)
     heading = f'example: {len(alone)} differences of the crossed side alone'
     assert f'  query: {crossed}: map: exit' in lines[lines.index(heading) :]
     # the streams of both runs and the snapshot are kept
-    assert list((out / 'example' / 'query').glob(f'* {campaign.COMPARED}.out'))
-    kept = out / 'example' / campaign.CROSSED / 'query'
-    assert list(kept.glob(f'* {campaign.CROSSED}.out'))
+    assert list((out / 'example' / 'query').glob(f'* {interpreters.COMPARED}.out'))
+    kept = out / 'example' / interpreters.CROSSED / 'query'
+    assert list(kept.glob(f'* {interpreters.CROSSED}.out'))
     assert (work / 'example' / 'snapshot' / corpus.root).is_dir()
 
 
 @pytest.mark.parametrize(
     argnames=('worded', 'cause'),
     argvalues=[
-        ([campaign.COMPARED], campaign.PACKAGES),
-        ([campaign.COMPARED, campaign.CROSSED], campaign.INTERPRETER),
+        ([interpreters.COMPARED], interpreters.PACKAGES),
+        ([interpreters.COMPARED, interpreters.CROSSED], interpreters.INTERPRETER),
     ],
     ids=['a package words it', 'the interpreter words it'],
 )
@@ -246,29 +246,31 @@ def test_excused_command_fails_the_run_and_gets_a_cause(
     worded: Sequence[str],
     cause: str,
 ) -> None:
-    """A command the registry excuses fails a campaign run like a difference.
+    """A command the registry excuses fails an interpreters run like a difference.
 
-    The campaign side is handed out as a side that words the error text of
+    The alt side is handed out as a side that words the error text of
     ``re`` its own way, which the registry lets a second engine do (D1).
     Two builds of v1 have nothing registered between them: the command
     exits 1 with no difference, lists the command as registered, runs its
     stage once more and keeps the snapshot. The cause is a package where
     the crossed side prints what the oracle prints, and the interpreter
-    where it words the text as the campaign side does.
+    where it words the text as the alt side does.
     """
     _doctor(monkeypatch, dict.fromkeys(worded, (sys.executable, '-c', WORDED)))
     corpora = _corpora_file(tmp_path, corpus)
     out = tmp_path / 'out'
     work = tmp_path / 'work'
     argv = [
-        'campaign',
+        'interpreters',
         *('--corpora', f'{corpora}'),
         *('--work', f'{work}', '--out', f'{out}', '--now', NOW),
     ]
     assert cli.main(argv) == 1
     lines = capsys.readouterr().out.splitlines()
     assert 'example: 0 differences' in lines
-    assert f'  registered: query: {campaign.COMPARED}: match (: D1 ({cause})' in lines
+    assert (
+        f'  registered: query: {interpreters.COMPARED}: match (: D1 ({cause})' in lines
+    )
     # the second run gives the command its cause
     document = json.loads((out / 'example.json').read_text(encoding='utf-8'))
     (row,) = document['rerun']['causes']
@@ -290,7 +292,7 @@ def test_scan_reads_every_name_of_the_wiki_and_no_other(
     folder a symlink points at and the folders above the root are no names
     of the wiki. An interpreter agrees with itself on every code point.
     """
-    assert campaign.changed(engine, engine) == {}
+    assert interpreters.changed(engine, engine) == {}
     point = _holdable(tmp_path, changed)
     if point is None:
         pytest.skip('the two interpreters agree on every code point')
@@ -304,18 +306,18 @@ def test_scan_reads_every_name_of_the_wiki_and_no_other(
         (root / relpath).write_text('text\n', encoding='utf-8')
     (outside / f'{char}.md').write_text('text\n', encoding='utf-8')
     (root / f'link-{char}').symlink_to(outside)
-    count, hits = campaign.scan(root, changed)
+    count, hits = interpreters.scan(root, changed)
     # the root, two folders, three files and the symlink
     assert count == 7
     paths = sorted(['.', f'{char}-folder', f'link-{char}', f'plain/{char}.txt'])
-    assert hits == [campaign.Hit(path=path, points=(point,)) for path in paths]
+    assert hits == [interpreters.Hit(path=path, points=(point,)) for path in paths]
 
 
 @pytest.mark.parametrize(
     argnames=('field', 'message'),
     argvalues=[
-        ('python', 'must name the interpreter of side campaign'),
-        ('unicode', 'must name the interpreter of side campaign'),
+        ('python', 'must name the interpreter of side alt'),
+        ('unicode', 'must name the interpreter of side alt'),
         ('constraints', 'must name the packages of side oracle'),
         ('libyaml', 'must name the packages of side oracle'),
         (None, "names no side ['crossed']"),
@@ -329,32 +331,32 @@ def test_crossed_side_that_does_not_cross_the_other_two_is_refused(
     field: Optional[str],
     message: str,
 ) -> None:
-    """A campaign run refuses a crossed side that tells the two causes apart no more.
+    """The run refuses a crossed side that tells the two causes apart no more.
 
     A difference the crossed side repeats is laid to the interpreter. With
-    the oracle's interpreter, or with the campaign side's packages, the
+    the oracle's interpreter, or with the alt side's packages, the
     side is one of the two it stands between, and every cause it names
     would be the same one. The command exits 2 with a message before it
     snapshots anything.
     """
     named = oracle.load()
     builds = dict(named.builds)
-    crossed = builds.pop(campaign.CROSSED)
+    crossed = builds.pop(interpreters.CROSSED)
     if field is not None:
         # the crossed side takes the field from the side it must not share it with
-        other = campaign.REFERENCE
+        other = interpreters.REFERENCE
         if field in ('constraints', 'libyaml'):
-            other = campaign.COMPARED
+            other = interpreters.COMPARED
         value = getattr(builds[other], field)
         if value == getattr(crossed, field):
             value = f'{value}.other'
-        builds[campaign.CROSSED] = dataclasses.replace(crossed, **{field: value})
+        builds[interpreters.CROSSED] = dataclasses.replace(crossed, **{field: value})
     monkeypatch.setattr(
         oracle, 'load', lambda: dataclasses.replace(named, builds=builds)
     )
     work = tmp_path / 'work'
     argv = [
-        'campaign',
+        'interpreters',
         *('--corpora', f'{tmp_path / "corpora.toml"}'),
         *('--work', f'{work}', '--out', f'{tmp_path / "out"}'),
     ]
@@ -402,7 +404,7 @@ def _holdable(
 
     Args:
         tmp_path: Folder to probe the file system in.
-        changed: The changed code points, from :func:`parity.campaign.changed`.
+        changed: The changed code points, from :func:`parity.interpreters.changed`.
         printable: ``True`` for a code point only one interpreter calls
             printable, which v1's name rule then takes on one side alone;
             ``False`` for one that the two interpreters differ on in no

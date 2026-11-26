@@ -1,14 +1,14 @@
-"""Functions for the campaign run: v1 as its consumers run it, against the oracle.
+"""Functions for the interpreters run: the alt side of v1 against the oracle.
 
-The campaign side is the oracle commit under the interpreter and the
-packages the consumers of 1.x run, so a wiki that moves from that side to an
-engine that follows the oracle sees a change wherever the two sides differ.
-:func:`run` compares the two over the matrix on a snapshot of one corpus.
-What differs runs once more with the crossed side, the campaign side's
-interpreter under the oracle side's packages, which says whether the
-interpreter, a package or both are the cause. :func:`changed` asks both
-interpreters what they make of every code point, and :func:`scan` reads the
-names of the wiki for a code point they do not agree on.
+The alt side is the oracle commit under a second interpreter and its own
+packages, so a wiki that moves from that side to an engine that follows the
+oracle sees a change wherever the two sides differ. :func:`run` compares the
+two over the matrix on a snapshot of one corpus. What differs runs once more
+with the crossed side, the alt side's interpreter under the oracle side's
+packages, which says whether the interpreter, a package or both are the
+cause. :func:`changed` asks both interpreters what they make of every code
+point, and :func:`scan` reads the names of the wiki for a code point they do
+not agree on.
 """
 
 from __future__ import annotations
@@ -35,10 +35,10 @@ from .side import Side
 
 __all__ = []
 
-#: the names of the three v1 sides of a campaign run: the reference, the side
-#: compared with it, and the side a difference runs on once more
+#: the names of the three v1 sides of an interpreters run: the reference, the
+#: side compared with it, and the side a difference runs on once more
 REFERENCE = 'oracle'
-COMPARED = 'campaign'
+COMPARED = 'alt'
 CROSSED = 'crossed'
 #: the three causes a difference between the first two sides can have
 INTERPRETER = 'interpreter'
@@ -83,7 +83,7 @@ class Hit:
 
 @dataclasses.dataclass(frozen=True)
 class Trial:
-    """What the campaign run of one corpus found.
+    """What the interpreters run of one corpus found.
 
     Attributes:
         label: Label of the corpus.
@@ -125,7 +125,7 @@ def run(
     now: str,
     seed: int = 0,
 ) -> Trial:
-    """Compare the campaign side with the oracle on a snapshot of ``corpus``.
+    """Compare the alt side with the oracle on a snapshot of ``corpus``.
 
     Args:
         corpus: The wiki to run on.

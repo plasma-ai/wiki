@@ -48,14 +48,14 @@ python -m parity perturb corpus [--engine NAME] [--sides SIDES] \
 python -m parity perturb loop [--engine NAME] [--sides SIDES] [--corpora CORPORA] \
     [--seed N | --fresh N] [--jobs N] --work DIR --out DIR
 
-# compare the campaign side with the oracle and read the names of each wiki
-python -m parity campaign --corpora CORPORA --work DIR --out DIR
+# compare the alt side with the oracle and read the names of each wiki
+python -m parity interpreters --corpora CORPORA --work DIR --out DIR
 
 # run a command in the Linux container
 python -m parity container [--commit COMMIT] [--out DIR] COMMAND [ARG ...]
 ```
 
-A side name is `oracle`, `campaign` or `crossed`, the three v1 sides that
+A side name is `oracle`, `alt` or `crossed`, the three v1 sides that
 `parity/oracle.toml` names (Oracle, below), or a side that the `SIDES` file
 declares. `SIDES` may not declare a side under the name of a v1 side.
 
@@ -217,13 +217,13 @@ corpus that failed keeps its perturbed snapshot under
 `<work>/perturb/runs/<label>/<seed>/`, because its checkout may move on; a tree
 of a loop is written again from its seed.
 
-`campaign` compares the campaign side with the oracle on each corpus of the file
-(Campaign Run, below). `--corpus`, `--now` and `--seed` are those of `matrix`.
-It exits 0 when no corpus shows a difference, a command the registry excuses, or
-a name that holds a changed code point, and 1 otherwise. It exits 2 with a
-message, before it snapshots anything: on what `matrix` refuses of a corpora
-file, a corpus, a work folder and a side, on a corpus named twice, and on an
-oracle file whose crossed side does not cross the other two. It makes
+`interpreters` compares the alt side with the oracle on each corpus of the file
+(Interpreters Run, below). `--corpus`, `--now` and `--seed` are those of
+`matrix`. It exits 0 when no corpus shows a difference, a command the registry
+excuses, or a name that holds a changed code point, and 1 otherwise. It exits 2
+with a message, before it snapshots anything: on what `matrix` refuses of a
+corpora file, a corpus, a work folder and a side, on a corpus named twice, and
+on an oracle file whose crossed side does not cross the other two. It makes
 `<work>/<label>` for each corpus, which must not exist beforehand, and removes
 it when the corpus passed; a corpus that failed keeps its snapshot there,
 because its checkout may move on. A corpus gets a result file
@@ -241,9 +241,9 @@ its daemon does not answer.
 
 The sections below are the rules of the harness, one part each: the oracle,
 sides, snapshots, comparison, caches, the matrix, the fixture families, the
-perturbation, the campaign run, the registry, the self-check, the CLI suite, the
-replay, with the account a whole replay gives of v1's tests and kinds, and the
-container.
+perturbation, the interpreters run, the registry, the self-check, the CLI suite,
+the replay, with the account a whole replay gives of v1's tests and kinds, and
+the container.
 
 ## Oracle
 
@@ -277,13 +277,13 @@ reason = "<why it waits>"
   once no branch names its commit. `ensure` makes a checkout again when its
   folder was deleted some other way.
 - **Sides.** v1 has three sides, and all run the oracle commit. `oracle` defines
-  parity. `campaign` is the commit as the consumers of 1.9.x run it: their
-  interpreter version and their package versions. `crossed` is the campaign
-  side's interpreter under the oracle side's packages, the side a difference
-  between the other two runs on once more (Campaign Run). Each side has a venv
-  in the checkout, `.venv/<side>`: a uv-managed interpreter of the named
-  version; exactly the packages its constraints file pins; and the checkout
-  itself installed in place, so the side imports `wiki` from the checkout.
+  parity. `alt` is the commit under a second interpreter that v1 supports, with
+  its own package versions. `crossed` is the alt side's interpreter under the
+  oracle side's packages, the side a difference between the other two runs on
+  once more (Interpreters Run). Each side has a venv in the checkout,
+  `.venv/<side>`: a uv-managed interpreter of the named version; exactly the
+  packages its constraints file pins; and the checkout itself installed in
+  place, so the side imports `wiki` from the checkout.
 - **Interpreter build.** The named version is the same CPython release on every
   host, but not the same build: uv installs the build its own release lists and
   keeps one it has already installed. The build and the SQLite inside it can
@@ -292,8 +292,8 @@ reason = "<why it waits>"
 - **Pins.** A constraints file pins every package of its venv, one
   `name==version` per line. `oracle.toml` names what a package pin cannot: the
   interpreter, its Unicode tables, and the libyaml inside PyYAML's C loader.
-  Every side pins the PyYAML built on libyaml 0.2.5, the loader build the
-  consumers run, so the loader is no difference between the sides.
+  Every side pins the PyYAML built on libyaml 0.2.5, so the loader is no
+  difference between the sides.
 - **Refusals.** `ensure`, and every run that names a v1 side, refuse a checkout
   whose `HEAD` is not the oracle commit, and one with a changed, added or
   deleted file under `wiki/` or `tests/`. They refuse a venv whose interpreter,
@@ -379,7 +379,7 @@ The side's own variables are applied last. stdin is the null device.
   the interpreter imports, with `argv[0]` set to `wiki`. Its `describe` command
   runs `parity/facts.py`, its `judge` command `parity/judge.py`, its `tap`
   command `parity/tap.py` (Perturbation, Kinds), and its `points` command
-  `parity/points.py` (Campaign Run, Names). Only a v1 side has a tap or a
+  `parity/points.py` (Interpreters Run, Names). Only a v1 side has a tap or a
   `points` command.
 - **Identity.** A side with an identity gets `WIKI_TRACE=<file>` on every
   command, a fresh file outside the slot. Before it runs the command, the side
@@ -822,18 +822,18 @@ its kind compares less than the table says.
   quotes, or one that runs over several lines, is not read: `dirty-edit` then
   leaves both pages far from their stamps.
 
-## Campaign Run
+## Interpreters Run
 
 v1 has no single answer where an answer turns on its interpreter: the Unicode
 tables behind its name rules, whitespace, `\w` and NFC, and the build of the
-YAML loader. The oracle's interpreter defines parity, and the consumers of 1.x
-run another one. A wiki that moves from the campaign side to an engine that
-follows the oracle is rewritten wherever the two sides differ. So
-`python -m parity campaign` compares the campaign side with the oracle on real
-wikis, and a corpus that fails goes to a person before an engine is built on the
-oracle's tables.
+YAML loader. The oracle's interpreter defines parity, and v1 supports others,
+with other tables. A wiki that moves from one of those to an engine that follows
+the oracle is rewritten wherever the two differ. So
+`python -m parity interpreters` compares the alt side, v1 under a second
+interpreter, with the oracle on real wikis, and a corpus that fails goes to a
+person before an engine is built on the oracle's tables.
 
-- **Sides.** The reference is `oracle` and the compared side `campaign`. The run
+- **Sides.** The reference is `oracle` and the compared side `alt`. The run
   takes no other, and no `SIDES` file.
 - **Matrix.** Both sides run the whole matrix on a snapshot of the corpus, as it
   stands: the run asks what each interpreter makes of the wiki's real names and
@@ -843,31 +843,30 @@ oracle's tables.
   too.
 - **Second run.** Where the two sides differ, the stages that show it run once
   more on the same snapshot, on all three sides. `crossed` shares its
-  interpreter with `campaign` and its packages with `oracle`. Each of its runs
-  is compared, by the rules of Comparison and with no registry entry asked, with
-  the reference and with the `campaign` run it stands for.
-- **Cause.** A difference between `campaign` and `oracle` gets its cause from
-  what `crossed` does at the same stage, case, aspect and detail. The cause is
+  interpreter with `alt` and its packages with `oracle`. Each of its runs is
+  compared, by the rules of Comparison and with no registry entry asked, with
+  the reference and with the `alt` run it stands for.
+- **Cause.** A difference between `alt` and `oracle` gets its cause from what
+  `crossed` does at the same stage, case, aspect and detail. The cause is
   `packages` where `crossed` does not differ from `oracle`, `interpreter` where
-  it differs from `oracle` and not from `campaign`, and `both` where it differs
-  from each: a stream that `crossed` prints a third way is laid to both. An
-  excused command is given a cause the same way, with every aspect of its
-  command counted. A rule that a run breaks by itself (`wrote`, `unexpected`,
-  `notice`, `identity`, a tree at `(end)`) is no difference between the sides:
-  it starts no second run and has no cause.
+  it differs from `oracle` and not from `alt`, and `both` where it differs from
+  each: a stream that `crossed` prints a third way is laid to both. An excused
+  command is given a cause the same way, with every aspect of its command
+  counted. A rule that a run breaks by itself (`wrote`, `unexpected`, `notice`,
+  `identity`, a tree at `(end)`) is no difference between the sides: it starts
+  no second run and has no cause.
 - **Crossed alone.** Whatever the second run shows of a `crossed` run that the
-  first run does not show of the `campaign` run it stands for is listed apart: a
+  first run does not show of the `alt` run it stands for is listed apart: a
   difference from the oracle, a rule the run broke by itself, or an excused
   command. It is printed below the corpus's differences and recorded as
   `rerun.alone`.
 - **Runs that stand for none.** A stage that continues another runs each side on
   the tree each side left. In the second run it therefore holds `crossed` on the
-  tree of `campaign` and `campaign` on the tree of `crossed`, which stand for no
-  run of the first. The result file records them, and no cause reads them.
+  tree of `alt` and `alt` on the tree of `crossed`, which stand for no run of
+  the first. The result file records them, and no cause reads them.
 - **Crossing.** A run exits 2 on an oracle file whose `crossed` side names
-  another interpreter or other Unicode tables than `campaign`, or another
-  constraints file or libyaml than `oracle`: such a side tells the two causes
-  apart no more.
+  another interpreter or other Unicode tables than `alt`, or another constraints
+  file or libyaml than `oracle`: such a side tells the two causes apart no more.
 
 ### Names
 
@@ -933,11 +932,11 @@ tests = []
   entry that gives no reason. The entries with the check `classifier` must be
   exactly the entries the harness has a classifier for.
 - **Second engine.** The registry lists what a second engine may do differently
-  from v1. Two builds of v1 have nothing registered between them: the campaign
-  side against the oracle, or one release against the next. A `matrix` run
-  therefore fails on a command the registry excuses, and lists it as
-  `registered`, unless `--registered` says that side `b` is a second engine. The
-  self-check and its doctored checks run one engine and fail the same way.
+  from v1. Two builds of v1 have nothing registered between them: the alt side
+  against the oracle, or one release against the next. A `matrix` run therefore
+  fails on a command the registry excuses, and lists it as `registered`, unless
+  `--registered` says that side `b` is a second engine. The self-check and its
+  doctored checks run one engine and fail the same way.
 - **Release.** `python -m parity registry --release` also exits 1 while an entry
   is proposed, or names no test where tests check it. Without `--release` the
   command prints the same lines and they do not fail it.
