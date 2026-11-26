@@ -1145,10 +1145,14 @@ A control that doctors no call, or that the replay does not report in full, is a
 
 A second engine supports a fixed set of regex constructs, of timestamp
 directives and of settings values, and refuses input outside it (Registry,
-Classifiers). The replay confirms the set against v1's tests: for every call it
-asks the judge of v1's side about the inputs of D3, which are the settings file
-as v1's command found it and the pattern of a `match` command.
+Classifiers). The replay confirms the set against the calls v1's tests record:
+for each call it replays, it asks the judge of v1's side about the inputs of D3.
 
+- **Inputs.** Every `.wiki/settings.json` the call's trees hold before the
+  command, the value of `--settings` of an `init` command, and the pattern of a
+  `match` command. A command line does not say which wiki it resolves to, and a
+  wiki need not have a cache folder yet, so every settings file of the trees
+  counts: a call beside a wiki with such settings is listed too.
 - **Outside.** A call that v1 ran, with exit code 0 or 1, on input the judge
   calls outside the set is listed in the result file (`outside`) with the
   judge's reasons. A command that v1 refuses by itself is not listed: no engine
@@ -1157,6 +1161,9 @@ as v1's command found it and the pattern of a `match` command.
   table drops its test under D3. So a test that depends on input outside the set
   is either named in the table or fails the replay, and a change to the set
   shows at once in which tests it reaches.
+- **Not judged.** A test that records no call gives the replay no input to
+  judge, so the set is not confirmed against it. The tests of the naming and
+  timestamp settings that the routing table sends to `probe` are of this kind.
 
 ### Homes
 

@@ -161,6 +161,8 @@ class _Pass:
         views: For each wiki root, the caches before and after.
         settings: For each wiki root, the bytes of its settings file as
             the command found it.
+        files: The bytes of every settings file the command found in the
+            trees, whether or not a wiki's caches lie beside it.
 
     """
 
@@ -171,6 +173,7 @@ class _Pass:
     final: Mapping[str, tuple]
     views: Mapping[str, tuple[View, View]]
     settings: Mapping[str, Optional[bytes]]
+    files: tuple[bytes, ...]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -646,7 +649,6 @@ def _play_one(
     stage = Stage(name=call.test, cases=(case,))
     differences: dict[Difference, None] = {}
     excused: dict[Excused, None] = {}
-    outside: dict[str, None] = {}
     for root in roots or [None]:
         folder = '' if root is None else f'{root}/{CACHE}'
         others = [other for other in folders if other != folder]
@@ -654,12 +656,12 @@ def _play_one(
         found = compare.stage(stage, runs, folder=folder)
         with lock:
             found, explained = classify.apply(stage, runs, found, judge=judge)
-            first = runs[0].records[0]
-            asked = classify.Command(case.args, first, first, frozenset())
-            reasons = classify.outside(asked, judge)
         differences.update(dict.fromkeys(found))
         excused.update(dict.fromkeys(explained))
-        outside.update(dict.fromkeys(reasons))
+    # judge the inputs of the call once, whichever wiki its command ran on:
+    # a wiki need not have a cache folder yet
+    with lock:
+        outside = classify.outside(case.args, passes[0].files, judge)
     return _Played(
         call=call,
         problems=tuple(problems),
@@ -688,6 +690,7 @@ def _pass(call: Call, runner: Side, *, notice: Optional[bool]) -> _Pass:
         known.add(pathlib.Path(call.root).relative_to(call.base).as_posix())
     first = {name: cache.view(call.base / name, _below(before, name)) for name in known}
     settings = {name: _settings(call.base / name) for name in known}
+    files = _declared(call.base, before)
     # run the command under the call's own environment
     env = {**call.env, **runner.env}
     env.pop(side.TRACE, None)
@@ -716,6 +719,7 @@ def _pass(call: Call, runner: Side, *, notice: Optional[bool]) -> _Pass:
         final=final,
         views=views,
         settings=settings,
+        files=files,
     )
 
 
@@ -998,6 +1002,23 @@ def _settings(root: pathlib.Path) -> Optional[bytes]:
         return (root / WIKI_SETTINGS).read_bytes()
     except OSError:
         return None
+
+
+def _declared(base: pathlib.Path, entries: Mapping[str, Entry]) -> tuple[bytes, ...]:
+    """Return the bytes of every settings file ``entries`` list below ``base``.
+
+    A file that cannot be read is left out, as no command reads it.
+    """
+    tail = f'/{WIKI_SETTINGS}'
+    result = []
+    for relpath, entry in sorted(entries.items()):
+        if (entry.kind != 'file') or not f'/{relpath}'.endswith(tail):
+            continue
+        try:
+            result.append((base / relpath).read_bytes())
+        except OSError:
+            continue
+    return tuple(result)
 
 
 def _roots(entries: Mapping[str, Entry]) -> list[str]:

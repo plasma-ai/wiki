@@ -540,8 +540,9 @@ harness can run on a second engine needs a row. Every notice and issue kind of
 the engine has one home in `parity/kinds.toml` (`parity/kinds.py`): a test whose
 replayed call shows the kind, or the perturbation. And a call that v1 runs on
 input outside the supported set is a finding unless the table drops its test
-under D3. A new v1 test, kind or input therefore fails the `parity` job until
-the table or the list accounts for it.
+under D3. A new v1 test or kind, and new input of a recorded call, therefore
+fails the `parity` job until the table or the list accounts for it. The inputs
+of a test that records no call are not judged.
 
 ### Run Bracket
 
