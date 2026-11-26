@@ -1,7 +1,7 @@
 # The kind list: every notice kind and every issue kind of v1, each with its
 # one home. A home is a test of v1 whose replayed call shows the kind, or
-# "perturbation" for a kind that the perturbation puts into its trees. The
-# rules are in SPEC.md, under Replay.
+# "perturbation" for a kind that an operator of the perturbation names. The
+# rules are in SPEC.md, under Replay and under Perturbation.
 
 # the kinds of the notices the engine emits
 [notices]

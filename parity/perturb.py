@@ -3,14 +3,16 @@
 A converged wiki gives the commands little to do: ``update`` writes almost
 nothing and ``lint`` reports almost nothing. A perturbation changes a tree by
 a seed, the way hands, tools and merges change one, so that the read-only
-commands have something to report and ``update`` something to take in. It
-runs no engine: an operator edits files, and what the engines make of the
+commands have something to report and ``update`` something to take in. An
+operator runs no engine: it edits files, and what the engines make of the
 edits is what a run compares.
 
 :func:`apply` runs every operator on one tree. Two more trees come from the
 one it leaves: :func:`unindex` deletes every index, and :func:`conflict`
 plants merge conflict markers, which ``update`` refuses. One seed, one tree
 and one path for the wiki to stand at give one perturbation, byte for byte.
+:func:`run` perturbs a snapshot of a corpus, runs its stages on every side
+and holds the perturbation to the kinds its operators name.
 """
 
 from __future__ import annotations
@@ -318,14 +320,14 @@ def prepare(
     """
     done = []
 
-    def _change(checkout: pathlib.Path) -> None:
+    def change(checkout: pathlib.Path) -> None:
         """Perturb the snapshot, for the wiki as it stands in a slot."""
         # an engine reads an absolute link against the root's resolved path
         stands = work.resolve() / _SLOT / _TREE / corpus.root
         done.append(apply(checkout, root=corpus.root, seed=seed, stands=stands))
 
     bare = dataclasses.replace(corpus, stages=(), alone=loop)
-    plan = runner.prepare(bare, work=work, seed=seed, change=_change)
+    plan = runner.prepare(bare, work=work, seed=seed, change=change)
     (perturbation,) = done
     own = stages(perturbation, root=corpus.root, loop=loop)
     return dataclasses.replace(plan, stages=(*plan.stages, *own)), perturbation
