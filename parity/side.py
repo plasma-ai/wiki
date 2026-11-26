@@ -53,6 +53,9 @@ class Side:
             ``update`` there inside the side's interpreter, and prints the
             kinds they met, for the perturbation. Empty for a side that
             has none.
+        points: A whole command that prints what the side's interpreter
+            makes of every code point, for the campaign run. Empty for a
+            side that has none.
 
     """
 
@@ -64,6 +67,7 @@ class Side:
     identity: Mapping[str, str] = dataclasses.field(default_factory=dict)
     judge: tuple[str, ...] = ()
     tap: tuple[str, ...] = ()
+    points: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)

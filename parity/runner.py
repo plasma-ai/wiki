@@ -194,6 +194,7 @@ def run(
     now: str,
     only: Optional[Sequence[str]] = None,
     keep: bool = False,
+    each: Optional[Callable[[Stage, Sequence[Run]], None]] = None,
 ) -> Result:
     """Run stages of the plan on every side and compare the sides.
 
@@ -211,6 +212,9 @@ def run(
             stage it continues from. ``None`` runs them all.
         keep: Whether to leave the tree of every run in the plan's
             :attr:`~Plan.kept` folder, as ``<stage>/<run>``.
+        each: A function that is handed each stage with its runs, once the
+            stage is compared. A run holds the manifest of a whole slot, so
+            the result carries none.
 
     Returns:
         The differences and the report.
@@ -304,6 +308,8 @@ def run(
         excused.extend(explained)
         streams.update(_differing_streams(stage, runs))
         report.append(_stage_report(stage, runs, found, explained))
+        if each is not None:
+            each(stage, runs)
     # remove the kept trees and build the report
     if kept.exists() and not keep:
         shutil.rmtree(kept)

@@ -23,3 +23,11 @@ python = "3.13.12"
 unicode = "15.1.0"
 libyaml = "0.2.5"
 constraints = "constraints/campaign.txt"
+
+# the crossed side: the campaign side's interpreter under the oracle side's
+# packages, so a difference between those two has one cause on each side of it
+[sides.crossed]
+python = "3.13.12"
+unicode = "15.1.0"
+libyaml = "0.2.5"
+constraints = "constraints/oracle.txt"

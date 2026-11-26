@@ -34,7 +34,7 @@ from parity import (
     terminal,
 )
 
-from .conftest import NOW, REPO_ROOT, _needs_bytes, _needs_git
+from .conftest import NOW, REPO_ROOT, WORDED, _needs_bytes, _needs_git
 
 __all__ = [
     'test_v1_sides_run_as_the_oracle_names_them',
@@ -76,17 +76,6 @@ notice = {side.NOTICE!r}
 stderr = result.stderr
 if stderr.startswith(notice):
     stderr = stderr[len(notice):]
-sys.stdout.buffer.write(result.stdout)
-sys.stderr.buffer.write(stderr)
-sys.exit(result.returncode)
-"""
-
-# a side that runs the command it is given and words the text of `re` its
-# own way, as a second engine may
-_WORDED = """
-import subprocess, sys
-result = subprocess.run(sys.argv[1:], capture_output=True)
-stderr = result.stderr.replace(b'unterminated subpattern', b'unclosed group')
 sys.stdout.buffer.write(result.stdout)
 sys.stderr.buffer.write(stderr)
 sys.exit(result.returncode)
@@ -343,7 +332,7 @@ def test_matrix_command_passes_an_excused_command_only_when_told(
     side is.
     """
     sides = tmp_path / 'sides.toml'
-    worded = [sys.executable, '-c', _WORDED, *engine.argv]
+    worded = [sys.executable, '-c', WORDED, *engine.argv]
     sides.write_text(f'[worded]\nargv = {json.dumps(worded)}\n', encoding='utf-8')
     corpora = _corpora_file(tmp_path, corpus)
     out = tmp_path / 'out'

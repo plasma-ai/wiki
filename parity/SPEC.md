@@ -48,11 +48,14 @@ python -m parity perturb corpus [--engine NAME] [--sides SIDES] \
 python -m parity perturb loop [--engine NAME] [--sides SIDES] [--corpora CORPORA] \
     [--seed N | --fresh N] [--jobs N] --work DIR --out DIR
 
+# compare the campaign side with the oracle and read the names of each wiki
+python -m parity campaign --corpora CORPORA --work DIR --out DIR
+
 # run a command in the Linux container
 python -m parity container [--commit COMMIT] [--out DIR] COMMAND [ARG ...]
 ```
 
-A side name is `oracle` or `campaign`, the two v1 sides that
+A side name is `oracle`, `campaign` or `crossed`, the three v1 sides that
 `parity/oracle.toml` names (Oracle, below), or a side that the `SIDES` file
 declares. `SIDES` may not declare a side under the name of a v1 side.
 
@@ -214,6 +217,23 @@ corpus that failed keeps its perturbed snapshot under
 `<work>/perturb/runs/<label>/<seed>/`, because its checkout may move on; a tree
 of a loop is written again from its seed.
 
+`campaign` compares the campaign side with the oracle on each corpus of the file
+(Campaign Run, below). `--corpus`, `--now` and `--seed` are those of `matrix`.
+It exits 0 when no corpus shows a difference, a command the registry excuses, or
+a name that holds a changed code point, and 1 otherwise. It exits 2 with a
+message, before it snapshots anything: on what `matrix` refuses of a corpora
+file, a corpus, a work folder and a side, on a corpus named twice, and on an
+oracle file whose crossed side does not cross the other two. It makes
+`<work>/<label>` for each corpus, which must not exist beforehand, and removes
+it when the corpus passed; a corpus that failed keeps its snapshot there,
+because its checkout may move on. A corpus gets a result file
+`<out>/<label>.json` in the form `matrix` writes, with the three sides, how many
+code points the two interpreters do not agree on, the second run with the cause
+of each difference and what the crossed side shows alone, and the names the scan
+read and found. The streams of a case that differs are saved under
+`<out>/<label>/<stage>/`, and those of the second run under
+`<out>/<label>/crossed/<stage>/`.
+
 `container` runs one command in the Linux container (Container, below) and exits
 with that command's exit code. It exits 2 with a message when it is given no
 command, when `--commit` names no commit, and when Docker is not installed or
@@ -221,8 +241,9 @@ its daemon does not answer.
 
 The sections below are the rules of the harness, one part each: the oracle,
 sides, snapshots, comparison, caches, the matrix, the fixture families, the
-perturbation, the registry, the self-check, the CLI suite, the replay, with the
-account a whole replay gives of v1's tests and kinds, and the container.
+perturbation, the campaign run, the registry, the self-check, the CLI suite, the
+replay, with the account a whole replay gives of v1's tests and kinds, and the
+container.
 
 ## Oracle
 
@@ -255,12 +276,14 @@ reason = "<why it waits>"
   When the oracle moves, the old checkout is removed with `git worktree remove`
   once no branch names its commit. `ensure` makes a checkout again when its
   folder was deleted some other way.
-- **Sides.** v1 has two sides, and both run the oracle commit. `oracle` defines
+- **Sides.** v1 has three sides, and all run the oracle commit. `oracle` defines
   parity. `campaign` is the commit as the consumers of 1.9.x run it: their
-  interpreter version and their package versions. Each side has a venv in the
-  checkout, `.venv/<side>`: a uv-managed interpreter of the named version;
-  exactly the packages its constraints file pins; and the checkout itself
-  installed in place, so the side imports `wiki` from the checkout.
+  interpreter version and their package versions. `crossed` is the campaign
+  side's interpreter under the oracle side's packages, the side a difference
+  between the other two runs on once more (Campaign Run). Each side has a venv
+  in the checkout, `.venv/<side>`: a uv-managed interpreter of the named
+  version; exactly the packages its constraints file pins; and the checkout
+  itself installed in place, so the side imports `wiki` from the checkout.
 - **Interpreter build.** The named version is the same CPython release on every
   host, but not the same build: uv installs the build its own release lists and
   keeps one it has already installed. The build and the SQLite inside it can
@@ -269,8 +292,8 @@ reason = "<why it waits>"
 - **Pins.** A constraints file pins every package of its venv, one
   `name==version` per line. `oracle.toml` names what a package pin cannot: the
   interpreter, its Unicode tables, and the libyaml inside PyYAML's C loader.
-  Both sides pin the PyYAML built on libyaml 0.2.5, the loader build the
-  consumers run, so the loader is no difference between the two sides.
+  Every side pins the PyYAML built on libyaml 0.2.5, the loader build the
+  consumers run, so the loader is no difference between the sides.
 - **Refusals.** `ensure`, and every run that names a v1 side, refuse a checkout
   whose `HEAD` is not the oracle commit, and one with a changed, added or
   deleted file under `wiki/` or `tests/`. They refuse a venv whose interpreter,
@@ -282,11 +305,12 @@ reason = "<why it waits>"
   side's interpreter can import every top-level folder of the oracle commit, a
   `parity` folder among them. Harness code that runs there is a script run by
   its path with `-P` (the launcher; `facts.py`, which prints what the
-  interpreter is made of; `judge.py`, which answers the classifiers; and
-  `tap.py`, which names the kinds a tree shows), never an import of `parity`.
-  The pytest plugins of the CLI suite and of the replay are loaded there by
-  names of their own (`parity_suite`, `parity_record`), from a folder that holds
-  the harness's plugins and nothing else.
+  interpreter is made of; `judge.py`, which answers the classifiers; `tap.py`,
+  which names the kinds a tree shows; and `points.py`, which prints what the
+  interpreter makes of every code point), never an import of `parity`. The
+  pytest plugins of the CLI suite and of the replay are loaded there by names of
+  their own (`parity_suite`, `parity_record`), from a folder that holds the
+  harness's plugins and nothing else.
 
 `python -m parity oracle check` holds `oracle.toml` level with v1, by three
 checks. It reads branches as the remote-tracking references hold them, so fetch
@@ -312,8 +336,8 @@ so exit 1 always means that a check failed.
 
 A side has a name, an argv prefix, variables of its own, a `notice` flag, an
 optional `describe` command, an optional `judge` command, an optional `tap`
-command, and an optional identity. The harness appends the wiki arguments to the
-prefix. The environment is built from nothing:
+command, an optional `points` command, and an optional identity. The harness
+appends the wiki arguments to the prefix. The environment is built from nothing:
 
 | Variable              | Value                                                                            |
 | --------------------- | -------------------------------------------------------------------------------- |
@@ -353,8 +377,10 @@ The side's own variables are applied last. stdin is the null device.
 - **v1 sides.** The argv prefix of a v1 side is its venv's interpreter, `-P` and
   `parity/launcher.py`. The launcher runs the command line of the `wiki` package
   the interpreter imports, with `argv[0]` set to `wiki`. Its `describe` command
-  runs `parity/facts.py`, its `judge` command `parity/judge.py`, and its `tap`
-  command `parity/tap.py` (Perturbation, Kinds). Only a v1 side has a tap.
+  runs `parity/facts.py`, its `judge` command `parity/judge.py`, its `tap`
+  command `parity/tap.py` (Perturbation, Kinds), and its `points` command
+  `parity/points.py` (Campaign Run, Names). Only a v1 side has a tap or a
+  `points` command.
 - **Identity.** A side with an identity gets `WIKI_TRACE=<file>` on every
   command, a fresh file outside the slot. Before it runs the command, the side
   appends one line of JSON to the file: `engine`, `version` and `build`. For a
@@ -795,6 +821,84 @@ its kind compares less than the table says.
   alone on a converged wiki and holds it to the kinds it names. A stamp in
   quotes, or one that runs over several lines, is not read: `dirty-edit` then
   leaves both pages far from their stamps.
+
+## Campaign Run
+
+v1 has no single answer where an answer turns on its interpreter: the Unicode
+tables behind its name rules, whitespace, `\w` and NFC, and the build of the
+YAML loader. The oracle's interpreter defines parity, and the consumers of 1.x
+run another one. A wiki that moves from the campaign side to an engine that
+follows the oracle is rewritten wherever the two sides differ. So
+`python -m parity campaign` compares the campaign side with the oracle on real
+wikis, and a corpus that fails goes to a person before an engine is built on the
+oracle's tables.
+
+- **Sides.** The reference is `oracle` and the compared side `campaign`. The run
+  takes no other, and no `SIDES` file.
+- **Matrix.** Both sides run the whole matrix on a snapshot of the corpus, as it
+  stands: the run asks what each interpreter makes of the wiki's real names and
+  text, and a perturbation would add only generated ones. Every rule of
+  Comparison and Caches holds, stderr included. Two builds of v1 have nothing
+  registered between them, so a command the registry excuses fails the corpus
+  too.
+- **Second run.** Where the two sides differ, the stages that show it run once
+  more on the same snapshot, on all three sides. `crossed` shares its
+  interpreter with `campaign` and its packages with `oracle`. Each of its runs
+  is compared, by the rules of Comparison and with no registry entry asked, with
+  the reference and with the `campaign` run it stands for.
+- **Cause.** A difference between `campaign` and `oracle` gets its cause from
+  what `crossed` does at the same stage, case, aspect and detail. The cause is
+  `packages` where `crossed` does not differ from `oracle`, `interpreter` where
+  it differs from `oracle` and not from `campaign`, and `both` where it differs
+  from each: a stream that `crossed` prints a third way is laid to both. An
+  excused command is given a cause the same way, with every aspect of its
+  command counted. A rule that a run breaks by itself (`wrote`, `unexpected`,
+  `notice`, `identity`, a tree at `(end)`) is no difference between the sides:
+  it starts no second run and has no cause.
+- **Crossed alone.** Whatever the second run shows of a `crossed` run that the
+  first run does not show of the `campaign` run it stands for is listed apart: a
+  difference from the oracle, a rule the run broke by itself, or an excused
+  command. It is printed below the corpus's differences and recorded as
+  `rerun.alone`.
+- **Runs that stand for none.** A stage that continues another runs each side on
+  the tree each side left. In the second run it therefore holds `crossed` on the
+  tree of `campaign` and `campaign` on the tree of `crossed`, which stand for no
+  run of the first. The result file records them, and no cause reads them.
+- **Crossing.** A run exits 2 on an oracle file whose `crossed` side names
+  another interpreter or other Unicode tables than `campaign`, or another
+  constraints file or libyaml than `oracle`: such a side tells the two causes
+  apart no more.
+
+### Names
+
+A difference in the tables that no command of the matrix reads today on the
+wiki's names is still one a later command may show. So the run also holds the
+names against the tables themselves.
+
+- **Tables.** Before the first corpus, the `points` command of each of the two
+  sides (`parity/points.py`) prints what its interpreter makes of every code
+  point: the properties in the table below. A code point with a property the two
+  interpreters do not agree on is a changed one. The result file records how
+  many there are, and for how many each property differs.
+- **Scan.** The run reads the name of the wiki root of the snapshot, which names
+  the wiki where its index names none, and the name of every file and folder
+  below it, whatever the wiki excludes: an engine reads a name before it can
+  exclude it. It follows no symlink and reads nothing below a `.git` folder. A
+  name that holds a changed code point fails the corpus, and the result file
+  lists its path with each such code point and the properties that differ for
+  it; the path of the root is `.`.
+
+| Read through  | Properties                                                                                                                                                                                                                     |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `unicodedata` | `category`, `bidirectional`, `combining`, `east_asian_width`, `mirrored`, `decimal`, `digit`, `numeric`, and the normal forms NFC, NFD, NFKC and NFKD                                                                          |
+| `str`         | `lower`, `upper`, `title`, `casefold`; `isalpha`, `isalnum`, `isdecimal`, `isdigit`, `isnumeric`, `isspace`, `islower`, `isupper`, `istitle`, `isprintable`; `isidentifier`, as the start and as a later part of an identifier |
+| `re`          | the classes `\w`, `\s` and `\d` of a `str` pattern                                                                                                                                                                             |
+
+`unicodedata.decomposition` is left out: the normal forms hold the mapping it
+prints, and what it answers for a Hangul syllable turns on the interpreter's
+version, not on its tables. The scan reads names, not text: the matrix runs
+`lint`, `update` and the cache builds over every page of the wiki, and a
+property of a code point in a page's text reaches a file only through those.
 
 ## Registry
 

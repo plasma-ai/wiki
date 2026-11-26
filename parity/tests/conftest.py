@@ -21,6 +21,16 @@ from parity import oracle, runner, side
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 #: the instant every side's clock is fixed at
 NOW = '2026-01-02T03:04:05Z'
+#: a side that runs the command it is given and words the text of `re` its
+#: own way, as a second engine may
+WORDED = """
+import subprocess, sys
+result = subprocess.run(sys.argv[1:], capture_output=True)
+stderr = result.stderr.replace(b'unterminated subpattern', b'unclosed group')
+sys.stdout.buffer.write(result.stdout)
+sys.stderr.buffer.write(stderr)
+sys.exit(result.returncode)
+"""
 # gates the tests that need git: the oracle checkout and the committed corpus
 _needs_git = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
 # gates the tests of names only a file system that keeps bytes holds: Linux
