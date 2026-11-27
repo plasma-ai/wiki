@@ -88,6 +88,7 @@ __all__ = [
     'test_match_invalid_regex_reports_error',
     'test_match_resolution_failure_exits_two',
     'test_match_all_skips_undecodable_files',
+    'test_match_names_a_page_it_cannot_decode',
     'test_search_ranked_and_json_output',
     'test_search_no_match_exits_nonzero',
     'test_search_invalid_query_reports_error',
@@ -2055,15 +2056,46 @@ def test_match_resolution_failure_exits_two(
 
 
 def test_match_all_skips_undecodable_files(wiki: pathlib.Path) -> None:
-    """``match --all`` skips a non-UTF-8 file instead of crashing the whole run."""
+    """``match --all`` skips a non-UTF-8 file instead of crashing the whole run.
+
+    A binary file is expected under ``--all``, so the skip prints nothing.
+    """
     binary = wiki / 'diagram.png'
     binary.write_bytes(b'\x89PNG\r\n\x1a\n\xff\xfe\x00\x01')
     try:
         result = _wiki(wiki, 'match', 'widget', '--path', str(wiki), '--all')
         assert result.returncode == 0, result.stdout + result.stderr
         assert 'snippet.txt' in result.stdout
+        assert result.stderr == ''
     finally:
         binary.unlink()
+
+
+def test_match_names_a_page_it_cannot_decode(wiki: pathlib.Path) -> None:
+    """``match`` names a page that is not UTF-8 on stderr and matches the rest.
+
+    The page may hold the pattern, so skipping it in silence could turn
+    a match into ``No matches found.``; the line says the page was not
+    looked at, and the other results and the exit code are unchanged.
+    """
+    before = _wiki(wiki, 'match', 'widget', '--path', str(wiki))
+    assert before.returncode == 0, before.stdout + before.stderr
+    # a Latin-1 page holding the pattern, and a word no other page holds
+    page = wiki / 'core' / 'legacy.md'
+    page.write_bytes('The widget caf\xe9 serves gizmos.\n'.encode('latin-1'))
+    skip = 'Skipping core/legacy.md: not readable as UTF-8 text'
+    try:
+        # the other pages match as before, under the line naming the page
+        result = _wiki(wiki, 'match', 'widget', '--path', str(wiki))
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.stdout == before.stdout
+        assert result.stderr.splitlines() == [skip]
+        # a pattern only that page holds is no match, with the reason above it
+        result = _wiki(wiki, 'match', 'gizmos', '--path', str(wiki))
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert result.stderr.splitlines() == [skip, 'No matches found.']
+    finally:
+        page.unlink()
 
 
 # ------ search

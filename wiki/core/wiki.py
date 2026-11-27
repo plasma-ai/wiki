@@ -2485,7 +2485,9 @@ class Wiki:
         By default matches body content of wiki-tracked
         markdown files. Use ``field`` to match specific
         frontmatter fields instead. Use ``all_files`` to
-        include non-markdown files.
+        include non-markdown files. A page that is not valid
+        UTF-8 is skipped with a read-skip notice; any other
+        file that is not is skipped in silence.
 
         Args:
             pattern: Regex pattern to match.
@@ -2525,15 +2527,21 @@ class Wiki:
         # search each file
         result = []
         for path in files:
+            relpath = str(path.relative_to(self._root))
             # skip binary / non-utf-8 files (e.g. an image under --all) rather
             # than aborting the whole search on one undecodable file; a file
             # vanishing between the walk and the read (a concurrent delete)
             # matches as absent from the walk
             try:
                 text = path.read_text(encoding='utf-8')
-            except (UnicodeDecodeError, FileNotFoundError):
+            except FileNotFoundError:
                 continue
-            relpath = str(path.relative_to(self._root))
+            except UnicodeDecodeError:
+                # a page may hold the pattern, so its skip is narrated: silence
+                # would read as no match (a binary file under --all is expected)
+                if path.suffix == '.md':
+                    self.on_read_skip(path=relpath)
+                continue
             lines = text.split('\n')
             # frontmatter is a markdown concept -- read slices non-md files
             # whole, so a non-md file's leading '---' pair is body content
@@ -6644,14 +6652,14 @@ class WriteSkipEvent(Event):
 
 
 class ReadSkipEvent(Event):
-    """Emitted when the search refresh skips an unreadable page."""
+    """Emitted when search or match skips a page it cannot read."""
 
     path: str
 
     @property
     def description(self: ReadSkipEvent) -> str:
         """Return the unreadable-page skip notice line."""
-        return f'Skipping {self.path}: unreadable during search refresh'
+        return f'Skipping {self.path}: not readable as UTF-8 text'
 
 
 class FrontmatterMalformedEvent(Event):

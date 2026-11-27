@@ -20,6 +20,12 @@ may include breaking changes, each listed under a Breaking heading.
 - `wiki init` and `wiki config` no longer fail on a `.gitattributes` that is not
   UTF-8, such as one with a Latin-1 comment. They append the merge mapping the
   file lacks and leave its existing bytes as they are.
+- `wiki match` says when it skips a page it cannot decode, as `wiki search`
+  does: `Skipping <path>: not readable as UTF-8 text` on stderr. Before, a match
+  inside such a page was reported as `No matches found.` A file that is not a
+  page, such as an image under `--all`, is still skipped in silence. The line
+  replaces `Skipping <path>: unreadable during search refresh` in `wiki search`,
+  so both commands print the same words.
 
 ## [1.10.0] - 2026-11-27
 

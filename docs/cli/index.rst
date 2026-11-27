@@ -421,6 +421,11 @@ refuses still match through the line grammar. An empty ``--field ""`` is an
 explicit empty field set that matches nothing — it does not fall back to a
 body match.
 
+A page that is not valid UTF-8 cannot be matched. It is skipped and named on
+stderr (``Skipping <path>: not readable as UTF-8 text``, the line
+``wiki search`` prints for such a page), so a pattern it may hold is never
+reported as no match in silence.
+
 .. list-table::
    :header-rows: 1
    :widths: 26 18 56
@@ -446,7 +451,7 @@ body match.
    * - ``-a``, ``--all``
      - off
      - Include non-markdown files, matched whole (``--field`` never matches
-       them; undecodable files are skipped).
+       them; one that is not UTF-8, such as an image, is skipped in silence).
    * - ``--lines``
      - off
      - Print ``path:lineno: line`` for each match.
