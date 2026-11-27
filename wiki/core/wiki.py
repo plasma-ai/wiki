@@ -204,8 +204,15 @@ class Wiki:
         rather than be ignored.
         """
         path = self._root / WIKI_SETTINGS
-        if not path.exists():
+        # NOTE: only a path that holds nothing is an absent file -- one the
+        #   filesystem cannot reach (a symlink loop, an unsearchable folder)
+        #   is unreadable, never read as all defaults
+        try:
+            os.stat(path)
+        except FileNotFoundError:
             return {}
+        except OSError as e:
+            raise _unreadable_settings_error(e.strerror) from e
         # NOTE: a FIFO blocks its reader until a writer comes, so only a
         #   regular file is opened
         if not path.is_file():
@@ -3274,17 +3281,24 @@ class Wiki:
         Raises:
             ValueError: If a root ``_config/settings.json`` exists -- the
                 legacy config namespace is never read, so its policy must
-                migrate before any policy-reading write proceeds.
+                migrate before any policy-reading write proceeds -- or
+                the filesystem cannot reach the settings path.
 
         """
         # TODO: remove back-compat in future version
         self._refuse_legacy_layout()
         path = self._root / WIKI_SETTINGS
-        if path.exists():
-            return []
-        path.parent.mkdir(parents=True, exist_ok=True)
-        wiki.util.fs.write_atomic(path, '{}\n')
-        return [SettingsRestoreEvent(path=WIKI_SETTINGS)]
+        # NOTE: only an absent file is restored -- a write through a path the
+        #   filesystem cannot reach fails without naming the settings file
+        try:
+            os.stat(path)
+        except FileNotFoundError:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            wiki.util.fs.write_atomic(path, '{}\n')
+            return [SettingsRestoreEvent(path=WIKI_SETTINGS)]
+        except OSError as e:
+            raise _unreadable_settings_error(e.strerror) from e
+        return []
 
     def _refuse_legacy_layout(self: Wiki) -> None:
         """Refuse to plan a sweep on a legacy-layout wiki.

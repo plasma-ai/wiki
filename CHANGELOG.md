@@ -17,11 +17,13 @@ may include breaking changes, each listed under a Breaking heading.
 
 ### Fixed
 
-- A `.wiki/settings.json` that cannot be read (no permission, a folder at its
-  path, a byte-order mark) gets an error that names the file and the cause, such
-  as `Cannot read .wiki/settings.json (Permission denied).`, in place of a raw
-  Python error. A folder at the path is no longer first reported as a missing
-  settings file, and a byte-order mark gets a message that says to remove it.
+- A `.wiki/settings.json` that cannot be read (no permission, a folder or a
+  symlink loop at its path, a byte-order mark) gets an error that names the file
+  and the cause, such as `Cannot read .wiki/settings.json (Permission denied).`,
+  in place of a raw Python error. A folder or a symlink loop at the path is no
+  longer first reported as a missing settings file that `wiki update` will
+  restore, and a symlink loop no longer leaves `map` and `lint` running on
+  default settings. A byte-order mark gets a message that says to remove it.
 
 ## [1.10.0] - 2026-11-27
 

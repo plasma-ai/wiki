@@ -92,10 +92,12 @@ but a wrong-typed known block or key is an error naming the file and key.
 
 A file that cannot be read fails the same commands with
 ``Cannot read .wiki/settings.json (<reason>).`` The reason is the system's own
-(``Permission denied``), ``not a regular file`` for a folder or anything else
-at the path that is not a file, or ``it starts with a byte-order mark; remove
-the mark``. A path that holds something is never reported as a missing
-settings file.
+(``Permission denied``, ``Too many levels of symbolic links``), ``not a regular
+file`` for a folder or anything else at the path that is not a file, or ``it
+starts with a byte-order mark; remove the mark``. Only a path that holds
+nothing is a missing settings file, which ``wiki update`` restores. The one
+message that names a path holding something as missing is ``No wiki at: ...``,
+for a folder with neither a settings file nor a root ``_index.md``.
 
 Seeding and restoration are asymmetric:
 

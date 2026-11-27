@@ -11,6 +11,7 @@ reporting as observable output rather than internal state.
 from __future__ import annotations
 
 import datetime as dt
+import errno
 import json
 import os
 import pathlib
@@ -590,9 +591,10 @@ def test_settings_nesting_is_refused_from_128_levels(tmp_path: pathlib.Path) -> 
     argvalues=[
         pytest.param('no-permission', 'Permission denied', marks=_needs_unprivileged),
         ('folder', 'not a regular file'),
+        ('looped-symlink', os.strerror(errno.ELOOP)),
         ('byte-order-mark', 'it starts with a byte-order mark; remove the mark'),
     ],
-    ids=['no-permission', 'folder', 'byte-order-mark'],
+    ids=['no-permission', 'folder', 'looped-symlink', 'byte-order-mark'],
 )
 def test_settings_file_that_cannot_be_read_is_named_with_its_cause(
     tmp_path: pathlib.Path,
@@ -602,8 +604,8 @@ def test_settings_file_that_cannot_be_read_is_named_with_its_cause(
     """A settings file that yields no text is refused in one line with its cause.
 
     The line names the file by its path in the wiki, and a path that holds
-    a folder is never called missing: nothing a command could restore is
-    absent there.
+    a folder or a symlink loop is never called missing: nothing a command
+    could restore is absent there.
     """
     root = tmp_path / 'wiki'
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
@@ -613,6 +615,9 @@ def test_settings_file_that_cannot_be_read_is_named_with_its_cause(
     elif fault == 'folder':
         settings.unlink()
         settings.mkdir()
+    elif fault == 'looped-symlink':
+        settings.unlink()
+        settings.symlink_to(settings.name)
     else:
         settings.write_bytes(b'\xef\xbb\xbf{}\n')
 
