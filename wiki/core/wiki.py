@@ -4238,19 +4238,16 @@ class Wiki:
 
         A bare ``UnicodeDecodeError`` carries only a byte offset --
         unactionable on a tree of thousands of files -- so the re-raise
-        appends the offending file's relative path to the reason.
+        leads with the offending file's relative path.
         """
         try:
             return path.read_text(encoding='utf-8')
         except UnicodeDecodeError as e:
-            relpath = path.relative_to(self._root)
-            raise UnicodeDecodeError(
-                e.encoding,
-                e.object,
-                e.start,
-                e.end,
-                f'{e.reason} (in {relpath})',
-            ) from e
+            # the base class's own arguments, with the path bound after: an
+            # error built this way pickles, so it crosses a process boundary
+            error = PageDecodeError(e.encoding, e.object, e.start, e.end, e.reason)
+            error.path = str(path.relative_to(self._root))
+            raise error from e
 
     def _has_crlf(self: Wiki, path: pathlib.Path) -> bool:
         r"""Return ``True`` if ``path``'s bytes carry CR line endings.
@@ -6427,6 +6424,25 @@ class Issue(str):
         return result
 
 
+# ------ errors
+
+
+class PageDecodeError(UnicodeDecodeError):
+    """A file of the wiki holds bytes that are not valid UTF-8.
+
+    Reads as the file's path, the offset of its first invalid byte and
+    the remedy, where the base class reads as the codec's own sentence.
+    It stays a ``UnicodeDecodeError``, so a handler for one catches it.
+    """
+
+    #: the file's path, relative to the wiki root
+    path: str
+
+    def __str__(self: PageDecodeError) -> str:
+        """Return the error line: the path, the byte and the remedy."""
+        return f'{self.path}: {_invalid_utf8(self)}; re-save the file as UTF-8'
+
+
 # ------ events
 
 
@@ -6959,6 +6975,11 @@ def _encloses_wiki_error(nested: pathlib.Path) -> ValueError:
     return ValueError(
         f'Path encloses the wiki at: {nested}; run the command from that declared root.'
     )
+
+
+def _invalid_utf8(e: UnicodeDecodeError) -> str:
+    """Return the phrase for undecodable bytes, giving the first invalid byte."""
+    return f'not valid UTF-8 at byte {e.start}'
 
 
 def _malformed_json_error(name: str, e: Exception) -> ValueError:

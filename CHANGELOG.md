@@ -7,6 +7,15 @@ may include breaking changes, each listed under a Breaking heading.
 
 ## [Unreleased]
 
+### Fixed
+
+- A page that is not valid UTF-8 stops `wiki read`, `wiki update` and
+  `wiki lint` with a message that leads with the page's path and gives the
+  offset of the first invalid byte, such as
+  `notes/draft.md: not valid UTF-8 at byte 4; re-save the file as UTF-8`, in
+  place of Python's codec sentence, which put the path last. The exit code is 2,
+  as before, and `Wiki` still raises a `UnicodeDecodeError`.
+
 ## [1.10.0] - 2026-11-27
 
 ### Added

@@ -31,6 +31,7 @@ __all__ = [
     'test_command_errors_exit_two',
     'test_untrusted_hook_refusal_exits_two',
     'test_update_check_separates_pending_from_error',
+    'test_page_that_is_not_utf8_stops_a_command_naming_the_byte',
     'test_init_creates_root_index',
     'test_init_guards_existing_wiki',
     'test_init_seeds_settings',
@@ -319,6 +320,53 @@ def test_update_check_separates_pending_from_error(tmp_path: pathlib.Path) -> No
     entry = _wiki(root, 'update', '--check', 'nowhere', '--path', str(root))
     assert entry.returncode == 2, entry.stdout + entry.stderr
     assert 'Error:' in entry.stderr
+
+
+@pytest.mark.parametrize(
+    argnames=('valid', 'rest'),
+    argvalues=[
+        (b'', b'\xff# Design\n'),
+        ('# Café\n\nBody '.encode(), b'\xff text.\n'),
+        (b'# Design\n\nBody ends mid-character: caf', b'\xc3'),
+        (b'# Design\n\n' + b'Body text. ' * 1000, b'\xff\n'),
+    ],
+    ids=['first-byte', 'middle', 'cut-off-final-character', 'past-one-read-buffer'],
+)
+def test_page_that_is_not_utf8_stops_a_command_naming_the_byte(
+    tmp_path: pathlib.Path,
+    valid: bytes,
+    rest: bytes,
+) -> None:
+    """A page that is not valid UTF-8 stops a command with its path and the byte.
+
+    The error leads with the page's path, gives the offset of the first
+    byte that is not UTF-8 -- a count of bytes, not characters, so an
+    editor's go-to-byte lands on it -- and names the remedy. The words
+    are wiki's own: the interpreter's sentence for the failure, which
+    names its codec, never prints.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    (root / 'core').mkdir()
+    (root / 'core' / 'design.md').write_bytes(valid + rest)
+
+    # every command that reads the page stops on it, with the one error line
+    error = (
+        f'Error: core/design.md: not valid UTF-8 at byte {len(valid)};'
+        ' re-save the file as UTF-8'
+    )
+    commands = (
+        ('read', 'core/design'),
+        ('update',),
+        ('update', '--check'),
+        ('lint',),
+        ('lint', '--json'),
+    )
+    for args in commands:
+        result = _wiki(root, *args, '--path', str(root))
+        assert result.returncode == 2, (args, result.stdout + result.stderr)
+        assert result.stderr.splitlines() == [error], args
+        assert 'codec' not in result.stdout + result.stderr, args
 
 
 # ------ init
