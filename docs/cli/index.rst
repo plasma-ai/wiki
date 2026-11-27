@@ -280,7 +280,9 @@ The slice options are pairwise mutually exclusive and share the format
 body only: the frontmatter is lifted off, structural leading and trailing
 blank lines are stripped, the slice is taken, and the output re-emits the
 frontmatter plus the slice — with a trailing newline appended, unlike an
-unsliced read. Non-markdown files slice as a whole.
+unsliced read. Non-markdown files slice as a whole. ``--lines`` counts lines as
+``wiki match`` numbers them: a line ends at a newline and at nothing else, so a
+form feed stays inside its line and comes back unchanged.
 
 .. list-table::
    :header-rows: 1

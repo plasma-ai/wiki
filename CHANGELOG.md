@@ -59,6 +59,11 @@ may include breaking changes, each listed under a Breaking heading.
   newline: the final newline ends the last line and opens no empty one. Before,
   `wiki match '^$' --lines` reported line 15 of a 14-line file, and a pattern
   that can match an empty line hit every file.
+- `wiki read --lines` counts lines as `wiki match` numbers them: a line ends at
+  a newline and at nothing else. Before, a form feed inside a line, or another
+  character Python reads as a line boundary, split the line in two and came back
+  as a newline. The diff under a `Requires update` issue of `wiki lint` breaks
+  lines the same way.
 
 ## [1.10.0] - 2026-11-27
 

@@ -105,6 +105,7 @@ __all__ = [
     'test_search_prefix_and_raw_are_mutually_exclusive',
     'test_search_limit_must_be_positive',
     'test_read_slice_forms',
+    'test_read_lines_count_as_match_numbers_them',
     'test_read_resolves_dotted_page_name',
     'test_read_errors',
     'test_read_slice_short_aliases',
@@ -2519,6 +2520,34 @@ def test_read_slice_forms(
     assert 'name: core/design' in result.stdout
     assert expected in result.stdout
     assert unexpected not in result.stdout
+
+
+def test_read_lines_count_as_match_numbers_them(tmp_path: pathlib.Path) -> None:
+    """``read --lines`` counts lines as ``match --lines`` numbers them.
+
+    Both break a page on newlines alone, so a form feed inside a line
+    shifts neither count, and the slice returns the line with the form
+    feed where the page has it.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', 'notes', '--path', str(root)).returncode == 0
+    body = 'alpha\nbe\x0cta\ngamma'
+    _write(root / 'p.md', _page(name='p', desc='A page.', body=body))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    # the slice's index 0 is the first body line, the H1
+    result = _wiki(root, 'match', '^# p$|^gamma$', '--path', str(root), '--lineno')
+    assert result.returncode == 0, result.stdout + result.stderr
+    heading, gamma = (
+        int(hit.removeprefix('p.md:'))
+        for hit in result.stdout.splitlines()
+        if hit.startswith('p.md:')
+    )
+    index = gamma - heading
+    # the two lines up to that index: the form-feed line whole, then gamma
+    spec = f'{index - 1}:{index + 1}'
+    result = _wiki(root, 'read', 'p', '--path', str(root), '--lines', spec)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.endswith('---\n\nbe\x0cta\ngamma\n')
 
 
 def test_read_resolves_dotted_page_name(wiki: pathlib.Path) -> None:

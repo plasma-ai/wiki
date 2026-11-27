@@ -4544,7 +4544,7 @@ class Wiki:
         body = body.strip()
         # slice the body
         if on == 'lines':
-            lines = body.splitlines()
+            lines = wiki.util.str.split_lines(body)
             result = '\n'.join(lines[start:stop])
         elif on == 'words':
             # words: keep the original span from the first to the last word
@@ -5734,15 +5734,15 @@ class Wiki:
         relpath = str(path.relative_to(self._root))
         # drop difflib's '---'/'+++' header lines; the path header replaces them
         diff = difflib.unified_diff(
-            current.splitlines(),
-            corrected.splitlines(),
+            wiki.util.str.split_lines(current),
+            wiki.util.str.split_lines(corrected),
             lineterm='',
         )
         body = list(diff)[2:]
         # a byte difference with no line-level delta is a final-newline change
-        # (splitlines cannot see one; CRLF drift reads clean through universal
-        # newlines and never reaches here); still report it so the flag never
-        # desyncs from update's byte compare
+        # (the line split cannot see one; CRLF drift reads clean through
+        # universal newlines and never reaches here); still report it so the
+        # flag never desyncs from update's byte compare
         if not body:
             return Issue(
                 f'{relpath}: Requires update (final newline differs)',
