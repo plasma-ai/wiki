@@ -7,6 +7,14 @@ may include breaking changes, each listed under a Breaking heading.
 
 ## [Unreleased]
 
+### Changed
+
+- `.wiki/settings.json` and `init --settings` must be strict JSON. `NaN`,
+  `Infinity`, a number too large to represent, a lone surrogate escape and
+  nesting 128 levels deep are refused with a message that names the cause.
+  Before, wiki read such a file, and `init --settings` could write a file that
+  is not JSON.
+
 ## [1.10.0] - 2026-11-27
 
 ### Added

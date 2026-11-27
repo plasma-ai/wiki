@@ -144,12 +144,17 @@ def parse_slice(value: Optional[str]) -> tuple[Optional[int], Optional[int]]:
 
 
 def parse_settings(value: Optional[str]) -> Optional[dict]:
-    """Parse a ``--settings`` JSON object string."""
+    """Parse a ``--settings`` JSON object string.
+
+    The text is held to what a settings file is held to (see
+    :func:`wiki.util.json.strict_loads`), so a seed that parses is never
+    written as a file the next command refuses.
+    """
     if value is None:
         return None
     try:
-        result = json.loads(value)
-    except json.JSONDecodeError as e:
+        result = wiki.util.json.strict_loads(value)
+    except ValueError as e:
         raise typer.BadParameter(f'--settings must be valid JSON ({e}).') from e
     if not isinstance(result, dict):
         raise typer.BadParameter('--settings must be a JSON object.')

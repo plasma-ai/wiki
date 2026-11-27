@@ -198,15 +198,17 @@ class Wiki:
         """Return the per-wiki settings overlay from ``.wiki/settings.json``.
 
         Returns an empty dict when the file is absent. Raises ``ValueError``
-        on malformed JSON or a non-object top level, since the file is
-        user-editable input that should fail loudly rather than be ignored.
+        on text that is not strict JSON (see
+        :func:`wiki.util.json.strict_loads`) or a non-object top level,
+        since the file is user-editable input that should fail loudly
+        rather than be ignored.
         """
         path = self._root / WIKI_SETTINGS
         if not path.exists():
             return {}
         try:
-            result = json.loads(path.read_text(encoding='utf-8'))
-        except (ValueError, RecursionError) as e:
+            result = wiki.util.json.strict_loads(path.read_text(encoding='utf-8'))
+        except ValueError as e:
             raise _malformed_json_error(WIKI_SETTINGS, e) from e
         if not isinstance(result, dict):
             raise ValueError(f'{WIKI_SETTINGS} must be a JSON object.')

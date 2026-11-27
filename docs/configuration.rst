@@ -80,17 +80,23 @@ The settings file: ``.wiki/settings.json``
 
 A JSON object at the wiki root. An absent file means all defaults; malformed
 JSON or a non-object top level fails every command that reads policy, with a
-message naming the file. The recognized blocks — ``naming``, ``timestamp``,
-``map``, ``titles``, ``lint``, ``exclude``, and ``links`` — are all optional,
-all objects. Unknown top-level keys are ignored, but a wrong-typed known block
-or key is an error naming the file and key.
+message naming the file. The file is held to strict JSON, so that every reader
+takes it the same way: ``NaN``, ``Infinity`` and ``-Infinity``, a number too
+large to represent (``1e400``), a lone surrogate escape (``"\ud800"``) and
+nesting 128 levels deep are each malformed, and the message names the cause
+(``Malformed JSON in .wiki/settings.json: NaN is not a JSON number``). The
+recognized blocks — ``naming``, ``timestamp``, ``map``, ``titles``, ``lint``,
+``exclude``, and ``links`` — are all optional, all objects. Unknown top-level
+keys are ignored, but a wrong-typed known block or key is an error naming the
+file and key.
 
 Seeding and restoration are asymmetric:
 
 - ``wiki init`` seeds the file with the full ``naming`` defaults block (shown
   below) so the knobs are discoverable, or with the object passed via
-  ``--settings '<json>'``. The seed is validated before anything is written,
-  and re-init never overwrites an existing settings file.
+  ``--settings '<json>'``. The seed is held to the same strict JSON and
+  validated before anything is written, and re-init never overwrites an
+  existing settings file.
 - ``wiki update`` and ``wiki config`` restore a *missing* file as ``{}`` —
   all defaults; custom policy is never re-invented. Deleting the file
   therefore silently drops any authored policy once the next mutating run
