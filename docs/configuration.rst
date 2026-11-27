@@ -80,17 +80,32 @@ The settings file: ``.wiki/settings.json``
 
 A JSON object at the wiki root. An absent file means all defaults; malformed
 JSON or a non-object top level fails every command that reads policy, with a
-message naming the file. The recognized blocks — ``naming``, ``timestamp``,
-``map``, ``titles``, ``lint``, ``exclude``, and ``links`` — are all optional,
-all objects. Unknown top-level keys are ignored, but a wrong-typed known block
-or key is an error naming the file and key.
+message naming the file. The file is held to strict JSON, so that every reader
+takes it the same way: ``NaN``, ``Infinity`` and ``-Infinity``, a number too
+large to represent (``1e400``), a lone surrogate escape (``"\ud800"``),
+nesting 128 levels deep and a key named twice in one object, at any level, are
+each malformed, and the message names the cause (``Malformed JSON in
+.wiki/settings.json: duplicate key 'exclude'``). The recognized blocks —
+``naming``, ``timestamp``, ``map``, ``titles``, ``lint``, ``exclude``, and
+``links`` — are all optional, all objects. Unknown top-level keys are ignored,
+but a wrong-typed known block or key is an error naming the file and key.
+
+A file that cannot be read fails the same commands with
+``Cannot read .wiki/settings.json (<reason>).`` The reason is the system's own
+(``Permission denied``, ``Too many levels of symbolic links``), ``not a regular
+file`` for a folder or anything else at the path that is not a file, or ``it
+starts with a byte-order mark; remove the mark``. Only a path that holds
+nothing is a missing settings file, which ``wiki update`` restores. The one
+message that names a path holding something as missing is ``No wiki at: ...``,
+for a folder with neither a settings file nor a root ``_index.md``.
 
 Seeding and restoration are asymmetric:
 
 - ``wiki init`` seeds the file with the full ``naming`` defaults block (shown
   below) so the knobs are discoverable, or with the object passed via
-  ``--settings '<json>'``. The seed is validated before anything is written,
-  and re-init never overwrites an existing settings file.
+  ``--settings '<json>'``. The seed is held to the same strict JSON and
+  validated before anything is written, and re-init never overwrites an
+  existing settings file.
 - ``wiki update`` and ``wiki config`` restore a *missing* file as ``{}`` —
   all defaults; custom policy is never re-invented. Deleting the file
   therefore silently drops any authored policy once the next mutating run

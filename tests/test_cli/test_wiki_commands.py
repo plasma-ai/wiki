@@ -11,6 +11,7 @@ reporting as observable output rather than internal state.
 from __future__ import annotations
 
 import datetime as dt
+import errno
 import json
 import os
 import pathlib
@@ -25,6 +26,7 @@ from wiki import __version__ as WIKI_VERSION
 from wiki.cli.utils import configure_git_merge_driver
 from wiki.constants import WIKI_CONFIG_DIR, WIKI_FREEZE_TIME
 
+from .._helpers import _needs_unprivileged
 from .conftest import GIT, WIKI, _env, _git, _git_repo, _wiki
 
 __all__ = [
@@ -39,6 +41,10 @@ __all__ = [
     'test_init_refuses_nested_wiki',
     'test_home_directory_is_never_a_wiki',
     'test_init_quiet_suppresses_chatter',
+    'test_settings_file_refuses_text_that_is_not_strict_json',
+    'test_init_refuses_settings_that_are_not_strict_json',
+    'test_settings_nesting_is_refused_from_128_levels',
+    'test_settings_file_that_cannot_be_read_is_named_with_its_cause',
     'test_install_copies_skill_into_home',
     'test_install_project_targets_cwd',
     'test_install_link_swaps_copy_and_symlink',
@@ -211,6 +217,44 @@ _PINNED_CLOCK_NOTICE = (
 _PINNED_CLOCK_ERROR = (
     'Error: WIKI_FREEZE_TIME must be an RFC 3339 instant in the UTC years'
     ' 1001 to 9998, like 2026-01-02T03:04:05Z, got {now}.\n'
+)
+
+# the texts ``json`` reads and strict JSON does not hold, each with the
+# reason its refusal words, for the settings file and ``init --settings`` alike
+_not_strict_json = pytest.mark.parametrize(
+    argnames=('text', 'reason'),
+    argvalues=[
+        # constants
+        ('{"x": NaN}', 'NaN is not a JSON number'),
+        ('{"x": Infinity}', 'Infinity is not a JSON number'),
+        ('{"x": -Infinity}', '-Infinity is not a JSON number'),
+        # numbers past the range of a double
+        ('{"x": 1e400}', 'number too large to represent'),
+        ('{"x": 1' + '0' * 400 + '}', 'number too large to represent'),
+        # surrogate escapes with no pair
+        ('{"x": "\\ud800"}', "lone surrogate '\\ud800' in a string"),
+        ('{"\\udc00": 1}', "lone surrogate '\\udc00' in a string"),
+        # a key named twice in one object, at the top level and in a block
+        (
+            '{"exclude": {"patterns": ["secret"]}, "exclude": {}}',
+            "duplicate key 'exclude'",
+        ),
+        ('{"naming": {"allow": "-", "allow": ""}}', "duplicate key 'allow'"),
+        # an object holding 127 arrays, one inside the next
+        ('{"x": ' + '[' * 127 + ']' * 127 + '}', 'nested more than 127 levels deep'),
+    ],
+    ids=[
+        'nan',
+        'infinity',
+        'negative-infinity',
+        'float-too-large',
+        'integer-too-large',
+        'surrogate-in-value',
+        'surrogate-in-key',
+        'key-twice-at-top-level',
+        'key-twice-in-a-block',
+        'nested-128-levels',
+    ],
 )
 
 pytestmark = pytest.mark.skipif(
@@ -548,6 +592,132 @@ def test_init_quiet_suppresses_chatter(tmp_path: pathlib.Path) -> None:
     rerun = _wiki(tmp_path, 'init', '--path', str(root), '--quiet')
     assert rerun.returncode == 0, rerun.stdout + rerun.stderr
     assert rerun.stdout.strip() == ''
+
+
+# ------ settings file
+
+
+@_not_strict_json
+def test_settings_file_refuses_text_that_is_not_strict_json(
+    tmp_path: pathlib.Path,
+    text: str,
+    reason: str,
+) -> None:
+    """A settings file that is not strict JSON stops a command before it acts.
+
+    ``json`` reads every one of these texts and a reader held to the JSON
+    grammar reads none, so the file is refused with its cause worded
+    rather than read one way here and another way elsewhere.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # a page awaiting adoption, so a sweep that ran would show
+    _write(root / 'core' / 'design.md', _page('Design', 'A design.', 'Body.'))
+    _write(root / '.wiki' / 'settings.json', text)
+    before = _tree(root)
+
+    # each command that reads policy says the one line and writes nothing
+    error = f'Error: Malformed JSON in .wiki/settings.json: {reason}\n'
+    for args in (('update', '--check'), ('update',), ('lint',), ('map',)):
+        result = _wiki(tmp_path, *args, '--path', str(root))
+        assert result.returncode == 2, (args, result.stdout + result.stderr)
+        assert result.stderr == error, args
+        assert _tree(root) == before, args
+
+
+@_not_strict_json
+def test_init_refuses_settings_that_are_not_strict_json(
+    tmp_path: pathlib.Path,
+    text: str,
+    reason: str,
+) -> None:
+    """``init --settings`` refuses what a settings file is refused for.
+
+    The seed is held to the reader's own rules, so ``init`` never writes
+    a settings file the next command refuses.
+    """
+    root = tmp_path / 'wiki'
+    result = _wiki(tmp_path, 'init', '--path', str(root), '--settings', text)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert f'--settings must be valid JSON ({reason}).' in result.stderr
+    assert not root.exists()
+
+
+def test_settings_nesting_is_refused_from_128_levels(tmp_path: pathlib.Path) -> None:
+    """Settings nested 127 levels deep are read; one level more is refused.
+
+    The depth is counted on the text before it is parsed, so the limit is
+    the same on every interpreter, whatever its stack allows.
+    """
+    limit = 127
+    # an object holding arrays, one inside the next
+    accepted = '{"x": ' + '[' * (limit - 1) + ']' * (limit - 1) + '}'
+    refused = '{"x": ' + '[' * limit + ']' * limit + '}'
+    root = tmp_path / 'wiki'
+
+    # the deepest seed is written, and the file it makes is read back
+    seeded = _wiki(tmp_path, 'init', '--path', str(root), '--settings', accepted)
+    assert seeded.returncode == 0, seeded.stdout + seeded.stderr
+    listed = _wiki(tmp_path, 'map', '--path', str(root))
+    assert listed.returncode == 0, listed.stdout + listed.stderr
+
+    # one level more stops both readers
+    _write(root / '.wiki' / 'settings.json', refused)
+    listed = _wiki(tmp_path, 'map', '--path', str(root))
+    assert listed.returncode == 2, listed.stdout + listed.stderr
+    assert 'nested more than 127 levels deep' in listed.stderr
+    fresh = tmp_path / 'fresh'
+    seeded = _wiki(tmp_path, 'init', '--path', str(fresh), '--settings', refused)
+    assert seeded.returncode == 2, seeded.stdout + seeded.stderr
+    assert 'nested more than 127 levels deep' in seeded.stderr
+    assert not fresh.exists()
+
+
+@pytest.mark.parametrize(
+    argnames=('fault', 'reason'),
+    argvalues=[
+        pytest.param('no-permission', 'Permission denied', marks=_needs_unprivileged),
+        ('folder', 'not a regular file'),
+        ('looped-symlink', os.strerror(errno.ELOOP)),
+        ('byte-order-mark', 'it starts with a byte-order mark; remove the mark'),
+    ],
+    ids=['no-permission', 'folder', 'looped-symlink', 'byte-order-mark'],
+)
+def test_settings_file_that_cannot_be_read_is_named_with_its_cause(
+    tmp_path: pathlib.Path,
+    fault: str,
+    reason: str,
+) -> None:
+    """A settings file that yields no text is refused in one line with its cause.
+
+    The line names the file by its path in the wiki, and a path that holds
+    a folder or a symlink loop is never called missing: nothing a command
+    could restore is absent there.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    settings = root / '.wiki' / 'settings.json'
+    if fault == 'no-permission':
+        os.chmod(settings, 0o000)
+    elif fault == 'folder':
+        settings.unlink()
+        settings.mkdir()
+    elif fault == 'looped-symlink':
+        settings.unlink()
+        settings.symlink_to(settings.name)
+    else:
+        settings.write_bytes(b'\xef\xbb\xbf{}\n')
+
+    # each command that reads policy says the one line
+    error = f'Error: Cannot read .wiki/settings.json ({reason}).\n'
+    try:
+        for args in (('update', '--check'), ('update',), ('lint',), ('map',)):
+            result = _wiki(tmp_path, *args, '--path', str(root))
+            assert result.returncode == 2, (args, result.stdout + result.stderr)
+            assert result.stderr == error, args
+    finally:
+        if fault == 'no-permission':
+            os.chmod(settings, 0o600)
 
 
 # ------ install
@@ -4935,6 +5105,15 @@ def _write(path: pathlib.Path, text: str) -> None:
     """Write ``text`` to ``path`` as UTF-8, creating parents as needed."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding='utf-8')
+
+
+def _tree(root: pathlib.Path) -> dict[str, bytes]:
+    """Return the bytes of every file under ``root``, keyed by relative path."""
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in sorted(root.rglob('*'))
+        if path.is_file()
+    }
 
 
 def _page(name: str, desc: str, body: str) -> str:

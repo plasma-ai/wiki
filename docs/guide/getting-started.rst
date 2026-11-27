@@ -109,8 +109,9 @@ The command sets up:
    * - ``--settings``
      - Initial ``.wiki/settings.json`` contents as a JSON object, e.g.
        ``--settings '{"naming": {"validate": ["ascii"]}}'`` (default: the
-       naming-defaults seed). Validated before anything is written; ignored
-       when the settings file already exists.
+       naming-defaults seed). Held to strict JSON, as the settings file is,
+       and validated before anything is written; ignored when the settings
+       file already exists.
    * - ``--quiet``
      - Suppress the Obsidian hint and other non-error output (default: off).
 

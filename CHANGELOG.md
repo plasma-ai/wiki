@@ -7,8 +7,25 @@ may include breaking changes, each listed under a Breaking heading.
 
 ## [Unreleased]
 
+### Changed
+
+- `.wiki/settings.json` and `init --settings` must be strict JSON. `NaN`,
+  `Infinity`, a number too large to represent, a lone surrogate escape, nesting
+  128 levels deep and a key named twice in one object are refused with a message
+  that names the cause. Before, wiki read such a file, kept only the last of two
+  equal keys, and `init --settings` could write a file that is not JSON.
+
 ### Fixed
 
+- A `.wiki/settings.json` that cannot be read (no permission, a folder or a
+  symlink loop at its path, a byte-order mark) gets an error that names the file
+  and the cause, such as `Cannot read .wiki/settings.json (Permission denied).`,
+  in place of a raw Python error. A folder or a symlink loop at the path is no
+  longer first reported as a missing settings file that `wiki update` will
+  restore, and a symlink loop no longer leaves `map` and `lint` running on
+  default settings. A byte-order mark gets a message that says to remove it. A
+  `links.external` wiki's settings file gets the same sentence after its
+  `links.external wiki '<path>': ` prefix.
 - A page that is not valid UTF-8 stops `wiki read`, `wiki update` and
   `wiki lint` with a message that leads with the page's path and gives the
   offset of the first invalid byte, such as
