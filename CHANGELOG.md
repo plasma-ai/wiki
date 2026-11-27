@@ -55,6 +55,10 @@ may include breaking changes, each listed under a Breaking heading.
   own. Before, each printed a Python warning that showed an install path and a
   line of wiki's source. The matches and the exit code are unchanged. A
   `naming.pattern` that Python warns about no longer prints that warning either.
+- `wiki match` no longer reports a line past the end of a file that ends with a
+  newline: the final newline ends the last line and opens no empty one. Before,
+  `wiki match '^$' --lines` reported line 15 of a 14-line file, and a pattern
+  that can match an empty line hit every file.
 
 ## [1.10.0] - 2026-11-27
 

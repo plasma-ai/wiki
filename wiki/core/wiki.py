@@ -2579,7 +2579,7 @@ class Wiki:
                 if path.suffix == '.md':
                     self.on_read_skip(path=relpath)
                 continue
-            lines = text.split('\n')
+            lines = wiki.util.str.split_lines(text)
             # frontmatter is a markdown concept -- read slices non-md files
             # whole, so a non-md file's leading '---' pair is body content
             # here too, not a frontmatter block to lift off

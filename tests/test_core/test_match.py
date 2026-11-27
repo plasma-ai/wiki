@@ -25,6 +25,7 @@ __all__ = [
     'test_match_names_a_page_it_cannot_decode',
     'test_match_refuses_a_pattern_that_does_not_compile',
     'test_match_raises_no_python_warning',
+    'test_match_final_newline_ends_the_last_line',
 ]
 
 
@@ -283,3 +284,31 @@ def test_match_raises_no_python_warning(tmp_path: pathlib.Path) -> None:
         warnings.simplefilter('error')
         hits = wiki.match('[[foo|bar&&]]')
     assert hits == [('core/design.md', 8, 'car] park')]
+
+
+@pytest.mark.parametrize(
+    argnames=('ending', 'blank'),
+    argvalues=[
+        ('', [5]),
+        ('\n', [5]),
+        ('\n\n', [5, 7]),
+    ],
+    ids=['no-final-newline', 'final-newline', 'blank-last-line'],
+)
+def test_match_final_newline_ends_the_last_line(
+    tmp_path: pathlib.Path,
+    ending: str,
+    blank: list[int],
+) -> None:
+    """A final newline ends the last line; it does not open an empty one.
+
+    A pattern that matches an empty line hits the blank lines the file
+    holds and no line past its end, so a page reads the same with and
+    without its final newline.
+    """
+    wiki = Wiki(tmp_path)
+    wiki.init(name='root')
+    text = '---\nname: p\ndesc: d\n---\n\nbody' + ending
+    (tmp_path / 'p.md').write_text(text, encoding='utf-8')
+    hits = wiki.match('^$')
+    assert [lineno for relpath, lineno, _ in hits if relpath == 'p.md'] == blank

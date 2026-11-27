@@ -94,6 +94,7 @@ __all__ = [
     'test_match_invalid_regex_reports_error',
     'test_match_explains_an_unescaped_wikilink',
     'test_match_hints_follow_the_pattern',
+    'test_match_reports_no_line_past_the_end',
     'test_naming_pattern_prints_no_python_warning',
     'test_match_resolution_failure_exits_two',
     'test_match_all_skips_undecodable_files',
@@ -2259,6 +2260,22 @@ def test_match_hints_follow_the_pattern(
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'p.md' in result.stdout.splitlines()
     assert result.stderr.splitlines() == hints
+
+
+def test_match_reports_no_line_past_the_end(wiki: pathlib.Path) -> None:
+    """``match '^$'`` reports the blank lines of a file and none past its end.
+
+    A file that ends with a newline has as many lines as newlines; the
+    newline that ends the last line is not an empty line after it.
+    """
+    text = (wiki / 'core' / 'design.md').read_text(encoding='utf-8')
+    assert text.endswith('\n')
+    line_count = text.count('\n')
+    result = _wiki(wiki, 'match', '^$', 'core', '--path', str(wiki), '--lineno')
+    assert result.returncode == 0, result.stdout + result.stderr
+    hits = result.stdout.splitlines()
+    assert any(hit.startswith('core/design.md:') for hit in hits)
+    assert f'core/design.md:{line_count + 1}' not in hits
 
 
 def test_naming_pattern_prints_no_python_warning(tmp_path: pathlib.Path) -> None:

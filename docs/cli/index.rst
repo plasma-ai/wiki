@@ -421,6 +421,10 @@ refuses still match through the line grammar. An empty ``--field ""`` is an
 explicit empty field set that matches nothing — it does not fall back to a
 body match.
 
+The pattern runs on one line at a time. A line ends at a newline, and the
+newline that ends a file opens no empty line after it, so ``^$`` matches the
+blank lines a file holds and none past its end.
+
 A pattern that does not compile fails with ``Invalid regex '<pattern>':
 <reason>``. In a regex an unescaped ``[[`` opens a character class, so a
 pattern such as ``[[topics/example`` does not look for a wikilink: the command
