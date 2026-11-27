@@ -1,6 +1,6 @@
 {
   "template": "https://github.com/plasma-ai/templates.git",
-  "commit": "85e017797bc14fa53e38293d5ec31f0185eccd81",
+  "commit": "580e085a2ab0247e1ecc29d60adabdcda48005d6",
   "checkout": null,
   "context": {
     "cookiecutter": {
@@ -12,7 +12,7 @@
         "package": "plasma-wiki",
         "title": "Wiki",
         "description": "Indexed knowledge bases with command-line tools for agents.",
-        "version": "1.9.0",
+        "version": "1.10.0",
         "authors": [
           {
             "name": "Plasma AI",
@@ -39,8 +39,8 @@
         "docs": "docs.plasma.ai/wiki"
       },
       "_template": "https://github.com/plasma-ai/templates.git",
-      "_commit": "85e017797bc14fa53e38293d5ec31f0185eccd81"
+      "_commit": "580e085a2ab0247e1ecc29d60adabdcda48005d6"
     }
   },
-  "directory": "package"
+  "directory": "python"
 }

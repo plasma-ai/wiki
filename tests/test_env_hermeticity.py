@@ -1,12 +1,13 @@
 """Tests that the suite is hermetic against a live deployment's env.
 
 An offline host exports ``OFFLINE_MODE`` for every tool that reads it (a
-CI job, or a shell set up for fractal, which honors the same switch). If
+CI job, or a shell set up for another tool that honors the same switch). If
 the suite inherits it, ``true`` skips the stubbed downloads the config
 tests assert on, and a value outside true/false makes every in-process
-``init``/``update_config`` call raise ``ValueError``. The autouse
-fixture in ``tests/conftest.py`` strips the var; this test guards that
-contract.
+``init``/``update_config`` call raise ``ValueError``. A shell set up for
+a fixed-clock run exports ``WIKI_FREEZE_TIME``, which fixes every stamp
+and opens every command's stderr with its notice. The autouse fixture in
+``tests/conftest.py`` strips both; this test guards that contract.
 """
 
 from __future__ import annotations

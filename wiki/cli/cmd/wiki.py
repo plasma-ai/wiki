@@ -232,19 +232,22 @@ def install(app: typer.Typer) -> typer.Typer:
         Copies the bundled skill into the Claude (.claude/skills) and Codex
         (.agents/skills) skill directories. Targets your home directory by
         default, or the current project with --project. --link symlinks the
-        skill instead of copying -- the editable-install dev setup, where
-        source edits apply without re-installing.
+        skill instead of copying it, for an editable install, where source
+        edits apply without re-installing.
         """
         # resolve install directory
         if project:
             root = pathlib.Path.cwd()
         else:
             root = pathlib.Path.home()
-        # resolve agent skill directories
+        # resolve agent skill directories through any links, so a folder
+        # linked to the other, or to a shared one, is installed once and
+        # reported where the skill lands
         targets = [
-            root / '.claude' / 'skills',
-            root / '.agents' / 'skills',
+            (root / '.claude' / 'skills').resolve(),
+            (root / '.agents' / 'skills').resolve(),
         ]
+        targets = list(dict.fromkeys(targets))
         # collect skills
         skills_dir = importlib.resources.files('wiki').joinpath('skills')
         skills = [path for path in skills_dir.iterdir() if path.is_dir()]
@@ -1339,8 +1342,8 @@ def _index_canonicalizer(root: pathlib.Path, path: pathlib.Path) -> Optional[Wik
 
     The engine is the wiki's own class (a ``.wiki/wiki.py`` hook may order
     rows its own way), and it serves only when it leaves the current
-    branch's index as written: an index another class wrote -- an
-    embedder's update with its own category order -- stays as merged, since
+    branch's index as written: an index another class wrote -- a
+    subclass's update with its own category order -- stays as merged, since
     this class would make it stale.
 
     Args:

@@ -11,7 +11,7 @@ from collections.abc import Iterator
 import pytest
 
 import wiki
-from wiki.constants import OFFLINE_MODE
+from wiki.constants import OFFLINE_MODE, WIKI_FREEZE_TIME
 
 # the CLI suite drives the installed wiki console script as a subprocess,
 # which coverage's in-process tracer cannot see; under --cov, point both the
@@ -25,8 +25,10 @@ if any(arg == '--cov' or arg.startswith('--cov=') for arg in sys.argv):
 # env vars a live wiki deployment may export -- tests must not inherit them:
 # an ambient OFFLINE_MODE=true silently skips the download paths the config
 # tests exercise, and core validates the var fail-loud, so any other ambient
-# value breaks every in-process init/update_config test (see _isolate_ambient_env)
-_AMBIENT_ENV_VARS = [OFFLINE_MODE]
+# value breaks every in-process init/update_config test; an ambient
+# WIKI_FREEZE_TIME fixes every stamp the suite reads off the
+# clock (see _isolate_ambient_env)
+_AMBIENT_ENV_VARS = [OFFLINE_MODE, WIKI_FREEZE_TIME]
 
 
 @pytest.fixture(autouse=True)
@@ -51,13 +53,16 @@ def _isolate_ambient_env() -> Iterator[None]:
     """Strip a live deployment's exported env for the whole session.
 
     An offline host exports ``OFFLINE_MODE`` for every tool that reads it (a
-    CI job, or a shell set up for fractal, which honors the same switch).
+    CI job, or a shell set up for another tool that honors the same switch).
     Inherited by the suite, ``true`` skips the stubbed downloads the config
     tests assert on, and a value outside true/false makes every in-process
-    ``init``/``update_config`` call raise ``ValueError``. Tests that need
-    the var set it themselves with the function-scoped ``monkeypatch``,
-    which runs later and is undone per test; the CLI suite is unaffected --
-    its ``_wiki`` runner pins the var per subprocess.
+    ``init``/``update_config`` call raise ``ValueError``. A shell set up
+    for a fixed-clock run exports ``WIKI_FREEZE_TIME``; inherited, it fixes
+    every stamp and opens every command's stderr with its notice. Tests that
+    need a var set it themselves with the function-scoped ``monkeypatch``,
+    which runs later and is undone per test; the CLI suite's ``_wiki``
+    runner pins ``OFFLINE_MODE`` per subprocess and passes the rest of
+    this environment on.
     """
     monkeypatch = pytest.MonkeyPatch()
     for var in _AMBIENT_ENV_VARS:

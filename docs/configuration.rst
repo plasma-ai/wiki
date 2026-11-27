@@ -8,7 +8,8 @@ Configuration
   indexing exclusions, and external link folders for that wiki;
 - the user-global file ``~/.wiki/settings.json`` — the machine-local trust
   store, not wiki policy;
-- the environment variables ``OFFLINE_MODE`` and ``WIKI_CONFIG_DIR``.
+- the environment variables ``OFFLINE_MODE`` and ``WIKI_CONFIG_DIR``, plus
+  the test switch ``WIKI_FREEZE_TIME``.
 
 The per-wiki file doubles as the *declared-root marker*: its presence tells
 every command where the wiki begins. This page covers each surface, plus how
@@ -259,7 +260,7 @@ content (dot-paths read the same way).
 
    {
      "exclude": {
-       "patterns": ["vendor/", "**/evidence/util", "*.tmp", "/scratch.md"]
+       "patterns": ["vendor/", "**/assets/raw", "*.tmp", "/scratch.md"]
      }
    }
 
@@ -328,7 +329,7 @@ subtree when driven by an old version — upgrade, delete the stray
 The enclosing git repository's ignore rules are a second exclusion source
 needing no configuration: a path the repo's gitignore fences is excluded
 from indexing exactly like a pattern match — never walked, adopted, or
-linked — so a driver's stray output beside tracked content cannot be swept
+linked — so a script's stray output beside tracked content cannot be swept
 into the corpus by the next update. Matching is pattern-pure (a
 force-tracked file matching a fence is still fenced), and a wiki whose own
 root and root ``_index.md`` are both ignored is exempt, so a deliberately
@@ -366,9 +367,10 @@ something inside the wiki, and a target carrying a ``.`` or ``..`` segment
 anywhere (most often at its start, as ``./`` or ``../``) must leave it,
 reaching a file or another wiki's page only under a folder this block lists,
 whose entry is the link's prefix. A sibling wiki's page is
-``[[../math/lemmas]]`` from every page, at the root or in ``nodes/verify.md``
-alike. ``wiki lint`` accepts such a link when its target lands under a
-listed folder and the file, its ``.md`` form, or the folder exists there;
+``[[../manual/glossary]]`` from every page, at the root or in
+``notes/meeting.md`` alike. ``wiki lint`` accepts such a link when its
+target lands under a listed folder and the file, its ``.md`` form, or the
+folder exists there;
 judges a target inside another wiki by that wiki's own page rules (below);
 notes a missing target under a listed folder as a ``Stale link`` (an issue
 under ``lint.strict``), unless
@@ -393,7 +395,7 @@ passed through ``--settings`` but seeds none.
 
    {
      "links": {
-       "external": ["../src", "../math", ".."]
+       "external": ["../src", "../manual", ".."]
      }
    }
 
@@ -409,7 +411,7 @@ its links.
    wiki:
 
    - Written with ``/`` as the separator, as one or more leading ``..``
-     segments followed by plain segments — ``../src``, ``../../patterns``,
+     segments followed by plain segments — ``../src``, ``../../shared``,
      or ``..`` alone. One trailing ``/`` is stripped, and repeated spellings
      of one folder collapse to one entry.
    - An ancestor of the wiki root (``..`` for the enclosing repository)
@@ -448,11 +450,11 @@ the config home (``~/.wiki``, or ``WIKI_CONFIG_DIR``) are never taken for a
 wiki: the trust store lives there, and a home that counted would enclose
 every wiki beneath it. Such a target is judged by that wiki's own page
 rules, read from its settings: a page links by stem
-(``[[../math/lemmas]]``); a folder that wiki indexes — one its
+(``[[../manual/glossary]]``); a folder that wiki indexes — one its
 ``exclude.patterns`` and its repository's gitignore leave in its walk,
 holding an ``_index.md`` — is the same hard directory-link issue as at home
-(``Link [[../math/g2]] targets a folder, not a page (use
-[[../math/g2/_index]])``); a folder it excludes is live in the bare form.
+(``Link [[../manual/guides]] targets a folder, not a page (use
+[[../manual/guides/_index]])``); a folder it excludes is live in the bare form.
 The read is a JSON parse of that wiki's settings plus, on the first folder
 link into it per run, its indexed-folder walk and one ``git check-ignore``
 (a note that walk raises, such as its gitignore fence being unavailable, is
@@ -461,7 +463,7 @@ that wiki's, worded as during its own update); none of that wiki's code runs
 wiki being linted. A settings file there that is not valid JSON, not a JSON
 object, whose ``exclude`` block is invalid, or that cannot be read — the
 marker folder itself included — fails this lint with exit 2, naming it
-(``links.external wiki '../math': ...``), as soon as a link's verdict needs
+(``links.external wiki '../manual': ...``), as soon as a link's verdict needs
 that wiki's rules — any target but a page by stem; a link judged without
 them (one landing inside this wiki, or an absolute target) keeps its verdict,
 and its suggestion names only a spelling that needs none of that wiki's rules
@@ -563,6 +565,28 @@ Environment variables
 
 ``WIKI_CONFIG_DIR``
    Path. Overrides the ``~/.wiki`` config home, relocating the trust store.
+
+``WIKI_FREEZE_TIME``
+   A test switch, not a setting: an RFC 3339 instant, such as
+   ``2026-01-02T03:04:05Z``, that every clock read returns in place of the
+   current time. Stamps render it through the wiki's own ``timestamp`` policy,
+   so two runs given one value write the same bytes whenever they run;
+   ``wiki trust`` records it too. The value takes one form — a capital ``T``,
+   an offset of ``Z``, ``+HH:MM`` or ``-HH:MM``, no leap second, at most six
+   fraction digits, a UTC year from 1001 to 9998 — with surrounding whitespace
+   ignored, and an empty value counts as unset. A command reads the variable as
+   it starts, once its command line has parsed. A value of any other form fails
+   the command with exit 2 before it does anything, whether or not it reads the
+   clock and ahead of its own option checks. While the variable is set, each
+   command opens stderr with the line ``WIKI_FREEZE_TIME is set: timestamps use
+   its fixed instant, not the clock.`` — if that line appears outside a test,
+   unset the variable. Help, ``--version`` and a command line that does not
+   parse never read the variable. Neither does the git merge driver: its exit
+   code is the merge's outcome, and it reads no clock. A ``.wiki/wiki.py`` hook
+   that overrides ``_utc_now`` keeps its own time source. File modification
+   times stay real as well: ``wiki update`` tells a hand edit by a file's
+   modification time, so while the stamp is frozen it can report ``Restamped``
+   for the same edited file on every run and leave the file's bytes unchanged.
 
 Other files under ``.wiki/``
 ----------------------------

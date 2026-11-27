@@ -14,11 +14,16 @@ from __future__ import annotations
 
 import json
 import pathlib
+import random
+import re
+from collections.abc import Iterator
+from typing import Optional
 
 import pytest
 
 from wiki.core.wiki import Wiki
 from wiki.util import git
+from wiki.util.glob import translate
 
 from ._helpers import (
     _capture_notices,
@@ -33,6 +38,7 @@ __all__ = [
     'test_exclude_policy_rejects_invalid_settings',
     'test_init_rejects_invalid_exclude_seed',
     'test_exclude_pattern_matching',
+    'test_exclusion_names_the_pattern_a_full_scan_names',
     'test_update_skips_excluded_subtree',
     'test_update_names_excluded_link_target',
     'test_update_symlink_precedence',
@@ -46,6 +52,9 @@ __all__ = [
     'test_unavailable_fence_is_narrated_inside_a_repository',
     'test_personally_ignored_row_draws_a_note',
     'test_reincluded_row_draws_no_note',
+    'test_untrackable_notes_spare_tracked_and_reincluded_paths',
+    'test_untrackable_notes_stop_at_an_ignored_path_inside_a_submodule',
+    'test_untrackable_notes_read_ignore_files_from_disk',
     'test_a_leading_colon_reads_as_a_name_in_every_git_probe',
     'test_gitignore_fence_reaches_a_nested_wiki_root',
     'test_gitignore_fence_honors_a_discovery_ceiling',
@@ -56,6 +65,279 @@ __all__ = [
     'test_new_judges_the_index_it_creates',
     'test_gitignored_link_target_names_the_cause',
 ]
+
+# seeds the sub-lists, the random paths and the fuzz draws
+_SEED = 7
+# seeded sub-lists of the hand-written patterns, and the longest of them
+_CORNER_SUBLISTS = 30
+_CORNER_SUBLIST_SIZE = 12
+# random paths joined from the hand-written names, and their deepest nesting
+_CORNER_RANDOM_PATHS = 400
+_CORNER_DEPTH = 5
+# fuzz rounds, and the patterns drawn in each
+_FUZZ_ROUNDS = 40
+_FUZZ_ROUND_SIZE = 8
+# share of fuzzed patterns that wrap a class body, and the longest body
+_FUZZ_CLASS_RATE = 0.8
+_FUZZ_CLASS_SIZE = 6
+# longest free-form fuzzed pattern
+_FUZZ_PATTERN_SIZE = 10
+# share of fuzzed path segments that are one character a class may hold
+_FUZZ_SINGLE_RATE = 0.5
+# deepest nesting of a fuzzed path, and its longest segment
+_FUZZ_DEPTH = 4
+_FUZZ_NAME_SIZE = 4
+# hand-written patterns, each one the settings accept
+_CORNER_PATTERNS = [
+    # trailing slash, anchoring and floating
+    'vendor/',
+    'vendor',
+    '/vendor',
+    '/vendor/',
+    'a/b/',
+    'a/b',
+    'foo.md',
+    '*.md',
+    'notes',
+    'x',
+    'b',
+    'c',
+    # '**' forms
+    '**',
+    '**/',
+    '/**',
+    '/**/',
+    '**/x',
+    'a/**',
+    'a/**/',
+    'a/**/b',
+    '**/**/x',
+    'a/**/**/b',
+    'a/**/**',
+    '**/a/**',
+    'a**b',
+    '***',
+    'a/***/b',
+    '**x',
+    'x**',
+    '/**/x',
+    'a/**/b/**/c',
+    '**/**',
+    '**/*',
+    '*/**',
+    '*',
+    '?',
+    '/*',
+    '*/*',
+    # classes and '/'
+    '[/]',
+    'a[!/]b',
+    '[a/b]',
+    '[.-0]',
+    'a[.-0]c',
+    '[!.-0]',
+    '[/-z]',
+    # negated, reversed and odd ranges
+    '[!a]',
+    '[!]a]',
+    '[!-]',
+    '[!]',
+    '[!z-a]',
+    '[z-a]',
+    '[z-ab]',
+    '[b-a-c]',
+    '[z-a!x]',
+    '[z-a!]',
+    '[z-a^x]',
+    '[z-a[x]',
+    '[a-c-e]',
+    '[--z]',
+    '[!--z]',
+    '[]-a]',
+    '[!]-a]',
+    '[a-]',
+    '[-a]',
+    '[!-a]',
+    '[a--b]',
+    '[a&&b]',
+    '[a~~b]',
+    '[a||b]',
+    '[^a]',
+    '[[:alpha:]]',
+    '[[a]',
+    '[a[b]',
+    '[!^]',
+    '[]',
+    '[]]',
+    '[]x]',
+    '[!]x]',
+    '[!]]',
+    '[ab]*',
+    'file?.[ch]',
+    '[é-ü]',
+    '[!é]',
+    '[😀-😂]',
+    '[\x00-\x1f]',
+    '[ -~]',
+    '[!\n]',
+    '[\n]',
+    # an unclosed '['
+    '[x',
+    'a[',
+    '[',
+    '[!',
+    'a[b/c]',
+    '[a/',
+    '[!a',
+    # braces and regex metacharacters, all literal
+    '{a,b}',
+    'a{1,2}',
+    '{}',
+    'a.b',
+    'a+b',
+    '(x)',
+    '$x',
+    '^x',
+    'a|b',
+    '#x',
+    'x y',
+    'foo ',
+    ' foo',
+    '<!-- a comment -->',
+    '.hidden',
+    'a.',
+    '-',
+    '~',
+    '&',
+    '|',
+    # non-ASCII names (composed and decomposed) and case
+    'é.md',
+    'e\u0301.md',
+    '€*',
+    '😀',
+    '?.md',
+    'Foo',
+    'ß',
+    'İ',
+    # newlines
+    'a\nb',
+    '*\n*',
+    'x\n',
+    '**/a\nb/**',
+    'a\nb/c',
+    '[\n-\r]',
+    # deep anchored literals, and patterns listed twice
+    'a/b/c',
+    '/a/b/c',
+    'vendor',
+    '*.md',
+    'deep/er/path/x',
+]
+# hand-written path segments
+_CORNER_NAMES = [
+    'a',
+    'b',
+    'c',
+    'x',
+    'z',
+    'vendor',
+    'notes',
+    'foo.md',
+    'Foo',
+    'foo',
+    'foo ',
+    ' foo',
+    'a.b',
+    'aXb',
+    'axxb',
+    'ab',
+    'a+b',
+    'aab',
+    '(x)',
+    '$x',
+    '^x',
+    'a|b',
+    '#x',
+    'x y',
+    '{a,b}',
+    'a{1,2}',
+    '{}',
+    'a1',
+    '[x',
+    'a[',
+    '[',
+    '[!',
+    '[a',
+    '[!a',
+    '!',
+    '^',
+    ']',
+    '-',
+    '..x',
+    '.hidden',
+    'a.',
+    '&',
+    '~',
+    '|',
+    '\\',
+    'a\\b',
+    '\\d',
+    'é.md',
+    'e\u0301.md',
+    'ë',
+    'é',
+    'e\u0301',
+    '€',
+    '€x',
+    '😀',
+    '😁',
+    '😃',
+    'ß',
+    'İ',
+    'i',
+    'a\nb',
+    '\n',
+    'x\n',
+    '\nx',
+    'a\rb',
+    '\x00',
+    '\x1f',
+    ' ',
+    'q',
+    'file1.c',
+    'file1.h',
+    'file12.c',
+    'temp1',
+    'build',
+    'drafts',
+    'cache',
+    '<!-- a comment -->',
+    'x.md',
+    'notes.md',
+    'deep',
+    'er',
+    'path',
+    '0',
+    ':',
+    '[]',
+    '[]]',
+    'x]',
+    '***',
+    'a**b',
+    '*',
+]
+# folders each hand-written name is nested under, and nests
+_CORNER_PARENTS = ['a', 'x', 'vendor', 'a\nb', 'é', 'a/b', 'deep/er']
+# characters of a free-form fuzzed pattern, the weightier ones repeated
+_FUZZ_PATTERN_CHARS = 'ab/*?[]!-^&~|{},.\n é€😀#<>$()+:zA' + 'ab*[]/-!'
+# characters of a fuzzed class body, the weightier ones repeated
+_FUZZ_CLASS_CHARS = '!-]^az&~|[é/0.!-]' + '--!]za'
+# characters of a fuzzed path segment, the weightier ones repeated
+_FUZZ_NAME_CHARS = 'ab-z!^&]\n[ é€😀#.{},:A~|\\*?' + 'abab'
+# characters a fuzzed path puts where a pattern holds a wildcard
+_FUZZ_FILL_CHARS = ['', 'a', 'z', '!', '\n', 'é']
+# characters a fuzzed path puts where a pattern holds a class
+_FUZZ_MEMBER_CHARS = ['a', 'b', '-', '!', 'z', '^']
 
 
 # ------ policy validation
@@ -290,6 +572,46 @@ def test_exclude_pattern_matching(
             assert f'[[{entry}|' not in rows, entry
 
 
+@pytest.mark.parametrize('source', ['corners', 'fuzz', 'class-fuzz'])
+def test_exclusion_names_the_pattern_a_full_scan_names(
+    tmp_path: pathlib.Path,
+    source: str,
+) -> None:
+    """A path is excluded by the pattern a scan of the whole list names.
+
+    The reference runs every pattern's translation, in list order,
+    against the path and each of its ancestors and names the first
+    that matches; the wiki names the same pattern, or none, for every
+    path. ``corners`` runs the hand-written patterns as one list, as
+    the list reversed, one at a time and as seeded sub-lists, over
+    names nested under each other; the fuzz sources draw seeded
+    patterns (free-form, then mostly classes) and paths built to match
+    them. Verdicts are read from the matcher itself: the paths hold
+    newlines, control characters, and names differing only in case or
+    normalization, which no one tree on disk can hold. Every source
+    must also name a wildcard-free pattern, name a pattern holding a
+    wildcard, and leave a path unnamed, so one whose patterns or paths
+    thin out fails instead of passing on nothing.
+    """
+    root = tmp_path.resolve()
+    _make_wiki(root)
+    generator = random.Random(_SEED)
+    if source == 'corners':
+        cases = _corner_cases(generator)
+    else:
+        cases = _fuzz_cases(generator, root, classes=(source == 'class-fuzz'))
+    kinds = set()
+    for patterns, paths in cases:
+        _set_exclude_patterns(root, patterns)
+        wiki = Wiki(root)
+        policy = [(pattern, re.compile(translate(pattern))) for pattern in patterns]
+        for relative in paths:
+            named = wiki._excluded_by(root / relative)
+            assert named == _scan(policy, relative), (patterns, relative)
+            kinds.add(_kind(named))
+    assert kinds == {'literal', 'wildcard', None}
+
+
 # ------ update, prune, and scope behavior
 
 
@@ -450,17 +772,17 @@ def test_scope_inside_excluded_dir_refused(
 def test_gitignored_residue_is_never_adopted(tmp_path: pathlib.Path) -> None:
     """A gitignore-fenced stray is invisible: no adoption, no rows, no red.
 
-    The battery-residue trap: a driver writes stray outputs beside its
-    evidence, lint reds on the bare files, and the approved repair --
-    ``wiki update`` -- is what adopts them (frontmatter written into
-    driver files, ``_index.md`` cards minted, parent rows added). With
+    The stray-output trap: a script writes stray outputs beside tracked
+    pages, lint reds on the bare files, and the usual repair --
+    ``wiki update`` -- is what adopts them (frontmatter written into the
+    script's files, ``_index.md`` files minted, parent rows added). With
     the repo's fences extended to indexing, the residue draws no issue
     and update writes none of it into the corpus; dropping the fence
     line re-admits it.
     """
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
     _git_repo(tmp_path, 'out/', 'TABLES.md')
-    # driver residue: a bare page and a stray output directory
+    # script residue: a bare page and a stray output directory
     residue = '# t\n\nraw rows\n'
     (tmp_path / 'core' / 'TABLES.md').write_text(residue, encoding='utf-8')
     out = tmp_path / 'core' / 'out'
@@ -496,27 +818,27 @@ def test_fenced_directory_is_invisible_to_every_check(
     The fence hides files from adoption, and it must hide their folder
     just as completely: no ``Missing index`` for the fenced directory,
     no row minted into it from its parent, and no rewrite of an
-    ``_index.md`` already tracked inside it -- the corpus shape where a
-    glob (``**/evidence/*/output/``) fences directories whose contents
+    ``_index.md`` already tracked inside it -- the case where a
+    glob (``**/runs/*/output/``) fences directories whose contents
     were committed before the fence existed, so the match must stay
     pattern-pure rather than reading those tracked files as content.
     """
-    _git_repo(tmp_path, '**/evidence/*/output/')
-    root = tmp_path / 'math'
-    fenced = root / 'claim' / 'evidence' / 'depth_free' / 'output'
+    _git_repo(tmp_path, '**/runs/*/output/')
+    root = tmp_path / 'wiki'
+    fenced = root / 'project' / 'runs' / 'first' / 'output'
     fenced.mkdir(parents=True)
     _make_wiki(
         root,
         folders={
-            'claim': [],
-            'claim/evidence': [],
-            'claim/evidence/depth_free': [],
+            'project': [],
+            'project/runs': [],
+            'project/runs/first': [],
         },
     )
     # residue committed before the fence existed: tracked, and fenced
     stale = '---\nname: output\ndesc: Stale.\n---\n\n# output\n\n***\n\nBody.\n'
     (fenced / '_index.md').write_text(stale, encoding='utf-8')
-    (fenced / 'base_table.log').write_text('rows\n', encoding='utf-8')
+    (fenced / 'run.log').write_text('rows\n', encoding='utf-8')
     _git(tmp_path, 'add', '-f', str(root), '.gitignore')
 
     # every check is silent about the fenced directory, and it stays put
@@ -639,7 +961,7 @@ def test_unavailable_fence_is_narrated_inside_a_repository(
     """A fence probe that fails inside a repository narrates the degrade.
 
     With git off PATH the sweep proceeds unfenced, adopting what the
-    repository fences -- frontmatter written into untracked driver
+    repository fences -- frontmatter written into a script's stray
     files, rows minted -- so the operator gets a line naming the
     unavailable fence rather than a silent mutation. Outside a
     repository there is no fence to lose, and the same degrade stays
@@ -747,6 +1069,188 @@ def test_reincluded_row_draws_no_note(tmp_path: pathlib.Path) -> None:
 
 
 @_needs_git
+def test_untrackable_notes_spare_tracked_and_reincluded_paths(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Each note is this machine's verdict on one indexed path.
+
+    The check asks what this machine's ``git add`` would refuse, under
+    its whole ignore stack: an untracked page a personal pattern
+    ignores is named, as are the index and the pages of a folder one
+    ignores. A file the repository already tracks is safe whatever
+    ignores it, and a path a later negation re-includes -- the personal
+    file's or a committed allowlist's -- is one git accepts, so neither
+    is named. Git reads a probed path as a pathspec, so an ignored name
+    holding glob characters is judged tracked when a tracked name
+    matches it, and is named only when none does.
+    """
+    root = tmp_path / 'memory'
+    _make_wiki(
+        root,
+        folders={
+            'notes': ['keep', 'kept.draft'],
+            'scratch': ['pinned'],
+            'globs': ['qa', 'starry'],
+            'allow': ['tracked'],
+        },
+    )
+    _git_repo(tmp_path)
+    # a personal ignore file, in force on this machine only
+    excludes = tmp_path.parent / f'{tmp_path.name}_personal_ignore'
+    excludes.write_text(
+        '*.draft.md\n!final.draft.md\nscratch/\ndrafts/\nq*.md\nstar*.md\nlone*\n',
+        encoding='utf-8',
+    )
+    _git(tmp_path, 'config', 'core.excludesFile', str(excludes))
+    # a committed allowlist: ignore the folder's files, re-include its pages
+    (root / 'allow' / '.gitignore').write_text('*\n!*.md\n', encoding='utf-8')
+    # everything so far is tracked, the personally ignored files included
+    _git(tmp_path, 'add', '-f', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+    # the pages no commit holds
+    (root / 'drafts').mkdir()
+    untracked = [
+        'notes/plan.draft.md',
+        'notes/final.draft.md',
+        'scratch/idea.md',
+        'drafts/idea.md',
+        'allow/fresh.md',
+        'globs/q?.md',
+        'globs/star*.md',
+        'globs/lone?.md',
+        'globs/lone[1].md',
+    ]
+    for relpath in untracked:
+        (root / relpath).write_text('# page\n\nBody.\n', encoding='utf-8')
+
+    wiki = Wiki(root)
+    notices = _capture_notices(wiki)
+    wiki.lint()
+    flagged = [
+        (event.path, event.pattern)
+        for event in notices
+        if type(event).__name__ == 'PathUntrackableEvent'
+    ]
+    assert flagged == [
+        # an ignored folder: the index it would gain, and its page
+        ('drafts/_index.md', 'drafts/'),
+        ('drafts/idea.md', 'drafts/'),
+        # glob characters that match no tracked name
+        ('globs/lone?.md', 'lone*'),
+        ('globs/lone[1].md', 'lone*'),
+        # an untracked page beside a tracked one the same pattern ignores
+        ('notes/plan.draft.md', '*.draft.md'),
+        # an untracked page in a tracked folder the personal file ignores
+        ('scratch/idea.md', 'scratch/'),
+    ]
+
+
+@_needs_git
+@pytest.mark.parametrize(
+    argnames=('ignored_inside', 'scoped', 'flagged'),
+    argvalues=[
+        (False, False, ['notes/plan.draft.md']),
+        (False, True, ['notes/plan.draft.md']),
+        (True, False, []),
+        (True, True, ['notes/plan.draft.md']),
+    ],
+    ids=[
+        'whole-wiki',
+        'scope-outside',
+        'ignored-inside-whole-wiki',
+        'ignored-inside-scope-outside',
+    ],
+)
+def test_untrackable_notes_stop_at_an_ignored_path_inside_a_submodule(
+    tmp_path: pathlib.Path,
+    ignored_inside: bool,
+    scoped: bool,
+    flagged: list[str],
+) -> None:
+    """A submodule silences the check only through an ignored path inside it.
+
+    Git refuses an index-aware probe of a path inside a submodule, and
+    a refused batch draws no note. Only the paths some pattern ignores
+    are probed that way, so a wiki holding a submodule still names the
+    ignored page outside it. An ignored page inside the submodule joins
+    that batch: git refuses it, and no path of the walk is named, while
+    a scope that leaves the submodule out is judged on its own paths.
+    """
+    _make_wiki(tmp_path, folders={'notes': ['keep']})
+    _git_repo(tmp_path)
+    # a personal ignore file, in force on this machine only
+    excludes = tmp_path.parent / f'{tmp_path.name}_personal_ignore'
+    excludes.write_text('*.draft.md\n', encoding='utf-8')
+    _git(tmp_path, 'config', 'core.excludesFile', str(excludes))
+    # a repository of its own below the wiki, committed as a submodule
+    module = tmp_path / 'module'
+    module.mkdir()
+    _git_repo(module)
+    (module / 'inner.md').write_text('# inner\n\nBody.\n', encoding='utf-8')
+    _git(module, 'add', '-A')
+    _git(module, 'commit', '-q', '-m', 'module')
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+    # the pages no commit holds
+    untracked = [tmp_path / 'notes' / 'plan.draft.md']
+    if ignored_inside:
+        untracked.append(module / 'inside.draft.md')
+    for path in untracked:
+        path.write_text('# page\n\nBody.\n', encoding='utf-8')
+
+    # lint the whole wiki, or the one folder outside the submodule
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+    wiki.lint('notes' if scoped else None)
+    paths = [
+        event.path
+        for event in notices
+        if type(event).__name__ == 'PathUntrackableEvent'
+    ]
+    assert paths == flagged
+
+
+@_needs_git
+def test_untrackable_notes_read_ignore_files_from_disk(tmp_path: pathlib.Path) -> None:
+    """An ignore file the index alone holds names no path.
+
+    A sparse checkout can keep a tracked ``.gitignore`` out of the
+    working tree. The fence reads ignore files from disk, so a page
+    that file would ignore is indexed like any other, and the check
+    narrows its paths by the same files: the page draws no note, while
+    a page the personal file ignores is still named.
+    """
+    _make_wiki(tmp_path, folders={'notes': ['keep']})
+    _git_repo(tmp_path)
+    # a personal ignore file, in force on this machine only
+    excludes = tmp_path.parent / f'{tmp_path.name}_personal_ignore'
+    excludes.write_text('*.draft.md\n', encoding='utf-8')
+    _git(tmp_path, 'config', 'core.excludesFile', str(excludes))
+    # a committed folder ignore file the checkout leaves off disk
+    ignore = tmp_path / 'notes' / '.gitignore'
+    ignore.write_text('secret.md\n', encoding='utf-8')
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+    _git(tmp_path, 'update-index', '--skip-worktree', 'notes/.gitignore')
+    ignore.unlink()
+    for stem in ('secret', 'plan.draft'):
+        (tmp_path / 'notes' / f'{stem}.md').write_text(
+            '# page\n\nBody.\n',
+            encoding='utf-8',
+        )
+
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+    wiki.lint()
+    flagged = [
+        event.path
+        for event in notices
+        if type(event).__name__ == 'PathUntrackableEvent'
+    ]
+    assert flagged == ['notes/plan.draft.md']
+
+
+@_needs_git
 def test_a_leading_colon_reads_as_a_name_in_every_git_probe(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -788,12 +1292,12 @@ def test_a_leading_colon_reads_as_a_name_in_every_git_probe(
 def test_gitignore_fence_reaches_a_nested_wiki_root(tmp_path: pathlib.Path) -> None:
     """Repo-root fences apply inside a wiki nested below the repo root.
 
-    The corpus shape: the repository root carries the fence lines and
+    A common layout: the repository root carries the fence lines and
     the wiki lives in a subdirectory, so the fence must resolve through
     the enclosing repo rather than the wiki root alone.
     """
     _git_repo(tmp_path, 'out/')
-    root = tmp_path / 'math'
+    root = tmp_path / 'wiki'
     _make_wiki(root, folders={'core': ['design']})
     out = root / 'core' / 'out'
     out.mkdir()
@@ -828,7 +1332,7 @@ def test_gitignore_fence_honors_a_discovery_ceiling(
     is unavailable.
     """
     _git_repo(tmp_path, 'out/')
-    root = tmp_path / 'math'
+    root = tmp_path / 'wiki'
     _make_wiki(root, folders={'core': ['design']})
     out = root / 'core' / 'out'
     out.mkdir()
@@ -890,7 +1394,7 @@ def test_unavailable_fence_note_honors_a_discovery_ceiling(
     # a wiki inside a repository and a symlink to it; the ceiling is set
     # from beside the repository, where the relative entry would name it
     repo = tmp_path / 'repo'
-    root = repo / 'math'
+    root = repo / 'wiki'
     _make_wiki(root, folders={'core': ['design']})
     _git_repo(repo)
     link = tmp_path / 'link'
@@ -1070,3 +1574,129 @@ def test_gitignored_link_target_names_the_cause(tmp_path: pathlib.Path) -> None:
     assert 'Pruned link:' in err
     index = tmp_path / 'data' / '_index.md'
     assert '[[data/report|report]]' not in index.read_text(encoding='utf-8')
+
+
+# ------ helpers
+
+
+def _scan(policy: list[tuple[str, re.Pattern[str]]], relative: str) -> Optional[str]:
+    """Return the first pattern, in list order, matching a path or an ancestor."""
+    candidates = [relative]
+    while '/' in candidates[-1]:
+        candidates.append(candidates[-1].rpartition('/')[0])
+    for pattern, compiled in policy:
+        if any(compiled.match(candidate) for candidate in candidates):
+            return pattern
+    return None
+
+
+def _kind(named: Optional[str]) -> Optional[str]:
+    """Return the kind of pattern a verdict names, ``None`` when it names none."""
+    if named is None:
+        return None
+    if any(char in named for char in '*?['):
+        return 'wildcard'
+    else:
+        return 'literal'
+
+
+def _walkable(paths: set[str]) -> list[str]:
+    """Return the ``paths`` a walk could yield, sorted.
+
+    A walked path has no empty segment, and ``pathlib`` drops a ``.``
+    segment, so the wiki would judge a different path than the reference.
+    """
+    return sorted(path for path in paths if not ({'', '.'} & set(path.split('/'))))
+
+
+def _corner_cases(generator: random.Random) -> Iterator[tuple[list[str], list[str]]]:
+    """Yield the hand-written policies, each with the hand-written paths."""
+    paths = set(_CORNER_NAMES)
+    for name in _CORNER_NAMES:
+        for parent in _CORNER_PARENTS:
+            paths.add(f'{parent}/{name}')
+            paths.add(f'{name}/{parent}')
+    for _ in range(_CORNER_RANDOM_PATHS):
+        depth = generator.randint(1, _CORNER_DEPTH)
+        paths.add('/'.join(generator.choice(_CORNER_NAMES) for _ in range(depth)))
+    walkable = _walkable(paths)
+    # the whole list both ways round, so each pattern shadows and is shadowed
+    yield _CORNER_PATTERNS, walkable
+    yield _CORNER_PATTERNS[::-1], walkable
+    # each pattern alone, so every pattern's own verdict is exercised
+    for pattern in dict.fromkeys(_CORNER_PATTERNS):
+        yield [pattern], walkable
+    for _ in range(_CORNER_SUBLISTS):
+        size = generator.randint(1, _CORNER_SUBLIST_SIZE)
+        yield generator.sample(_CORNER_PATTERNS, size), walkable
+
+
+def _fuzz_cases(
+    generator: random.Random,
+    root: pathlib.Path,
+    *,
+    classes: bool,
+) -> Iterator[tuple[list[str], list[str]]]:
+    """Yield fuzzed policies, each with paths built from its patterns.
+
+    Each round draws patterns, keeps the ones the settings accept, and
+    yields them as one list and one at a time. With ``classes``, most
+    draws wrap a class body, and many path segments are single
+    characters a class is likely to hold.
+    """
+    for _ in range(_FUZZ_ROUNDS):
+        drawn = [
+            _fuzz_pattern(generator, classes=classes) for _ in range(_FUZZ_ROUND_SIZE)
+        ]
+        patterns = [pattern for pattern in drawn if _accepted(root, pattern)]
+        paths = set()
+        for pattern in patterns:
+            path = _fuzz_match(generator, pattern)
+            paths.update([path, f'a/{path}', f'{path}/b'])
+        for _ in range(_FUZZ_ROUND_SIZE):
+            depth = generator.randint(1, _FUZZ_DEPTH)
+            paths.add(
+                '/'.join(_fuzz_name(generator, classes=classes) for _ in range(depth))
+            )
+        walkable = _walkable(paths)
+        yield patterns, walkable
+        for pattern in patterns:
+            yield [pattern], walkable
+
+
+def _fuzz_pattern(generator: random.Random, *, classes: bool) -> str:
+    """Draw one pattern: free-form, or wrapped around a class body."""
+    if classes and (generator.random() < _FUZZ_CLASS_RATE):
+        size = generator.randint(0, _FUZZ_CLASS_SIZE)
+        body = ''.join(generator.choice(_FUZZ_CLASS_CHARS) for _ in range(size))
+        head = generator.choice(['', 'a', '*'])
+        close = generator.choice([']', ']', ']x', ''])
+        tail = generator.choice(['', '*', '/b'])
+        return f'{head}[{body}{close}{tail}'
+    size = generator.randint(1, _FUZZ_PATTERN_SIZE)
+    return ''.join(generator.choice(_FUZZ_PATTERN_CHARS) for _ in range(size))
+
+
+def _fuzz_name(generator: random.Random, *, classes: bool) -> str:
+    """Draw one path segment."""
+    if classes and (generator.random() < _FUZZ_SINGLE_RATE):
+        return generator.choice(_FUZZ_CLASS_CHARS + 'bcy`{1~+,é\n')
+    size = generator.randint(1, _FUZZ_NAME_SIZE)
+    return ''.join(generator.choice(_FUZZ_NAME_CHARS) for _ in range(size))
+
+
+def _fuzz_match(generator: random.Random, pattern: str) -> str:
+    """Return a path ``pattern`` is likely to match: its wildcards filled in."""
+    path = pattern.strip('/').replace('**', generator.choice(['a', 'a/b', 'é']))
+    path = re.sub(r'[*?]', lambda _: generator.choice(_FUZZ_FILL_CHARS), path)
+    return re.sub(r'\[[^\]/]*\]', lambda _: generator.choice(_FUZZ_MEMBER_CHARS), path)
+
+
+def _accepted(root: pathlib.Path, pattern: str) -> bool:
+    """Return ``True`` if the settings accept ``pattern`` as a policy."""
+    _set_exclude_patterns(root, [pattern])
+    try:
+        Wiki(root)._exclude_policy  # noqa: B018
+    except ValueError:
+        return False
+    return True

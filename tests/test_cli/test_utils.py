@@ -162,7 +162,7 @@ def test_resolve_wiki_root_fallback_nominations(
 ) -> None:
     """Fallback nominations win only when valid, and ride the guard pipeline.
 
-    An embedder fallback (e.g. plasma's project-anchored wiki dir) only
+    A caller's fallback (e.g. a wiki folder anchored at a project root) only
     nominates a candidate: a declared-or-indexed nomination resolves, an
     invalid one declines to the ``{cwd}/wiki`` fallback rather than
     masking it, and a winning nomination still flows through
@@ -308,7 +308,7 @@ def test_load_wiki_class(tmp_path: pathlib.Path) -> None:
     # a hook this environment cannot load fails naming the hook file, so
     # a wiki declaring an uninstalled subclass is diagnosable, not cryptic
     (config_dir / 'wiki.py').write_text(
-        'import _no_such_embedder_module\n',
+        'import _no_such_subclass_module\n',
         encoding='utf-8',
     )
     with pytest.raises(RuntimeError, match=r'\.wiki/wiki\.py'):
@@ -372,8 +372,8 @@ def test_trust_root_skips_rewrite_when_already_trusted(
 ) -> None:
     """Re-trusting an already-trusted root does not rewrite its record.
 
-    Trust is idempotent: the second call skips the write, so a fleet that
-    trusts a root per node at spawn incurs no churn. A deliberately
+    Trust is idempotent: the second call skips the write, so processes that
+    each trust the same root as they start incur no churn. A deliberately
     backdated timestamp seeded into the store proves it -- any rewrite
     would refresh it to now, so its survival is what a same-second
     re-run's byte-identical output cannot show.
@@ -401,8 +401,8 @@ def test_trust_root_concurrent_writes_keep_every_entry(
     """Parallel ``trust_root`` calls never lose each other's entries.
 
     The store is a read-modify-write of one JSON file, so without mutual
-    exclusion concurrent trusters clobber each other; a fleet trusts one
-    root per node at spawn, so the file lock is what makes that safe. The
+    exclusion concurrent trusters clobber each other; processes started
+    together each trust a root, so the file lock is what makes that safe. The
     workers cross a barrier before writing to force the writes to contend,
     then the store must still hold every distinct root.
     """
@@ -701,8 +701,8 @@ def test_trust_root_bounds_the_wait_for_a_held_lock(
 ) -> None:
     """A lock held by someone else times out loudly instead of hanging forever.
 
-    A blocking ``LOCK_EX`` wedges every fleet-wide spawn-time trust call
-    behind one stopped holder, with no output to diagnose it by. The wait
+    A blocking ``LOCK_EX`` wedges every later trust call behind one
+    stopped holder, with no output to diagnose it by. The wait
     is bounded and the refusal names the lock; once the holder lets go,
     the very same call succeeds, so the bound never costs a legitimate
     waiter its turn.
@@ -831,7 +831,7 @@ def test_trust_root_writes_over_a_blank_store(tmp_path: pathlib.Path) -> None:
 
     An empty file holds no trusted roots, so the strict read's whole
     justification -- a rewrite would drop every trusted root -- is
-    vacuous, while refusing it wedges every spawn-time trust call on the
+    vacuous, while refusing it wedges every trust call on the
     machine until a human removes the file. A store zeroed by an
     interrupted copy or a bootstrap ``touch`` reads as absent instead.
     """
@@ -866,7 +866,7 @@ def test_is_trusted_ignores_malformed_store(tmp_path: pathlib.Path) -> None:
 def test_reused_command_honors_resolve_override(tmp_path: pathlib.Path) -> None:
     """A reused command resolves its wiki through the injected ``resolve``.
 
-    Embedders rebuild their sub-apps from ``wiki.cli.cmd`` registration
+    A wrapping CLI builds its sub-apps from ``wiki.cli.cmd`` registration
     functions, injecting resolution (root fallbacks, subclass defaults)
     through the ``resolve`` keyword instead of forking command bodies.
     """
@@ -897,20 +897,20 @@ def test_reused_command_honors_resolve_override(tmp_path: pathlib.Path) -> None:
 def test_resolve_wiki_default_class(tmp_path: pathlib.Path) -> None:
     """``default`` picks the class when no ``.wiki/wiki.py`` hook names one.
 
-    An embedder CLI passes its own ``Wiki`` subclass, so its wikis get
-    embedder semantics without a hook file; a hook still wins when
+    A wrapping CLI passes its own ``Wiki`` subclass, so its wikis get
+    that subclass's semantics without a hook file; a hook still wins when
     present.
     """
 
-    class EmbedderWiki(Wiki):
-        """Wiki subclass standing in for an embedder CLI's default."""
+    class WrapperWiki(Wiki):
+        """Wiki subclass standing in for a wrapping CLI's default."""
 
     root = tmp_path / 'docs'
     root.mkdir()
     _declare_root(root)
-    # the embedder default is instantiated for a hookless wiki
-    wiki = resolve_wiki(str(root), default=EmbedderWiki)
-    assert type(wiki) is EmbedderWiki
+    # the passed default is instantiated for a hookless wiki
+    wiki = resolve_wiki(str(root), default=WrapperWiki)
+    assert type(wiki) is WrapperWiki
     # the bare default remains the base class
     assert type(resolve_wiki(str(root))) is Wiki
     # a hook still overrides any default (once the root is trusted to run it)
@@ -922,7 +922,7 @@ def test_resolve_wiki_default_class(tmp_path: pathlib.Path) -> None:
         "__all__ = ['HookWiki']\n",
         encoding='utf-8',
     )
-    assert type(resolve_wiki(str(root), default=EmbedderWiki)).__name__ == 'HookWiki'
+    assert type(resolve_wiki(str(root), default=WrapperWiki)).__name__ == 'HookWiki'
 
 
 # ------ command error wrapper
@@ -1127,7 +1127,7 @@ def test_merge_driver_maps_indexes_at_the_root_and_pages_in_the_wiki(
     it, since only the wiki's file maps pages. Each file gains the block
     whose mapping line it lacks, after its last line and set off by a
     blank line, in the file's own line ending; its existing bytes stay
-    as they are, the shape an embedder's commit check accepts. A wiki at
+    as they are, the shape a check on the file's bytes accepts. A wiki at
     the repository root carries both blocks in its one file, and a
     re-run writes nothing more.
     """

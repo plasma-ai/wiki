@@ -23,11 +23,12 @@ from wiki.constants import (
     DEFAULT_WIKI_NAME,
     WIKI_CONFIG_DIR,
     WIKI_DIR,
+    WIKI_FREEZE_TIME,
     WIKI_INDEX,
     WIKI_SETTINGS,
 )
 from wiki.core.event import Event
-from wiki.core.wiki import Wiki, _encloses_wiki_error
+from wiki.core.wiki import Wiki, _encloses_wiki_error, _now, _pinned_now
 from wiki.util.git import _git
 
 __all__ = [
@@ -46,8 +47,8 @@ __all__ = [
 ]
 
 # bounds the wait for the trust-store lock in trust_root; long enough to
-# outlast a fleet's spawn-time contention, short enough that one wedged
-# holder refuses in plain language instead of hanging every node forever
+# outlast many processes trusting at once, short enough that one wedged
+# holder refuses in plain language instead of hanging every caller forever
 _LOCK_TIMEOUT = 10.0
 
 # how often the bounded wait retries the non-blocking lock acquisition
@@ -61,10 +62,16 @@ _MERGE_DRIVER = (
     ' else git merge-file -L ours -L base -L theirs --marker-size=%L %A %O %B; fi'
 )
 
+# the line a command opens stderr with while WIKI_FREEZE_TIME fixes the
+# clock, so the test seam is never silent in a shell it leaked into
+_PINNED_CLOCK_NOTICE = (
+    f'{WIKI_FREEZE_TIME} is set: timestamps use its fixed instant, not the clock.'
+)
+
 # the .gitattributes blocks mapping files to the merge driver, each a comment
 # and its mapping line: index files at the repository root, and every page in
-# the wiki root's own file (embedders match these bytes, so a change here is a
-# change to their commit checks)
+# the wiki root's own file (a caller may match these bytes, so a change here
+# is a breaking change)
 _INDEX_ATTRIBUTES = ('# Wiki index merge driver', '**/_index.md merge=wiki')
 _PAGE_ATTRIBUTES = ('# Wiki page merge driver', '*.md merge=wiki')
 
@@ -79,7 +86,10 @@ def command(
     A command error prints ``Error: <message>`` on stderr and exits 2,
     beside typer's own usage errors, so exit 1 is left to mean exactly
     the command's own nonzero outcome and a script gating on one can
-    never read a failed run as the other.
+    never read a failed run as the other. A command run under a set
+    ``WIKI_FREEZE_TIME`` opens stderr with one fixed line; an invalid
+    value is a command error, raised before the command does anything.
+    A private command never reads the variable.
     """
 
     def decorator(f: Callable, /) -> Callable:
@@ -89,6 +99,11 @@ def command(
         @functools.wraps(f)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
+                # NOTE: a private command's exit code is its caller's protocol
+                #   (git reads the merge driver's as the merge outcome), so a
+                #   WIKI_FREEZE_TIME the command never reads must not fail it
+                if (not private) and (_pinned_now() is not None):
+                    typer.echo(_PINNED_CLOCK_NOTICE, err=True)
                 return f(*args, **kwargs)
             except (typer.Exit, typer.Abort, typer.BadParameter):
                 raise
@@ -201,7 +216,7 @@ def trust_root(root: pathlib.Path) -> pathlib.Path:
         finally:
             os.close(store_fd)
     # an already-trusted root skips the rewrite -- re-trusting is idempotent,
-    # and not touching the store keeps fleet-wide spawn-time trust calls cheap
+    # and not touching the store keeps repeated trust calls cheap
     if is_trusted(resolved):
         return resolved
     # the read-modify-write below loses concurrent entries without mutual
@@ -211,9 +226,9 @@ def trust_root(root: pathlib.Path) -> pathlib.Path:
     lock_path = home / '.settings.lock'
     lock_fd = _open_lock(lock_path)
     with os.fdopen(lock_fd, 'rb') as lock:
-        # a plain blocking LOCK_EX wedges every fleet-wide spawn-time trust
-        # call behind one stopped holder, silently and forever: poll instead,
-        # and refuse naming the lock once the wait budget is spent
+        # a plain blocking LOCK_EX wedges every later trust call behind one
+        # stopped holder, silently and forever: poll instead, and refuse
+        # naming the lock once the wait budget is spent
         deadline = time.monotonic() + _LOCK_TIMEOUT
         while True:
             try:
@@ -235,7 +250,7 @@ def trust_root(root: pathlib.Path) -> pathlib.Path:
         settings = _read_global_settings(strict=True)
         # strict admits a dict or no 'trusted' key at all, never another shape
         trusted = settings.get('trusted', {})
-        trusted[str(resolved)] = dt.datetime.now(dt.UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
+        trusted[str(resolved)] = _now(dt.UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
         settings['trusted'] = trusted
         content = json.dumps(settings, indent=2, sort_keys=True)
         wiki.util.fs.write_atomic(path, content + '\n')
@@ -306,7 +321,7 @@ def resolve_wiki(
     Corroboration diagnostics ride the resolution -- an undeclared tree
     (at its topmost index), a declared root missing its index, and an
     index chain extending above the declared root are each named on
-    stderr rather than failing. ``fallbacks`` nominate embedder roots
+    stderr rather than failing. ``fallbacks`` nominate a caller's roots
     (see :func:`resolve_wiki_root`); ``default`` is the ``Wiki`` class
     when no ``.wiki/wiki.py`` hook names one.
     """
@@ -458,7 +473,7 @@ def resolve_wiki_root(
         while (result.parent / WIKI_INDEX).is_file():
             result = result.parent
         return result
-    # embedder-nominated roots: a nomination wins only when declared or at
+    # caller-nominated roots: a nomination wins only when declared or at
     # least indexed (the same rule as the {cwd}/wiki fallback below), so a
     # stale nominator declines instead of masking a valid fallback
     for fallback in fallbacks:

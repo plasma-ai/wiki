@@ -16,6 +16,7 @@ from ._helpers import _capture_notices, _make_wiki, _set_exclude_patterns
 
 __all__ = [
     'test_search_ranks_metadata_and_refreshes_incrementally',
+    'test_search_serves_an_edited_page_by_its_current_text_alone',
     'test_search_ranks_desc_matches_above_body_prose',
     'test_search_orders_equal_scores_by_path',
     'test_search_never_returns_index_pages',
@@ -27,6 +28,7 @@ __all__ = [
     'test_search_and_match_canonicalize_scope_casing',
     'test_search_does_not_reread_unchanged_unreadable_pages',
     'test_search_notices_unreadable_pages_per_read_attempt',
+    'test_search_notices_unreadable_pages_in_path_order',
     'test_search_retries_indexed_pages_after_a_transient_read_failure',
     'test_search_rebuilds_a_corrupt_index',
     'test_search_heals_a_readonly_index_family',
@@ -80,6 +82,28 @@ def test_search_ranks_metadata_and_refreshes_incrementally(
     assert all(path != 'core/title-hit.md' for path, _, _ in wiki.search('mnemosyne'))
 
 
+def test_search_serves_an_edited_page_by_its_current_text_alone(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An edited page answers for its new text and no longer for its old.
+
+    The refresh replaces a changed page's row rather than adding a
+    second one, so a term the edit removed stops matching and the page
+    comes back once for a term both versions hold.
+    """
+    # the page answers for its first text
+    wiki = _make_wiki(tmp_path, folders={'core': []})
+    page = tmp_path / 'core' / 'page.md'
+    page.write_text('# page\n\nSharedtoken firsttoken draft.\n', encoding='utf-8')
+    assert [path for path, _, _ in wiki.search('firsttoken')] == ['core/page.md']
+
+    # an edit replaces the row: the old term is gone, the shared term hits once
+    page.write_text('# page\n\nSharedtoken secondtoken revision.\n', encoding='utf-8')
+    assert wiki.search('firsttoken') == []
+    assert [path for path, _, _ in wiki.search('secondtoken')] == ['core/page.md']
+    assert [path for path, _, _ in wiki.search('sharedtoken')] == ['core/page.md']
+
+
 def test_search_ranks_desc_matches_above_body_prose(tmp_path: pathlib.Path) -> None:
     """A frontmatter-desc match outranks the same term in body prose."""
     wiki = _make_wiki(tmp_path, folders={'core': []})
@@ -104,11 +128,11 @@ def test_search_ranks_desc_matches_above_body_prose(tmp_path: pathlib.Path) -> N
 
 
 def test_search_orders_equal_scores_by_path(tmp_path: pathlib.Path) -> None:
-    """Pages whose scores tie come back in path order on every run.
+    """Pages whose scores tie come back in path order on every index.
 
-    Tied rows otherwise follow the refresh's insertion order, which
-    follows the process hash seed, so a ``limit`` cut could pick
-    different pages from one run to the next.
+    Tied rows otherwise follow the order the index stored them in,
+    which records when each page was indexed, so a ``limit`` cut could
+    pick different pages on two clones of one wiki.
     """
     wiki = _make_wiki(tmp_path, folders={'core': []})
     stems = ['foxtrot', 'delta', 'alpha', 'echo', 'charlie', 'bravo']
@@ -117,6 +141,8 @@ def test_search_orders_equal_scores_by_path(tmp_path: pathlib.Path) -> None:
             f'# {stem}\n\nTiedtoken prose.\n',
             encoding='utf-8',
         )
+        # index each page as it lands, so the rows are stored out of path order
+        wiki.search('tiedtoken')
 
     # same-shaped pages tie exactly, so only the tiebreaker orders them
     matches = wiki.search('tiedtoken')
@@ -373,6 +399,41 @@ def test_search_notices_unreadable_pages_per_read_attempt(
     notices.clear()
     assert wiki.search('hidden') == []
     assert not any(type(event).__name__ == 'ReadSkipEvent' for event in notices)
+
+
+def test_search_notices_unreadable_pages_in_path_order(tmp_path: pathlib.Path) -> None:
+    """Several failed refresh reads are narrated in path order on every run.
+
+    The notices are output a reader sees, so their order follows the
+    page paths, never the process hash seed. The order is that of the
+    relative paths compared as strings, the order equal scores tie by:
+    ``core-b/`` sorts ahead of ``core/``, though a folder-by-folder
+    walk reaches ``core/`` first.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': [], 'core-b': []})
+    pages = [
+        'core/foxtrot.md',
+        'core-b/delta.md',
+        'core/alpha.md',
+        'core-b/echo.md',
+        'core/charlie.md',
+        'core-b/bravo.md',
+    ]
+    for relpath in pages:
+        # bytes no UTF-8 read decodes
+        (tmp_path / relpath).write_bytes(b'\xff\xfe')
+    notices = _capture_notices(wiki)
+
+    assert wiki.search('anytoken') == []
+    skips = [event for event in notices if type(event).__name__ == 'ReadSkipEvent']
+    assert [event.path for event in skips] == [
+        'core-b/bravo.md',
+        'core-b/delta.md',
+        'core-b/echo.md',
+        'core/alpha.md',
+        'core/charlie.md',
+        'core/foxtrot.md',
+    ]
 
 
 def test_search_retries_indexed_pages_after_a_transient_read_failure(

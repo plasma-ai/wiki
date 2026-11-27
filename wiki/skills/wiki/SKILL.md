@@ -46,8 +46,12 @@ Then run commands directly:
 wiki <command> ...
 ```
 
-Run `wiki --help` for a list of commands, and `wiki <command> --help` for full
-option descriptions.
+For a list of commands, or a command's full option descriptions, run:
+
+```bash
+wiki --help
+wiki <command> --help
+```
 
 ## Working at scale
 
@@ -77,7 +81,7 @@ rather than authoring or auditing page by page yourself:
   `.wiki/settings.json` exclude whole subtrees from indexing — never walked,
   scaffolded, or linted, though `wiki read` still serves them. The enclosing git
   repository's ignore rules fence the same way, with no configuration: what the
-  repo ignores is not wiki content, so a stray driver output beside tracked
+  repo ignores is not wiki content, so a stray script output beside tracked
   pages is never adopted, minted an `_index.md`, or linked — delete or fence
   residue rather than letting update sweep it in. A wiki whose own root and root
   `_index.md` are both gitignored is exempt.
@@ -149,18 +153,18 @@ rather than authoring or auditing page by page yourself:
   a prefix-free target (`[[core/design]]`) must name something inside the wiki;
   a target starting with `./` or `../` (or carrying a `.` or `..` segment
   anywhere) must leave the wiki, so one spelling names an external file from
-  every page (`[[../math/lemmas]]` from a root-level page and from
-  `nodes/verify.md` alike) and moving a page never changes its links. Such a
+  every page (`[[../manual/glossary]]` from a root-level page and from
+  `notes/meeting.md` alike) and moving a page never changes its links. Such a
   link is live only under a folder the wiki allowlists in `links.external` in
   `.wiki/settings.json`: a list of folder paths relative to the wiki root, each
   climbing out of it with leading `..`, e.g.
-  `{"links": {"external": ["../src", "../math"]}}`; an entry is the literal
+  `{"links": {"external": ["../src", "../manual"]}}`; an entry is the literal
   prefix of every link it admits. List the narrowest folder holding the targets,
   and a folder, never a file. Under an allowlisted folder the target is live
   when the file, its `.md` page, or the folder exists; a target inside another
   wiki (a folder holding `.wiki/settings.json`) follows that wiki's own
   settings, so a folder it indexes fails lint exactly as at home
-  (`Link [[../math/g2]] targets a folder, not a page (use [[../math/g2/_index]])`).
+  (`Link [[../manual/guides]] targets a folder, not a page (use [[../manual/guides/_index]])`).
   Link a file or the `_index` page, never a bare folder — stricter link checkers
   reject a bare folder link too. A prefixed link that lands inside the wiki
   fails lint (`points inside the wiki through './' or '../'`), naming the
@@ -297,7 +301,7 @@ rather than authoring or auditing page by page yourself:
   sorts the rows into the order `wiki update` writes, with the wiki's own class
   (a trusted hook's `category_order` included) when that class leaves ours'
   index as written — a check that sees a category order only where ours' rows
-  span two or more categories, so an embedder's own order can still be re-sorted
+  span two or more categories, so a subclass's own order can still be re-sorted
   into this class's — so a clean merge in which each side only added, deleted or
   retitled entries passes `update --check` and `lint` as merged. A side missing
   its `***` entirely (formatter damage) can't be split into regions, so it
@@ -321,11 +325,11 @@ rather than authoring or auditing page by page yourself:
   merge add/add with no common ancestor: the generated region resolves
   automatically — including the seeded `created` stamps, which are `wiki update`
   churn on both sides — but body prose authored below `***` on both sides
-  conflicts for hand-union (empty or identical bodies merge clean). Concurrent
-  cohorts should leave a new directory's index body empty until after the merge
-  wave, then author it once. The merge driver plants a one-line HTML-comment
-  hint above such add/add conflict markers naming this convention — delete it as
-  you resolve.
+  conflicts for hand-union (empty or identical bodies merge clean). Branches
+  worked on at the same time should leave a new directory's index body empty
+  until they have merged, then author it once. The merge driver plants a
+  one-line HTML-comment hint above such add/add conflict markers naming this
+  convention — delete it as you resolve.
 - **A `.wiki/wiki.py` hook needs explicit trust.** A wiki may ship a
   `.wiki/wiki.py` (a custom `Wiki` subclass) that runs code with the user's
   privileges, so `wiki` refuses to load an untrusted hook — every command that

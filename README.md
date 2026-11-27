@@ -69,8 +69,8 @@ project only):
 wiki install [--link]
 ```
 
-After upgrading the package, re-run `wiki install` to refresh the copied skill
-(pass `--link` for symlinked install).
+After upgrading the package, re-run the install command to refresh the copied
+skill (pass `--link` for symlinked install).
 
 ## Usage
 
@@ -93,8 +93,8 @@ or identifier-style names, through the `naming` block in `.wiki/settings.json`;
 excluded from indexing with gitignore-style globs in `exclude.patterns` —
 excluded paths are never walked or linted, though `wiki read` still serves them.
 Prose wikilinks stay inside the wiki unless `links.external` lists folders
-outside it, as paths relative to the wiki root (`../src`, `../math`): a `./` or
-`../` link, read from the wiki root like every other link, may then target a
+outside it, as paths relative to the wiki root (`../src`, `../manual`): a `./`
+or `../` link, read from the wiki root like every other link, may then target a
 file or another wiki's page under a listed folder, whose entry is the link's
 prefix. The allowlist is a lint rule alone — `wiki lint` checks such links in
 place, while `wiki read` and every other command stay confined to the wiki root.
@@ -248,9 +248,9 @@ Run `./install.sh --help` for all options. Alternatively, run
 Installing a dependency as editable (e.g. a sibling package) is left to the
 caller: `uv pip install --editable <path>`.
 
-With an editable install, `wiki install --link` symlinks the bundled skill into
-the agent skill directories instead of copying it, so skill edits apply without
-re-running the install.
+With an editable install, the install command's `--link` option symlinks the
+bundled skill into the agent skill directories instead of copying it, so skill
+edits apply without re-running the install.
 
 Once installed, run tools with `uv run --no-sync <command>`, or activate the
 environment first (`source .venv/bin/activate`).
