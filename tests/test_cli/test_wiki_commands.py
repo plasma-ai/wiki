@@ -105,6 +105,7 @@ __all__ = [
     'test_lint_clean_after_update',
     'test_merge_driver_no_op_without_git',
     'test_init_writes_gitattributes_without_committing',
+    'test_init_and_config_append_to_gitattributes_that_is_not_utf8',
     'test_merge_driver_merges_authored_frontmatter',
     'test_merge_driver_moves_regenerated_keys_with_their_bodies',
     'test_merge_driver_takes_the_other_sides_row_edit',
@@ -2442,6 +2443,42 @@ def test_init_writes_gitattributes_without_committing(tmp_path: pathlib.Path) ->
     assert _git(tmp_path, 'rev-parse', 'HEAD').stdout == head
     staged = _git(tmp_path, 'diff', '--cached', '--name-only').stdout
     assert '.gitattributes' not in staged
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_init_and_config_append_to_gitattributes_that_is_not_utf8(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A ``.gitattributes`` that is not UTF-8 gains its mapping, bytes intact.
+
+    Git reads the file as bytes, so a comment in another encoding is a
+    working file: ``init`` and ``config`` append the block it lacks and
+    leave every existing byte as it is.
+    """
+    # a repo whose committed .gitattributes holds a Latin-1 comment
+    _git_repo(tmp_path)
+    latin1 = '# café assets\n*.png binary\n'.encode('latin-1')
+    attributes = tmp_path / '.gitattributes'
+    attributes.write_bytes(latin1)
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'attributes')
+    root = tmp_path / 'wiki'
+
+    # init appends the index mapping after the file's own bytes
+    init = _wiki(tmp_path, 'init', '--path', str(root))
+    assert init.returncode == 0, init.stdout + init.stderr
+    index_block = b'\n# Wiki index merge driver\n**/_index.md merge=wiki\n'
+    assert attributes.read_bytes() == latin1 + index_block
+
+    # config does the same for the wiki's own file, once it holds such bytes
+    (root / '.gitattributes').write_bytes(latin1)
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'wiki')
+    config = _wiki(root, 'config', '--path', str(root))
+    assert config.returncode == 0, config.stdout + config.stderr
+    page_block = b'\n# Wiki page merge driver\n*.md merge=wiki\n'
+    assert (root / '.gitattributes').read_bytes() == latin1 + page_block
+    assert attributes.read_bytes() == latin1 + index_block
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')

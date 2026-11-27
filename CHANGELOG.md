@@ -17,6 +17,9 @@ may include breaking changes, each listed under a Breaking heading.
   as before, and `Wiki` still raises a `UnicodeDecodeError`. A
   `.wiki/settings.json` or `.obsidian/*.json` file that is not UTF-8 gets the
   same wording: `Malformed JSON in <file>: not valid UTF-8 at byte N`.
+- `wiki init` and `wiki config` no longer fail on a `.gitattributes` that is not
+  UTF-8, such as one with a Latin-1 comment. They append the merge mapping the
+  file lacks and leave its existing bytes as they are.
 
 ## [1.10.0] - 2026-11-27
 

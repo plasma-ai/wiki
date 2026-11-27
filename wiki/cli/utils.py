@@ -622,7 +622,10 @@ def _append_attributes(path: pathlib.Path, blocks: list[tuple[str, str]]) -> Non
         blocks: Comment and mapping-line pairs, in the order they land.
 
     """
-    current = path.read_bytes().decode('utf-8') if path.exists() else ''
+    # git reads the file as bytes, in any encoding: a byte that is not UTF-8
+    # rides through the append as it is, escaped here and restored at the write
+    data = path.read_bytes() if path.exists() else b''
+    current = data.decode('utf-8', errors='surrogateescape')
     lines = current.splitlines()
     missing = [block for block in blocks if block[1] not in lines]
     if not missing:
@@ -644,7 +647,7 @@ def _append_attributes(path: pathlib.Path, blocks: list[tuple[str, str]]) -> Non
         text += prefix + eol.join(block) + eol
     # write into the working tree only; the user stages and commits the file
     # (this command never touches the index)
-    wiki.util.fs.write_atomic(path, text)
+    wiki.util.fs.write_atomic(path, text.encode('utf-8', errors='surrogateescape'))
 
 
 def _config_home() -> pathlib.Path:
