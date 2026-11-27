@@ -92,6 +92,9 @@ __all__ = [
     'test_match_no_match_exits_nonzero',
     'test_match_line_flags_are_mutually_exclusive',
     'test_match_invalid_regex_reports_error',
+    'test_match_explains_an_unescaped_wikilink',
+    'test_match_hints_follow_the_pattern',
+    'test_naming_pattern_prints_no_python_warning',
     'test_match_resolution_failure_exits_two',
     'test_match_all_skips_undecodable_files',
     'test_match_names_a_page_it_cannot_decode',
@@ -255,6 +258,17 @@ _not_strict_json = pytest.mark.parametrize(
         'key-twice-in-a-block',
         'nested-128-levels',
     ],
+)
+
+# the line match prints for a pattern holding an unescaped [[
+_NESTED_SET_HINT = (
+    "An unescaped '[[' opens a character class; match a wikilink with '\\[\\['."
+)
+
+# the line match prints for a doubled set operator inside a character class
+_SET_OPERATOR_HINT = (
+    "A doubled '--', '&&', '~~' or '||' inside a character class is not a set"
+    ' operation; escape each character to match it as written.'
 )
 
 pytestmark = pytest.mark.skipif(
@@ -2182,7 +2196,95 @@ def test_match_invalid_regex_reports_error(wiki: pathlib.Path) -> None:
     """
     result = _wiki(wiki, 'match', '[', '--path', str(wiki))
     assert result.returncode == 2
-    assert 'error' in (result.stdout + result.stderr).lower()
+    # one line names the pattern as a regex, ahead of the parser's reason
+    assert result.stderr.startswith("Error: Invalid regex '[': ")
+    assert result.stderr.count('\n') == 1
+    assert result.stdout == ''
+
+
+def test_match_explains_an_unescaped_wikilink(tmp_path: pathlib.Path) -> None:
+    """An unescaped ``[[`` draws a line that says how to match a wikilink.
+
+    ``[[`` is the wiki's own link syntax and a character class in a
+    regex, so the pattern most likely to be typed means something else.
+    The line stands in for Python's warning, which names a source line
+    of the install; the pattern still runs, or is refused, as the regex
+    it is.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', 'notes', '--path', str(root)).returncode == 0
+    body = 'see [[foo|bar]] here\ncar] park'
+    _write(root / 'p.md', _page(name='p', desc='A page.', body=body))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    # the pattern runs as a class and a literal ], matching what it matched
+    result = _wiki(root, 'match', '[[foo|bar]]', '--path', str(root), '--lines')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == 'p.md:10: see [[foo|bar]] here\np.md:11: car] park\n'
+    assert result.stderr.splitlines() == [_NESTED_SET_HINT]
+    # a pattern that does not compile gets the line and one error line
+    result = _wiki(root, 'match', '[[a/p', '--path', str(root))
+    assert result.returncode == 2
+    assert result.stdout == ''
+    lines = result.stderr.splitlines()
+    assert lines[:-1] == [_NESTED_SET_HINT]
+    assert lines[-1].startswith("Error: Invalid regex '[[a/p': ")
+
+
+@pytest.mark.parametrize(
+    argnames=('pattern', 'hints'),
+    argvalues=[
+        (r'[q&&]', [_SET_OPERATOR_HINT]),
+        (r'[[q&&]', [_NESTED_SET_HINT, _SET_OPERATOR_HINT]),
+        (r'\[\[foo|fish \& chips', []),
+    ],
+    ids=['doubled-operator', 'both', 'neither'],
+)
+def test_match_hints_follow_the_pattern(
+    tmp_path: pathlib.Path,
+    pattern: str,
+    hints: list[str],
+) -> None:
+    """Each risky construct draws one line, in a fixed order, and no other.
+
+    A doubled ``&&`` inside a character class reads as two characters
+    where another regex dialect intersects sets; a pattern holding
+    neither construct prints nothing beside its matches.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', 'notes', '--path', str(root)).returncode == 0
+    body = 'see [[foo|bar]] here\nfish & chips'
+    _write(root / 'p.md', _page(name='p', desc='A page.', body=body))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    result = _wiki(root, 'match', pattern, '--path', str(root))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'p.md' in result.stdout.splitlines()
+    assert result.stderr.splitlines() == hints
+
+
+def test_naming_pattern_prints_no_python_warning(tmp_path: pathlib.Path) -> None:
+    """A ``naming.pattern`` Python warns about loads without a word.
+
+    The pattern is settings, not a command argument, so the warning's
+    source line would say nothing to whoever ran the command.
+    """
+    root = tmp_path / 'wiki'
+    settings = json.dumps({'naming': {'pattern': '[[a-z]+'}})
+    result = _wiki(
+        tmp_path,
+        'init',
+        'notes',
+        '--path',
+        str(root),
+        '--settings',
+        settings,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'Warning' not in result.stderr
+    # the policy loads again in every run that checks a name
+    _write(root / 'p.md', _page(name='p', desc='A page.', body='Text.'))
+    result = _wiki(root, 'update', '--path', str(root))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'Warning' not in result.stderr
 
 
 def test_match_resolution_failure_exits_two(

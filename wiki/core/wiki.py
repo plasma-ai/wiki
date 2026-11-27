@@ -324,7 +324,7 @@ class Wiki:
                     f' {pattern!r} in {WIKI_SETTINGS}.'
                 )
             try:
-                pattern = re.compile(pattern)
+                pattern = wiki.util.re.quiet_compile(pattern)
             except re.error as e:
                 raise ValueError(
                     f'naming.pattern in {WIKI_SETTINGS} is not a valid regex: {e}'
@@ -2539,10 +2539,16 @@ class Wiki:
             List of ``(relative_path, line_number, line_text)``
             tuples. Line numbers are 1-based.
 
+        Raises:
+            ValueError: If ``pattern`` is not a valid regex.
+
         """
         # compile pattern
         flags = re.IGNORECASE if ignore_case else 0
-        regex = re.compile(pattern, flags)
+        try:
+            regex = wiki.util.re.quiet_compile(pattern, flags)
+        except re.error as e:
+            raise ValueError(f'Invalid regex {pattern!r}: {e}') from e
         # resolve folder scope
         if name:
             folder = self._resolve_folder(name)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import errno
 import fcntl
@@ -10,9 +11,11 @@ import importlib.util
 import json
 import os
 import pathlib
+import re
 import stat
 import sys
 import time
+import warnings
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any, Literal, Optional
 
@@ -42,6 +45,7 @@ __all__ = [
     'parse_slice',
     'parse_settings',
     'require_utf8',
+    'pattern_hints',
     'is_trusted',
     'trust_root',
     'load_wiki_class',
@@ -80,6 +84,20 @@ _PINNED_CLOCK_NOTICE = (
 # is a breaking change)
 _INDEX_ATTRIBUTES = ('# Wiki index merge driver', '**/_index.md merge=wiki')
 _PAGE_ATTRIBUTES = ('# Wiki page merge driver', '*.md merge=wiki')
+
+# the constructs Python's regex parser warns about, in the order their lines
+# print: the words that mark the warning, and the line printed in its place
+_PATTERN_HINTS = (
+    (
+        'nested set',
+        "An unescaped '[[' opens a character class; match a wikilink with '\\[\\['.",
+    ),
+    (
+        'Possible set ',
+        "A doubled '--', '&&', '~~' or '||' inside a character class is not a set"
+        ' operation; escape each character to match it as written.',
+    ),
+)
 
 
 def command(
@@ -178,6 +196,34 @@ def require_utf8(option: str, value: str) -> None:
         value.encode('utf-8')
     except UnicodeEncodeError:
         raise typer.BadParameter(f'{option} is not valid UTF-8.') from None
+
+
+def pattern_hints(pattern: str) -> list[str]:
+    """Return one line for each risky construct in a regex ``pattern``.
+
+    The lines stand in for the warnings Python's parser raises: one for an
+    unescaped ``[[``, then one for a doubled set operator inside a
+    character class. A pattern that does not compile keeps the lines its
+    parse reached.
+    """
+    # the cache answers a pattern it has compiled without parsing it, and
+    # only the parser warns
+    re.purge()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always', FutureWarning)
+        # refusing a pattern that does not compile is the engine's job
+        with contextlib.suppress(re.error):
+            re.compile(pattern)
+    messages = [
+        str(warning.message)
+        for warning in caught
+        if issubclass(warning.category, FutureWarning)
+    ]
+    return [
+        hint
+        for marker, hint in _PATTERN_HINTS
+        if any(marker in message for message in messages)
+    ]
 
 
 def is_trusted(root: pathlib.Path, /) -> bool:

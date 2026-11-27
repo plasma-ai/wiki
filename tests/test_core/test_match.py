@@ -7,6 +7,7 @@ with ``read`` slicing and the word counts.
 from __future__ import annotations
 
 import pathlib
+import warnings
 from typing import Optional
 
 import pytest
@@ -22,6 +23,8 @@ __all__ = [
     'test_match_skips_excluded_paths',
     'test_match_survives_page_deleted_mid_scan',
     'test_match_names_a_page_it_cannot_decode',
+    'test_match_refuses_a_pattern_that_does_not_compile',
+    'test_match_raises_no_python_warning',
 ]
 
 
@@ -256,3 +259,27 @@ def test_match_names_a_page_it_cannot_decode(
     assert wiki.match('design', field=field, all_files=True) == before
     lines = [event.description for event in notices]
     assert lines == ['Skipping core/legacy.md: unreadable, or not valid UTF-8']
+
+
+def test_match_refuses_a_pattern_that_does_not_compile(tmp_path: pathlib.Path) -> None:
+    """A pattern that is not a regex is refused by name, as a regex."""
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    with pytest.raises(ValueError, match=r"Invalid regex '\[\[a/p': "):
+        wiki.match('[[a/p')
+
+
+def test_match_raises_no_python_warning(tmp_path: pathlib.Path) -> None:
+    """A pattern Python warns about runs with no warning raised.
+
+    The warning names the engine's own source line, so a host that
+    turns warnings into errors would fail on a line it cannot fix.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    (tmp_path / 'core' / 'design.md').write_text(
+        '---\nname: design\ndesc: d\n---\n\n# design\n\ncar] park\n',
+        encoding='utf-8',
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        hits = wiki.match('[[foo|bar&&]]')
+    assert hits == [('core/design.md', 8, 'car] park')]

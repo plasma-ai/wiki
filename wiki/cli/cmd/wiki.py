@@ -23,6 +23,7 @@ from wiki.cli.utils import (
     load_wiki_class,
     parse_settings,
     parse_slice,
+    pattern_hints,
     refuse_nested_init,
     require_utf8,
     resolve_wiki,
@@ -666,6 +667,10 @@ def match(
         # subtree, a refused or broken hook -- is the triple's error leg,
         # which the command wrapper renders and exits 2 on
         wiki = resolve(path)
+        # a risky construct draws its line before the pattern runs or is refused
+        hints = pattern_hints(pattern)
+        for hint in hints:
+            typer.echo(hint, err=True)
         matches = wiki.match(
             pattern=pattern,
             name=name,

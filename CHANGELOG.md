@@ -47,6 +47,14 @@ may include breaking changes, each listed under a Breaking heading.
   line replaces `Skipping <path>: unreadable during search refresh` in
   `wiki search`, which prints it for a page it cannot open or cannot decode, so
   both commands print the same words.
+- `wiki match` reports a pattern that does not compile as
+  `Invalid regex '<pattern>': <reason>`, which names the pattern and says it is
+  read as a regex. A pattern with an unescaped `[[` gets one line on stderr that
+  says `[[` opens a character class and that `\[\[` matches a wikilink, and a
+  doubled `--`, `&&`, `~~` or `||` inside a character class gets a line of its
+  own. Before, each printed a Python warning that showed an install path and a
+  line of wiki's source. The matches and the exit code are unchanged. A
+  `naming.pattern` that Python warns about no longer prints that warning either.
 
 ## [1.10.0] - 2026-11-27
 
