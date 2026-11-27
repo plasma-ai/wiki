@@ -6984,7 +6984,9 @@ def _invalid_utf8(e: UnicodeDecodeError) -> str:
 
 def _malformed_json_error(name: str, e: Exception) -> ValueError:
     """Build the malformed-JSON error, naming the user-editable file."""
-    return ValueError(f'Malformed JSON in {name}: {e}')
+    # undecodable bytes read as the package's phrase, not the codec's sentence
+    reason = _invalid_utf8(e) if isinstance(e, UnicodeDecodeError) else e
+    return ValueError(f'Malformed JSON in {name}: {reason}')
 
 
 def _read_vault_json(target: pathlib.Path) -> Any:

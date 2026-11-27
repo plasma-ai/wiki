@@ -14,7 +14,9 @@ may include breaking changes, each listed under a Breaking heading.
   offset of the first invalid byte, such as
   `notes/draft.md: not valid UTF-8 at byte 4; re-save the file as UTF-8`, in
   place of Python's codec sentence, which put the path last. The exit code is 2,
-  as before, and `Wiki` still raises a `UnicodeDecodeError`.
+  as before, and `Wiki` still raises a `UnicodeDecodeError`. A
+  `.wiki/settings.json` or `.obsidian/*.json` file that is not UTF-8 gets the
+  same wording: `Malformed JSON in <file>: not valid UTF-8 at byte N`.
 
 ## [1.10.0] - 2026-11-27
 

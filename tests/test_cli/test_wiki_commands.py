@@ -32,6 +32,7 @@ __all__ = [
     'test_untrusted_hook_refusal_exits_two',
     'test_update_check_separates_pending_from_error',
     'test_page_that_is_not_utf8_stops_a_command_naming_the_byte',
+    'test_json_file_that_is_not_utf8_is_malformed_at_the_byte',
     'test_init_creates_root_index',
     'test_init_guards_existing_wiki',
     'test_init_seeds_settings',
@@ -367,6 +368,39 @@ def test_page_that_is_not_utf8_stops_a_command_naming_the_byte(
         assert result.returncode == 2, (args, result.stdout + result.stderr)
         assert result.stderr.splitlines() == [error], args
         assert 'codec' not in result.stdout + result.stderr, args
+
+
+@pytest.mark.parametrize(
+    argnames=('name', 'args'),
+    argvalues=[
+        ('.wiki/settings.json', ('update',)),
+        ('.wiki/settings.json', ('lint',)),
+        ('.obsidian/app.json', ('config',)),
+    ],
+    ids=['settings-update', 'settings-lint', 'obsidian-config'],
+)
+def test_json_file_that_is_not_utf8_is_malformed_at_the_byte(
+    tmp_path: pathlib.Path,
+    name: str,
+    args: tuple[str, ...],
+) -> None:
+    """A settings or Obsidian JSON file that is not UTF-8 is malformed at a byte.
+
+    The file is refused as it is for bad JSON, by name, and the reason
+    is the offset of its first invalid byte in wiki's own words, never
+    the interpreter's sentence naming its codec.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # a Latin-1 e-acute, where UTF-8 text holds two bytes for the letter
+    valid = b'{"note": "caf'
+    (root / name).write_bytes(valid + b'\xe9"}\n')
+
+    result = _wiki(root, *args, '--path', str(root))
+    assert result.returncode == 2, result.stdout + result.stderr
+    error = f'Error: Malformed JSON in {name}: not valid UTF-8 at byte {len(valid)}'
+    assert result.stderr.splitlines() == [error]
+    assert 'codec' not in result.stdout + result.stderr
 
 
 # ------ init
