@@ -105,8 +105,8 @@ def test_update_preserves_concurrent_edit(
     """An edit landing between plan and apply survives the update.
 
     ``update`` snapshots every file while planning and writes corrected
-    content afterwards; an edit another writer (e.g. a sibling fractal
-    node) lands inside that window must not be silently reverted to the
+    content afterwards; an edit another writer (e.g. a concurrent
+    process) lands inside that window must not be silently reverted to the
     plan-time snapshot.
     """
     _make_wiki(tmp_path, folders={'notes': ['readme']})
@@ -147,7 +147,7 @@ def test_update_writes_are_atomic_for_concurrent_readers(
     """A concurrent reader never observes an empty or truncated file.
 
     ``update`` rewrites files in place; a truncate-then-write briefly
-    empties each file, so a concurrent reader (another node's plan) sees
+    empties each file, so a concurrent reader (another process's plan) sees
     ``''`` or a prefix, and a crash mid-write leaves a torn file. Writes
     must stage to a temp file in the same directory and rename into
     place, keeping every read all-or-nothing.
@@ -219,7 +219,7 @@ def test_update_survives_page_deleted_mid_plan(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A page deleted while update plans (a concurrent node) never crashes.
+    """A page deleted while update plans (by a concurrent writer) never crashes.
 
     In ``_read_child_labels``, reading pages without the ``None`` guard
     its folder branch has would let a page vanishing between enumeration
@@ -259,7 +259,7 @@ def test_update_survives_page_deleted_mid_page_pass(
     """A page deleted after the page pass walks it never crashes update.
 
     The page pass reads each walked file directly, so a page vanishing
-    between its folder's enumeration and its read (a concurrent node's
+    between its folder's enumeration and its read (a concurrent writer's
     delete) must plan as absent from the walk rather than raise
     ``FileNotFoundError``.
     """
@@ -298,7 +298,7 @@ def test_update_survives_page_deleted_mid_read(
 
     Cross-file reads resolve absence at the read rather than through a
     separate existence probe, so a delete landing between any probe and
-    the read (a concurrent node's) still answers as an absent file
+    the read (a concurrent writer's) still answers as an absent file
     rather than raising ``FileNotFoundError``.
     """
     wiki = _make_wiki(tmp_path, folders={'notes': ['doomed', 'readme']})

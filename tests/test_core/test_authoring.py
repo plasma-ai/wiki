@@ -138,33 +138,33 @@ def test_update_path_joins_title(tmp_path: pathlib.Path) -> None:
 def test_new_generates_a_converged_index(tmp_path: pathlib.Path) -> None:
     """``new`` writes a lint-complete index and wires the parent row.
 
-    The adoption shape: a folder of raw evidence files gains its index
+    The adoption shape: a folder of raw script files gains its index
     with an authored desc and content, the folder's own rows and the
     parent's new row (desc propagated) land in the same pass, and the
     tree is converged -- no follow-up update, no placeholder for lint
     to nag about.
     """
-    wiki = _make_wiki(tmp_path, folders={'evidence': ['report']})
-    # a folder of raw keeper legs, adopted with authored inputs
-    verify = tmp_path / 'evidence' / 'verify'
-    verify.mkdir()
-    (verify / 'main.py').write_text('print(0)\n', encoding='utf-8')
+    wiki = _make_wiki(tmp_path, folders={'tools': ['report']})
+    # a folder of raw scripts, adopted with authored inputs
+    backup = tmp_path / 'tools' / 'backup'
+    backup.mkdir()
+    (backup / 'main.py').write_text('print(0)\n', encoding='utf-8')
     created = wiki.new(
-        'evidence/verify',
-        desc='The verify record: keeper legs and the grading quote.',
-        content='Adopted at grading; re-run `main.py` to reproduce.',
+        'tools/backup',
+        desc='The backup tool: nightly copies and the restore script.',
+        content='Added in the first release; run `main.py` to start a copy.',
     )
-    assert created == 'evidence/verify/_index.md'
+    assert created == 'tools/backup/_index.md'
 
     # the index carries the authored desc (YAML-quoted for its ': ') and
     # content plus its own rows
-    text = (verify / '_index.md').read_text(encoding='utf-8')
-    assert "desc: 'The verify record: keeper legs and the grading quote.'" in text
-    assert 'Adopted at grading' in text
-    assert '[[evidence/verify/main.py|main.py]]' in text
+    text = (backup / '_index.md').read_text(encoding='utf-8')
+    assert "desc: 'The backup tool: nightly copies and the restore script.'" in text
+    assert 'Added in the first release' in text
+    assert '[[tools/backup/main.py|main.py]]' in text
     # the parent row landed with the desc propagated
-    parent = (tmp_path / 'evidence' / '_index.md').read_text(encoding='utf-8')
-    assert '[[evidence/verify/_index|verify/]]: The verify record:' in parent
+    parent = (tmp_path / 'tools' / '_index.md').read_text(encoding='utf-8')
+    assert '[[tools/backup/_index|backup/]]: The backup tool:' in parent
     # the tree is converged and clean: no issues, no notes for the new index
     assert wiki.update() == []
     fresh = Wiki(tmp_path)
@@ -172,8 +172,8 @@ def test_new_generates_a_converged_index(tmp_path: pathlib.Path) -> None:
 
     # a second generation over the same index is refused, bytes untouched
     with pytest.raises(ValueError, match='Index already exists'):
-        wiki.new('evidence/verify', desc='Another.', content='More.')
-    assert (verify / '_index.md').read_text(encoding='utf-8') == text
+        wiki.new('tools/backup', desc='Another.', content='More.')
+    assert (backup / '_index.md').read_text(encoding='utf-8') == text
 
 
 def test_new_writes_multi_line_desc_as_block_scalar(
@@ -186,23 +186,23 @@ def test_new_writes_multi_line_desc_as_block_scalar(
     continuation line, and the tree still converges with a clean lint
     -- no malformed YAML for a later sweep to trip on.
     """
-    wiki = _make_wiki(tmp_path, folders={'evidence': ['report']})
+    wiki = _make_wiki(tmp_path, folders={'tools': ['report']})
     wiki.new(
-        'evidence/verify',
-        desc='The verify record.\nKeeper legs and the grading quote.',
-        content='Adopted at grading.',
+        'tools/backup',
+        desc='The backup tool.\nNightly copies and the restore script.',
+        content='Added in the first release.',
     )
     # the index carries the desc as an indented literal block scalar
-    verify = tmp_path / 'evidence' / 'verify'
-    text = (verify / '_index.md').read_text(encoding='utf-8')
+    backup = tmp_path / 'tools' / 'backup'
+    text = (backup / '_index.md').read_text(encoding='utf-8')
     assert (
-        'desc: |\n  The verify record.\n  Keeper legs and the grading quote.'
+        'desc: |\n  The backup tool.\n  Nightly copies and the restore script.'
     ) in text
     # the parent row carries the continuation line, unindented
-    parent = (tmp_path / 'evidence' / '_index.md').read_text(encoding='utf-8')
+    parent = (tmp_path / 'tools' / '_index.md').read_text(encoding='utf-8')
     assert (
-        '[[evidence/verify/_index|verify/]]: The verify record.\n'
-        'Keeper legs and the grading quote.'
+        '[[tools/backup/_index|backup/]]: The backup tool.\n'
+        'Nightly copies and the restore script.'
     ) in parent
     # the tree is converged and clean
     assert wiki.update() == []
@@ -241,10 +241,10 @@ def test_new_refuses_unauthored_inputs(
     or placeholder input is a loud refusal before any write, so a
     mechanical adoption can never ship the hidden hand-fill state.
     """
-    wiki = _make_wiki(tmp_path, folders={'evidence': ['report']})
+    wiki = _make_wiki(tmp_path, folders={'tools': ['report']})
     with pytest.raises(ValueError, match=match):
-        wiki.new('evidence/verify', desc=desc, content=content)
-    assert not (tmp_path / 'evidence' / 'verify').exists()
+        wiki.new('tools/backup', desc=desc, content=content)
+    assert not (tmp_path / 'tools' / 'backup').exists()
 
 
 def test_new_refuses_unreachable_targets(tmp_path: pathlib.Path) -> None:
@@ -257,13 +257,13 @@ def test_new_refuses_unreachable_targets(tmp_path: pathlib.Path) -> None:
     sees or repairs -- each is refused naming its cause, with nothing
     written.
     """
-    wiki = _make_wiki(tmp_path, folders={'evidence': ['report']})
+    wiki = _make_wiki(tmp_path, folders={'tools': ['report']})
     cases = [
         ('../outside', 'outside wiki root'),
         ('.', 'root index'),
-        ('missing/verify', 'Parent folder does not exist'),
-        ('evidence/bad#name', 'Invalid folder name'),
-        ('evidence', 'Index already exists'),
+        ('missing/backup', 'Parent folder does not exist'),
+        ('tools/bad#name', 'Invalid folder name'),
+        ('tools', 'Index already exists'),
     ]
     for name, match in cases:
         with pytest.raises(ValueError, match=match):
@@ -303,27 +303,27 @@ def test_new_preflights_sweep_refusals_before_writing(
     marker-shaped authored input is refused at the boundary, so a
     refused adoption leaves nothing on disk.
     """
-    wiki = _make_wiki(tmp_path, folders={'evidence': ['report']})
+    wiki = _make_wiki(tmp_path, folders={'tools': ['report']})
     conflict = '\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\n'
     # a conflicted sibling in the parent scope refuses with nothing created
-    sibling = tmp_path / 'evidence' / 'report.md'
+    sibling = tmp_path / 'tools' / 'report.md'
     clean = sibling.read_text(encoding='utf-8')
     sibling.write_text(clean + conflict, encoding='utf-8')
     with pytest.raises(ValueError, match='Merge conflict markers'):
-        wiki.new('evidence/verify', desc='A real desc.', content='Real content.')
-    assert not (tmp_path / 'evidence' / 'verify').exists()
+        wiki.new('tools/backup', desc='A real desc.', content='Real content.')
+    assert not (tmp_path / 'tools' / 'backup').exists()
     # marker-shaped authored content is refused at the boundary too
     sibling.write_text(clean, encoding='utf-8')
     with pytest.raises(ValueError, match='Merge conflict markers'):
-        wiki.new('evidence/verify', desc='A real desc.', content=conflict.strip())
-    assert not (tmp_path / 'evidence' / 'verify').exists()
+        wiki.new('tools/backup', desc='A real desc.', content=conflict.strip())
+    assert not (tmp_path / 'tools' / 'backup').exists()
     # a nested declared wiki in the parent scope refuses pre-write alike
-    guest = tmp_path / 'evidence' / 'guest'
+    guest = tmp_path / 'tools' / 'guest'
     (guest / '.wiki').mkdir(parents=True)
     (guest / '.wiki' / 'settings.json').write_text('{}\n', encoding='utf-8')
     with pytest.raises(ValueError, match='encloses the wiki at'):
-        wiki.new('evidence/verify', desc='A real desc.', content='Real content.')
-    assert not (tmp_path / 'evidence' / 'verify').exists()
+        wiki.new('tools/backup', desc='A real desc.', content='Real content.')
+    assert not (tmp_path / 'tools' / 'backup').exists()
 
 
 # ------ helpers

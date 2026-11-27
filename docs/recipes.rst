@@ -252,7 +252,7 @@ are folder paths relative to the wiki root, climbing out of it with ``..``:
 
    {
      "links": {
-       "external": ["../src", "../math"]
+       "external": ["../src", "../manual"]
      }
    }
 
@@ -263,7 +263,7 @@ one folder down alike:
 
 .. code-block:: markdown
 
-   See [[../src/main.py]] and [[../math/lemmas|the lemmas]].
+   See [[../src/main.py]] and [[../manual/glossary|the glossary]].
 
 A prefix-free target is read from the wiki root too and names something
 inside it. List every link opening with ``./`` or ``../`` with ``wiki match``;
@@ -275,13 +275,13 @@ list:
 .. code-block:: console
 
    $ wiki match '\[\[\.\.?/' --lines
-   overview.md:12: See [[../src/main.py]] and [[../math/lemmas|the lemmas]].
+   overview.md:12: See [[../src/main.py]] and [[../manual/glossary|the glossary]].
 
 ``wiki lint`` accepts a link whose target — the file, its ``.md`` form, or a
 folder — exists under a listed folder on this machine, and judges a target
 inside another wiki by that wiki's own rules: a folder it indexes is the
-``targets a folder, not a page (use [[../math/g2/_index]])`` issue, as at
-home. A prefixed link that lands inside the wiki is a hard issue, ``points
+``targets a folder, not a page (use [[../manual/guides/_index]])`` issue, as
+at home. A prefixed link that lands inside the wiki is a hard issue, ``points
 inside the wiki through './' or '../'``, naming the prefix-free form — as is
 one that misses under a listed folder while the same text read from the
 page's folder names something in the wiki (``[[../overview]]`` from

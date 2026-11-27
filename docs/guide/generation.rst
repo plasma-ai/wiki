@@ -212,7 +212,7 @@ would destroy authored content or race a concurrent editor:
   link when its prune is announced.
 - **Paths the enclosing git repository ignores** are excluded from the walk
   the same way ``exclude.patterns`` paths are: what the repo fences out of
-  version control is not wiki content, so a driver's stray output is never
+  version control is not wiki content, so a script's stray output is never
   adopted, never gains a minted ``_index.md``, and never draws a parent link
   row. A wiki whose root and root ``_index.md`` both read as gitignored is
   exempt — the fence never empties a deliberately unindexed wiki.
@@ -437,8 +437,8 @@ its meaning:
    or ``exclude.patterns`` segment keeps its whole subtree out of the
    index, leaving nothing to name. The same issue covers a folder that
    another wiki indexes, reached through a ``links.external`` folder and
-   judged by that wiki's own settings — ``Link [[../math/g2]] targets a
-   folder, not a page (use [[../math/g2/_index]])`` (see
+   judged by that wiki's own settings — ``Link [[../manual/guides]] targets a
+   folder, not a page (use [[../manual/guides/_index]])`` (see
    :doc:`/configuration`).
 
 ``Link [[target]] points inside the wiki through './' or '../' (use [[canonical]])``

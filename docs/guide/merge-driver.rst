@@ -126,14 +126,14 @@ Link block
    trusted ``.wiki/wiki.py`` hook's ``category_order`` included — and
    rendering them as update does. It does so only when that class leaves
    the current branch's own index as written: an index another class wrote
-   (an embedder's update with its own category order) stays as merged, as
+   (a subclass's update with its own category order) stays as merged, as
    does one whose hook cannot load or run — the H1 the current branch's, the
    other side's rows below its own. A merge with two rows for one target
    stays as merged too, since only ``wiki update``, which reads the
    filesystem, can choose between them. The check
    sees a class's category order only where the current branch's rows span
    two or more categories, so a merge that brings a second category into an
-   index with fewer is sorted in this class's order even when an embedder's
+   index with fewer is sorted in this class's order even when a subclass's
    update orders categories its own way. A clean merge in which each side
    only added, deleted, or retitled entries is then current as merged.
 
@@ -205,7 +205,7 @@ parses as an authored key that every later rewrite carries forward — so
 Add/add body conflict
    Sibling branches authored the same new directory's index body
    concurrently. The hint states the convention that avoids this: leave
-   new-directory index bodies empty until after the merge wave.
+   new-directory index bodies empty until the branches have merged.
 
 Lost delimiter
    A side that lost the ``***`` delimiter the base had — typically formatter

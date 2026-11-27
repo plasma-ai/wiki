@@ -55,6 +55,9 @@ may include breaking changes, each listed under a Breaking heading.
 - `wiki install` follows a linked `.claude/skills` or `.agents/skills` folder to
   where it leads, so two folders linked to one place get the skill once, and the
   report names the folder the skill lands in.
+- The hint the git merge driver plants above an add/add `_index.md` body
+  conflict says to leave new-directory index bodies empty until the branches
+  have merged.
 
 ## [1.9.0] - 2026-10-25
 
@@ -334,8 +337,8 @@ may include breaking changes, each listed under a Breaking heading.
   command frees them at exit, while a library consumer that runs `update` or
   `lint` many times in one process keeps them. A command's peak memory rises by
   about 13 MB on a 5,000-page wiki of short blocks, 26 MB on one whose blocks
-  carry a paragraph-long `desc`, and about 100 MB on a 24,000-page wiki of short
-  blocks; a later run in the same process adds 2 to 5 KB per page.
+  carry a paragraph-long `desc`, and about 100 MB on a wiki of over 20,000 pages
+  of short blocks; a later run in the same process adds 2 to 5 KB per page.
 
 ### Fixed
 
@@ -362,8 +365,8 @@ may include breaking changes, each listed under a Breaking heading.
   less of their own work: a run walks its scope once for its plan and the checks
   before it, a walk `wiki lint` inside a repository holds until it finishes at
   about 2.5 KB per indexed folder and per non-markdown file (5 MB on a
-  5,000-page wiki of about 2,000 folders, 17 MB on one of about 4,000 folders
-  and 3,100 non-markdown files); an index is planned from one listing of its
+  5,000-page wiki of about 2,000 folders, 17 MB on one of about 7,000 folders
+  and non-markdown files together); an index is planned from one listing of its
   folder; a content scan skips a text that cannot hold the shape it looks for;
   and the frontmatter reader takes a fast path through a block with no blank
   line and a body that cannot nest past its bound. On a 5,000-page wiki
@@ -438,7 +441,7 @@ may include breaking changes, each listed under a Breaking heading.
 
 - `links.external` external link folders: a list in `.wiki/settings.json` of
   folder paths relative to the wiki root, each climbing out of it with leading
-  `..` (`{"links": {"external": ["../src", "../math"]}}`), under which prose
+  `..` (`{"links": {"external": ["../src", "../manual"]}}`), under which prose
   wikilinks may leave the wiki. Two link bases, one rule each: a prefix-free
   target is read from the wiki root and must name something inside it; a `./` or
   `../` target is read from the page's folder, as Obsidian and markdown read it,
@@ -815,12 +818,12 @@ may include breaking changes, each listed under a Breaking heading.
   until that sweep runs.
 - The enclosing git repository's ignore rules now fence indexing, beside
   `exclude.patterns`: a gitignored path is never walked, adopted, minted an
-  `_index.md`, or linked, so battery residue can no longer turn lint red and get
-  committed by the approved repair (`wiki update` writing frontmatter into
-  driver files and minting index cards). Matching is pattern-pure
-  (`git check-ignore --no-index`), so a force-tracked file matching a fence is
-  fenced all the same; a wiki whose own root is ignored is exempt, and a pruned
-  row whose target is fenced gets a cause line
+  `_index.md`, or linked, so a script's stray output can no longer turn lint red
+  and get committed by the repair that follows (`wiki update` writing
+  frontmatter into the stray files and minting index files for them). Matching
+  is pattern-pure (`git check-ignore --no-index`), so a force-tracked file
+  matching a fence is fenced all the same; a wiki whose own root is ignored is
+  exempt, and a pruned row whose target is fenced gets a cause line
   (`GitignoreSkipEvent`/`on_gitignore_skip`) naming the fence. The fence reads
   the repository's own rules only — the user-global `core.excludesFile` is
   pinned out of the probe, so fencing is identical on every clone instead of one
@@ -828,15 +831,15 @@ may include breaking changes, each listed under a Breaking heading.
   probe drops the caller's `GIT_*` environment, so an inherited `GIT_DIR` (git
   hooks export one) can neither fence corpus content by another repository's
   rules nor, pointed where no repository is discoverable, drop the fence and
-  adopt the residue it was holding back. A probe that fails inside a repository
-  — git off `PATH`, a broken install — narrates the degrade
+  adopt the files it was holding back. A probe that fails inside a repository —
+  git off `PATH`, a broken install — narrates the degrade
   (`GitFenceUnavailableEvent`/`on_git_fence_unavailable`, a `lint --json` note)
   instead of sweeping unfenced in silence.
 - A `--path` (or cwd resolution) landing inside an existing wiki resolves upward
   to the enclosing root — declared, or the topmost index of a bare chain — with
   a stderr notice naming it, instead of aborting with "Path is inside the wiki".
-  The habitual root-relative invocation (e.g. `wiki update --path math` from
-  inside `math/`) now works from anywhere in the tree; scoped work still goes
+  The habitual root-relative invocation (e.g. `wiki update --path docs` from
+  inside `docs/`) now works from anywhere in the tree; scoped work still goes
   through the entry argument. `wiki new` keeps the refusal: its name argument is
   a write target, so a rebased root would silently relocate the write. A
   `--path` naming a declared root resolves to that root itself — a vendored wiki
@@ -892,9 +895,9 @@ may include breaking changes, each listed under a Breaking heading.
   pages — and reported paths carry the true casing.
 - `wiki trust` bounds its wait for the trust-store lock instead of blocking on
   it forever: one stopped holder (or a stalled network-filesystem write) wedged
-  every fleet-wide spawn-time trust call with no diagnostic at all. The wait
-  polls a non-blocking acquisition and, once the budget is spent, refuses naming
-  the lock path.
+  every later trust call with no diagnostic at all. The wait polls a
+  non-blocking acquisition and, once the budget is spent, refuses naming the
+  lock path.
 - Undecodable bytes in the trust store read as corruption instead of escaping as
   a `UnicodeDecodeError`: one bad byte — a partial write, a truncated restore,
   an encoding mishap — turned every `wiki update`/`lint`/`map` on a hooked wiki
@@ -999,10 +1002,10 @@ may include breaking changes, each listed under a Breaking heading.
   corrupt top level is, instead of being discarded and replaced by a fresh
   single-entry map — the one key that matters was the one shape the strict read
   did not cover, so a hand-edit or a version skew that made it a list lost every
-  root on the next spawn-time trust call. A *blank* store is the opposite case
-  and now writes cleanly: an empty file holds no trusted roots, so the "a
-  rewrite would drop every trusted root" refusal was vacuous and served only to
-  wedge every trust call on the machine until a human removed the file.
+  root on the next trust call. A *blank* store is the opposite case and now
+  writes cleanly: an empty file holds no trusted roots, so the "a rewrite would
+  drop every trusted root" refusal was vacuous and served only to wedge every
+  trust call on the machine until a human removed the file.
 
 ## [1.2.0] - 2026-07-28
 
@@ -1026,8 +1029,8 @@ may include breaking changes, each listed under a Breaking heading.
   non-zero. Stale-link notes suggest the `_index` form of the link.
 - `wiki trust` is now idempotent and concurrency-safe: re-trusting an
   already-trusted root leaves the store untouched, and the trust store is
-  updated under a file lock so parallel `wiki trust` calls — such as one per
-  node across an agent fleet — never lose each other's entries.
+  updated under a file lock so parallel `wiki trust` calls — such as several
+  processes started at once — never lose each other's entries.
 - The `wiki` package is now POSIX-only: the concurrency-safe trust store uses
   `fcntl` file locking (declared via an `Operating System :: POSIX` classifier),
   so `import wiki` no longer works on Windows — the library as much as the CLI.
