@@ -2502,6 +2502,7 @@ def test_init_and_config_append_to_gitattributes_that_is_not_utf8(
     # init appends the index mapping after the file's own bytes
     init = _wiki(tmp_path, 'init', '--path', str(root))
     assert init.returncode == 0, init.stdout + init.stderr
+    assert 'codec' not in init.stdout + init.stderr
     index_block = b'\n# Wiki index merge driver\n**/_index.md merge=wiki\n'
     assert attributes.read_bytes() == latin1 + index_block
 
@@ -2511,6 +2512,7 @@ def test_init_and_config_append_to_gitattributes_that_is_not_utf8(
     _git(tmp_path, 'commit', '-q', '-m', 'wiki')
     config = _wiki(root, 'config', '--path', str(root))
     assert config.returncode == 0, config.stdout + config.stderr
+    assert 'codec' not in config.stdout + config.stderr
     page_block = b'\n# Wiki page merge driver\n*.md merge=wiki\n'
     assert (root / '.gitattributes').read_bytes() == latin1 + page_block
     assert attributes.read_bytes() == latin1 + index_block
