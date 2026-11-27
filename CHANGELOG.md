@@ -27,6 +27,14 @@ may include breaking changes, each listed under a Breaking heading.
 
 ### Fixed
 
+- A settings error shows the wrong value as JSON: `got null` and
+  `got {"a": true}`, where it printed Python's `None` and `{'a': True}`. A value
+  longer than 80 characters is cut there with `...`. An entry of
+  `naming.validate` or `naming.reserved` that is not a string gets a settings
+  error that names the key, such as
+  `naming.reserved entry must be a string, got ["x"] in .wiki/settings.json.`,
+  in place of a raw Python error or, for a number in `naming.reserved`, no error
+  at all.
 - A `.wiki/settings.json` that cannot be read (no permission, a folder or a
   symlink loop at its path, a byte-order mark) gets an error that names the file
   and the cause, such as `Cannot read .wiki/settings.json (Permission denied).`,

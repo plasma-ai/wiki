@@ -748,11 +748,11 @@ def test_settings_file_that_cannot_be_read_is_named_with_its_cause(
         ),
         (
             {'map': {'desc_limit': 'ten'}},
-            "map.desc_limit must be an int >= -1 or null, got 'ten'",
+            'map.desc_limit must be an int >= -1 or null, got "ten"',
         ),
         (
             {'titles': {'required': 'yes'}},
-            "titles.required must be a boolean, got 'yes'",
+            'titles.required must be a boolean, got "yes"',
         ),
         ({'lint': {'strict': 1}}, 'lint.strict must be a boolean, got 1'),
         (
@@ -761,7 +761,7 @@ def test_settings_file_that_cannot_be_read_is_named_with_its_cause(
         ),
         (
             {'links': {'external': '../src'}},
-            "links.external must be a list of folder paths, got '../src'",
+            'links.external must be a list of folder paths, got "../src"',
         ),
     ],
     ids=['naming', 'timestamp', 'map', 'titles', 'lint', 'exclude', 'links'],

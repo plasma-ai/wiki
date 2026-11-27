@@ -88,7 +88,10 @@ each malformed, and the message names the cause (``Malformed JSON in
 .wiki/settings.json: duplicate key 'exclude'``). The recognized blocks —
 ``naming``, ``timestamp``, ``map``, ``titles``, ``lint``, ``exclude``, and
 ``links`` — are all optional, all objects. Unknown top-level keys are ignored,
-but a wrong-typed known block or key is an error naming the file and key.
+but a wrong-typed known block or key is an error naming the file and key. The
+error shows the wrong value as JSON
+(``map.indent must be a string, got null in .wiki/settings.json.``), and cuts
+a value longer than 80 characters there with ``...``.
 
 ``wiki update`` (``--check`` included), ``wiki new``, ``wiki lint``,
 ``wiki map``, ``wiki search`` and ``wiki match`` check the whole file before
@@ -163,7 +166,7 @@ rules are opt-in. An entry whose name breaks the policy is skipped by
    name after removing any ``allow`` characters: ``ascii``, ``alpha``,
    ``alphanum``, or ``identifier`` (each maps to the corresponding
    Python ``str.is*`` check). Unknown names are rejected when the policy
-   loads.
+   loads, as is an entry that is not a string.
 
 ``naming.allow``
    String of characters, default ``""``. Characters stripped from the name
@@ -202,7 +205,8 @@ predicates sets ``"allow": "."``.
 
 ``naming.reserved``
    List of strings, default ``[]``. Names rejected outright. ``_index`` is
-   always reserved regardless of this list.
+   always reserved regardless of this list. An entry that is not a string is
+   rejected when the policy loads.
 
 Where the ``naming`` keys require integers, booleans are rejected — the
 checks are exact-type.
