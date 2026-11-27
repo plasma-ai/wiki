@@ -708,66 +708,66 @@ def test_new_requires_authored_desc_and_content(tmp_path: pathlib.Path) -> None:
     """
     root = tmp_path / 'wiki'
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
-    _write(root / 'evidence' / '_index.md', _index('Evidence', 'The legs.', 'Text.'))
+    _write(root / 'tools' / '_index.md', _index('Tools', 'The tools.', 'Text.'))
     assert _wiki(root, 'update', '--path', str(root)).returncode == 0
-    (root / 'evidence' / 'verify').mkdir()
-    (root / 'evidence' / 'verify' / 'main.py').write_text('print(0)\n')
+    (root / 'tools' / 'backup').mkdir()
+    (root / 'tools' / 'backup' / 'main.py').write_text('print(0)\n')
 
     # both inputs are required options: omitting either is a usage error
     missing_desc = _wiki(
         root,
         'new',
-        'evidence/verify',
+        'tools/backup',
         '--path',
         str(root),
         '--content',
-        'Adopted at grading.',
+        'Added in the first release.',
     )
     assert missing_desc.returncode == 2
     missing_content = _wiki(
         root,
         'new',
-        'evidence/verify',
+        'tools/backup',
         '--path',
         str(root),
         '--desc',
-        'The verify record.',
+        'The backup tool.',
     )
     assert missing_content.returncode == 2
     placeholder = _wiki(
         root,
         'new',
-        'evidence/verify',
+        'tools/backup',
         '--path',
         str(root),
         '--desc',
         '...',
         '--content',
-        'Adopted at grading.',
+        'Added in the first release.',
     )
     assert placeholder.returncode == 2
     assert 'never stubbed' in placeholder.stderr
-    assert not (root / 'evidence' / 'verify' / '_index.md').exists()
+    assert not (root / 'tools' / 'backup' / '_index.md').exists()
 
     # with both inputs the adoption lands converged in one command
     created = _wiki(
         root,
         'new',
-        'evidence/verify',
+        'tools/backup',
         '--path',
         str(root),
         '--desc',
-        'The verify record.',
+        'The backup tool.',
         '--content',
-        'Keeper legs.',
+        'Nightly copies.',
     )
     assert created.returncode == 0, created.stdout + created.stderr
-    assert 'Created evidence/verify/_index.md.' in created.stdout
-    index = (root / 'evidence' / 'verify' / '_index.md').read_text(encoding='utf-8')
-    assert 'desc: The verify record.' in index
-    assert 'Keeper legs.' in index
-    parent = (root / 'evidence' / '_index.md').read_text(encoding='utf-8')
-    assert '[[evidence/verify/_index|verify/]]: The verify record.' in parent
+    assert 'Created tools/backup/_index.md.' in created.stdout
+    index = (root / 'tools' / 'backup' / '_index.md').read_text(encoding='utf-8')
+    assert 'desc: The backup tool.' in index
+    assert 'Nightly copies.' in index
+    parent = (root / 'tools' / '_index.md').read_text(encoding='utf-8')
+    assert '[[tools/backup/_index|backup/]]: The backup tool.' in parent
     check = _wiki(root, 'update', '--check', '--path', str(root))
     assert check.returncode == 0, check.stdout + check.stderr
 
@@ -775,7 +775,7 @@ def test_new_requires_authored_desc_and_content(tmp_path: pathlib.Path) -> None:
     again = _wiki(
         root,
         'new',
-        'evidence/verify',
+        'tools/backup',
         '--path',
         str(root),
         '--desc',
@@ -1284,24 +1284,24 @@ def test_links_external_end_to_end(tmp_path: pathlib.Path) -> None:
     sibling settings file is named.
     """
     root = tmp_path / 'wiki'
-    settings = '{"links": {"external": ["../src", "../math", "../missing"]}}'
+    settings = '{"links": {"external": ["../src", "../manual", "../missing"]}}'
     init = _wiki(tmp_path, 'init', '--path', str(root), '--settings', settings)
     assert init.returncode == 0, init.stdout + init.stderr
     _write(tmp_path / 'src' / 'main.py', 'print()\n')
     _write(tmp_path / 'docs' / 'y.md', 'Doc.\n')
     _write(tmp_path / 'idx' / '_index.md', 'Idx.\n')
     # a sibling wiki with a page and an indexed folder
-    math = tmp_path / 'math'
-    assert _wiki(tmp_path, 'init', '--path', str(math)).returncode == 0
-    _write(math / 'lemmas.md', _page('Lemmas', 'Lemmas.', 'Body.'))
-    _write(math / 'g2' / 'topic.md', _page('Topic', 'A topic.', 'Body.'))
-    assert _wiki(math, 'update', '--path', str(math)).returncode == 0
+    manual = tmp_path / 'manual'
+    assert _wiki(tmp_path, 'init', '--path', str(manual)).returncode == 0
+    _write(manual / 'glossary.md', _page('Glossary', 'Glossary.', 'Body.'))
+    _write(manual / 'guides' / 'topic.md', _page('Topic', 'A topic.', 'Body.'))
+    assert _wiki(manual, 'update', '--path', str(manual)).returncode == 0
     # a root-level page and a nested page linking outside
     _write(root / 'core' / '_index.md', _index('Core', 'Core concepts.', 'Text.'))
     links = _page(
         name='Links',
         desc='Links.',
-        body='See [[../src/main.py]], [[../src/gone.py]], [[../math/lemmas]],'
+        body='See [[../src/main.py]], [[../src/gone.py]], [[../manual/glossary]],'
         ' [[../docs/x]], [[../docs/y|Doc]], [[../docs/y.md/x]], [[../idx]], and'
         ' [[../missing/z]].',
     )
@@ -1347,15 +1347,15 @@ def test_links_external_end_to_end(tmp_path: pathlib.Path) -> None:
         ' links into it are not checked'
     ) in lint.stderr
     assert '[[../src/main.py]]' not in lint.stderr
-    assert '[[../math/lemmas]]' not in lint.stderr
+    assert '[[../manual/glossary]]' not in lint.stderr
     assert '[[../missing/z]]' not in lint.stderr
     # a bare folder of the sibling wiki is that wiki's directory link
-    _write(root / 'g2.md', _page('G2', 'G2.', 'See [[../math/g2]].'))
+    _write(root / 'guides.md', _page('Guides', 'Guides.', 'See [[../manual/guides]].'))
     assert _wiki(root, 'update', '--path', str(root)).returncode == 0
     lint = _wiki(root, 'lint', '--path', str(root))
     assert (
-        'g2.md: Link [[../math/g2]] targets a folder, not a page'
-        ' (use [[../math/g2/_index]])'
+        'guides.md: Link [[../manual/guides]] targets a folder, not a page'
+        ' (use [[../manual/guides/_index]])'
     ) in lint.stdout
     # --json carries every finding typed
     document = json.loads(_wiki(root, 'lint', '--path', str(root), '--json').stdout)
@@ -1408,7 +1408,10 @@ def test_links_external_end_to_end(tmp_path: pathlib.Path) -> None:
     config.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
     page = _page('Page', 'A page.', 'See [[../src/main.py]].')
     _write(root / 'core' / 'page.md', page)
-    _write(root / 'g2.md', _page('G2', 'G2.', 'See [[../math/g2/_index]].'))
+    _write(
+        root / 'guides.md',
+        _page('Guides', 'Guides.', 'See [[../manual/guides/_index]].'),
+    )
     assert _wiki(root, 'update', '--path', str(root)).returncode == 0
     lint = _wiki(root, 'lint', '--path', str(root), '--full')
     assert lint.returncode == 0, lint.stdout + lint.stderr
@@ -1430,13 +1433,13 @@ def test_links_external_end_to_end(tmp_path: pathlib.Path) -> None:
     assert "Invalid links.external folder 'src': inside the wiki root" in lint.stderr
     # a malformed sibling settings file is named as that wiki's -- read the
     # moment a link needs its rules, which a bare folder link does
-    data['links'] = {'external': ['../math']}
+    data['links'] = {'external': ['../manual']}
     config.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
-    _write(root / 'g2.md', _page('G2', 'G2.', 'See [[../math/g2]].'))
-    (math / '.wiki' / 'settings.json').write_text('{', encoding='utf-8')
+    _write(root / 'guides.md', _page('Guides', 'Guides.', 'See [[../manual/guides]].'))
+    (manual / '.wiki' / 'settings.json').write_text('{', encoding='utf-8')
     lint = _wiki(root, 'lint', '--path', str(root))
     assert lint.returncode == 2
-    assert "links.external wiki '../math'" in lint.stderr
+    assert "links.external wiki '../manual'" in lint.stderr
 
 
 def test_update_cli_refuses_conflict_markers(tmp_path: pathlib.Path) -> None:

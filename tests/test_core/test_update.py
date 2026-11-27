@@ -1502,7 +1502,7 @@ def test_update_announces_adoption(tmp_path: pathlib.Path) -> None:
     """
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
     (tmp_path / 'core' / 'titled.md').write_text(
-        '# The L25 Wall\n\nBody prose.\n',
+        '# The Q3 Budget\n\nBody prose.\n',
         encoding='utf-8',
     )
     (tmp_path / 'core' / 'plain.md').write_text('Body prose only.\n', encoding='utf-8')
@@ -3177,11 +3177,11 @@ def test_quoted_colon_title_renders_unquoted_heading(
 @pytest.mark.parametrize(
     argnames=('body', 'seeded'),
     argvalues=[
-        ('# The L25 Wall\n\nBody prose.\n', 'title: The L25 Wall'),
+        ('# The Q3 Budget\n\nBody prose.\n', 'title: The Q3 Budget'),
         ('# null\n\nBody prose.\n', "title: 'null'"),
         ('# "Quoted Title"\n\nBody prose.\n', 'title: \'"Quoted Title"\''),
         ("# 'null'\n\nBody prose.\n", "title: '''null'''"),
-        ('﻿# The L25 Wall\n\nBody prose.\n', 'title: The L25 Wall'),
+        ('﻿# The Q3 Budget\n\nBody prose.\n', 'title: The Q3 Budget'),
         ('Body prose only.\n', None),
         ('﻿Body prose only.\n', None),
         ('# TODO #123\n\nBody prose.\n', "title: 'TODO #123'"),

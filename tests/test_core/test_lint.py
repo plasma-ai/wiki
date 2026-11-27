@@ -302,7 +302,7 @@ def test_lint_issues_are_typed(tmp_path: pathlib.Path) -> None:
     )
     # frontmatter a strict YAML reader rejects
     (tmp_path / 'data' / 'unquoted.md').write_text(
-        '---\nname: unquoted\ndesc: A lane for X: HR, WR.\n---\n\n# unquoted\n\nBody.\n',
+        '---\nname: unquoted\ndesc: A note for X: red, blue.\n---\n\n# unquoted\n\nBody.\n',
         encoding='utf-8',
     )
     # an emptied index (and, with a page to link, its missing delimiter)
@@ -961,13 +961,13 @@ def test_lint_stamp_parse_follows_configured_format(
     argnames=('field', 'line', 'reason', 'advice'),
     argvalues=[
         (
-            'desc: Independent lane for L1: the harness.',
+            'desc: Alternative plan for Q1: the fallback.',
             3,
             'mapping values',
             'quote or rewrite the value',
         ),
         (
-            'title: Theorem for X: HR, WR',
+            'title: Summary for X: red, blue',
             3,
             'mapping values',
             'quote or rewrite the value',
@@ -1540,9 +1540,9 @@ def test_lint_code_span_continuation_keeps_list_open(
     """
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
     body = (
-        '- evidence lives at\n'
-        '  `spine/L001/evidence/main.py`\n'
-        '  and re-runs on demand\n'
+        '- the script lives at\n'
+        '  `tools/backup/src/main.py`\n'
+        '  and runs on demand\n'
         '- next item\n'
     )
     page = tmp_path / 'core' / 'design.md'

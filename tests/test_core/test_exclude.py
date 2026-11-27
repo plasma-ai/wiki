@@ -819,26 +819,26 @@ def test_fenced_directory_is_invisible_to_every_check(
     just as completely: no ``Missing index`` for the fenced directory,
     no row minted into it from its parent, and no rewrite of an
     ``_index.md`` already tracked inside it -- the case where a
-    glob (``**/evidence/*/output/``) fences directories whose contents
+    glob (``**/runs/*/output/``) fences directories whose contents
     were committed before the fence existed, so the match must stay
     pattern-pure rather than reading those tracked files as content.
     """
-    _git_repo(tmp_path, '**/evidence/*/output/')
-    root = tmp_path / 'math'
-    fenced = root / 'claim' / 'evidence' / 'depth_free' / 'output'
+    _git_repo(tmp_path, '**/runs/*/output/')
+    root = tmp_path / 'wiki'
+    fenced = root / 'project' / 'runs' / 'first' / 'output'
     fenced.mkdir(parents=True)
     _make_wiki(
         root,
         folders={
-            'claim': [],
-            'claim/evidence': [],
-            'claim/evidence/depth_free': [],
+            'project': [],
+            'project/runs': [],
+            'project/runs/first': [],
         },
     )
     # residue committed before the fence existed: tracked, and fenced
     stale = '---\nname: output\ndesc: Stale.\n---\n\n# output\n\n***\n\nBody.\n'
     (fenced / '_index.md').write_text(stale, encoding='utf-8')
-    (fenced / 'base_table.log').write_text('rows\n', encoding='utf-8')
+    (fenced / 'run.log').write_text('rows\n', encoding='utf-8')
     _git(tmp_path, 'add', '-f', str(root), '.gitignore')
 
     # every check is silent about the fenced directory, and it stays put
@@ -1297,7 +1297,7 @@ def test_gitignore_fence_reaches_a_nested_wiki_root(tmp_path: pathlib.Path) -> N
     the enclosing repo rather than the wiki root alone.
     """
     _git_repo(tmp_path, 'out/')
-    root = tmp_path / 'math'
+    root = tmp_path / 'wiki'
     _make_wiki(root, folders={'core': ['design']})
     out = root / 'core' / 'out'
     out.mkdir()
@@ -1332,7 +1332,7 @@ def test_gitignore_fence_honors_a_discovery_ceiling(
     is unavailable.
     """
     _git_repo(tmp_path, 'out/')
-    root = tmp_path / 'math'
+    root = tmp_path / 'wiki'
     _make_wiki(root, folders={'core': ['design']})
     out = root / 'core' / 'out'
     out.mkdir()
@@ -1394,7 +1394,7 @@ def test_unavailable_fence_note_honors_a_discovery_ceiling(
     # a wiki inside a repository and a symlink to it; the ceiling is set
     # from beside the repository, where the relative entry would name it
     repo = tmp_path / 'repo'
-    root = repo / 'math'
+    root = repo / 'wiki'
     _make_wiki(root, folders={'core': ['design']})
     _git_repo(repo)
     link = tmp_path / 'link'
