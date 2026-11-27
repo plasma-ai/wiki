@@ -612,8 +612,8 @@ nothing on disk.
 
 .. code-block:: console
 
-   $ wiki new evidence/verify --desc 'The verify record.' --content 'Keeper legs.'
-   Created evidence/verify/_index.md.
+   $ wiki new tools/backup --desc 'The backup tool.' --content 'Nightly copies.'
+   Created tools/backup/_index.md.
 
 ``wiki lint``
 -------------
