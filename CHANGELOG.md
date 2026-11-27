@@ -23,7 +23,9 @@ may include breaking changes, each listed under a Breaking heading.
   in place of a raw Python error. A folder or a symlink loop at the path is no
   longer first reported as a missing settings file that `wiki update` will
   restore, and a symlink loop no longer leaves `map` and `lint` running on
-  default settings. A byte-order mark gets a message that says to remove it.
+  default settings. A byte-order mark gets a message that says to remove it. A
+  `links.external` wiki's settings file gets the same sentence after its
+  `links.external wiki '<path>': ` prefix.
 
 ## [1.10.0] - 2026-11-27
 

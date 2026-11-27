@@ -20,6 +20,7 @@ the same of its root resolver).
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import pathlib
@@ -1165,25 +1166,39 @@ def test_lint_other_wiki_targets_follow_its_rules(
 
 
 @pytest.mark.parametrize(
-    argnames='fault',
+    argnames=('fault', 'error'),
     argvalues=[
-        'malformed',
-        'looped-marker',
-        pytest.param('unreadable-file', marks=_needs_unprivileged),
-        pytest.param('unreadable-folder', marks=_needs_unprivileged),
+        ('malformed', 'Malformed JSON in .wiki/settings.json: '),
+        (
+            'looped-marker',
+            f'Cannot read .wiki/settings.json ({os.strerror(errno.ELOOP)}).',
+        ),
+        pytest.param(
+            'unreadable-file',
+            'Cannot read .wiki/settings.json (Permission denied).',
+            marks=_needs_unprivileged,
+        ),
+        pytest.param(
+            'unreadable-folder',
+            'Cannot read .wiki/settings.json (Permission denied).',
+            marks=_needs_unprivileged,
+        ),
     ],
+    ids=['malformed', 'looped-marker', 'unreadable-file', 'unreadable-folder'],
 )
 def test_lint_other_wiki_unreadable_settings_fail_loudly(
     tmp_path: pathlib.Path,
     fault: str,
+    error: str,
 ) -> None:
     """A settings file lint cannot read in an allowlisted wiki fails naming it.
 
     Another wiki's settings are read as the host's are -- user-editable
     input that fails loudly, malformed or unreadable alike, a looped
     marker symlink and the marker folder itself included -- and the error
-    names which wiki's file it is, so the two ``.wiki/settings.json`` are
-    never confused, without that file's absolute path.
+    is the host's own sentence behind a prefix that names which wiki's
+    file it is, so the two ``.wiki/settings.json`` are never confused,
+    without that file's absolute path.
     """
     root = tmp_path / 'wiki'
     _make_wiki(root)
@@ -1204,16 +1219,20 @@ def test_lint_other_wiki_unreadable_settings_fail_loudly(
     _link_from(root, 'root', '../manual/guides')
     _set_links_external(root, ['../manual'])
 
-    # the error names the other wiki's settings file
-    match = r"links\.external wiki '\.\./manual'"
+    # the error names the other wiki, then says what the host's own would
     try:
-        with pytest.raises(ValueError, match=match) as excinfo:
+        with pytest.raises(ValueError) as excinfo:
             Wiki(root).lint()
     finally:
         if locked is not None:
             os.chmod(locked, 0o700)
     message = str(excinfo.value)
-    assert 'settings.json' in message
+    prefix = "links.external wiki '../manual': "
+    if fault == 'malformed':
+        # the parser's own sentence follows the kept prefix
+        assert message.startswith(prefix + error)
+    else:
+        assert message == prefix + error
     assert str(tmp_path.resolve()) not in message
 
 
