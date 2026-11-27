@@ -226,6 +226,12 @@ _not_strict_json = pytest.mark.parametrize(
         # surrogate escapes with no pair
         ('{"x": "\\ud800"}', "lone surrogate '\\ud800' in a string"),
         ('{"\\udc00": 1}', "lone surrogate '\\udc00' in a string"),
+        # a key named twice in one object, at the top level and in a block
+        (
+            '{"exclude": {"patterns": ["secret"]}, "exclude": {}}',
+            "duplicate key 'exclude'",
+        ),
+        ('{"naming": {"allow": "-", "allow": ""}}', "duplicate key 'allow'"),
         # an object holding 127 arrays, one inside the next
         ('{"x": ' + '[' * 127 + ']' * 127 + '}', 'nested more than 127 levels deep'),
     ],
@@ -237,6 +243,8 @@ _not_strict_json = pytest.mark.parametrize(
         'integer-too-large',
         'surrogate-in-value',
         'surrogate-in-key',
+        'key-twice-at-top-level',
+        'key-twice-in-a-block',
         'nested-128-levels',
     ],
 )

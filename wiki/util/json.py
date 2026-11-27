@@ -25,9 +25,10 @@ def strict_loads(text: str, /) -> Any:
     ``json.loads`` reads more than the JSON grammar holds: the constants
     ``NaN``, ``Infinity`` and ``-Infinity``, a number past the range of a
     double (read as infinity, or as an integer no other reader keeps), a
-    lone surrogate escape, and nesting as deep as the interpreter's stack
-    allows. Each is refused with a ``ValueError`` that words the cause, so
-    an accepted text is one every strict reader accepts and reads alike.
+    lone surrogate escape, an object that names a key twice (the last
+    value wins), and nesting as deep as the interpreter's stack allows.
+    Each is refused with a ``ValueError`` that words the cause, so an
+    accepted text is one every strict reader accepts and reads alike.
     Nesting is counted on the text before it is parsed, so the verdict
     never depends on the interpreter's stack. A plain syntax error stays
     the ``json.JSONDecodeError`` (a ``ValueError``) ``json.loads`` raises.
@@ -46,6 +47,10 @@ def strict_loads(text: str, /) -> Any:
     Traceback (most recent call last):
     ...
     ValueError: lone surrogate '\ud800' in a string
+    >>> strict_loads('{"a": {"b": 1, "b": 2}}')
+    Traceback (most recent call last):
+    ...
+    ValueError: duplicate key 'b'
     >>> strict_loads('[' * 128 + ']' * 128)
     Traceback (most recent call last):
     ...
@@ -61,12 +66,13 @@ def strict_loads(text: str, /) -> Any:
                 raise ValueError(f'nested more than {_DEPTH_LIMIT - 1} levels deep')
         elif token in (']', '}'):
             depth -= 1
-    # parse, refusing each constant and number as the parser meets it
+    # parse, refusing each constant, number and object as the parser meets it
     result = json.loads(
         text,
         parse_constant=_refuse_constant,
         parse_float=_parse_float,
         parse_int=_parse_int,
+        object_pairs_hook=_parse_object,
     )
     # refuse a surrogate no escape paired
     for string in _strings(result):
@@ -94,6 +100,16 @@ def _parse_int(literal: str, /) -> int:
     #   int() raises an error of its own, which depends on how it is configured
     _parse_float(literal)
     return int(literal)
+
+
+def _parse_object(pairs: list[tuple[str, Any]], /) -> dict[str, Any]:
+    """Build an object from its pairs, refusing a key named twice."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f'duplicate key {key!r}')
+        result[key] = value
+    return result
 
 
 def _strings(value: Any, /) -> Iterator[str]:

@@ -82,13 +82,13 @@ A JSON object at the wiki root. An absent file means all defaults; malformed
 JSON or a non-object top level fails every command that reads policy, with a
 message naming the file. The file is held to strict JSON, so that every reader
 takes it the same way: ``NaN``, ``Infinity`` and ``-Infinity``, a number too
-large to represent (``1e400``), a lone surrogate escape (``"\ud800"``) and
-nesting 128 levels deep are each malformed, and the message names the cause
-(``Malformed JSON in .wiki/settings.json: NaN is not a JSON number``). The
-recognized blocks — ``naming``, ``timestamp``, ``map``, ``titles``, ``lint``,
-``exclude``, and ``links`` — are all optional, all objects. Unknown top-level
-keys are ignored, but a wrong-typed known block or key is an error naming the
-file and key.
+large to represent (``1e400``), a lone surrogate escape (``"\ud800"``),
+nesting 128 levels deep and a key named twice in one object, at any level, are
+each malformed, and the message names the cause (``Malformed JSON in
+.wiki/settings.json: duplicate key 'exclude'``). The recognized blocks —
+``naming``, ``timestamp``, ``map``, ``titles``, ``lint``, ``exclude``, and
+``links`` — are all optional, all objects. Unknown top-level keys are ignored,
+but a wrong-typed known block or key is an error naming the file and key.
 
 Seeding and restoration are asymmetric:
 
