@@ -90,6 +90,13 @@ each malformed, and the message names the cause (``Malformed JSON in
 ``links`` — are all optional, all objects. Unknown top-level keys are ignored,
 but a wrong-typed known block or key is an error naming the file and key.
 
+A file that cannot be read fails the same commands with
+``Cannot read .wiki/settings.json (<reason>).`` The reason is the system's own
+(``Permission denied``), ``not a regular file`` for a folder or anything else
+at the path that is not a file, or ``it starts with a byte-order mark; remove
+the mark``. A path that holds something is never reported as a missing
+settings file.
+
 Seeding and restoration are asymmetric:
 
 - ``wiki init`` seeds the file with the full ``naming`` defaults block (shown

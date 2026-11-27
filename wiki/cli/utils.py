@@ -404,7 +404,10 @@ def resolve_wiki(
             raise _islands_wiki_error(island)
     # corroboration diagnostics: name what resolution tolerated
     if not declared:
-        _say(f'{wiki_root}: {WIKI_SETTINGS} missing; `wiki update` will restore it')
+        # NOTE: a marker path that holds anything is not missing, and update
+        #   restores nothing there: the settings read names what it holds
+        if not (wiki_root / WIKI_SETTINGS).exists():
+            _say(f'{wiki_root}: {WIKI_SETTINGS} missing; `wiki update` will restore it')
     elif not has_index:
         _say(
             f'{wiki_root}: wiki root is missing its {WIKI_INDEX};'

@@ -198,7 +198,7 @@ class Wiki:
         """Return the per-wiki settings overlay from ``.wiki/settings.json``.
 
         Returns an empty dict when the file is absent. Raises ``ValueError``
-        on text that is not strict JSON (see
+        on a file that cannot be read, text that is not strict JSON (see
         :func:`wiki.util.json.strict_loads`) or a non-object top level,
         since the file is user-editable input that should fail loudly
         rather than be ignored.
@@ -206,8 +206,24 @@ class Wiki:
         path = self._root / WIKI_SETTINGS
         if not path.exists():
             return {}
+        # NOTE: a FIFO blocks its reader until a writer comes, so only a
+        #   regular file is opened
+        if not path.is_file():
+            raise _unreadable_settings_error('not a regular file')
+        # read the text, naming the cause of a file that yields none
         try:
-            result = wiki.util.json.strict_loads(path.read_text(encoding='utf-8'))
+            text = path.read_text(encoding='utf-8')
+        except OSError as e:
+            raise _unreadable_settings_error(e.strerror) from e
+        except UnicodeDecodeError as e:
+            raise _malformed_json_error(WIKI_SETTINGS, e) from e
+        if text.startswith('\ufeff'):
+            raise _unreadable_settings_error(
+                'it starts with a byte-order mark; remove the mark'
+            )
+        # parse the text as strict JSON
+        try:
+            result = wiki.util.json.strict_loads(text)
         except ValueError as e:
             raise _malformed_json_error(WIKI_SETTINGS, e) from e
         if not isinstance(result, dict):
@@ -3935,10 +3951,8 @@ class Wiki:
             raise ValueError(f'links.external wiki {relpath!r}: {e}') from e
         except OSError as e:
             relpath = os.path.relpath(folder, self._root)
-            raise ValueError(
-                f'links.external wiki {relpath!r}: cannot read {WIKI_SETTINGS}'
-                f' ({e.strerror})'
-            ) from e
+            error = _unreadable_settings_error(e.strerror)
+            raise ValueError(f'links.external wiki {relpath!r}: {error}') from e
         return guest
 
     def _external_index_target(
@@ -6966,6 +6980,11 @@ def _encloses_wiki_error(nested: pathlib.Path) -> ValueError:
 def _malformed_json_error(name: str, e: Exception) -> ValueError:
     """Build the malformed-JSON error, naming the user-editable file."""
     return ValueError(f'Malformed JSON in {name}: {e}')
+
+
+def _unreadable_settings_error(reason: str) -> ValueError:
+    """Build the unreadable-settings error, naming the file and the cause."""
+    return ValueError(f'Cannot read {WIKI_SETTINGS} ({reason}).')
 
 
 def _read_vault_json(target: pathlib.Path) -> Any:

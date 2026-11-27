@@ -25,6 +25,7 @@ from wiki import __version__ as WIKI_VERSION
 from wiki.cli.utils import configure_git_merge_driver
 from wiki.constants import WIKI_CONFIG_DIR, WIKI_FREEZE_TIME
 
+from .._helpers import _needs_unprivileged
 from .conftest import GIT, WIKI, _env, _git, _git_repo, _wiki
 
 __all__ = [
@@ -40,6 +41,7 @@ __all__ = [
     'test_settings_file_refuses_text_that_is_not_strict_json',
     'test_init_refuses_settings_that_are_not_strict_json',
     'test_settings_nesting_is_refused_from_128_levels',
+    'test_settings_file_that_cannot_be_read_is_named_with_its_cause',
     'test_install_copies_skill_into_home',
     'test_install_project_targets_cwd',
     'test_install_link_swaps_copy_and_symlink',
@@ -581,6 +583,49 @@ def test_settings_nesting_is_refused_from_128_levels(tmp_path: pathlib.Path) -> 
     assert seeded.returncode == 2, seeded.stdout + seeded.stderr
     assert 'nested more than 127 levels deep' in seeded.stderr
     assert not fresh.exists()
+
+
+@pytest.mark.parametrize(
+    argnames=('fault', 'reason'),
+    argvalues=[
+        pytest.param('no-permission', 'Permission denied', marks=_needs_unprivileged),
+        ('folder', 'not a regular file'),
+        ('byte-order-mark', 'it starts with a byte-order mark; remove the mark'),
+    ],
+    ids=['no-permission', 'folder', 'byte-order-mark'],
+)
+def test_settings_file_that_cannot_be_read_is_named_with_its_cause(
+    tmp_path: pathlib.Path,
+    fault: str,
+    reason: str,
+) -> None:
+    """A settings file that yields no text is refused in one line with its cause.
+
+    The line names the file by its path in the wiki, and a path that holds
+    a folder is never called missing: nothing a command could restore is
+    absent there.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    settings = root / '.wiki' / 'settings.json'
+    if fault == 'no-permission':
+        os.chmod(settings, 0o000)
+    elif fault == 'folder':
+        settings.unlink()
+        settings.mkdir()
+    else:
+        settings.write_bytes(b'\xef\xbb\xbf{}\n')
+
+    # each command that reads policy says the one line
+    error = f'Error: Cannot read .wiki/settings.json ({reason}).\n'
+    try:
+        for args in (('update', '--check'), ('update',), ('lint',), ('map',)):
+            result = _wiki(tmp_path, *args, '--path', str(root))
+            assert result.returncode == 2, (args, result.stdout + result.stderr)
+            assert result.stderr == error, args
+    finally:
+        if fault == 'no-permission':
+            os.chmod(settings, 0o600)
 
 
 # ------ install
