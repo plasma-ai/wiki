@@ -33,6 +33,10 @@ _ORACLE = 'oracle'
 _SELF = 'self-check'
 _CORPUS = 'corpora'
 _HISTORY = 'history'
+# the folder every merge of a gate is replayed in, below the gate's work
+# folder: one for every step that replays merges, since a cache entry is keyed
+# on the path its merge ran at. No layer has this name
+_AT = 'at'
 # the folder that holds the harness, which every step runs from
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -76,7 +80,8 @@ class Timed:
 
     Attributes:
         name: Label of the step.
-        code: The exit code of its command.
+        code: The exit code of its command; the negated signal number for
+            a command a signal ended.
         seconds: How long the command took.
         cpu: The processor seconds the command and every process it
             waited for took.
@@ -99,6 +104,7 @@ class Done:
         seconds: How long the layer took, from its first step's start to
             its last step's end.
         load: The load average of the host when the layer started.
+        load_end: The load average of the host when the layer ended.
 
     """
 
@@ -106,6 +112,7 @@ class Done:
     steps: tuple[Timed, ...]
     seconds: float
     load: float
+    load_end: float
 
     @property
     def cpu(self: Done) -> float:
@@ -121,8 +128,16 @@ class Done:
 
     @property
     def code(self: Done) -> int:
-        """Return the exit code of the layer: the highest of its steps'."""
-        return max(step.code for step in self.steps)
+        """Return the exit code of the layer.
+
+        ``0`` when every step exited 0, ``1`` when a step exited 1 and none
+        ended any other way, and ``2`` otherwise: a step that a signal
+        ended has a negative code, which is an error like any code above 1.
+        """
+        codes = {step.code for step in self.steps}
+        if codes - {0, 1}:
+            return 2
+        return max(codes)
 
 
 def layers(
@@ -158,7 +173,8 @@ def layers(
         loop: The corpora whose wikis the loop of fresh seeds runs on.
             The first also takes the registry check, which one corpus
             proves. Empty leaves the loop out.
-        work: Folder each step makes its work folder in.
+        work: Folder each step makes its work folder in, and the steps that
+            replay merges the one folder the merges run in.
         out: Folder each step writes its results in.
         cache: Folder of the cache of the merge history.
         engine: Name of the side compared against v1. ``None`` leaves out
@@ -205,7 +221,7 @@ def layers(
 
     reference = ['--side', suite.REFERENCE]
     looped = [part for label in loop for part in ('--corpus', label)]
-    replayed = ['merges', *shared, *chosen, *clock, *pace]
+    replayed = ['merges', *shared, *chosen, *clock, *pace, '--at', f'{work / _AT}']
     # v2 is level with v1, as the remote-tracking references hold it
     check = Step(name='oracle', argv=('oracle', 'check'), log=out / 'oracle.txt')
     result = [Layer(name='oracle', part=_ORACLE, steps=(check,))]
@@ -291,7 +307,14 @@ def run(planned: Sequence[Layer], *, jobs: Optional[int] = None) -> Iterator[Don
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
             steps = tuple(pool.map(_step, layer.steps))
         seconds = round(time.monotonic() - started, 1)
-        yield Done(layer=layer, steps=steps, seconds=seconds, load=round(load, 2))
+        load_end, *_ = os.getloadavg()
+        yield Done(
+            layer=layer,
+            steps=steps,
+            seconds=seconds,
+            load=round(load, 2),
+            load_end=round(load_end, 2),
+        )
 
 
 # ------ helper functions

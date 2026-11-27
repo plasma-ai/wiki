@@ -636,8 +636,11 @@ did on each merge: a run of v1 alone stores a merge that shows no difference and
 skips the ones the cache holds, and a run with an engine reads v1's part from
 it. An entry is keyed on the oracle's engine files, its constraints file, the
 interpreter, git, the merge, the instant and the path, so a release that changes
-no engine file keeps the cache. A change to what an entry holds, or to the steps
-of a pass, moves `_FORMAT` in the same commit, and the spec's section with it.
+no engine file keeps the cache. It is keyed on the harness files that make a
+pass and an entry too (`_SOURCES`): a change to one of them empties the cache,
+so fill it again with a run of v1 alone before the next gate with an engine, and
+add a module to the list when a pass comes to run through it. The runs that
+share a cache replay their merges in one folder, which `--at` names.
 
 `python -m parity gate` runs a gate (`parity/gate.py`): the layers of the
 harness on the corpora, one after the other, each step a harness command in a
@@ -646,8 +649,9 @@ with an engine if `--engine` names one, and ends with the merge history;
 `gate daily` holds the comparison and the merges the cache does not hold yet. It
 records the seconds, the processor seconds and the load of each layer, so run it
 on a host that does nothing else, and with the same `--work` every time: the
-cache of the merge history is keyed on the path. A new harness command that a
-gate should hold gets its layer in `layers` and its row in the spec's table.
+cache of the merge history is keyed on the path, and the gate hands every step
+that replays merges the folder `<work>/at`. A new harness command that a gate
+should hold gets its layer in `layers` and its row in the spec's table.
 
 `python -m parity container` runs one command in the Linux container
 (`parity/container.py`, `parity/Dockerfile`): the Ubuntu release of the CI

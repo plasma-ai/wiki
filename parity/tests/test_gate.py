@@ -7,9 +7,9 @@ merges.
 
 from __future__ import annotations
 
-import functools
 import json
 import pathlib
+import shutil
 
 import pytest
 
@@ -19,8 +19,9 @@ from .conftest import NOW, _declare, _needs_git
 
 __all__ = [
     'test_daily_gate_with_no_engine_fills_the_cache_and_times_its_layers',
-    'test_gate_exits_with_the_highest_exit_code_of_its_steps',
-    'test_full_gate_names_every_layer_in_order',
+    'test_layers_of_the_merge_history_share_the_cache',
+    'test_layer_runs_every_step_and_times_each',
+    'test_layer_ends_as_the_worst_of_its_steps',
     'test_gate_that_would_run_nothing_is_refused',
 ]
 
@@ -71,8 +72,11 @@ def test_daily_gate_with_no_engine_fills_the_cache_and_times_its_layers(
     assert 'example: 0 of 3 merges differ' in (
         tmp_path / 'out' / 'merges.txt'
     ).read_text('utf-8')
-    # the same work folder gives every merge the path its entry is keyed on
-    assert not (tmp_path / 'work' / 'merges').exists()
+    # the same work folder gives every merge the path its entry is keyed on;
+    # a gate whose oracle check failed keeps its own, with nothing of a merge
+    assert not (tmp_path / 'work' / 'at').exists()
+    assert not (tmp_path / 'work' / 'merges' / 'merges').exists()
+    shutil.rmtree(tmp_path / 'work', ignore_errors=True)
     assert cli.main([*argv, f'{tmp_path / "again"}']) in (0, 1)
     result = json.loads(
         (tmp_path / 'again' / 'merges' / 'example.json').read_text('utf-8')
@@ -80,13 +84,56 @@ def test_daily_gate_with_no_engine_fills_the_cache_and_times_its_layers(
     assert result['counts']['cached'] == 3
 
 
-def test_gate_exits_with_the_highest_exit_code_of_its_steps(
+@_needs_git
+def test_layers_of_the_merge_history_share_the_cache(
+    history: runner.Corpus,
     tmp_path: pathlib.Path,
 ) -> None:
-    """A layer is as its steps ended: each is timed, and the highest exit code stands.
+    """The layers that replay merges read what another layer of a gate stored.
+
+    The layers of the merge history run as a gate orders them, with the
+    second interpreter of v1 as the engine. A first daily gate meets every
+    merge as a new one: the engine runs beside v1, and v1 alone then
+    stores them. The next daily gate finds no new merge. A full gate reads
+    v1's part of every merge from the cache, with and without the engine.
+    """
+    corpora = _declare(tmp_path, history)
+
+    def replayed(kind: str, name: str) -> dict[str, tuple[int, int]]:
+        """Run the gate's history layers; return each one's merges and cached ones."""
+        planned = gate.layers(
+            kind,
+            corpora=corpora,
+            labels=[history.label],
+            loop=[],
+            work=tmp_path / 'work',
+            out=tmp_path / name,
+            cache=tmp_path / 'cache',
+            engine='alt',
+            now=NOW,
+        )
+        counts = {}
+        for done in gate.run([layer for layer in planned if layer.part == 'history']):
+            assert done.code == 0, done.layer.steps[0].log.read_text('utf-8')
+            path = tmp_path / name / done.layer.name / f'{history.label}.json'
+            held = json.loads(path.read_text('utf-8'))['counts']
+            counts[done.layer.name] = (held['merges'], held['cached'])
+        return counts
+
+    first = replayed(gate.DAILY, 'first')
+    assert list(first) == ['merges-engine', 'merges']
+    assert first == {'merges-engine': (3, 0), 'merges': (3, 0)}
+    assert replayed(gate.DAILY, 'second') == {'merges-engine': (0, 0), 'merges': (3, 3)}
+    full = replayed(gate.FULL, 'full')
+    assert list(full) == ['merges', 'merges-engine']
+    assert full == {'merges': (3, 3), 'merges-engine': (3, 3)}
+
+
+def test_layer_runs_every_step_and_times_each(tmp_path: pathlib.Path) -> None:
+    """A layer is as its steps ended: each ran, printed to its own log and is timed.
 
     One step passes and one is a command line the harness refuses with exit
-    2; both ran, and each printed to its own log.
+    2, which is then the layer's.
     """
     passing = gate.Step(
         name='passing',
@@ -119,61 +166,38 @@ def test_gate_exits_with_the_highest_exit_code_of_its_steps(
     assert done.seconds >= max(step.seconds for step in done.steps)
 
 
-def test_full_gate_names_every_layer_in_order(tmp_path: pathlib.Path) -> None:
-    """A full gate checks the harness first, then the engine, then the history.
+@pytest.mark.parametrize(
+    ('codes', 'expected'),
+    [
+        ((0, 0), 0),
+        ((0, 1), 1),
+        ((1, 2), 2),
+        ((0, 3), 2),
+        ((-9, 0), 2),
+        ((-9, 1), 2),
+    ],
+)
+def test_layer_ends_as_the_worst_of_its_steps(
+    tmp_path: pathlib.Path,
+    codes: tuple[int, ...],
+    expected: int,
+) -> None:
+    """A layer exits 0, 1 for a result that is not the expected one, or 2.
 
-    Without an engine no layer compares two engines; without a loop corpus
-    no loop runs. A layer whose command takes a corpus has a step for each.
+    A step that a signal ended has a negative code. It is an error, as
+    every code above 1 is, whatever the other steps showed.
     """
-    layers = functools.partial(
-        gate.layers,
-        corpora=tmp_path / 'corpora.toml',
-        work=tmp_path / 'work',
-        out=tmp_path / 'out',
-        cache=tmp_path / 'cache',
+    steps = tuple(
+        gate.Step(name=f'{index}', argv=(), log=tmp_path / f'{index}.txt')
+        for index, _ in enumerate(codes)
     )
-    labels = ['corpus-a', 'corpus-b']
-    alone = layers(gate.FULL, labels=labels, loop=[])
-    assert [layer.name for layer in alone] == [
-        'oracle',
-        'selfcheck',
-        'registry',
-        'replay',
-        'fixtures',
-        'perturb-corpus',
-        'merges-sample',
-        'merges',
-    ]
-    assert [step.name for step in alone[1].steps] == labels
-    both = layers(gate.FULL, labels=labels, loop=['corpus-b'], engine='engine')
-    assert [layer.name for layer in both] == [
-        'oracle',
-        'selfcheck',
-        'registry',
-        'replay',
-        'fixtures',
-        'perturb-corpus',
-        'perturb-loop',
-        'merges-sample',
-        'matrix',
-        'fixtures-engine',
-        'perturb-corpus-engine',
-        'perturb-loop-engine',
-        'merges',
-        'merges-engine',
-    ]
-    daily = layers(gate.DAILY, labels=labels, loop=['corpus-b'], engine='engine')
-    assert [layer.name for layer in daily] == [
-        'oracle',
-        'matrix',
-        'fixtures-engine',
-        'perturb-corpus-engine',
-        'merges-engine',
-        'merges',
-    ]
-    # the engine meets the day's merges before v1 alone stores them
-    (new,) = daily[-2].steps
-    assert '--new' in new.argv
+    layer = gate.Layer(name='layer', part='self-check', steps=steps)
+    timed = tuple(
+        gate.Timed(name=step.name, code=code, seconds=1.0, cpu=1.0)
+        for step, code in zip(steps, codes)
+    )
+    done = gate.Done(layer=layer, steps=timed, seconds=1.0, load=1.0, load_end=1.0)
+    assert done.code == expected
 
 
 @pytest.mark.parametrize(

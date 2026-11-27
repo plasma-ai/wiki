@@ -54,8 +54,12 @@ def _git(cwd: pathlib.Path, *args: str) -> str:
     env['GIT_CONFIG_GLOBAL'] = os.devnull
     env['GIT_CONFIG_SYSTEM'] = os.devnull
     identity = ['-c', 'user.name=t', '-c', 'user.email=t@t']
+    # git packs nothing behind a test's back: a commit would start a
+    # maintenance run whose lock file comes and goes while a fixture copies
+    # the repository
+    quiet = ['-c', 'gc.auto=0', '-c', 'maintenance.auto=false']
     result = subprocess.run(
-        ['git', '-C', f'{cwd}', *identity, *args],
+        ['git', '-C', f'{cwd}', *identity, *quiet, *args],
         env=env,
         capture_output=True,
         text=True,

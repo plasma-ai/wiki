@@ -22,6 +22,7 @@ import datetime as dt
 import hashlib
 import json
 import logging
+import math
 import multiprocessing
 import os
 import pathlib
@@ -56,19 +57,30 @@ logger = logging.getLogger('parity')
 #: the stage of the merge itself, and its one case
 MERGE = 'merge'
 
-# the version of what a cache entry holds and of how a merge is replayed: a
-# change to either gives every entry another key, so the next run replays
-# every merge on the reference side again
-_FORMAT = 1
-# the folder every merge is replayed in, below the work folder: a merge runs
-# at `<work>/at/<commit>`, whichever worker takes it
-_AT = 'at'
+# the files of the harness that make a pass and a cache entry: the steps of a
+# pass, the environment and the launcher of a side, the git calls, the scans,
+# the folders of a slot, and the classes an entry holds. A cache entry is
+# keyed on their bytes, so a change to one of them replays every merge on the
+# reference side again; a module a pass comes to run through joins them
+_SOURCES = (
+    'cache.py',
+    'compare.py',
+    'launcher.py',
+    'manifest.py',
+    'matrix.py',
+    'merges.py',
+    'runner.py',
+    'side.py',
+    'snapshot.py',
+)
+# the folder of the harness, which holds them
+_HARNESS = pathlib.Path(__file__).resolve().parent
 # the repository of a worker while it replays no merge
 _WORKER = 'worker-{index}'
 # the home its judge runs under
 _JUDGE = 'judge-{index}'
-# how many merges a worker takes at once: neighbors, whose trees are close,
-# and few enough that the workers end together though the merges of a
+# how many merges a worker takes at once, at most: neighbors, whose trees are
+# close, and few enough that the workers end together though the merges of a
 # history differ in what they cost
 _NEIGHBORS = 8
 # seconds between two looks at the workers while no merge has ended
@@ -165,6 +177,8 @@ class Stamp:
             reference side's venv.
         python: Version of the reference side's interpreter.
         git: What ``git --version`` prints.
+        harness: Digest of the files of the harness that make a pass and
+            an entry.
 
     """
 
@@ -172,6 +186,7 @@ class Stamp:
     constraints: str
     python: str
     git: str
+    harness: str
 
 
 @dataclasses.dataclass(frozen=True)
@@ -292,26 +307,39 @@ def prepare(history: History, *, work: pathlib.Path, at: pathlib.Path) -> Plan:
     (work / _SNAPSHOT).mkdir(parents=True)
     held = work / _SNAPSHOT / '.git'
     snapshot.clone(history.checkout / '.git', held)
-    env = _plain()
-    head = snapshot._git(['--git-dir', f'{held}', 'rev-parse', 'HEAD'], env=env)
+    head = snapshot._git(['--git-dir', f'{held}', 'rev-parse', 'HEAD'], env=_plain())
+    merges = tuple(listed(held))
+    return Plan(history=history, work=work, at=at, head=head, merges=merges)
+
+
+def listed(repository: pathlib.Path) -> list[Merge]:
+    """Return every merge commit that ``HEAD`` reaches, oldest first.
+
+    The command reads the repository and writes nothing there, so a run may
+    ask it of a checkout before it snapshots one.
+
+    Args:
+        repository: The ``.git`` folder of a repository.
+
+    """
     listing = snapshot._git(
         [
             '--git-dir',
-            f'{held}',
+            f'{repository}',
             'rev-list',
             '--merges',
             '--parents',
             '--topo-order',
             '--reverse',
-            head,
+            'HEAD',
         ],
-        env=env,
+        env=_plain(),
     )
     merges = []
     for line in listing.splitlines():
         commit, *parents = line.split()
         merges.append(Merge(commit=commit, parents=tuple(parents)))
-    return Plan(history=history, work=work, at=at, head=head, merges=tuple(merges))
+    return merges
 
 
 def sample(merges: Sequence[Merge], one_in: int) -> list[Merge]:
@@ -333,7 +361,8 @@ def stamp(oracle: Oracle, name: str) -> Stamp:
 
     Returns:
         The digests of the engine files and of the side's constraints
-        file, the side's interpreter and the host's git.
+        file, the side's interpreter, the host's git, and the digest of the
+        harness's own files.
 
     """
     env = _plain()
@@ -356,12 +385,17 @@ def stamp(oracle: Oracle, name: str) -> Stamp:
             kept = [line for line in lines if not line.startswith(_VERSION_LINE)]
             held = hashlib.sha256(b''.join(kept)).hexdigest()
         digest.update(f'{held}\t{relpath}\0'.encode('utf-8', 'surrogateescape'))
+    harness = hashlib.sha256()
+    for relpath in _SOURCES:
+        held = hashlib.sha256((_HARNESS / relpath).read_bytes()).hexdigest()
+        harness.update(f'{held}\t{relpath}\0'.encode())
     build = oracle.builds[name]
     return Stamp(
         engine=digest.hexdigest(),
         constraints=hashlib.sha256(build.constraints.read_bytes()).hexdigest(),
         python=build.python,
         git=snapshot._git(['--version'], env=env),
+        harness=harness.hexdigest(),
     )
 
 
@@ -398,7 +432,7 @@ def run(
     paths in what a side prints are those of every other run of that
     merge. The workers take the merges in runs of neighbors: a worker
     keeps one repository, and the tree of a merge is close to the tree of
-    the merge before it.
+    the merge before it. A run is short enough that every worker has one.
 
     Args:
         plan: The snapshot, from :func:`prepare`.
@@ -441,11 +475,9 @@ def run(
     if not waiting:
         return
     # deal the others out in runs of neighbors, which the workers take in turn
-    runs = [
-        waiting[start : start + _NEIGHBORS]
-        for start in range(0, len(waiting), _NEIGHBORS)
-    ]
-    count = max(1, min(jobs, len(runs)))
+    size = min(_NEIGHBORS, math.ceil(len(waiting) / jobs))
+    runs = [waiting[start : start + size] for start in range(0, len(waiting), size)]
+    count = min(jobs, len(runs))
     # NOTE: a worker is a process started from nothing: the harness holds
     #   threads, and a forked copy of a process with threads may hang
     context = multiprocessing.get_context('spawn')
@@ -539,7 +571,6 @@ def _plain() -> dict[str, str]:
 def _key(plan: Plan, merge: Merge, stamped: Stamp, *, now: str) -> dict[str, Any]:
     """Return what the cache entry of ``merge`` is keyed on."""
     return {
-        'format': _FORMAT,
         **dataclasses.asdict(stamped),
         'platform': sys.platform,
         'commit': merge.commit,

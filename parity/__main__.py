@@ -9,7 +9,7 @@ usage: python -m parity matrix --a NAME --b NAME [--registered] [--sides FILE] -
        python -m parity perturb corpus [--engine NAME] [--sides FILE] --corpora FILE [--seed N] --work DIR --out DIR
        python -m parity perturb loop [--engine NAME] [--sides FILE] [--corpora FILE] [--seed N | --fresh N] --work DIR --out DIR
        python -m parity interpreters --corpora FILE --work DIR --out DIR
-       python -m parity merges [--engine NAME] [--sides FILE] --corpora FILE [--cache DIR] --work DIR --out DIR
+       python -m parity merges [--engine NAME] [--sides FILE] --corpora FILE [--cache DIR] [--at DIR] --work DIR --out DIR
        python -m parity gate {full,daily} [--engine NAME] [--sides FILE] --corpora FILE --cache DIR --work DIR --out DIR
        python -m parity oracle ensure [--side NAME]
        python -m parity oracle check [--skip NAME]
@@ -95,10 +95,12 @@ tree declares. With no ``--engine`` both sides are v1, under two hash seeds;
 with one it compares v1 with that side, and with that side on one thread.
 ``--cache`` keeps what v1 did on each merge: a run of v1 alone stores it and
 skips the merges the cache holds, and a run with an engine reads v1's part
-from it. It exits 0 when no merge shows a difference, and 1 otherwise. It
-exits 2, before it snapshots a repository, as ``matrix`` does and on a corpus
-whose checkout is no repository. A merge that ends in an error is printed and
-recorded, the others run on, and the run then exits 2.
+from it. An entry is keyed on the path its merge ran at, so the runs that
+share a cache name one folder with ``--at``. It exits 0 when no merge shows
+a difference, and 1 otherwise. It exits 2, before it snapshots a repository,
+as ``matrix`` does, on a corpus whose checkout is no repository, and on a
+``--commit`` that names no merge of the histories. A merge that ends in an
+error is printed and recorded, the others run on, and the run then exits 2.
 
 ``gate`` runs a gate: the layers of the harness on the corpora, one after the
 other, each a set of the commands above with a work folder, an output folder
@@ -107,7 +109,8 @@ v1 with an engine if one is named, and ends with the whole merge history; a
 daily gate holds the comparison with the engine and the merges the cache does
 not hold yet. It records for each layer the seconds on the clock, the
 processor seconds of its commands and how many processors that comes to, and
-exits with the highest exit code of its steps: 0, 1, or 2 for any other.
+exits 0 when every step did, 1 when a step exited 1 and none ended any other
+way, and 2 otherwise.
 
 The registry lists what a second engine may do differently from v1, and two
 builds of v1 have nothing registered between them. ``matrix`` therefore
@@ -132,6 +135,7 @@ from __future__ import annotations
 import argparse
 import collections
 import concurrent.futures
+import contextlib
 import dataclasses
 import datetime as dt
 import functools
@@ -492,6 +496,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # jobs option
     jobs_help = 'How many merges are replayed at once (default: one per processor).'
     command.add_argument('--jobs', type=int, help=jobs_help)
+    # merge folder option
+    at_help = (
+        'New folder every merge is replayed in, each below its commit: the runs'
+        ' that share a cache name the same one (default: <work>/merges/at).'
+    )
+    command.add_argument('--at', type=pathlib.Path, help=at_help)
     # work folder option
     work_help = 'Folder the harness makes one new folder in.'
     command.add_argument('--work', type=pathlib.Path, required=True, help=work_help)
@@ -1562,14 +1572,35 @@ def _merges(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int
     # refuse the work folder and the histories, and probe every side, before
     # a repository is snapshotted
     work = options.work.resolve() / _MERGES
+    at = work / _AT
+    if options.at is not None:
+        at = options.at.resolve()
     try:
         fixtures.validate(work)
+        fixtures.validate(at)
         told = merges.histories([corpora[label] for label in labels])
         for history in told:
             merges.validate(history, work=work / _REPOSITORIES / history.label)
         header = _header(chosen, now=options.now)
     except ValueError as e:
         parser.error(f'{e}')
+    # refuse a commit that is no merge of any history: the run would replay
+    # nothing for it, and exit as if the merge showed no difference
+    if options.commit:
+        held = [
+            merge.commit
+            for history in told
+            for merge in merges.listed(history.checkout / '.git')
+        ]
+        unknown = [
+            commit
+            for commit in options.commit
+            if not any(known.startswith(commit) for known in held)
+        ]
+        if unknown:
+            parser.error(
+                f'--commit names no merge commit of the histories: {unknown!r}.'
+            )
     header['registry'] = {id: entry.status for id, entry in entries.items()}
     # v1 against itself under two hash seeds, or v1 against the engine, which
     # also runs on one thread
@@ -1588,11 +1619,7 @@ def _merges(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int
     for history in told:
         label = history.label
         started = time.monotonic()
-        plan = merges.prepare(
-            history,
-            work=work / _REPOSITORIES / label,
-            at=work / _AT,
-        )
+        plan = merges.prepare(history, work=work / _REPOSITORIES / label, at=at)
         # resolve the merges to replay
         picked = list(plan.merges)
         if options.sample is not None:
@@ -1674,6 +1701,10 @@ def _merges(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int
         # two builds of v1 have nothing registered between them
         if counts['differing'] or (counts['excused'] and not engines):
             failed = True
+    # every worker took its repository back, so the folder of the merges is
+    # empty: the next run that names it finds it new
+    with contextlib.suppress(OSError):
+        at.rmdir()
     if errors:
         return 2
     if failed:
@@ -1760,6 +1791,7 @@ def _gate(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
             'cpu': done.cpu,
             'parallelism': done.parallelism,
             'load': done.load,
+            'load_end': done.load_end,
             'steps': [
                 {**dataclasses.asdict(timed), 'argv': list(step.argv)}
                 for timed, step in zip(done.steps, done.layer.steps)
@@ -1772,20 +1804,18 @@ def _gate(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
         print(
             f'{done.layer.name} ({done.layer.part}): exit {done.code},'
             f' {done.seconds:.0f} s, {done.cpu:.0f} s of processor time,'
-            f' {done.parallelism:.1f} processors, load {done.load:.1f} at its start',
+            f' {done.parallelism:.1f} processors, load {done.load:.1f} at its start'
+            f' and {done.load_end:.1f} at its end',
             flush=True,
         )
         for timed, step in zip(done.steps, done.layer.steps):
             if timed.code != 0:
                 print(f'  {step.name}: exit {timed.code}: {step.log}', flush=True)
-        codes.extend(step.code for step in done.steps)
-    # an exit code but 0 and 1 is an error of a step, or of the harness
-    if any(code not in (0, 1) for code in codes):
-        return 2
-    if any(codes):
-        return 1
-    shutil.rmtree(work, ignore_errors=True)
-    return 0
+        codes.append(done.code)
+    code = max(codes)
+    if code == 0:
+        shutil.rmtree(work, ignore_errors=True)
+    return code
 
 
 def _container(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
