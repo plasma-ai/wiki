@@ -282,7 +282,8 @@ blank lines are stripped, the slice is taken, and the output re-emits the
 frontmatter plus the slice — with a trailing newline appended, unlike an
 unsliced read. Non-markdown files slice as a whole. ``--lines`` counts lines as
 ``wiki match`` numbers them: a line ends at a newline and at nothing else, so a
-form feed stays inside its line and comes back unchanged.
+form feed stays inside its line and comes back unchanged. An empty slice value
+is refused as an invalid slice, as any other malformed one is.
 
 .. list-table::
    :header-rows: 1

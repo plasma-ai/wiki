@@ -14,6 +14,11 @@ may include breaking changes, each listed under a Breaking heading.
   128 levels deep and a key named twice in one object are refused with a message
   that names the cause. Before, wiki read such a file, kept only the last of two
   equal keys, and `init --settings` could write a file that is not JSON.
+- An empty `--lines`, `--words` or `--chars` value of `wiki read` is an invalid
+  slice. Before, it returned the whole page, so a script with an unset variable
+  read a page it meant to slice. `wiki read` also checks its slice before it
+  looks for the wiki, so a malformed slice is reported as one whatever `--path`
+  names.
 
 ### Fixed
 

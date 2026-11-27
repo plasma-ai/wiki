@@ -496,19 +496,21 @@ def read(
         trailing newline.
         """
         # validate arguments: the slice units are pairwise exclusive
-        if lines and words:
+        if (lines is not None) and (words is not None):
             raise typer.BadParameter('--lines and --words are mutually exclusive.')
-        if lines and chars:
+        if (lines is not None) and (chars is not None):
             raise typer.BadParameter('--lines and --chars are mutually exclusive.')
-        if words and chars:
+        if (words is not None) and (chars is not None):
             raise typer.BadParameter('--words and --chars are mutually exclusive.')
-        # resolve the one given slice unit, if any
+        # parse the one given slice unit, if any (an empty value is a
+        # malformed slice, not an absent one)
         ranges = {'lines': lines, 'words': words, 'chars': chars}
-        given = {on: spec for on, spec in ranges.items() if spec}
+        given = {
+            on: parse_slice(spec) for on, spec in ranges.items() if spec is not None
+        }
         wiki = resolve(path)
         if given:
-            on, spec = next(iter(given.items()))
-            start, stop = parse_slice(spec)
+            on, (start, stop) = next(iter(given.items()))
             content = wiki.read(name=name, start=start, stop=stop, on=on)
         else:
             content = wiki.read(name=name)

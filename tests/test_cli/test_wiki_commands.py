@@ -108,6 +108,7 @@ __all__ = [
     'test_read_lines_count_as_match_numbers_them',
     'test_read_resolves_dotted_page_name',
     'test_read_errors',
+    'test_read_checks_its_slice_before_the_wiki',
     'test_read_slice_short_aliases',
     'test_colliding_short_flags_are_rejected',
     'test_read_outputs_bytes_verbatim',
@@ -2576,6 +2577,12 @@ def test_read_resolves_dotted_page_name(wiki: pathlib.Path) -> None:
         ('core/design', ['--words', 'abc'], 2, 'slice format'),
         # a slice with non-integer bounds is a usage error
         ('core/design', ['--words', 'a:b'], 2, 'slice format'),
+        # an empty slice value is a malformed slice, not an absent one
+        ('core/design', ['--lines', ''], 2, 'slice format'),
+        ('core/design', ['--words', ''], 2, 'slice format'),
+        ('core/design', ['--chars', ''], 2, 'slice format'),
+        # ... and still excludes another unit
+        ('core/design', ['--lines', '', '--words', '0:2'], 2, 'mutually exclusive'),
         # a missing entry is a clean runtime error, not a traceback
         ('core/missing_entry', [], 2, 'not found'),
         # a name escaping the wiki root is refused, not resolved
@@ -2586,6 +2593,10 @@ def test_read_resolves_dotted_page_name(wiki: pathlib.Path) -> None:
     ids=[
         'non-colon-slice',
         'non-integer-slice',
+        'empty-lines-slice',
+        'empty-words-slice',
+        'empty-chars-slice',
+        'empty-slice-beside-another',
         'missing-entry',
         'escaping-name',
         'blank-name',
@@ -2602,6 +2613,24 @@ def test_read_errors(
     result = _wiki(wiki, 'read', name, '--path', str(wiki), *args)
     assert result.returncode == returncode
     assert needle in (result.stdout + result.stderr).lower()
+
+
+def test_read_checks_its_slice_before_the_wiki(tmp_path: pathlib.Path) -> None:
+    """A malformed slice is reported as one whatever ``--path`` names.
+
+    The slice is checked with the other arguments, before the wiki is
+    looked for, so a command line that is wrong in two ways is reported
+    as malformed first.
+    """
+    missing = tmp_path / 'nonexistent'
+    result = _wiki(tmp_path, 'read', 'a/p', '--path', str(missing), '--lines', 'zz')
+    assert result.returncode == 2
+    assert "Invalid slice format: 'zz'" in result.stderr
+    assert 'No wiki' not in result.stderr
+    # a well-formed slice leaves the missing wiki as the error
+    result = _wiki(tmp_path, 'read', 'a/p', '--path', str(missing), '--lines', '0:1')
+    assert result.returncode == 2
+    assert 'No wiki' in result.stderr
 
 
 @pytest.mark.parametrize(
