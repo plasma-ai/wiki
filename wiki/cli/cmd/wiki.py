@@ -1342,8 +1342,8 @@ def _index_canonicalizer(root: pathlib.Path, path: pathlib.Path) -> Optional[Wik
 
     The engine is the wiki's own class (a ``.wiki/wiki.py`` hook may order
     rows its own way), and it serves only when it leaves the current
-    branch's index as written: an index another class wrote -- an
-    embedder's update with its own category order -- stays as merged, since
+    branch's index as written: an index another class wrote -- a
+    subclass's update with its own category order -- stays as merged, since
     this class would make it stale.
 
     Args:
