@@ -394,7 +394,9 @@ def test_search_notices_unreadable_pages_per_read_attempt(
     assert wiki.search('hidden') == []
     skips = [event for event in notices if type(event).__name__ == 'ReadSkipEvent']
     assert [event.path for event in skips] == ['core/unreadable.md']
-    assert 'core/unreadable.md' in skips[0].description
+    # one line serves a page that cannot be opened and one that is not UTF-8
+    line = 'Skipping core/unreadable.md: unreadable, or not valid UTF-8'
+    assert skips[0].description == line
     # the tombstone keeps the next query off the read path -- no repeat notice
     notices.clear()
     assert wiki.search('hidden') == []

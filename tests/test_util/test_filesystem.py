@@ -11,6 +11,7 @@ from wiki.util.filesystem import write_atomic
 
 __all__ = [
     'test_write_atomic_writes_lf_bytes',
+    'test_write_atomic_writes_bytes_as_given',
     'test_write_atomic_preserves_mode',
     'test_write_atomic_failure_discards_temp',
     'test_write_atomic_unencodable_discards_temp',
@@ -22,6 +23,14 @@ def test_write_atomic_writes_lf_bytes(tmp_path: pathlib.Path) -> None:
     target = tmp_path / 'page.md'
     write_atomic(target, 'alpha\nbeta\n')
     assert target.read_bytes() == b'alpha\nbeta\n'
+
+
+def test_write_atomic_writes_bytes_as_given(tmp_path: pathlib.Path) -> None:
+    """Bytes land as given, so a file that is not UTF-8 keeps its encoding."""
+    target = tmp_path / '.gitattributes'
+    latin1 = '# café\r\n*.png binary\r\n'.encode('latin-1')
+    write_atomic(target, latin1)
+    assert target.read_bytes() == latin1
 
 
 def test_write_atomic_preserves_mode(tmp_path: pathlib.Path) -> None:

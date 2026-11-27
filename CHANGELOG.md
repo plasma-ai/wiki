@@ -26,6 +26,27 @@ may include breaking changes, each listed under a Breaking heading.
   default settings. A byte-order mark gets a message that says to remove it. A
   `links.external` wiki's settings file gets the same sentence after its
   `links.external wiki '<path>': ` prefix.
+- A page that is not valid UTF-8 stops `wiki read`, `wiki update` and
+  `wiki lint` with a message that leads with the page's path and gives the
+  offset of the first invalid byte, such as
+  `notes/draft.md: not valid UTF-8 at byte 4; re-save the file as UTF-8`, in
+  place of Python's codec sentence, which put the path last. The exit code is 2,
+  as before, and `Wiki` still raises a `UnicodeDecodeError`. A
+  `.wiki/settings.json` or `.obsidian/*.json` file that is not UTF-8 gets the
+  same wording: `Malformed JSON in <file>: not valid UTF-8 at byte N`. So does a
+  JSON file staged under `.wiki/obsidian/`, where `wiki config` printed the
+  codec sentence with no file name, and `wiki trust` gives the byte when it
+  refuses a trust store that is not UTF-8.
+- `wiki init` and `wiki config` no longer fail on a `.gitattributes` that is not
+  UTF-8, such as one with a Latin-1 comment. They append the merge mapping the
+  file lacks and leave its existing bytes as they are.
+- `wiki match` says when it skips a page it cannot decode, as `wiki search`
+  does: `Skipping <path>: unreadable, or not valid UTF-8` on stderr. Before, a
+  match inside such a page was reported as `No matches found.` A file that is
+  not a page, such as an image under `--all`, is still skipped in silence. The
+  line replaces `Skipping <path>: unreadable during search refresh` in
+  `wiki search`, which prints it for a page it cannot open or cannot decode, so
+  both commands print the same words.
 
 ## [1.10.0] - 2026-11-27
 

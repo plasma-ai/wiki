@@ -8,11 +8,12 @@ from __future__ import annotations
 import os
 import pathlib
 import tempfile
+from typing import Union
 
 __all__ = []
 
 
-def write_atomic(path: pathlib.Path, text: str) -> None:
+def write_atomic(path: pathlib.Path, text: Union[str, bytes]) -> None:
     """Write ``text`` to ``path`` atomically (temp file + rename).
 
     A plain ``write_text`` truncates before writing, exposing an empty or
@@ -20,15 +21,19 @@ def write_atomic(path: pathlib.Path, text: str) -> None:
     process dies mid-write. Staging to a temp file in the same directory
     and ``os.replace``-ing it into place makes every read all-or-nothing.
     The dot-prefixed temp name keeps a leftover from a crash out of the
-    wiki walk.
+    wiki walk. Bytes are written as given, for a file that is not UTF-8.
     """
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f'.{path.name}.')
     tmp = pathlib.Path(tmp)
     try:
-        # newline='\n' writes LF verbatim on every platform, so a rewrite
-        # normalizes CRLF and never reintroduces it
-        with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as handle:
-            handle.write(text)
+        if isinstance(text, bytes):
+            with os.fdopen(fd, 'wb') as handle:
+                handle.write(text)
+        else:
+            # newline='\n' writes LF verbatim on every platform, so a rewrite
+            # normalizes CRLF and never reintroduces it
+            with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as handle:
+                handle.write(text)
         # mkstemp creates the temp 0600 and os.replace carries that mode
         # onto the target: preserve the existing mode, or honor the umask
         # for a fresh file

@@ -7,12 +7,13 @@ with ``read`` slicing and the word counts.
 from __future__ import annotations
 
 import pathlib
+from typing import Optional
 
 import pytest
 
 from wiki.core.wiki import Wiki
 
-from ._helpers import _make_wiki, _set_exclude_patterns
+from ._helpers import _capture_notices, _make_wiki, _set_exclude_patterns
 
 __all__ = [
     'test_body_includes_h1_for_counts_and_match',
@@ -20,6 +21,7 @@ __all__ = [
     'test_all_files_matches_non_markdown_whole',
     'test_match_skips_excluded_paths',
     'test_match_survives_page_deleted_mid_scan',
+    'test_match_names_a_page_it_cannot_decode',
 ]
 
 
@@ -221,3 +223,36 @@ def test_match_survives_page_deleted_mid_scan(
     paths = [relpath for relpath, _, _ in hits]
     assert 'core/keep.md' in paths
     assert 'core/doomed.md' not in paths
+
+
+@pytest.mark.parametrize(
+    argnames='field',
+    argvalues=[None, 'desc'],
+    ids=['body', 'field'],
+)
+def test_match_names_a_page_it_cannot_decode(
+    tmp_path: pathlib.Path,
+    field: Optional[str],
+) -> None:
+    """A page that is not UTF-8 is skipped with a notice, never in silence.
+
+    The page may hold the pattern, so a silent skip would report a match
+    as no match: the notice names the page, and every other file matches
+    as it did. A binary file under ``all_files`` is expected there, so it
+    draws no notice.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    notices = _capture_notices(wiki)
+    before = wiki.match('design', field=field, all_files=True)
+    assert before
+    assert notices == []
+
+    # a Latin-1 page and an image, each holding the pattern's bytes
+    legacy = '---\ndesc: The design caf\xe9.\n---\n\nContent for design.\n'
+    (tmp_path / 'core' / 'legacy.md').write_bytes(legacy.encode('latin-1'))
+    (tmp_path / 'core' / 'diagram.png').write_bytes(b'\x89PNG\xff design')
+
+    # the page alone is named, and the other results are unchanged
+    assert wiki.match('design', field=field, all_files=True) == before
+    lines = [event.description for event in notices]
+    assert lines == ['Skipping core/legacy.md: unreadable, or not valid UTF-8']
