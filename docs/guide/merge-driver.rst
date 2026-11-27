@@ -205,7 +205,7 @@ parses as an authored key that every later rewrite carries forward — so
 Add/add body conflict
    Sibling branches authored the same new directory's index body
    concurrently. The hint states the convention that avoids this: leave
-   new-directory index bodies empty until after the merge wave.
+   new-directory index bodies empty until the branches have merged.
 
 Lost delimiter
    A side that lost the ``***`` delimiter the base had — typically formatter

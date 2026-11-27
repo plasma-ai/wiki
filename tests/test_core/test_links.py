@@ -998,14 +998,14 @@ def test_lint_external_probe_never_raises(tmp_path: pathlib.Path) -> None:
     """
     root = tmp_path / 'wiki'
     _make_wiki(root, folders={'notes': ['meeting']})
-    _make_sibling_wiki(tmp_path / 'math')
+    _make_sibling_wiki(tmp_path / 'manual')
     tree = {'src/locked/', 'src/secret.txt', 'unlisted/locked/', 'parent/inner/'}
     _plant(tmp_path, tree)
     # a name past the filesystem's length limit
     long_name = 'a' * 300
     links = (
         '../src/locked/x]], [[../src/secret.txt]], [[../src/a\x00b]],'
-        ' [[../math/g2/a\x00b]], [[../unlisted/locked/x]],'
+        ' [[../manual/guides/a\x00b]], [[../unlisted/locked/x]],'
         ' [[../unlisted/a\x00b]], and [[../a\x00b/x'
     )
     _link_from(root, 'root', links)
@@ -1015,7 +1015,7 @@ def test_lint_external_probe_never_raises(tmp_path: pathlib.Path) -> None:
         f' and [[../unlisted/{long_name}'
     )
     _link_from(root, 'nested', mirrored)
-    _set_links_external(root, ['../src', '../math', '../parent/inner'])
+    _set_links_external(root, ['../src', '../manual', '../parent/inner'])
     wiki = Wiki(root)
     # the probes run against locked paths, restored after the lint
     locked = [
@@ -1059,7 +1059,7 @@ def test_lint_external_probe_never_raises(tmp_path: pathlib.Path) -> None:
     }
     notes = [event.description for event in notices if 'link' in event.description]
     assert sorted(notes) == [
-        '_index.md: Stale link [[../math/g2/a\x00b]]',
+        '_index.md: Stale link [[../manual/guides/a\x00b]]',
         '_index.md: Stale link [[../src/a\x00b]]',
         '_index.md: Stale link [[../src/locked/x]]',
         "links.external entry '../parent/inner' names no folder on this machine;"
@@ -1077,20 +1077,28 @@ def test_lint_external_probe_never_raises(tmp_path: pathlib.Path) -> None:
     argnames=('external', 'link', 'verdict'),
     argvalues=[
         # an entry naming the wiki itself
-        (['../math'], '../math/lemmas', 'live'),
-        (['../math'], '../math/lemmas.md', 'live'),
-        (['../math'], '../math/g2/_index', 'live'),
-        (['../math'], '../math/g2', 'issue:../math/g2/_index'),
-        (['../math'], '../math', 'issue:../math/_index'),
-        (['../math'], '../math/vendor', 'live'),
-        (['../math'], '../math/gone', 'stale'),
-        (['../math'], '../math/g2#top|G', 'issue:../math/g2/_index#top|G'),
+        (['../manual'], '../manual/glossary', 'live'),
+        (['../manual'], '../manual/glossary.md', 'live'),
+        (['../manual'], '../manual/guides/_index', 'live'),
+        (['../manual'], '../manual/guides', 'issue:../manual/guides/_index'),
+        (['../manual'], '../manual', 'issue:../manual/_index'),
+        (['../manual'], '../manual/vendor', 'live'),
+        (['../manual'], '../manual/gone', 'stale'),
+        (
+            ['../manual'],
+            '../manual/guides#top|G',
+            'issue:../manual/guides/_index#top|G',
+        ),
         # an ancestor entry, and one inside the wiki, reach the same rules
-        (['..'], '../math/g2', 'issue:../math/g2/_index'),
-        (['../math/g2'], '../math/g2', 'issue:../math/g2/_index'),
-        (['../math/g2'], '../math/g2/topic', 'live'),
+        (['..'], '../manual/guides', 'issue:../manual/guides/_index'),
+        (['../manual/guides'], '../manual/guides', 'issue:../manual/guides/_index'),
+        (['../manual/guides'], '../manual/guides/topic', 'live'),
         # an absolute target is steered to the index page the folder links by
-        (['../math'], '{absolute}/math/g2', 'stale-fix:../math/g2/_index'),
+        (
+            ['../manual'],
+            '{absolute}/manual/guides',
+            'stale-fix:../manual/guides/_index',
+        ),
     ],
     ids=[
         'page-stem',
@@ -1128,7 +1136,7 @@ def test_lint_other_wiki_targets_follow_its_rules(
     """
     root = tmp_path / 'wiki'
     _make_wiki(root, folders={'notes': ['meeting']})
-    _make_sibling_wiki(tmp_path / 'math')
+    _make_sibling_wiki(tmp_path / 'manual')
     link = link.format(absolute=tmp_path.resolve())
     relpath = _link_from(root, page, link)
     _set_links_external(root, external)
@@ -1179,8 +1187,8 @@ def test_lint_other_wiki_unreadable_settings_fail_loudly(
     """
     root = tmp_path / 'wiki'
     _make_wiki(root)
-    _make_sibling_wiki(tmp_path / 'math')
-    settings = tmp_path / 'math' / '.wiki' / 'settings.json'
+    _make_sibling_wiki(tmp_path / 'manual')
+    settings = tmp_path / 'manual' / '.wiki' / 'settings.json'
     locked = None
     if fault == 'malformed':
         settings.write_text('{', encoding='utf-8')
@@ -1193,11 +1201,11 @@ def test_lint_other_wiki_unreadable_settings_fail_loudly(
         locked = settings.parent
     if locked is not None:
         os.chmod(locked, 0o000)
-    _link_from(root, 'root', '../math/g2')
-    _set_links_external(root, ['../math'])
+    _link_from(root, 'root', '../manual/guides')
+    _set_links_external(root, ['../manual'])
 
     # the error names the other wiki's settings file
-    match = r"links\.external wiki '\.\./math'"
+    match = r"links\.external wiki '\.\./manual'"
     try:
         with pytest.raises(ValueError, match=match) as excinfo:
             Wiki(root).lint()
@@ -1223,12 +1231,12 @@ def test_lint_other_wiki_broken_settings_spare_unrelated_links(
     """
     root = tmp_path / 'wiki'
     _make_wiki(root, folders={'notes': ['meeting']})
-    _make_sibling_wiki(tmp_path / 'math')
-    (tmp_path / 'math' / '.wiki' / 'settings.json').write_text('{', encoding='utf-8')
-    absolute = tmp_path.resolve() / 'math' / 'g2'
-    links = f'./x]], [[../math/lemmas]], and [[{absolute}'
+    _make_sibling_wiki(tmp_path / 'manual')
+    (tmp_path / 'manual' / '.wiki' / 'settings.json').write_text('{', encoding='utf-8')
+    absolute = tmp_path.resolve() / 'manual' / 'guides'
+    links = f'./x]], [[../manual/glossary]], and [[{absolute}'
     _link_from(root, 'nested', links)
-    _set_links_external(root, ['../math'])
+    _set_links_external(root, ['../manual'])
     wiki = Wiki(root)
 
     # the verdicts stand, with no spelling that needs the unreadable wiki
@@ -1251,21 +1259,21 @@ def test_links_other_wiki_runs_no_hook(tmp_path: pathlib.Path) -> None:
     """
     root = tmp_path / 'wiki'
     _make_wiki(root)
-    _make_sibling_wiki(tmp_path / 'math')
-    hook = tmp_path / 'math' / '.wiki' / 'wiki.py'
+    _make_sibling_wiki(tmp_path / 'manual')
+    hook = tmp_path / 'manual' / '.wiki' / 'wiki.py'
     hook.write_text(
         "import pathlib\npathlib.Path(__file__).with_name('EXECUTED').touch()\n",
         encoding='utf-8',
     )
-    _link_from(root, 'root', '../math/g2]] and again [[../math/g2')
-    _set_links_external(root, ['../math'])
+    _link_from(root, 'root', '../manual/guides]] and again [[../manual/guides')
+    _set_links_external(root, ['../manual'])
 
     # lint judges the folder once, without importing the hook
     issues = Wiki(root).lint()
     folder_issues = [issue for issue in issues if 'targets a folder' in issue]
     folder_issue_count = len(folder_issues)
     assert folder_issue_count == 1
-    assert not (tmp_path / 'math' / '.wiki' / 'EXECUTED').exists()
+    assert not (tmp_path / 'manual' / '.wiki' / 'EXECUTED').exists()
 
 
 @_needs_git
@@ -1282,10 +1290,10 @@ def test_links_other_wiki_notices_ride_the_host_funnel(
     """
     root = tmp_path / 'wiki'
     _make_wiki(root)
-    _make_sibling_wiki(tmp_path / 'math')
-    _git_repo(tmp_path / 'math')
-    _link_from(root, 'root', '../math/g2')
-    _set_links_external(root, ['../math'])
+    _make_sibling_wiki(tmp_path / 'manual')
+    _git_repo(tmp_path / 'manual')
+    _link_from(root, 'root', '../manual/guides')
+    _set_links_external(root, ['../manual'])
     wiki = Wiki(root)
     (tmp_path / 'nobin').mkdir()
     monkeypatch.setenv('PATH', str(tmp_path / 'nobin'))
@@ -1316,9 +1324,9 @@ def test_links_other_wiki_keeps_the_host_run_memo(
     """
     root = tmp_path / 'wiki'
     _make_wiki(root, folders={'notes': ['meeting']})
-    _make_sibling_wiki(tmp_path / 'math')
-    _link_from(root, 'root', '../math/g2')
-    _set_links_external(root, ['../math'])
+    _make_sibling_wiki(tmp_path / 'manual')
+    _link_from(root, 'root', '../manual/guides')
+    _set_links_external(root, ['../manual'])
     compositions.clear()
 
     # the other wiki is judged, and every block still composes once
@@ -1393,17 +1401,17 @@ def test_links_home_symlink_loop_never_raises(
     """
     root = tmp_path / 'wiki'
     _make_wiki(root)
-    _make_sibling_wiki(tmp_path / 'math')
+    _make_sibling_wiki(tmp_path / 'manual')
     (tmp_path / 'loop').symlink_to('loop')
     monkeypatch.setenv('HOME', str(tmp_path / 'loop'))
-    _link_from(root, 'root', '../math/g2')
-    _set_links_external(root, ['../math'])
+    _link_from(root, 'root', '../manual/guides')
+    _set_links_external(root, ['../manual'])
 
     # the sibling wiki's folder is still the directory-link issue
     issues = Wiki(root).lint()
     assert issues == [
-        '_index.md: Link [[../math/g2]] targets a folder, not a page'
-        ' (use [[../math/g2/_index]])'
+        '_index.md: Link [[../manual/guides]] targets a folder, not a page'
+        ' (use [[../manual/guides/_index]])'
     ]
 
 
@@ -1564,9 +1572,9 @@ def _link_from(root: pathlib.Path, page: str, link: str) -> str:
 
 def _make_sibling_wiki(path: pathlib.Path) -> None:
     """Create a wiki beside the one under test: a page, an indexed folder, an excluded one."""
-    _make_wiki(path, folders={'g2': ['topic'], 'vendor': ['v']})
-    (path / 'lemmas.md').write_text(
-        '---\nname: lemmas\ndesc: Lemmas.\n---\n\n# lemmas\n\nText.\n',
+    _make_wiki(path, folders={'guides': ['topic'], 'vendor': ['v']})
+    (path / 'glossary.md').write_text(
+        '---\nname: glossary\ndesc: Glossary.\n---\n\n# glossary\n\nText.\n',
         encoding='utf-8',
     )
     _set_exclude_patterns(path, ['vendor'])

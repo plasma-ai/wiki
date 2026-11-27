@@ -4,9 +4,9 @@
 # holds the file level with v1.
 
 # the oracle commit: the merge base of this branch and `base`
-commit = "4c870777b1eb38c7f40aed00ac3ed09eabc3f0db"
+commit = "f6a7ba5d9de90c5d59165eee15600de916e88829"
 # what `wiki --version` prints at that commit
-version = "1.9.0"
+version = "1.10.0"
 # the branch v1 lives on
 base = "dev"
 
