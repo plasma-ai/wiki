@@ -53,6 +53,9 @@ may include breaking changes, each listed under a Breaking heading.
 - `wiki install` follows a linked `.claude/skills` or `.agents/skills` folder to
   where it leads, so two folders linked to one place get the skill once, and the
   report names the folder the skill lands in.
+- The hint the git merge driver plants above an add/add `_index.md` body
+  conflict says to leave new-directory index bodies empty until the branches
+  have merged.
 
 ## [1.9.0] - 2026-10-25
 
@@ -332,8 +335,8 @@ may include breaking changes, each listed under a Breaking heading.
   command frees them at exit, while a library consumer that runs `update` or
   `lint` many times in one process keeps them. A command's peak memory rises by
   about 13 MB on a 5,000-page wiki of short blocks, 26 MB on one whose blocks
-  carry a paragraph-long `desc`, and about 100 MB on a 24,000-page wiki of short
-  blocks; a later run in the same process adds 2 to 5 KB per page.
+  carry a paragraph-long `desc`, and about 100 MB on a wiki of over 20,000 pages
+  of short blocks; a later run in the same process adds 2 to 5 KB per page.
 
 ### Fixed
 
@@ -360,8 +363,8 @@ may include breaking changes, each listed under a Breaking heading.
   less of their own work: a run walks its scope once for its plan and the checks
   before it, a walk `wiki lint` inside a repository holds until it finishes at
   about 2.5 KB per indexed folder and per non-markdown file (5 MB on a
-  5,000-page wiki of about 2,000 folders, 17 MB on one of about 4,000 folders
-  and 3,100 non-markdown files); an index is planned from one listing of its
+  5,000-page wiki of about 2,000 folders, 17 MB on one of about 7,000 folders
+  and non-markdown files together); an index is planned from one listing of its
   folder; a content scan skips a text that cannot hold the shape it looks for;
   and the frontmatter reader takes a fast path through a block with no blank
   line and a body that cannot nest past its bound. On a 5,000-page wiki
@@ -436,7 +439,7 @@ may include breaking changes, each listed under a Breaking heading.
 
 - `links.external` external link folders: a list in `.wiki/settings.json` of
   folder paths relative to the wiki root, each climbing out of it with leading
-  `..` (`{"links": {"external": ["../src", "../math"]}}`), under which prose
+  `..` (`{"links": {"external": ["../src", "../manual"]}}`), under which prose
   wikilinks may leave the wiki. Two link bases, one rule each: a prefix-free
   target is read from the wiki root and must name something inside it; a `./` or
   `../` target is read from the page's folder, as Obsidian and markdown read it,
@@ -833,8 +836,8 @@ may include breaking changes, each listed under a Breaking heading.
 - A `--path` (or cwd resolution) landing inside an existing wiki resolves upward
   to the enclosing root — declared, or the topmost index of a bare chain — with
   a stderr notice naming it, instead of aborting with "Path is inside the wiki".
-  The habitual root-relative invocation (e.g. `wiki update --path math` from
-  inside `math/`) now works from anywhere in the tree; scoped work still goes
+  The habitual root-relative invocation (e.g. `wiki update --path docs` from
+  inside `docs/`) now works from anywhere in the tree; scoped work still goes
   through the entry argument. `wiki new` keeps the refusal: its name argument is
   a write target, so a rebased root would silently relocate the write. A
   `--path` naming a declared root resolves to that root itself — a vendored wiki

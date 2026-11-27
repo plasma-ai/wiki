@@ -93,8 +93,8 @@ or identifier-style names, through the `naming` block in `.wiki/settings.json`;
 excluded from indexing with gitignore-style globs in `exclude.patterns` —
 excluded paths are never walked or linted, though `wiki read` still serves them.
 Prose wikilinks stay inside the wiki unless `links.external` lists folders
-outside it, as paths relative to the wiki root (`../src`, `../math`): a `./` or
-`../` link, read from the wiki root like every other link, may then target a
+outside it, as paths relative to the wiki root (`../src`, `../manual`): a `./`
+or `../` link, read from the wiki root like every other link, may then target a
 file or another wiki's page under a listed folder, whose entry is the link's
 prefix. The allowlist is a lint rule alone — `wiki lint` checks such links in
 place, while `wiki read` and every other command stay confined to the wiki root.

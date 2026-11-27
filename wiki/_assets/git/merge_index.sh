@@ -454,7 +454,7 @@ git merge-file --marker-size="$MARKER_SIZE" -p -L ours -L base -L theirs \
 if [[ "$BELOW_EXIT" -ne 0 && ! -s "$BASE" ]]; then
     HINT='<!-- add/add index conflict: sibling branches authored this'
     HINT+=' body concurrently; leave new-directory index bodies empty'
-    HINT+=' until after the merge wave, and delete this line when'
+    HINT+=' until the branches have merged, and delete this line when'
     HINT+=' resolving -->'
     MARKER=$(printf '%*s' "$MARKER_SIZE" '' | tr ' ' '<')
     # the hint and marker travel through the environment so awk

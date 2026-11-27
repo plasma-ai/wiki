@@ -275,7 +275,7 @@ def test_operation_frees_its_memo_at_its_end(
     # a nested operation joins the enclosing run: new pre-flights the parent
     # scope's plan and runs the public update on it, and no text composes twice
     compositions.clear()
-    wiki.new('notes/verify', desc='A real desc.', content='Real content.')
+    wiki.new('notes/backup', desc='A real desc.', content='Real content.')
     compose_count = len(compositions)
     distinct_count = len(set(compositions))
     assert distinct_count == compose_count
@@ -343,7 +343,7 @@ def test_context_copied_mid_run_opens_its_own_run(
     wiki.on_notice = copying
 
     # new fires its link-added notice from inside its run
-    wiki.new('core/verify', desc='A real desc.', content='Real content.')
+    wiki.new('core/backup', desc='A real desc.', content='Real content.')
     assert copies
     copy, *_ = copies
 
@@ -443,7 +443,7 @@ def test_process_forked_mid_run_opens_its_own_run(
     report = b''
     exit_code = None
     try:
-        wiki.new('core/verify', desc='A real desc.', content='Real content.')
+        wiki.new('core/backup', desc='A real desc.', content='Real content.')
     finally:
         # release the child, then drain its report and reap it, on a red run too;
         # a child that outlives the deadline is killed, so the reap cannot hang
@@ -1409,7 +1409,7 @@ def test_repair_breaks_frontmatter_names_a_breaking_repair(
         ('desc:\ndesc: second', 'desc', None),
         ('desc: first\ndesc: second', 'desc', 'first'),
         # tolerated invalid YAML reads through the line grammar as authored
-        ('desc: A theorem for X: HR, WR.', 'desc', 'A theorem for X: HR, WR.'),
+        ('desc: A summary for X: red, blue.', 'desc', 'A summary for X: red, blue.'),
         ('desc: > one liner.', 'desc', 'one liner.'),
         ('desc: "unterminated\n  continues', 'desc', '"unterminated continues'),
         (
@@ -1418,7 +1418,7 @@ def test_repair_breaks_frontmatter_names_a_breaking_repair(
             'Ours.',
         ),
         # one invalid line sends every field of the block through the line grammar
-        ('desc: A theorem for X: HR, WR.\ncategory: |\n  Cat', 'category', 'Cat'),
+        ('desc: A summary for X: red, blue.\ncategory: |\n  Cat', 'category', 'Cat'),
     ],
     ids=[
         'placeholder',

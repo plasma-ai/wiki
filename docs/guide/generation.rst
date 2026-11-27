@@ -437,8 +437,8 @@ its meaning:
    or ``exclude.patterns`` segment keeps its whole subtree out of the
    index, leaving nothing to name. The same issue covers a folder that
    another wiki indexes, reached through a ``links.external`` folder and
-   judged by that wiki's own settings — ``Link [[../math/g2]] targets a
-   folder, not a page (use [[../math/g2/_index]])`` (see
+   judged by that wiki's own settings — ``Link [[../manual/guides]] targets a
+   folder, not a page (use [[../manual/guides/_index]])`` (see
    :doc:`/configuration`).
 
 ``Link [[target]] points inside the wiki through './' or '../' (use [[canonical]])``
