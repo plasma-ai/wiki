@@ -285,6 +285,12 @@ class Wiki:
                     f'naming.max_length must be an int >= 1 or null, got'
                     f' {max_length!r} in {WIKI_SETTINGS}.'
                 )
+            # a minimum above the maximum admits no name at all
+            if min_length > max_length:
+                raise ValueError(
+                    f'naming.min_length ({min_length}) must not exceed'
+                    f' naming.max_length ({max_length}) in {WIKI_SETTINGS}.'
+                )
         # deny/allow are strings of characters; reserved is a list of names
         for leaf in ('deny', 'allow'):
             if not isinstance(policy[leaf], str):
@@ -628,8 +634,6 @@ class Wiki:
                 reason = 'names the whole filesystem'
             elif joined.is_relative_to(self._root):
                 reason = 'inside the wiki root (in-wiki links need no allowlist)'
-            elif pathlib.Path(os.path.realpath(joined)).is_relative_to(self._root):
-                reason = 'resolves inside the wiki root through an alias'
             else:
                 reason = None
             if reason is not None:
@@ -642,6 +646,41 @@ class Wiki:
                 continue
             result.append((folder, joined))
         return result
+
+    def _validate_settings(self: Wiki) -> None:
+        """Validate every ``settings.json`` block, in the documented order.
+
+        An operation that reads policy runs this first -- before it
+        resolves a scope, walks, emits a notice, or writes -- so a
+        malformed block fails each of them alike, whichever blocks it goes
+        on to use. ``read``, ``update_config``, and the merge driver's
+        entry points never run it: each reads only the blocks it uses, so
+        a page stays readable, the repair runnable, and a merge settled on
+        a wiki with a malformed block elsewhere. No check here follows a
+        path on disk (see :meth:`_refuse_aliased_link_folders`).
+        """
+        self._naming_policy  # noqa: B018
+        self._timestamp_policy  # noqa: B018
+        self._map_policy  # noqa: B018
+        self._titles_required  # noqa: B018
+        self._lint_strict  # noqa: B018
+        self._exclude_policy  # noqa: B018
+        self._links_policy  # noqa: B018
+
+    def _refuse_aliased_link_folders(self: Wiki) -> None:
+        """Refuse a ``links.external`` folder a symlink leads back into the wiki.
+
+        The one settings check that follows a path on disk, so it stays
+        out of :meth:`_validate_settings`: a symlink differs from one
+        checkout to the next, and a sweep's verdict on a settings file
+        must not.
+        """
+        for folder, joined in self._links_policy:
+            if pathlib.Path(os.path.realpath(joined)).is_relative_to(self._root):
+                raise ValueError(
+                    f'Invalid links.external folder {folder!r}: resolves inside'
+                    f' the wiki root through an alias in {WIKI_SETTINGS}.'
+                )
 
     @functools.cached_property
     def _gitignore_fence(self: Wiki) -> frozenset[str]:
@@ -1021,8 +1060,6 @@ class Wiki:
         or an entry may name a file: the links into it are neither live
         nor stale, so lint names the entry once (soft) and the link scan
         passes over targets under it rather than noting every one.
-        Reading the policy here also validates the block on every run,
-        links or none.
         """
         for folder, joined in self._links_policy:
             if not os.path.isdir(joined):
@@ -1251,19 +1288,12 @@ class Wiki:
         # validate the seeded policies BEFORE any filesystem write: a rejected
         # seed must fail cleanly rather than strand a wiki whose settings.json
         # every later command (and re-init, which never overwrites it) rejects
+        self._validate_settings()
+        self._refuse_aliased_link_folders()
         name = name or self._root.name
         violation = self._name_violation(name)
         if violation is not None:
             raise ValueError(f'Invalid wiki name {name!r}: {violation}')
-        # the titles, map, exclude, links, and lint policies are read lazily
-        # (first inside the plan, the map render, the walk, lint's folder
-        # check, and lint's link scan), so touch them here to reject
-        # a bad seed early
-        self._titles_required  # noqa: B018
-        self._map_policy  # noqa: B018
-        self._exclude_policy  # noqa: B018
-        self._links_policy  # noqa: B018
-        self._lint_strict  # noqa: B018
         # alias current timestamp
         now = self._utc_now()
         # initialize wiki root
@@ -1600,6 +1630,8 @@ class Wiki:
             the parent folder is outside the scope.
 
         """
+        # check every settings block before anything else
+        self._validate_settings()
         # resolve the scope first, so a bad entry fails before the write
         # sweeps below mutate anything
         if name:
@@ -1735,6 +1767,8 @@ class Wiki:
                 checked before the write, with nothing created.
 
         """
+        # check every settings block before anything else
+        self._validate_settings()
         # the authored inputs are the point: refuse placeholders outright,
         # never stub them
         desc = desc.strip()
@@ -1950,6 +1984,10 @@ class Wiki:
             ``kind`` and per-kind payload ``fields``.
 
         """
+        # check every settings block before anything else, then the one
+        # links.external rule that follows a path on disk
+        self._validate_settings()
+        self._refuse_aliased_link_folders()
         # resolve folder
         if name:
             folder = self._resolve_folder(name)
@@ -1968,17 +2006,14 @@ class Wiki:
         # inside a repository the untrackable-row note walks the scope and the
         # plan reads that walk (nothing between the walk and the plan touches
         # the walked tree); outside one there is no note, and the plan walks
-        # for itself once the links policy below is read
+        # for itself
         walk = None
         if self._in_repository():
             walk = self._walk(folder)
             self._warn_untrackable_rows(walk)
         # a links.external entry naming no folder on this machine is one note
-        # per run, not one per link; reading the policy here also fails a
-        # malformed block before the plan, links or none
+        # per run, not one per link
         self._warn_missing_link_folders()
-        # a malformed lint block fails here too, stale links or none
-        self._lint_strict  # noqa: B018
         # compute what update would write (the source of truth for drift); the
         # blocks the planners keep as written come back as notices, keyed here
         # by path like the overlay, so lint names the refusals update applies
@@ -2476,6 +2511,8 @@ class Wiki:
             then by path among equal scores.
 
         """
+        # check every settings block before anything else
+        self._validate_settings()
         # resolve folder
         if name:
             folder = self._resolve_folder(name)
@@ -2540,6 +2577,8 @@ class Wiki:
             tuples. Line numbers are 1-based.
 
         """
+        # check every settings block before anything else
+        self._validate_settings()
         # compile pattern
         flags = re.IGNORECASE if ignore_case else 0
         regex = re.compile(pattern, flags)
@@ -2663,6 +2702,8 @@ class Wiki:
             Indented tree string.
 
         """
+        # check every settings block before anything else
+        self._validate_settings()
         if isinstance(category, str):
             category = [category]
         # resolve the desc limit (argument > map.desc_limit setting,

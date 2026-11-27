@@ -33,6 +33,7 @@ __all__ = [
     'test_init_rejects_invalid_wiki_name',
     'test_init_refuses_conflict_markers',
     'test_settings_reject_malformed_values',
+    'test_settings_blocks_are_validated_in_the_documented_order',
     'test_timestamp_format_configurable',
     'test_timestamp_timezone_configurable',
     'test_timestamp_zone_swaps_default_z_for_offset',
@@ -145,6 +146,7 @@ def test_validate_name_strict_via_settings(tmp_path: pathlib.Path) -> None:
         ({'min_length': 3}, 'abc', True),
         ({'max_length': 5}, 'abcde', True),
         ({'max_length': 5}, 'abcdef', False),
+        ({'min_length': 3, 'max_length': 3}, 'abc', True),
         ({'deny': '$'}, 'pri$e', False),
         ({'validate': ['identifier']}, 'spin-lock', False),
         ({'validate': ['identifier'], 'allow': '-'}, 'spin-lock', True),
@@ -158,6 +160,7 @@ def test_validate_name_strict_via_settings(tmp_path: pathlib.Path) -> None:
         'min-length-ok',
         'max-length-ok',
         'too-long',
+        'min-equals-max',
         'denied-char',
         'identifier-rejects-dash',
         'allow-exempts-dash',
@@ -356,6 +359,29 @@ def test_settings_reject_malformed_values(
     with pytest.raises(ValueError, match=match) as excinfo:
         Wiki(tmp_path).lint()
     assert 'settings.json' in str(excinfo.value)
+
+
+def test_settings_blocks_are_validated_in_the_documented_order(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Of several malformed blocks, the first in the documented order is named.
+
+    A command checks every block before it acts, so the block an error
+    names depends on the settings file alone: not on the command, and not
+    on the order the file lists its blocks in.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    order = ['naming', 'timestamp', 'map', 'titles', 'lint', 'exclude', 'links']
+    settings = dict.fromkeys(reversed(order), 'malformed')
+    path = tmp_path / '.wiki' / 'settings.json'
+
+    # mend the named block each time, and the next one in order is named
+    for block in order:
+        path.write_text(json.dumps(settings), encoding='utf-8')
+        message = f'The {block} block must be a JSON object'
+        with pytest.raises(ValueError, match=message):
+            Wiki(tmp_path).update(check=True)
+        del settings[block]
 
 
 # ------ timestamps

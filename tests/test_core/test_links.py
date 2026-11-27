@@ -43,6 +43,7 @@ from ._helpers import (
 __all__ = [
     'test_links_policy_rejects_invalid_settings',
     'test_init_rejects_invalid_links_seed',
+    'test_links_alias_into_the_wiki_is_refused_by_lint_and_init_alone',
     'test_links_policy_accepts_missing_and_ancestor_folders',
     'test_lint_judges_external_targets_by_the_allowlist',
     'test_lint_reads_external_links_alike_in_pages_and_indexes',
@@ -143,7 +144,7 @@ def test_links_policy_rejects_invalid_settings(
     characters no wikilink target can carry, ``.`` and interior ``..``
     segments, the filesystem root, and any spelling of a folder inside
     the wiki -- lexical or through a symlink alias) raises ``ValueError``
-    through any command that reads the policy, links or none.
+    through ``lint``, links or none.
     """
     root = tmp_path / 'wiki'
     _make_wiki(root, folders={'core': ['design']})
@@ -172,14 +173,38 @@ def test_links_policy_rejects_invalid_settings(
 def test_init_rejects_invalid_links_seed(tmp_path: pathlib.Path) -> None:
     """A rejected ``links`` seed aborts ``init`` before writing anything.
 
-    The links policy is read lazily (first inside lint's folder check),
-    so init touches it up front: a bad seed must fail before the
-    settings file, the root index, or any sweep write lands.
+    Init validates its whole seed up front: a bad one must fail before
+    the settings file, the root index, or any sweep write lands.
     """
     root = tmp_path / 'wiki'
     with pytest.raises(ValueError, match=r'links\.external'):
         Wiki(root).init(settings={'links': {'external': ['src']}})
     assert not root.exists()
+
+
+def test_links_alias_into_the_wiki_is_refused_by_lint_and_init_alone(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An entry a symlink leads back into the wiki stops ``lint`` and ``init``.
+
+    It is the one settings check that follows a path on disk, so the
+    sweep never runs it: ``update`` accepts a settings file whose text is
+    sound, whatever a symlink does in one checkout.
+    """
+    root = tmp_path / 'wiki'
+    _make_wiki(root, folders={'core': ['design']})
+    (tmp_path / 'alias').symlink_to(root, target_is_directory=True)
+    _set_links_external(root, ['../alias'])
+
+    assert Wiki(root).update() == []
+    with pytest.raises(ValueError, match=r"'\.\./alias': .* through an alias"):
+        Wiki(root).lint()
+    # a seed is refused as lint would refuse the file it makes
+    fresh = tmp_path / 'fresh'
+    (tmp_path / 'loop').symlink_to(fresh, target_is_directory=True)
+    with pytest.raises(ValueError, match=r'through an alias'):
+        Wiki(fresh).init(settings={'links': {'external': ['../loop']}})
+    assert not fresh.exists()
 
 
 @pytest.mark.parametrize(

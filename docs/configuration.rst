@@ -90,6 +90,21 @@ each malformed, and the message names the cause (``Malformed JSON in
 ``links`` — are all optional, all objects. Unknown top-level keys are ignored,
 but a wrong-typed known block or key is an error naming the file and key.
 
+``wiki update`` (``--check`` included), ``wiki new``, ``wiki lint``,
+``wiki map``, ``wiki search`` and ``wiki match`` check the whole file before
+they do anything else: every block, in the order above, whichever blocks the
+command goes on to use. The first block at fault is named and the command
+exits 2 before it resolves a scope, walks a folder or writes a file, and
+after no note but those about locating the wiki, so ``wiki update --check``
+never passes on a file that ``wiki lint`` or ``wiki map`` refuses. Three paths read only the blocks they use and keep
+running on a wiki with a broken block elsewhere: ``wiki read``, so a page
+stays readable; ``wiki config``, so the repair command stays runnable; and
+the merge driver, so a merge still settles stamps. The check reads the
+settings file and no other file in or around the wiki. The one check that
+follows a path on disk — a ``links.external`` folder that resolves inside
+the wiki through a symlink — is left to ``wiki lint`` and ``wiki init``,
+since a symlink differs from one checkout to the next.
+
 A file that cannot be read fails the same commands with
 ``Cannot read .wiki/settings.json (<reason>).`` The reason is the system's own
 (``Permission denied``, ``Too many levels of symbolic links``), ``not a regular
@@ -178,7 +193,8 @@ predicates sets ``"allow": "."``.
 
 ``naming.max_length``
    Integer ``>= 1`` or ``null``, default ``null``. Maximum name length;
-   ``null`` means no cap.
+   ``null`` means no cap. A ``min_length`` above the ``max_length`` is an
+   error naming both keys, since no name could pass.
 
 ``naming.leading_digits``
    Boolean, default ``true``. Only affects the ``identifier`` predicate: when
@@ -402,9 +418,10 @@ a lint rule and nothing more: ``wiki read``, ``wiki map``, ``wiki match``,
 ``wiki search``, ``wiki update``, and ``wiki new`` stay confined to the wiki
 root (a name under a listed folder still fails with ``Path is outside wiki
 root``), generated index rows never carry an external target, and ``wiki map``
-never shows an external folder. ``wiki lint`` reads the block on every run,
-links or none; ``wiki update`` never reads it; ``wiki init`` validates a block
-passed through ``--settings`` but seeds none.
+never shows an external folder. Every command that reads policy validates the
+block with the rest of the settings file, links or none, and only ``wiki lint``
+acts on it; ``wiki init`` validates a block passed through ``--settings`` but
+seeds none.
 
 .. code-block:: json
 
@@ -446,9 +463,11 @@ its links.
      ``~`` path; a ``\`` separator; a ``#``, ``|``, ``[``, ``]``, or NUL
      character (no wikilink target can carry one); an empty segment
      (``//``); a ``.`` segment; a ``..`` segment anywhere but the start; a
-     path naming the whole filesystem; a path inside the wiki root (an
-     in-wiki link needs no allowlist); and a path that resolves inside the
-     wiki root through a symlink alias.
+     path naming the whole filesystem; and a path inside the wiki root (an
+     in-wiki link needs no allowlist). ``wiki lint`` and ``wiki init`` also
+     reject a path that resolves inside the wiki root through a symlink
+     alias; the other commands leave that check out, since it depends on
+     the checkout and not on the file.
    - An entry may name a folder absent from this machine — a sibling
      checkout missing from a partial clone. ``wiki lint`` notes it once per
      run (``links.external entry '../src' names no folder on this machine;

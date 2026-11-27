@@ -483,6 +483,18 @@ method: a call inside a run joins it. The decorator count
 (`grep -c '@format.run_scoped' wiki/core/wiki.py`) equals the count of
 operations the class docstring names.
 
+### Settings Check
+
+An operation that reads policy (`update`, `new`, `lint`, `map`, `search`,
+`match`) opens with `self._validate_settings()` (`core/wiki.py`), and `init`
+runs it on its seed before its first write: every settings block, in the order
+`docs/configuration.rst` lists them. `read`, `update_config`, `settle_stamps`
+and `canonicalize_index` never call it; each reads only the per-block policy
+properties it uses, so a page stays readable, the repair runnable and a merge
+settled on a wiki with a broken block elsewhere. A settings check that follows a
+path on disk stays out of the routine: the one there is,
+`_refuse_aliased_link_folders`, runs in `lint` and `init`.
+
 ### Shell Scripts
 
 The only shell script in the `wiki/` package is `_assets/git/merge_index.sh`,

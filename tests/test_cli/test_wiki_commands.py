@@ -45,6 +45,9 @@ __all__ = [
     'test_init_refuses_settings_that_are_not_strict_json',
     'test_settings_nesting_is_refused_from_128_levels',
     'test_settings_file_that_cannot_be_read_is_named_with_its_cause',
+    'test_malformed_settings_block_stops_every_policy_command',
+    'test_settings_are_validated_before_the_scope',
+    'test_malformed_block_spares_read_config_and_the_merge_driver',
     'test_install_copies_skill_into_home',
     'test_install_project_targets_cwd',
     'test_install_link_swaps_copy_and_symlink',
@@ -255,6 +258,18 @@ _not_strict_json = pytest.mark.parametrize(
         'key-twice-in-a-block',
         'nested-128-levels',
     ],
+)
+
+# one run of each command that reads policy, each with something to do in
+# the wiki the settings tests build
+_POLICY_COMMANDS = (
+    ('update',),
+    ('update', '--check'),
+    ('new', 'notes', '--desc', 'Notes.', '--content', 'Body.'),
+    ('lint',),
+    ('map',),
+    ('search', 'design'),
+    ('match', 'design'),
 )
 
 pytestmark = pytest.mark.skipif(
@@ -718,6 +733,137 @@ def test_settings_file_that_cannot_be_read_is_named_with_its_cause(
     finally:
         if fault == 'no-permission':
             os.chmod(settings, 0o600)
+
+
+@pytest.mark.parametrize(
+    argnames=('settings', 'message'),
+    argvalues=[
+        (
+            {'naming': {'min_length': 5, 'max_length': 2}},
+            'naming.min_length (5) must not exceed naming.max_length (2)',
+        ),
+        (
+            {'timestamp': {'timezone': 'Mars/Olympus'}},
+            "Unknown timestamp.timezone 'Mars/Olympus'",
+        ),
+        (
+            {'map': {'desc_limit': 'ten'}},
+            "map.desc_limit must be an int >= -1 or null, got 'ten'",
+        ),
+        (
+            {'titles': {'required': 'yes'}},
+            "titles.required must be a boolean, got 'yes'",
+        ),
+        ({'lint': {'strict': 1}}, 'lint.strict must be a boolean, got 1'),
+        (
+            {'exclude': {'patterns': ['!keep']}},
+            "Invalid exclude.patterns pattern '!keep': negation ('!') is not supported",
+        ),
+        (
+            {'links': {'external': '../src'}},
+            "links.external must be a list of folder paths, got '../src'",
+        ),
+    ],
+    ids=['naming', 'timestamp', 'map', 'titles', 'lint', 'exclude', 'links'],
+)
+def test_malformed_settings_block_stops_every_policy_command(
+    tmp_path: pathlib.Path,
+    settings: dict,
+    message: str,
+) -> None:
+    """A malformed block stops every command that reads policy, alike.
+
+    Each command checks the whole settings file before it acts, whichever
+    blocks it goes on to use: the same line and exit code from all of
+    them, and nothing written. A length minimum above the maximum is one
+    such block: no name could pass it, and a sweep would prune every row.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'core' / '_index.md', _index('Core', 'Core concepts.', 'Text.'))
+    _write(root / 'core' / 'design.md', _page('Design', 'A design.', 'Body.'))
+    assert _wiki(tmp_path, 'update', '--path', str(root)).returncode == 0
+    # a page awaiting adoption, so a sweep that ran would show
+    _write(root / 'core' / 'draft.md', 'A draft.\n')
+    _write(root / '.wiki' / 'settings.json', json.dumps(settings))
+    before = _tree(root)
+
+    error = f'Error: {message} in .wiki/settings.json.\n'
+    for args in _POLICY_COMMANDS:
+        result = _wiki(tmp_path, *args, '--path', str(root))
+        assert result.returncode == 2, (args, result.stdout + result.stderr)
+        assert result.stderr == error, args
+        assert _tree(root) == before, args
+
+
+def test_settings_are_validated_before_the_scope(tmp_path: pathlib.Path) -> None:
+    """A malformed block is reported ahead of a scope that names no folder."""
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / '.wiki' / 'settings.json', '{"map": []}')
+
+    error = 'Error: The map block must be a JSON object in .wiki/settings.json.\n'
+    for args in (
+        ('update', 'nowhere'),
+        ('lint', 'nowhere'),
+        ('map', 'nowhere'),
+        ('search', 'design', 'nowhere'),
+        ('match', 'design', 'nowhere'),
+    ):
+        result = _wiki(tmp_path, *args, '--path', str(root))
+        assert result.returncode == 2, (args, result.stdout + result.stderr)
+        assert result.stderr == error, args
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_malformed_block_spares_read_config_and_the_merge_driver(
+    tmp_path: pathlib.Path,
+) -> None:
+    """``read``, ``config`` and a merge run on a wiki with a block they do not use.
+
+    Each reads only the blocks it needs: a page stays readable, the
+    repair command runnable, and two branches that each edit and restamp
+    a page still merge on the later stamp, while ``map`` is refused.
+    """
+    root = tmp_path / 'wiki'
+    _git_repo(tmp_path)
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    page = root / 'notes.md'
+    base = (
+        '---\nname: notes\ndesc: Notes.\nupdated: 2026-01-01T00:00:00Z\n---\n'
+        '\n# notes\n\nFirst line.\n\nMiddle line.\n\nLast line.\n'
+    )
+    _write(page, base)
+    _write(root / '.wiki' / 'settings.json', '{"map": {"desc_limit": "ten"}}')
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+    assert _wiki(tmp_path, 'map', '--path', str(root)).returncode == 2
+
+    # a page reads, and config installs
+    read = _wiki(tmp_path, 'read', 'notes', '--path', str(root))
+    assert read.returncode == 0, read.stdout + read.stderr
+    assert read.stdout == base
+    config = _wiki(tmp_path, 'config', '--path', str(root))
+    assert config.returncode == 0, config.stdout + config.stderr
+
+    # each branch edits its own line and restamps the page
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    theirs = base.replace('2026-01-01T00:00:00Z', '2026-01-03T00:00:00Z')
+    _write(page, theirs.replace('Last line.', 'Their last line.'))
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    ours = base.replace('2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z')
+    _write(page, ours.replace('First line.', 'Our first line.'))
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
+
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    merged = page.read_text(encoding='utf-8')
+    assert re.findall(r'^updated:.*$', merged, re.M) == [
+        'updated: 2026-01-03T00:00:00Z'
+    ]
+    assert 'Our first line.' in merged
+    assert 'Their last line.' in merged
 
 
 # ------ install
@@ -1680,14 +1826,14 @@ def test_links_external_end_to_end(tmp_path: pathlib.Path) -> None:
     read = _wiki(root, 'read', '../src/main.py', '--path', str(root))
     assert read.returncode == 2
     assert 'outside wiki root' in (read.stdout + read.stderr).lower()
-    # a malformed block fails lint, naming the file and key, never update
+    # a malformed block fails update and lint alike, naming the file and key
     data['links'] = {'external': ['src']}
     config.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
-    update = _wiki(root, 'update', '--path', str(root))
-    assert update.returncode == 0, update.stdout + update.stderr
-    lint = _wiki(root, 'lint', '--path', str(root))
-    assert lint.returncode == 2
-    assert "Invalid links.external folder 'src': inside the wiki root" in lint.stderr
+    for command in ('update', 'lint'):
+        refused = _wiki(root, command, '--path', str(root))
+        assert refused.returncode == 2, command
+        error = "Invalid links.external folder 'src': inside the wiki root"
+        assert error in refused.stderr, command
     # a malformed sibling settings file is named as that wiki's -- read the
     # moment a link needs its rules, which a bare folder link does
     data['links'] = {'external': ['../manual']}

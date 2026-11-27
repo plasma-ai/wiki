@@ -14,6 +14,16 @@ may include breaking changes, each listed under a Breaking heading.
   128 levels deep and a key named twice in one object are refused with a message
   that names the cause. Before, wiki read such a file, kept only the last of two
   equal keys, and `init --settings` could write a file that is not JSON.
+- Every command that reads policy (`wiki update`, `wiki new`, `wiki lint`,
+  `wiki map`, `wiki search` and `wiki match`) checks the whole settings file
+  before it does anything else, so `wiki update --check` no longer passes on a
+  file that `wiki lint` or `wiki map` refuses. The blocks are checked in the
+  order the documentation lists them, and the first one at fault is named.
+  `wiki read`, `wiki config` and the merge driver still run on a wiki with a
+  broken block they do not use.
+- A `naming.min_length` above `naming.max_length` is a settings error that names
+  both keys. Before, every name was skipped and `wiki update` pruned every index
+  row.
 
 ### Fixed
 
