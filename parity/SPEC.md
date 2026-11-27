@@ -51,6 +51,15 @@ python -m parity perturb loop [--engine NAME] [--sides SIDES] [--corpora CORPORA
 # compare the alt side with the oracle and read the names of each wiki
 python -m parity interpreters --corpora CORPORA --work DIR --out DIR
 
+# replay the merges of each corpus's history and compare the sides on each
+python -m parity merges [--engine NAME] [--sides SIDES] --corpora CORPORA \
+    [--cache DIR] [--new] [--sample N] [--commit COMMIT] [--jobs N] [--at DIR] \
+    --work DIR --out DIR
+
+# run a gate: the layers of the harness on the corpora, each timed
+python -m parity gate {full,daily} [--engine NAME] [--sides SIDES] --corpora CORPORA \
+    [--loop LABEL] --cache DIR [--jobs N] --work DIR --out DIR
+
 # run a command in the Linux container
 python -m parity container [--commit COMMIT] [--out DIR] COMMAND [ARG ...]
 ```
@@ -234,6 +243,35 @@ read and found. The streams of a case that differs are saved under
 `<out>/<label>/<stage>/`, and those of the second run under
 `<out>/<label>/crossed/<stage>/`.
 
+`merges` replays the merge commits of each corpus's history (Merge History,
+below). `--engine`, `--sides`, `--corpus` and `--now` are those of the other
+commands, and `--jobs N` sets how many merges run at once. `--commit COMMIT`
+(repeatable) names the merges to replay, each by its commit or the start of it,
+in place of all of them. It exits 0 when no merge shows a difference, and 1
+otherwise; with no `--engine` a command the registry excuses is a result that is
+not the expected one. It exits 2 with a message, before it snapshots a
+repository: on what `matrix` refuses of a corpora file, a side and a work
+folder; on a corpus named twice; on a corpus whose checkout is no repository; on
+`--sample` or `--jobs` below one; on `--new` with no `--cache`; and on a
+`--commit` that names no merge commit of the run's histories, which it reads
+from the checkouts. It makes `<work>/merges`, which must not exist beforehand,
+and removes it when the run passed. `--at DIR` names the folder the merges run
+in (Merge History, Path) in place of `<work>/merges/at`: a folder the harness
+refuses as it refuses a work folder, and removes when the run ends. A history
+gets a result file `<out>/<history>.json`: the host and the sides as `matrix`
+records them, what the cache is keyed on, the commit the snapshot stood at, how
+many merges its history holds, what the replayed merges were, and one row for
+each merge, in the form `matrix` writes for a stage, with the seconds each
+side's pass took and the processor seconds of the side's own processes. The
+streams of a case that differs are saved under
+`<out>/<history>/<commit>/<stage>/`. A merge that ends in an error (a checkout
+git refuses) costs the run no other result: its row holds the error, the
+traceback goes to stderr, the other merges run on, and the run exits 2 with its
+work folder left in place.
+
+`gate` runs a full or a daily gate (Gates, below) and exits with the highest
+exit code of its steps, as that section says.
+
 `container` runs one command in the Linux container (Container, below) and exits
 with that command's exit code. It exits 2 with a message when it is given no
 command, when `--commit` names no commit, and when Docker is not installed or
@@ -241,9 +279,9 @@ its daemon does not answer.
 
 The sections below are the rules of the harness, one part each: the oracle,
 sides, snapshots, comparison, caches, the matrix, the fixture families, the
-perturbation, the interpreters run, the registry, the self-check, the CLI suite,
-the replay, with the account a whole replay gives of v1's tests and kinds, and
-the container.
+perturbation, the merge history, the interpreters run, the registry, the
+self-check, the CLI suite, the replay, with the account a whole replay gives of
+v1's tests and kinds, the gates, and the container.
 
 ## Oracle
 
@@ -430,7 +468,9 @@ Every tree a side runs on is a clone of that snapshot, placed at one path:
   the runs on either side of the sweep then differ at `(baseline)`. Choose a
   work folder the system leaves alone.
 - **Live repositories.** The harness runs no `git worktree` subcommand, no
-  commit and no checkout in a clone. Its one git write is the index refresh.
+  commit and no checkout in a clone. Its one git write is the index refresh. The
+  merge replay checks out and merges in a repository of its own, which holds no
+  file of the checkout's repository (Merge History).
 - **Cold stages.** A stage marked cold removes `<root>/.wiki/cache` from its
   clone before the first command.
 - **Links out of a clone.** A clone keeps the target of a symlink as it is
@@ -489,6 +529,7 @@ case, an aspect and a detail:
 | `tree`       | the manifests differ at a path                        | the path      |
 | `touched`    | one side touched a path and the other did not         | the path      |
 | `cache`      | the caches differ                                     | cache and key |
+| `unmerged`   | a merge left a path unmerged in another way           | the path      |
 | `wrote`      | a read-only command touched a path outside the caches | the path      |
 | `unexpected` | a command ended with an exit code its case forbids    | the exit code |
 | `notice`     | a side broke the notice rule of Sides                 | empty         |
@@ -822,6 +863,145 @@ its kind compares less than the table says.
   quotes, or one that runs over several lines, is not read: `dirty-edit` then
   leaves both pages far from their stamps.
 
+## Merge History
+
+A wiki is merged by git, and the engine is part of the merge: git hands each
+index that both sides changed to the engine's merge driver, and the tree the
+merge leaves is one the engine must then take. The trees real merges leave were
+written by every older version of the engine, so no generated tree is as far
+from converged, in as many ways. `python -m parity merges` replays every merge
+commit of a corpus's history on every side and compares the sides on each. The
+replay is `parity/merges.py`.
+
+- **History.** The corpora of one checkout share one history. A run groups the
+  corpora it names by checkout and replays each repository once, with the wiki
+  roots those corpora declare there. The label of a history is the labels of its
+  corpora, sorted and joined by `+`.
+- **Snapshot.** Only the repository of the checkout is cloned, its `.git`
+  folder: a replay checks out trees of the history, and nothing of the tree the
+  checkout stands at today.
+- **Merges.** Every merge commit that the snapshot's `HEAD` reaches, oldest
+  first. A merge on a branch that `HEAD` does not hold is not replayed.
+- **Repository.** A merge is replayed in a repository of the harness's own: a
+  new one, with the snapshot's object store as its alternate. It holds nothing
+  else of the checkout: no hook, no filter, no local config and no linked
+  worktree, each of which a copy of the checkout's own repository would run or
+  read. Git packs nothing there by itself. A file the checkout keeps through a
+  filter stands in the tree as git stores it.
+- **Path.** Each merge runs at a path of its own, `<at>/<commit>`, a slot with
+  the three folders of Snapshots. A worker moves its repository there for the
+  merge and back when the merge ends. `--at DIR` names the folder, which must
+  not exist; the default is `<work>/merges/at`. So the paths a side prints are
+  those of every other side, and of every other run that names the same folder,
+  however many workers it has. The folder is empty when a run ends, and the run
+  removes it.
+- **Pass.** One side's pass over one merge has four steps. The first parent is
+  checked out, detached, and every file git does not hold there is removed, the
+  ignored ones too. The side's merge driver is registered in the repository:
+  `merge.wiki.driver` is the side's own command line with
+  `_merge %O %A %B %L %P`. Git then merges the other parents under the side's
+  environment (`git merge --no-ff --no-edit`): it commits a merge that ends
+  clean, at the run's instant and under a fixed identity, and leaves one with
+  conflicts in progress, as a merge in a working copy does. Last, each wiki of
+  the history that the merged tree declares runs three commands from the neutral
+  folder: `update --check --full`, `update --full` and `update --check`.
+- **The merge.** The merge is a stage of one case, `merge`. Git's stdout, its
+  stderr, which holds what the driver printed there with every notice line, and
+  its exit code are compared as they are. The exit code may be 0 or 1. The tree
+  and the touched set are compared as after any command. The index entries the
+  merge left unmerged (`git ls-files -u`: mode, blob, stage and path) must be
+  the same, and a path where they are not is an `unmerged` difference. Every
+  call of the driver leaves the side's identity record, and any other record is
+  an `identity` difference; the result records how often git called the driver.
+- **The wikis.** Each wiki is a stage named for its root, and its three commands
+  are compared by the rules of Comparison and Caches. A merged tree may hold
+  anything, so each command may exit 2 as well: `update` refuses a tree that
+  holds conflict markers. A wiki that only one side's merged tree declares is a
+  `tree` difference at its settings file, before the first command. The
+  classifiers are asked about a wiki's commands and never about a merge.
+- **Scans.** The whole slot is scanned before the merge, after it and after the
+  last command. After a wiki's command only that wiki, the home and the neutral
+  folder are scanned, and a path a command changed anywhere else shows at
+  `(end)`, as a `tree` difference of the run that changed it. A worker keeps its
+  manifest from one pass to the next: a file keeps its digest while its inode,
+  size, mode and both times are what the last scan saw. The caches of the other
+  wikis are no part of a stage's tree: each side wrote them at its own moment,
+  and the stage of their own wiki compares them by the cache rule.
+- **What a merge was.** A result records for each merge, as the reference side
+  ran it: how often git called the driver, how many index entries stayed
+  unmerged, the wikis `update` refused, and the wikis whose second
+  `update --check` still found something to do. None of these fails a run: they
+  are what v1 makes of that tree, and the other side must make the same of it.
+- **Sides.** With no `--engine` both sides are v1, under `PYTHONHASHSEED=1` and
+  `PYTHONHASHSEED=2`, and a command the registry excuses fails the run. With
+  one, the runs are v1, the engine, and the engine with `WIKI_THREADS=1`, and
+  what the registry excuses passes.
+- **Workers.** `--jobs N` replays that many merges at once, each worker a
+  process with one repository. A worker takes up to eight merges at a time,
+  neighbors in the history, since the tree of a merge is close to the tree of
+  the merge before it; the workers then end together, though the merges of a
+  history differ widely in what they cost. Fewer merges than eight for each
+  worker are dealt out evenly, so every worker has some.
+- **Sample.** `--sample N` replays the fixed sample: the merges whose commit,
+  read as a number, is a multiple of `N`. A merge is in the sample of every run
+  or of none, however far the history has grown.
+
+### History Cache
+
+v1 does the same on a merge every time, so what it did is kept. `--cache DIR`
+names the folder, and an entry holds the reference side's pass over one merge:
+the streams, the exit code, the touched set, the changed manifest content and
+the cache view of every command, the unmerged entries, the count of driver
+calls, a digest of the tree the merge started from, and the merge's part of the
+result file.
+
+- **Key.** An entry is keyed on what its pass depends on. Of v1: a digest of the
+  engine files of the oracle commit, which are the mode, blob and path of every
+  file under `wiki/` outside `wiki/skills`, with the file that states the
+  version counted without that line; a digest of the reference side's
+  constraints file; and the version of its interpreter. Of the host:
+  `git --version` and the platform. Of the run: the merge commit, the instant,
+  the path the merge ran at, and the wiki roots of the history. Of the harness:
+  a digest of the files that make a pass and an entry, which `parity/merges.py`
+  lists: the replay itself, the run and the launcher of a side, the git calls,
+  the manifest, the cache view, the folders of a slot, and the classes an entry
+  holds. So a merge commit on the branch v1 lives on, a change to its docs or a
+  release that only moves the version keeps every entry; a change to an engine
+  file, to a package pin or to one of those harness files leaves none, and the
+  next run replays every merge on v1.
+- **v1 alone.** A run with no `--engine` does not replay a merge the cache
+  holds: its row comes from the entry and says `cached`. A merge it replays is
+  stored when the two sides show no difference and no excused command. Only this
+  run stores, because it alone holds v1 against itself.
+- **With an engine.** The reference side's pass comes from the cache where the
+  cache holds it, and only the engine runs. The cached pass stands on the tree
+  the engine's pass started the merge from, and each later stage on what the
+  entry's own commands made of it. Where the digest of that first tree is not
+  the entry's, the merge shows a `tree` difference at `(baseline)` with no path:
+  git checked out another tree than when the entry was made. A merge the cache
+  does not hold runs v1 beside the engine, and nothing is stored.
+- **New merges.** `--new` replays only the merges the cache does not hold. With
+  an engine that is each merge v1 has not run yet, against v1 as it runs there.
+- **Same folder.** The path a merge ran at is part of its key, so a run finds
+  the entries of another only where both replay their merges in the same folder.
+  Two runs with the same `--work` do; runs with work folders of their own, as
+  the layers of a gate have, name one folder with `--at`.
+
+Limits of the replay:
+
+- **Times.** Git writes the files of a checkout and of a merge at the moment of
+  each pass, and v1 reads a page's modification time against its stamp (see
+  Perturbation, Times). A page that a merge leaves changed and uncommitted, with
+  a stamp that names the minute or, under a date format, the day of the pass,
+  can be restamped on one side and left on the other. The sides then differ on
+  that merge, and a second run shows whether the time was the cause.
+- **The tree a merge left in history.** A replay reads the parents of a merge
+  commit, never its tree: the tree is what git and the side's driver make of the
+  parents today, not what the people who merged resolved by hand.
+- **The driver's line in git's config.** The harness registers the side's
+  command line. That the line an engine's own `init` registers finds the engine
+  is a test's to hold.
+
 ## Interpreters Run
 
 v1 has no single answer where an answer turns on its interpreter: the Unicode
@@ -1033,10 +1213,10 @@ The supported set, as the judge decides it:
   classifier code, so a difference of their kind is reported. Two are a test's
   to hold: the text of a failed plugin download (D1), and typer's two completion
   options, which a second engine does not have (D2). The label of a `_merge`
-  error line (D1) waits for a `_merge` command in the harness, which runs none.
-  A pattern past the compiled-size limits, and nesting past the depth limit
-  (D3), are limits of the second engine's regex library, and the judge's walk
-  does not hold them.
+  error line (D1) is never excused: the merge replay runs the driver, and no
+  classifier is asked about a merge. A pattern past the compiled-size limits,
+  and nesting past the depth limit (D3), are limits of the second engine's regex
+  library, and the judge's walk does not hold them.
 - **No entry.** One library text has no clause in any entry. `init --settings`
   with text that is not JSON ends in a parameter error of wiki's own code,
   `Invalid value: --settings must be valid JSON (<text>).`, whose `<text>` is
@@ -1688,6 +1868,87 @@ A run passes when it has no difference and no finding:
 
 A test that is skipped, or fails as its mark expects, records no call. The
 result file lists it with its outcome, and it is no finding of the replay.
+
+## Gates
+
+A gate is the harness run whole on the corpora: its layers, one after the other,
+each timed. `python -m parity gate` runs one, and `parity/gate.py` names its
+layers. A layer is one harness command, or that command once for each corpus,
+and every command of a gate is a step: a process of its own, with a work folder,
+an output folder and a log below the gate's.
+
+- **Full gate.** It first checks the harness with v1 alone: the self-check and
+  the registry check, the replay of v1's tests with its controls, the fixture
+  families, the perturbation in both modes, and the fixed sample of the merge
+  history with no cache. With an engine it then compares v1 with the engine on
+  the corpora, on the fixture families and on the perturbation in both modes. It
+  ends with the whole merge history: v1 alone on every merge the cache does not
+  hold, which stores them, then the engine on every merge.
+- **Daily gate.** The comparison with the engine on fresh snapshots, without the
+  loop of fresh seeds, and the merges made since the last gate: the engine on
+  every merge the cache does not hold, against v1 as it runs there, and then v1
+  alone on those merges, which stores them.
+- **No engine.** Without `--engine` a gate has no layer that compares two
+  engines, and says so. A full gate is then the check of the harness and the
+  fill of the cache, and a daily gate the fill alone.
+- **Oracle.** Every gate starts with `oracle check`, so a gate fails while this
+  branch is not level with v1. The check reads the remote-tracking references:
+  fetch first.
+- **Loop.** `--loop LABEL` (repeatable) names the corpora whose wikis the loop
+  of fresh seeds runs on, `--fresh N` seeds each (default 200). The first of
+  them also takes the registry check, which one corpus proves; with none, the
+  first corpus of the gate takes it and no loop runs.
+- **Order.** The layers run one after the other, so the time of a layer is its
+  own. The steps of a layer run side by side. `--jobs N` bounds how many steps
+  run at once, and is handed to the commands that run several trees or merges at
+  once.
+- **Times.** For each step the gate records the exit code, the seconds on the
+  clock, and the processor seconds of the command with every process it waited
+  for, which are the sides it ran. For each layer it records the seconds from
+  its first step's start to its last step's end, the sum of its steps' processor
+  seconds, their quotient (how many processors the layer kept busy) and the
+  host's load average when the layer started and when it ended. Other work on
+  the host shows in the load, stretches the seconds and can add processor
+  seconds too; time a gate on a host that does nothing else.
+- **Result.** `<out>/gate.json` holds the gate, the engine, the corpora, when it
+  started, the host and one row for each layer with its steps and their
+  arguments. It is written again as each layer ends, so a gate that is cut short
+  leaves the layers it ran. A step writes its results to `<out>/<layer>/`, or
+  `<out>/<layer>/<corpus>/` where the layer has a step for each corpus, and what
+  it prints to a file of that name with `.txt`.
+- **Exit code.** Every layer runs, whatever the one before it showed. A layer
+  ends 0 when every step exited 0, 1 when a step exited 1 and none ended any
+  other way, and 2 otherwise: a step that a signal ended is an error. The gate
+  exits with the highest of its layers' codes. It exits 2 with a message, before
+  a step runs: on a corpora or sides file of the wrong shape, on an unknown
+  corpus or side, on a corpus named twice, on a `--loop` corpus the gate does
+  not run on, on a count below one, and on a work folder that exists. A gate
+  that passed removes its work folder; one that did not leaves the trees its
+  steps kept.
+
+| Layer                   | Part         | Gate                  | Command                                                             |
+| ----------------------- | ------------ | --------------------- | ------------------------------------------------------------------- |
+| `oracle`                | `oracle`     | both                  | `oracle check`                                                      |
+| `selfcheck`             | `self-check` | full                  | `selfcheck --side oracle`, a step for each corpus                   |
+| `registry`              | `self-check` | full                  | `registry --side oracle` on one corpus                              |
+| `replay`                | `self-check` | full                  | `replay`                                                            |
+| `fixtures`              | `self-check` | full                  | `fixtures`                                                          |
+| `perturb-corpus`        | `self-check` | full                  | `perturb corpus`, a step for each corpus                            |
+| `perturb-loop`          | `self-check` | full, with `--loop`   | `perturb loop --corpora` on the loop's corpora, with `--fresh`      |
+| `merges-sample`         | `self-check` | full                  | `merges --sample`, with no cache                                    |
+| `matrix`                | `corpora`    | both, with an engine  | `matrix --a oracle --b ENGINE --registered`, a step for each corpus |
+| `fixtures-engine`       | `corpora`    | both, with an engine  | `fixtures --engine`                                                 |
+| `perturb-corpus-engine` | `corpora`    | both, with an engine  | `perturb corpus --engine`, a step for each corpus                   |
+| `perturb-loop-engine`   | `corpora`    | full, with both       | `perturb loop --engine --corpora` on the loop's corpora             |
+| `merges-engine`         | `history`    | daily, with an engine | `merges --engine --cache --new`, before `merges`                    |
+| `merges`                | `history`    | both                  | `merges --cache`                                                    |
+| `merges-engine`         | `history`    | full, with an engine  | `merges --engine --cache`, after `merges`                           |
+
+The cache of the merge history is keyed on the path a merge ran at. Every step
+of a gate that replays merges is therefore handed one folder, `--at <work>/at`,
+so the engine's layer reads what the layer of v1 alone stored, and the daily
+gate's `--new` names only the merges no gate has stored. Every gate of a host
+takes the same `--work`, or its merges run at other paths and it finds no entry.
 
 ## Container
 

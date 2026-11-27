@@ -89,6 +89,12 @@ uv run --no-sync python -m parity perturb loop --work <dir> --out <dir>
 # compare the alt side with the oracle on each corpus of a file
 uv run --no-sync python -m parity interpreters --corpora <file> --work <dir> --out <dir>
 
+# replay the merges of each corpus's history, with v1's part kept in a cache
+uv run --no-sync python -m parity merges --corpora <file> --cache <dir> --work <dir> --out <dir>
+
+# run a full gate with v1 alone: the harness checks itself and fills that cache
+uv run --no-sync python -m parity gate full --corpora <file> --cache <dir> --work <dir> --out <dir>
+
 # run a command in the Linux container, on a clone of HEAD (needs Docker)
 uv run --no-sync python -m parity container -- <command>
 
@@ -617,6 +623,35 @@ wiki root and every name below it for a code point they do not agree on; such a
 name fails the corpus even where the matrix shows no difference. A property an
 engine starts to read from the Unicode tables goes into `PROPERTIES` there and
 into the spec's table.
+
+`python -m parity merges` replays the merge commits of a corpus's history
+(`parity/merges.py`), because the trees real merges leave were written by every
+older version of the engine. On every side it checks out the first parent in a
+repository of the harness's own, which borrows the snapshot's objects and holds
+no hook, filter or config of the checkout; merges the other parents with the
+side's merge driver; and runs `update --check`, `update` and `update --check` on
+each wiki the merged tree declares. A merge runs at a path its commit names, so
+the paths a side prints are those of every other run. `--cache` keeps what v1
+did on each merge: a run of v1 alone stores a merge that shows no difference and
+skips the ones the cache holds, and a run with an engine reads v1's part from
+it. An entry is keyed on the oracle's engine files, its constraints file, the
+interpreter, git, the merge, the instant and the path, so a release that changes
+no engine file keeps the cache. It is keyed on the harness files that make a
+pass and an entry too (`_SOURCES`): a change to one of them empties the cache,
+so fill it again with a run of v1 alone before the next gate with an engine, and
+add a module to the list when a pass comes to run through it. The runs that
+share a cache replay their merges in one folder, which `--at` names.
+
+`python -m parity gate` runs a gate (`parity/gate.py`): the layers of the
+harness on the corpora, one after the other, each step a harness command in a
+process of its own. `gate full` checks the harness with v1 alone, compares v1
+with an engine if `--engine` names one, and ends with the merge history;
+`gate daily` holds the comparison and the merges the cache does not hold yet. It
+records the seconds, the processor seconds and the load of each layer, so run it
+on a host that does nothing else, and with the same `--work` every time: the
+cache of the merge history is keyed on the path, and the gate hands every step
+that replays merges the folder `<work>/at`. A new harness command that a gate
+should hold gets its layer in `layers` and its row in the spec's table.
 
 `python -m parity container` runs one command in the Linux container
 (`parity/container.py`, `parity/Dockerfile`): the Ubuntu release of the CI

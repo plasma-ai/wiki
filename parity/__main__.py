@@ -9,6 +9,8 @@ usage: python -m parity matrix --a NAME --b NAME [--registered] [--sides FILE] -
        python -m parity perturb corpus [--engine NAME] [--sides FILE] --corpora FILE [--seed N] --work DIR --out DIR
        python -m parity perturb loop [--engine NAME] [--sides FILE] [--corpora FILE] [--seed N | --fresh N] --work DIR --out DIR
        python -m parity interpreters --corpora FILE --work DIR --out DIR
+       python -m parity merges [--engine NAME] [--sides FILE] --corpora FILE [--cache DIR] [--at DIR] --work DIR --out DIR
+       python -m parity gate {full,daily} [--engine NAME] [--sides FILE] --corpora FILE --cache DIR --work DIR --out DIR
        python -m parity oracle ensure [--side NAME]
        python -m parity oracle check [--skip NAME]
        python -m parity container [--commit COMMIT] [--out DIR] COMMAND [ARG ...]
@@ -85,6 +87,31 @@ or such a name, and 1 otherwise. It exits 2, before it snapshots anything,
 as ``matrix`` does, and on an oracle file whose crossed side does not cross
 the other two.
 
+``merges`` replays the merge commits of each corpus's history. On every
+side it checks out the first parent of a merge in a repository of its own,
+merges the other parents with the side's merge driver, and runs ``update
+--check``, ``update`` and ``update --check`` again on each wiki the merged
+tree declares. With no ``--engine`` both sides are v1, under two hash seeds;
+with one it compares v1 with that side, and with that side on one thread.
+``--cache`` keeps what v1 did on each merge: a run of v1 alone stores it and
+skips the merges the cache holds, and a run with an engine reads v1's part
+from it. An entry is keyed on the path its merge ran at, so the runs that
+share a cache name one folder with ``--at``. It exits 0 when no merge shows
+a difference, and 1 otherwise. It exits 2, before it snapshots a repository,
+as ``matrix`` does, on a corpus whose checkout is no repository, and on a
+``--commit`` that names no merge of the histories. A merge that ends in an
+error is printed and recorded, the others run on, and the run then exits 2.
+
+``gate`` runs a gate: the layers of the harness on the corpora, one after the
+other, each a set of the commands above with a work folder, an output folder
+and a log of its own. A full gate checks the harness with v1 alone, compares
+v1 with an engine if one is named, and ends with the whole merge history; a
+daily gate holds the comparison with the engine and the merges the cache does
+not hold yet. It records for each layer the seconds on the clock, the
+processor seconds of its commands and how many processors that comes to, and
+exits 0 when every step did, 1 when a step exited 1 and none ended any other
+way, and 2 otherwise.
+
 The registry lists what a second engine may do differently from v1, and two
 builds of v1 have nothing registered between them. ``matrix`` therefore
 counts a command the registry excuses as a result that is not the expected
@@ -108,6 +135,7 @@ from __future__ import annotations
 import argparse
 import collections
 import concurrent.futures
+import contextlib
 import dataclasses
 import datetime as dt
 import functools
@@ -133,9 +161,11 @@ from . import (
     container,
     dispatch,
     fixtures,
+    gate,
     homes,
     interpreters,
     kinds,
+    merges,
     oracle,
     perturb,
     ported,
@@ -174,8 +204,8 @@ _YEARS = (1001, 9998)
 _DESCRIPTION = """\
 Run two wiki engines on the same trees and report what they do differently.
 
-matrix, selfcheck, registry, suite, replay, fixtures, perturb and interpreters exit 0 when every
-result is the expected one, and 1 otherwise. A run that would compare nothing exits 2 with a message,
+matrix, selfcheck, registry, suite, replay, fixtures, perturb, interpreters, merges and gate exit 0
+when every result is the expected one, and 1 otherwise. A run that would compare nothing exits 2 with a message,
 before it snapshots anything or runs a test. oracle ensure exits 2 when it
 refuses a checkout or a venv, and oracle check exits 1 when a check fails. An
 error of the harness itself prints its traceback and exits 2.
@@ -197,6 +227,13 @@ _LOOP = 'loop'
 _SEEDS = 2**32
 # the command that compares the alt side with the oracle
 _INTERPRETERS = 'interpreters'
+# the command that replays the merges of a history, the folder of its
+# snapshots and the folder every merge runs in, below its own
+_MERGES = 'merges'
+_REPOSITORIES = 'repositories'
+_AT = 'at'
+# the command that runs a gate, and its result file
+_GATE = 'gate'
 # the command that runs another in the Linux container
 _CONTAINER = 'container'
 
@@ -422,6 +459,121 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # sample seed option
     seed_help = 'Seed of the matrix sample (default: 0).'
     command.add_argument('--seed', type=int, default=0, help=seed_help)
+    summary = "Replay the merges of each corpus's history and compare the sides."
+    command = commands.add_parser(_MERGES, help=summary, description=summary)
+    # engine name option
+    engine_help = 'Name of the side compared against v1 (default: v1 against itself).'
+    command.add_argument('--engine', help=engine_help)
+    # sides file option
+    sides_help = 'TOML file with one table per side, beside the v1 sides.'
+    command.add_argument('--sides', type=pathlib.Path, help=sides_help)
+    # corpora file option
+    corpora_help = 'TOML file with one table per corpus.'
+    command.add_argument(
+        '--corpora',
+        type=pathlib.Path,
+        required=True,
+        help=corpora_help,
+    )
+    # corpus label option
+    corpus_help = 'Label of a corpus to run on (repeatable; default: every corpus).'
+    command.add_argument('--corpus', action='append', help=corpus_help)
+    # cache folder option
+    cache_help = (
+        'Folder that keeps what v1 did on each merge: a merge it holds is not'
+        ' replayed on v1 again (default: no cache).'
+    )
+    command.add_argument('--cache', type=pathlib.Path, help=cache_help)
+    # new merges flag
+    new_help = 'Replay only the merges the cache does not hold yet.'
+    command.add_argument('--new', action='store_true', help=new_help)
+    # sample option
+    sample_help = 'Replay the fixed sample: one merge in N, chosen by its commit.'
+    command.add_argument('--sample', type=int, help=sample_help)
+    # commit option
+    commit_help = 'A merge commit to replay (repeatable; default: every merge).'
+    command.add_argument('--commit', action='append', help=commit_help)
+    # jobs option
+    jobs_help = 'How many merges are replayed at once (default: one per processor).'
+    command.add_argument('--jobs', type=int, help=jobs_help)
+    # merge folder option
+    at_help = (
+        'New folder every merge is replayed in, each below its commit: the runs'
+        ' that share a cache name the same one (default: <work>/merges/at).'
+    )
+    command.add_argument('--at', type=pathlib.Path, help=at_help)
+    # work folder option
+    work_help = 'Folder the harness makes one new folder in.'
+    command.add_argument('--work', type=pathlib.Path, required=True, help=work_help)
+    # output folder option
+    out_help = 'Folder for the result files and the saved streams.'
+    command.add_argument('--out', type=pathlib.Path, required=True, help=out_help)
+    # fixed instant option
+    now_help = f'RFC 3339 instant every side runs at (default: {_NOW}).'
+    command.add_argument('--now', type=_instant, default=_NOW, help=now_help)
+    summary = 'Run a gate: the layers of the harness on the corpora, each timed.'
+    command = commands.add_parser(_GATE, help=summary, description=summary)
+    # gate argument
+    kind_help = (
+        'The gate: full checks the harness with v1 alone and holds every'
+        ' layer; daily holds the comparison with an engine and the new merges.'
+    )
+    command.add_argument('kind', choices=(gate.FULL, gate.DAILY), help=kind_help)
+    # engine name option
+    engine_help = (
+        'Name of the side compared against v1 (default: none, and the layers'
+        ' that compare two engines are left out).'
+    )
+    command.add_argument('--engine', help=engine_help)
+    # sides file option
+    sides_help = 'TOML file with one table per side, beside the v1 sides.'
+    command.add_argument('--sides', type=pathlib.Path, help=sides_help)
+    # corpora file option
+    corpora_help = 'TOML file with one table per corpus.'
+    command.add_argument(
+        '--corpora',
+        type=pathlib.Path,
+        required=True,
+        help=corpora_help,
+    )
+    # corpus label option
+    corpus_help = 'Label of a corpus to run on (repeatable; default: every corpus).'
+    command.add_argument('--corpus', action='append', help=corpus_help)
+    # loop corpus option
+    loop_help = (
+        'Label of a corpus whose wiki the loop of fresh seeds runs on'
+        ' (repeatable; default: none, and a full gate runs no loop).'
+    )
+    command.add_argument('--loop', action='append', default=[], help=loop_help)
+    # fresh seeds option
+    fresh_help = (
+        'How many fresh seeds the loop runs on each of its wikis (default: 200).'
+    )
+    command.add_argument('--fresh', type=int, default=200, help=fresh_help)
+    # sample option
+    sample_help = (
+        'The fixed sample of merges a full gate replays with no cache: one'
+        ' merge in N (default: 20).'
+    )
+    command.add_argument('--sample', type=int, default=20, help=sample_help)
+    # cache folder option
+    cache_help = 'Folder that keeps what v1 did on each merge.'
+    command.add_argument('--cache', type=pathlib.Path, required=True, help=cache_help)
+    # jobs option
+    jobs_help = (
+        'How many steps of a layer run at once, and how many trees or merges'
+        " a step runs at once (default: every step, and each command's own)."
+    )
+    command.add_argument('--jobs', type=int, help=jobs_help)
+    # work folder option
+    work_help = 'New folder each step makes its work folder in.'
+    command.add_argument('--work', type=pathlib.Path, required=True, help=work_help)
+    # output folder option
+    out_help = "Folder for the result file, and each step's results and log."
+    command.add_argument('--out', type=pathlib.Path, required=True, help=out_help)
+    # fixed instant option
+    now_help = f'RFC 3339 instant every side runs at (default: {_NOW}).'
+    command.add_argument('--now', type=_instant, help=now_help)
     summary = 'Build the oracle checkout, or hold oracle.toml level with v1.'
     command = commands.add_parser('oracle', help=summary, description=summary)
     actions = command.add_subparsers(dest='action', required=True)
@@ -529,6 +681,10 @@ def _run(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
         return _perturb(parser, options)
     if options.command == _INTERPRETERS:
         return _interpreters(parser, options)
+    if options.command == _MERGES:
+        return _merges(parser, options)
+    if options.command == _GATE:
+        return _gate(parser, options)
     if options.command == _CONTAINER:
         return _container(parser, options)
     # read the registry
@@ -1372,6 +1528,294 @@ def _interpreters(parser: argparse.ArgumentParser, options: argparse.Namespace) 
     if failed:
         return 1
     return 0
+
+
+def _merges(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
+    """Replay the merges of each history, compare the sides, and return the exit code."""
+    # read the registry, the sides and the corpora
+    try:
+        entries = registry.load()
+        declared = {}
+        if options.sides is not None:
+            declared = config.load_sides(options.sides)
+        corpora = config.load_corpora(options.corpora)
+    except ValueError as e:
+        parser.error(f'{e}')
+    # resolve the corpora whose histories are replayed
+    labels = options.corpus or list(corpora)
+    unknown = [label for label in labels if label not in corpora]
+    if unknown:
+        parser.error(f'{options.corpora} declares no corpus named {unknown!r}.')
+    twice = sorted({label for label in labels if labels.count(label) > 1})
+    if twice:
+        parser.error(f'--corpus names a corpus twice: {twice!r}.')
+    if not labels:
+        parser.error(f'{options.corpora} declares no corpus.')
+    if (options.sample is not None) and (options.sample < 1):
+        parser.error(f'--sample must be at least 1, got {options.sample}.')
+    if (options.jobs is not None) and (options.jobs < 1):
+        parser.error(f'--jobs must be at least 1, got {options.jobs}.')
+    if options.new and (options.cache is None):
+        parser.error(
+            '--new names the merges a cache does not hold, and no --cache is given.'
+        )
+    # resolve the sides: v1, and the engine if the run names one
+    names = [suite.REFERENCE]
+    if options.engine is not None:
+        if options.engine == suite.REFERENCE:
+            parser.error(f'--engine names {options.engine!r}, the side v1 runs as.')
+        names.append(options.engine)
+    try:
+        chosen = _sides(names, declared, path=options.sides)
+    except ValueError as e:
+        parser.error(f'{e}')
+    # refuse the work folder and the histories, and probe every side, before
+    # a repository is snapshotted
+    work = options.work.resolve() / _MERGES
+    at = work / _AT
+    if options.at is not None:
+        at = options.at.resolve()
+    try:
+        fixtures.validate(work)
+        fixtures.validate(at)
+        told = merges.histories([corpora[label] for label in labels])
+        for history in told:
+            merges.validate(history, work=work / _REPOSITORIES / history.label)
+        header = _header(chosen, now=options.now)
+    except ValueError as e:
+        parser.error(f'{e}')
+    # refuse a commit that is no merge of any history: the run would replay
+    # nothing for it, and exit as if the merge showed no difference
+    if options.commit:
+        held = [
+            merge.commit
+            for history in told
+            for merge in merges.listed(history.checkout / '.git')
+        ]
+        unknown = [
+            commit
+            for commit in options.commit
+            if not any(known.startswith(commit) for known in held)
+        ]
+        if unknown:
+            parser.error(
+                f'--commit names no merge commit of the histories: {unknown!r}.'
+            )
+    header['registry'] = {id: entry.status for id, entry in entries.items()}
+    # v1 against itself under two hash seeds, or v1 against the engine, which
+    # also runs on one thread
+    reference, *engines = chosen
+    sides = selfcheck._seeded(reference)
+    if engines:
+        sides = [reference, engines[0], replay.threaded(engines[0])]
+    stamped = None
+    if options.cache is not None:
+        stamped = merges.stamp(oracle.load(), suite.REFERENCE)
+        header['cache'] = dataclasses.asdict(stamped)
+    # replay each history and write its result file
+    options.out.mkdir(parents=True, exist_ok=True)
+    failed = False
+    errors = 0
+    for history in told:
+        label = history.label
+        started = time.monotonic()
+        plan = merges.prepare(history, work=work / _REPOSITORIES / label, at=at)
+        # resolve the merges to replay
+        picked = list(plan.merges)
+        if options.sample is not None:
+            picked = merges.sample(picked, options.sample)
+        if options.commit:
+            picked = [
+                merge
+                for merge in picked
+                if any(merge.commit.startswith(commit) for commit in options.commit)
+            ]
+        if options.new and (options.cache is not None) and (stamped is not None):
+            known = merges.stored(
+                plan,
+                picked,
+                now=options.now,
+                store=options.cache,
+                stamped=stamped,
+            )
+            picked = [merge for merge in picked if merge not in known]
+        count = len(picked)
+        s = 's' if count != 1 else ''
+        print(f'{label}: {count} merge{s} of {len(plan.merges)} to replay', flush=True)
+        replayed = {}
+        tried = merges.run(
+            plan,
+            picked,
+            sides,
+            now=options.now,
+            second=bool(engines),
+            store=options.cache,
+            stamped=stamped,
+            jobs=options.jobs or os.cpu_count() or 1,
+        )
+        for done in tried:
+            replayed[done.commit] = done
+            _save(done.streams, options.out / label / done.commit)
+        ordered = [replayed[merge.commit] for merge in picked]
+        counts = merges.summary(ordered)
+        seconds = round(time.monotonic() - started, 1)
+        rows = [
+            {**done.report, 'commit': done.commit, 'cached': done.cached}
+            | ({'error': done.error} if done.error is not None else {})
+            for done in ordered
+        ]
+        document = {
+            **header,
+            'history': label,
+            'roots': list(history.roots),
+            'head': plan.head,
+            'history_merges': len(plan.merges),
+            'counts': counts,
+            'seconds': seconds,
+            'merges': rows,
+        }
+        text = json.dumps(document, indent=2)
+        (options.out / f'{label}.json').write_text(text + '\n', encoding='utf-8')
+        # print what the merges were, then what is not the expected result
+        print(
+            f'{label}: {counts["merges"]} merges: {counts["cached"]} from the cache,'
+            f' {counts["driven"]} reached the merge driver, {counts["conflicted"]}'
+            f' left conflicts, {counts["refused"]} hold a wiki update refused,'
+            f' {counts["unconverged"]} hold a wiki one update did not converge;'
+            f' {seconds:.0f} s'
+        )
+        print(
+            f'{label}: {counts["differing"]} of {counts["merges"]} merges differ,'
+            f' {counts["errors"]} ended in an error'
+        )
+        for done in ordered:
+            if done.error is not None:
+                print(f'  {done.commit}: error: {done.error}')
+            for difference in done.differences:
+                line = _line(difference)
+                print(f'  {done.commit}: {line}')
+            for excused in done.excused:
+                line = _line(excused)
+                print(f'  {done.commit}: registered: {line}')
+        errors += counts['errors']
+        # two builds of v1 have nothing registered between them
+        if counts['differing'] or (counts['excused'] and not engines):
+            failed = True
+    # every worker took its repository back, so the folder of the merges is
+    # empty: the next run that names it finds it new
+    with contextlib.suppress(OSError):
+        at.rmdir()
+    if errors:
+        return 2
+    if failed:
+        return 1
+    shutil.rmtree(work)
+    return 0
+
+
+def _gate(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
+    """Run the layers of a gate, time each, and return the exit code."""
+    # read the corpora and the sides, which every step reads again
+    try:
+        declared = {}
+        if options.sides is not None:
+            declared = config.load_sides(options.sides)
+        corpora = config.load_corpora(options.corpora)
+    except ValueError as e:
+        parser.error(f'{e}')
+    # resolve the corpora, and those of the loop among them
+    labels = options.corpus or list(corpora)
+    unknown = [label for label in labels if label not in corpora]
+    if unknown:
+        parser.error(f'{options.corpora} declares no corpus named {unknown!r}.')
+    twice = sorted({label for label in labels if labels.count(label) > 1})
+    if twice:
+        parser.error(f'--corpus names a corpus twice: {twice!r}.')
+    if not labels:
+        parser.error(f'{options.corpora} declares no corpus.')
+    outside = [label for label in options.loop if label not in labels]
+    if outside:
+        parser.error(f'--loop names {outside!r}, which the gate does not run on.')
+    for name in ('fresh', 'sample', 'jobs'):
+        value = getattr(options, name)
+        if (value is not None) and (value < 1):
+            parser.error(f'--{name} must be at least 1, got {value}.')
+    # resolve the engine
+    if options.engine is not None:
+        if options.engine == suite.REFERENCE:
+            parser.error(f'--engine names {options.engine!r}, the side v1 runs as.')
+        try:
+            _sides([options.engine], declared, path=options.sides)
+        except ValueError as e:
+            parser.error(f'{e}')
+    # a gate that failed leaves its trees in its work folder
+    work = options.work.resolve()
+    if os.path.lexists(work):
+        parser.error(f'Work folder {work} exists; the gate makes it new.')
+    out = options.out.resolve()
+    planned = gate.layers(
+        options.kind,
+        corpora=options.corpora.resolve(),
+        labels=labels,
+        loop=options.loop,
+        work=work,
+        out=out,
+        cache=options.cache.resolve(),
+        engine=options.engine,
+        sides=options.sides.resolve() if options.sides is not None else None,
+        fresh=options.fresh,
+        sample=options.sample,
+        jobs=options.jobs,
+        now=options.now,
+    )
+    if options.engine is None:
+        print(f'{_GATE}: no engine is named: no layer compares two engines', flush=True)
+    # run each layer, and write the result file again as each one ends
+    out.mkdir(parents=True, exist_ok=True)
+    document: dict[str, Any] = {
+        'gate': options.kind,
+        'engine': options.engine,
+        'corpora': labels,
+        'loop': options.loop,
+        'started': dt.datetime.now(dt.UTC).isoformat(timespec='seconds'),
+        'host': {'platform': platform.platform(), 'processors': os.cpu_count()},
+        'layers': [],
+    }
+    codes = []
+    for done in gate.run(planned, jobs=options.jobs):
+        row = {
+            'name': done.layer.name,
+            'part': done.layer.part,
+            'exit': done.code,
+            'seconds': done.seconds,
+            'cpu': done.cpu,
+            'parallelism': done.parallelism,
+            'load': done.load,
+            'load_end': done.load_end,
+            'steps': [
+                {**dataclasses.asdict(timed), 'argv': list(step.argv)}
+                for timed, step in zip(done.steps, done.layer.steps)
+            ],
+        }
+        document['layers'].append(row)
+        text = json.dumps(document, indent=2)
+        (out / f'{_GATE}.json').write_text(text + '\n', encoding='utf-8')
+        # print the layer, and each step that did not end as expected
+        print(
+            f'{done.layer.name} ({done.layer.part}): exit {done.code},'
+            f' {done.seconds:.0f} s, {done.cpu:.0f} s of processor time,'
+            f' {done.parallelism:.1f} processors, load {done.load:.1f} at its start'
+            f' and {done.load_end:.1f} at its end',
+            flush=True,
+        )
+        for timed, step in zip(done.steps, done.layer.steps):
+            if timed.code != 0:
+                print(f'  {step.name}: exit {timed.code}: {step.log}', flush=True)
+        codes.append(done.code)
+    code = max(codes)
+    if code == 0:
+        shutil.rmtree(work, ignore_errors=True)
+    return code
 
 
 def _container(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
