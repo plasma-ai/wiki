@@ -31,6 +31,8 @@ __all__ = [
     'test_command_errors_exit_two',
     'test_untrusted_hook_refusal_exits_two',
     'test_update_check_separates_pending_from_error',
+    'test_page_that_is_not_utf8_stops_a_command_naming_the_byte',
+    'test_json_file_that_is_not_utf8_is_malformed_at_the_byte',
     'test_init_creates_root_index',
     'test_init_guards_existing_wiki',
     'test_init_seeds_settings',
@@ -86,6 +88,7 @@ __all__ = [
     'test_match_invalid_regex_reports_error',
     'test_match_resolution_failure_exits_two',
     'test_match_all_skips_undecodable_files',
+    'test_match_names_a_page_it_cannot_decode',
     'test_search_ranked_and_json_output',
     'test_search_no_match_exits_nonzero',
     'test_search_invalid_query_reports_error',
@@ -103,6 +106,7 @@ __all__ = [
     'test_lint_clean_after_update',
     'test_merge_driver_no_op_without_git',
     'test_init_writes_gitattributes_without_committing',
+    'test_init_and_config_append_to_gitattributes_that_is_not_utf8',
     'test_merge_driver_merges_authored_frontmatter',
     'test_merge_driver_moves_regenerated_keys_with_their_bodies',
     'test_merge_driver_takes_the_other_sides_row_edit',
@@ -136,6 +140,7 @@ __all__ = [
     'test_version_flag_reports_a_version',
     'test_trust_gates_hook_execution',
     'test_trust_refuses_non_wiki_path',
+    'test_trust_refuses_a_store_that_is_not_utf8_naming_the_byte',
     'test_trust_store_does_not_mark_home_as_wiki_root',
     'test_trust_store_exemption_survives_symlinked_home',
     'test_root_resolution_survives_a_symlink_loop_home',
@@ -319,6 +324,88 @@ def test_update_check_separates_pending_from_error(tmp_path: pathlib.Path) -> No
     entry = _wiki(root, 'update', '--check', 'nowhere', '--path', str(root))
     assert entry.returncode == 2, entry.stdout + entry.stderr
     assert 'Error:' in entry.stderr
+
+
+@pytest.mark.parametrize(
+    argnames=('valid', 'rest'),
+    argvalues=[
+        (b'', b'\xff# Design\n'),
+        ('# Café\n\nBody '.encode(), b'\xff text.\n'),
+        (b'# Design\n\nBody ends mid-character: caf', b'\xc3'),
+        (b'# Design\n\n' + b'Body text. ' * 1000, b'\xff\n'),
+    ],
+    ids=['first-byte', 'middle', 'cut-off-final-character', 'past-one-read-buffer'],
+)
+def test_page_that_is_not_utf8_stops_a_command_naming_the_byte(
+    tmp_path: pathlib.Path,
+    valid: bytes,
+    rest: bytes,
+) -> None:
+    """A page that is not valid UTF-8 stops a command with its path and the byte.
+
+    The error leads with the page's path, gives the offset of the first
+    byte that is not UTF-8 -- a count of bytes, not characters, so an
+    editor's go-to-byte lands on it -- and names the remedy. The words
+    are wiki's own: the interpreter's sentence for the failure, which
+    names its codec, never prints.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    (root / 'core').mkdir()
+    (root / 'core' / 'design.md').write_bytes(valid + rest)
+
+    # every command that reads the page stops on it, with the one error line
+    error = (
+        f'Error: core/design.md: not valid UTF-8 at byte {len(valid)};'
+        ' re-save the file as UTF-8'
+    )
+    commands = (
+        ('read', 'core/design'),
+        ('update',),
+        ('update', '--check'),
+        ('lint',),
+        ('lint', '--json'),
+    )
+    for args in commands:
+        result = _wiki(root, *args, '--path', str(root))
+        assert result.returncode == 2, (args, result.stdout + result.stderr)
+        assert result.stderr.splitlines() == [error], args
+        assert 'codec' not in result.stdout + result.stderr, args
+
+
+@pytest.mark.parametrize(
+    argnames=('name', 'args'),
+    argvalues=[
+        ('.wiki/settings.json', ('update',)),
+        ('.wiki/settings.json', ('lint',)),
+        ('.obsidian/app.json', ('config',)),
+        ('.wiki/obsidian/community-plugins.json', ('config',)),
+    ],
+    ids=['settings-update', 'settings-lint', 'obsidian-config', 'staged-config'],
+)
+def test_json_file_that_is_not_utf8_is_malformed_at_the_byte(
+    tmp_path: pathlib.Path,
+    name: str,
+    args: tuple[str, ...],
+) -> None:
+    """A settings or Obsidian JSON file that is not UTF-8 is malformed at a byte.
+
+    The file is refused by name, whether it is the vault's own or the
+    copy staged under ``.wiki/obsidian/``, and the reason is the offset
+    of its first invalid byte in wiki's own words, never the
+    interpreter's sentence naming its codec.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # a Latin-1 e-acute, where UTF-8 text holds two bytes for the letter
+    valid = b'{"note": "caf'
+    (root / name).write_bytes(valid + b'\xe9"}\n')
+
+    result = _wiki(root, *args, '--path', str(root))
+    assert result.returncode == 2, result.stdout + result.stderr
+    error = f'Error: Malformed JSON in {name}: not valid UTF-8 at byte {len(valid)}'
+    assert result.stderr.splitlines() == [error]
+    assert 'codec' not in result.stdout + result.stderr
 
 
 # ------ init
@@ -1972,15 +2059,46 @@ def test_match_resolution_failure_exits_two(
 
 
 def test_match_all_skips_undecodable_files(wiki: pathlib.Path) -> None:
-    """``match --all`` skips a non-UTF-8 file instead of crashing the whole run."""
+    """``match --all`` skips a non-UTF-8 file instead of crashing the whole run.
+
+    A binary file is expected under ``--all``, so the skip prints nothing.
+    """
     binary = wiki / 'diagram.png'
     binary.write_bytes(b'\x89PNG\r\n\x1a\n\xff\xfe\x00\x01')
     try:
         result = _wiki(wiki, 'match', 'widget', '--path', str(wiki), '--all')
         assert result.returncode == 0, result.stdout + result.stderr
         assert 'snippet.txt' in result.stdout
+        assert result.stderr == ''
     finally:
         binary.unlink()
+
+
+def test_match_names_a_page_it_cannot_decode(wiki: pathlib.Path) -> None:
+    """``match`` names a page that is not UTF-8 on stderr and matches the rest.
+
+    The page may hold the pattern, so skipping it in silence could turn
+    a match into ``No matches found.``; the line says the page was not
+    looked at, and the other results and the exit code are unchanged.
+    """
+    before = _wiki(wiki, 'match', 'widget', '--path', str(wiki))
+    assert before.returncode == 0, before.stdout + before.stderr
+    # a Latin-1 page holding the pattern, and a word no other page holds
+    page = wiki / 'core' / 'legacy.md'
+    page.write_bytes('The widget caf\xe9 serves gizmos.\n'.encode('latin-1'))
+    skip = 'Skipping core/legacy.md: unreadable, or not valid UTF-8'
+    try:
+        # the other pages match as before, under the line naming the page
+        result = _wiki(wiki, 'match', 'widget', '--path', str(wiki))
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.stdout == before.stdout
+        assert result.stderr.splitlines() == [skip]
+        # a pattern only that page holds is no match, with the reason above it
+        result = _wiki(wiki, 'match', 'gizmos', '--path', str(wiki))
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert result.stderr.splitlines() == [skip, 'No matches found.']
+    finally:
+        page.unlink()
 
 
 # ------ search
@@ -2360,6 +2478,44 @@ def test_init_writes_gitattributes_without_committing(tmp_path: pathlib.Path) ->
     assert _git(tmp_path, 'rev-parse', 'HEAD').stdout == head
     staged = _git(tmp_path, 'diff', '--cached', '--name-only').stdout
     assert '.gitattributes' not in staged
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_init_and_config_append_to_gitattributes_that_is_not_utf8(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A ``.gitattributes`` that is not UTF-8 gains its mapping, bytes intact.
+
+    Git reads the file as bytes, so a comment in another encoding is a
+    working file: ``init`` and ``config`` append the block it lacks and
+    leave every existing byte as it is.
+    """
+    # a repo whose committed .gitattributes holds a Latin-1 comment
+    _git_repo(tmp_path)
+    latin1 = '# café assets\n*.png binary\n'.encode('latin-1')
+    attributes = tmp_path / '.gitattributes'
+    attributes.write_bytes(latin1)
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'attributes')
+    root = tmp_path / 'wiki'
+
+    # init appends the index mapping after the file's own bytes
+    init = _wiki(tmp_path, 'init', '--path', str(root))
+    assert init.returncode == 0, init.stdout + init.stderr
+    assert 'codec' not in init.stdout + init.stderr
+    index_block = b'\n# Wiki index merge driver\n**/_index.md merge=wiki\n'
+    assert attributes.read_bytes() == latin1 + index_block
+
+    # config does the same for the wiki's own file, once it holds such bytes
+    (root / '.gitattributes').write_bytes(latin1)
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'wiki')
+    config = _wiki(root, 'config', '--path', str(root))
+    assert config.returncode == 0, config.stdout + config.stderr
+    assert 'codec' not in config.stdout + config.stderr
+    page_block = b'\n# Wiki page merge driver\n*.md merge=wiki\n'
+    assert (root / '.gitattributes').read_bytes() == latin1 + page_block
+    assert attributes.read_bytes() == latin1 + index_block
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
@@ -4377,6 +4533,31 @@ def test_trust_refuses_non_wiki_path(tmp_path: pathlib.Path) -> None:
     result = _wiki(tmp_path, 'trust', '--path', str(tmp_path / 'nope'))
     assert result.returncode == 2
     assert 'No wiki at' in result.stderr
+
+
+def test_trust_refuses_a_store_that_is_not_utf8_naming_the_byte(
+    tmp_path: pathlib.Path,
+) -> None:
+    """``wiki trust`` refuses a trust store that is not UTF-8, at the byte.
+
+    The refusal names the store and the offset of its first invalid
+    byte in wiki's own words, never the interpreter's sentence naming
+    its codec, and leaves the store's bytes for repair.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # a trusted path spelled with a Latin-1 e-acute
+    store = pathlib.Path(os.environ[WIKI_CONFIG_DIR]) / 'settings.json'
+    valid = b'{"trusted": {"/caf'
+    corrupt = valid + b'\xe9": "2000-01-01T00:00:00Z"}}\n'
+    store.write_bytes(corrupt)
+
+    result = _wiki(root, 'trust', '--path', str(root))
+    assert result.returncode == 2, result.stdout + result.stderr
+    reason = f'not valid UTF-8 at byte {len(valid)}'
+    assert f'Error: Trust store is corrupt: {store} ({reason});' in result.stderr
+    assert 'codec' not in result.stdout + result.stderr
+    assert store.read_bytes() == corrupt
 
 
 def test_trust_store_does_not_mark_home_as_wiki_root(

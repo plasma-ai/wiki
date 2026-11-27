@@ -1409,14 +1409,20 @@ class Wiki:
         # create or merge each top-level json file
         for source in sorted(config_dir.glob('*.json')):
             target = obsidian_dir / source.name
+            # a staged file that is not UTF-8 is named, as a vault file is
+            try:
+                text = source.read_text(encoding='utf-8')
+            except UnicodeDecodeError as e:
+                name = f'{WIKI_DIR}/obsidian/{source.name}'
+                raise _malformed_json_error(name, e) from e
             # create from source when the target is absent (atomically, so a
             # crash mid-create never leaves a torn file the merge rejects)
             if not target.exists():
-                wiki.util.fs.write_atomic(target, source.read_text(encoding='utf-8'))
+                wiki.util.fs.write_atomic(target, text)
                 continue
             # load source and target for merge; the target is user-editable, so
             # name the file on bad JSON instead of a bare, undiagnosable error
-            source_data = json.loads(source.read_text(encoding='utf-8'))
+            source_data = json.loads(text)
             target_data = _read_vault_json(target)
             # merge per the install policy (arrays union, dicts deep)
             merged = _obsidian.merge_settings(
@@ -2485,7 +2491,9 @@ class Wiki:
         By default matches body content of wiki-tracked
         markdown files. Use ``field`` to match specific
         frontmatter fields instead. Use ``all_files`` to
-        include non-markdown files.
+        include non-markdown files. A page that is not valid
+        UTF-8 is skipped with a read-skip notice; any other
+        file that is not is skipped in silence.
 
         Args:
             pattern: Regex pattern to match.
@@ -2525,15 +2533,21 @@ class Wiki:
         # search each file
         result = []
         for path in files:
+            relpath = str(path.relative_to(self._root))
             # skip binary / non-utf-8 files (e.g. an image under --all) rather
             # than aborting the whole search on one undecodable file; a file
             # vanishing between the walk and the read (a concurrent delete)
             # matches as absent from the walk
             try:
                 text = path.read_text(encoding='utf-8')
-            except (UnicodeDecodeError, FileNotFoundError):
+            except FileNotFoundError:
                 continue
-            relpath = str(path.relative_to(self._root))
+            except UnicodeDecodeError:
+                # a page may hold the pattern, so its skip is narrated: silence
+                # would read as no match (a binary file under --all is expected)
+                if path.suffix == '.md':
+                    self.on_read_skip(path=relpath)
+                continue
             lines = text.split('\n')
             # frontmatter is a markdown concept -- read slices non-md files
             # whole, so a non-md file's leading '---' pair is body content
@@ -4238,19 +4252,16 @@ class Wiki:
 
         A bare ``UnicodeDecodeError`` carries only a byte offset --
         unactionable on a tree of thousands of files -- so the re-raise
-        appends the offending file's relative path to the reason.
+        leads with the offending file's relative path.
         """
         try:
             return path.read_text(encoding='utf-8')
         except UnicodeDecodeError as e:
-            relpath = path.relative_to(self._root)
-            raise UnicodeDecodeError(
-                e.encoding,
-                e.object,
-                e.start,
-                e.end,
-                f'{e.reason} (in {relpath})',
-            ) from e
+            # the base class's own arguments, with the path bound after: an
+            # error built this way pickles, so it crosses a process boundary
+            error = PageDecodeError(e.encoding, e.object, e.start, e.end, e.reason)
+            error.path = str(path.relative_to(self._root))
+            raise error from e
 
     def _has_crlf(self: Wiki, path: pathlib.Path) -> bool:
         r"""Return ``True`` if ``path``'s bytes carry CR line endings.
@@ -6427,6 +6438,25 @@ class Issue(str):
         return result
 
 
+# ------ errors
+
+
+class PageDecodeError(UnicodeDecodeError):
+    """A file of the wiki holds bytes that are not valid UTF-8.
+
+    Reads as the file's path, the offset of its first invalid byte and
+    the remedy, where the base class reads as the codec's own sentence.
+    It stays a ``UnicodeDecodeError``, so a handler for one catches it.
+    """
+
+    #: the file's path, relative to the wiki root
+    path: str
+
+    def __str__(self: PageDecodeError) -> str:
+        """Return the error line: the path, the byte and the remedy."""
+        return f'{self.path}: {_invalid_utf8(self)}; re-save the file as UTF-8'
+
+
 # ------ events
 
 
@@ -6628,14 +6658,14 @@ class WriteSkipEvent(Event):
 
 
 class ReadSkipEvent(Event):
-    """Emitted when the search refresh skips an unreadable page."""
+    """Emitted when search or match skips a page it cannot read."""
 
     path: str
 
     @property
     def description(self: ReadSkipEvent) -> str:
         """Return the unreadable-page skip notice line."""
-        return f'Skipping {self.path}: unreadable during search refresh'
+        return f'Skipping {self.path}: unreadable, or not valid UTF-8'
 
 
 class FrontmatterMalformedEvent(Event):
@@ -6961,9 +6991,16 @@ def _encloses_wiki_error(nested: pathlib.Path) -> ValueError:
     )
 
 
+def _invalid_utf8(e: UnicodeDecodeError) -> str:
+    """Return the phrase for undecodable bytes, giving the first invalid byte."""
+    return f'not valid UTF-8 at byte {e.start}'
+
+
 def _malformed_json_error(name: str, e: Exception) -> ValueError:
     """Build the malformed-JSON error, naming the user-editable file."""
-    return ValueError(f'Malformed JSON in {name}: {e}')
+    # undecodable bytes read as the package's phrase, not the codec's sentence
+    reason = _invalid_utf8(e) if isinstance(e, UnicodeDecodeError) else e
+    return ValueError(f'Malformed JSON in {name}: {reason}')
 
 
 def _read_vault_json(target: pathlib.Path) -> Any:

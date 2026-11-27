@@ -12,6 +12,7 @@ import datetime as dt
 import json
 import os
 import pathlib
+import pickle
 import re
 import shutil
 import unicodedata
@@ -2782,13 +2783,17 @@ def test_undecodable_page_error_names_the_file(
     """A non-UTF-8 ``.md`` page aborts update/lint naming the culprit.
 
     The decode error alone carries only a byte offset -- unactionable on
-    a tree of thousands of files -- so the re-raise appends the offending
-    file's relative path.
+    a tree of thousands of files -- so the error leads with the offending
+    file's relative path. It stays a ``UnicodeDecodeError``, so a caller's
+    handler for one still catches it, and it pickles, so a caller that
+    runs the wiki in a worker process receives it with its message.
     """
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
     (tmp_path / 'core' / 'badpage.md').write_bytes(b'# bad\n\nbody \xff\xfe\n')
-    with pytest.raises(UnicodeDecodeError, match=r'badpage\.md'):
+    with pytest.raises(UnicodeDecodeError, match=r'^core/badpage\.md: ') as excinfo:
         getattr(wiki, command)()
+    received = pickle.loads(pickle.dumps(excinfo.value))  # noqa: S301
+    assert str(received) == str(excinfo.value)
 
 
 @pytest.mark.parametrize(
