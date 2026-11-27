@@ -2086,7 +2086,7 @@ def test_match_names_a_page_it_cannot_decode(wiki: pathlib.Path) -> None:
     # a Latin-1 page holding the pattern, and a word no other page holds
     page = wiki / 'core' / 'legacy.md'
     page.write_bytes('The widget caf\xe9 serves gizmos.\n'.encode('latin-1'))
-    skip = 'Skipping core/legacy.md: not readable as UTF-8 text'
+    skip = 'Skipping core/legacy.md: unreadable, or not valid UTF-8'
     try:
         # the other pages match as before, under the line naming the page
         result = _wiki(wiki, 'match', 'widget', '--path', str(wiki))

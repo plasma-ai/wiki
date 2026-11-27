@@ -422,9 +422,9 @@ explicit empty field set that matches nothing — it does not fall back to a
 body match.
 
 A page that is not valid UTF-8 cannot be matched. It is skipped and named on
-stderr (``Skipping <path>: not readable as UTF-8 text``, the line
-``wiki search`` prints for such a page), so a pattern it may hold is never
-reported as no match in silence.
+stderr (``Skipping <path>: unreadable, or not valid UTF-8``, the line
+``wiki search`` prints for a page it cannot open or decode), so a pattern it
+may hold is never reported as no match in silence.
 
 .. list-table::
    :header-rows: 1

@@ -6665,7 +6665,7 @@ class ReadSkipEvent(Event):
     @property
     def description(self: ReadSkipEvent) -> str:
         """Return the unreadable-page skip notice line."""
-        return f'Skipping {self.path}: not readable as UTF-8 text'
+        return f'Skipping {self.path}: unreadable, or not valid UTF-8'
 
 
 class FrontmatterMalformedEvent(Event):

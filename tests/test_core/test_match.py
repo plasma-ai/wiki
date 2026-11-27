@@ -255,4 +255,4 @@ def test_match_names_a_page_it_cannot_decode(
     # the page alone is named, and the other results are unchanged
     assert wiki.match('design', field=field, all_files=True) == before
     lines = [event.description for event in notices]
-    assert lines == ['Skipping core/legacy.md: not readable as UTF-8 text']
+    assert lines == ['Skipping core/legacy.md: unreadable, or not valid UTF-8']
