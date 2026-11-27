@@ -28,7 +28,13 @@ from wiki.constants import (
     WIKI_SETTINGS,
 )
 from wiki.core.event import Event
-from wiki.core.wiki import Wiki, _encloses_wiki_error, _now, _pinned_now
+from wiki.core.wiki import (
+    Wiki,
+    _encloses_wiki_error,
+    _invalid_utf8,
+    _now,
+    _pinned_now,
+)
 from wiki.util.git import _git
 
 __all__ = [
@@ -880,8 +886,9 @@ def _read_global_settings(*, strict: bool = False) -> dict:
         # undecodable bytes are corruption too, and escape json's own error
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
             if strict:
+                reason = _invalid_utf8(e) if isinstance(e, UnicodeDecodeError) else e
                 raise ValueError(
-                    f'Trust store is corrupt: {path} ({e});{stakes}'
+                    f'Trust store is corrupt: {path} ({reason});{stakes}'
                 ) from e
             return {}
     if not isinstance(result, dict):

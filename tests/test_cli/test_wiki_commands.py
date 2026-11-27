@@ -140,6 +140,7 @@ __all__ = [
     'test_version_flag_reports_a_version',
     'test_trust_gates_hook_execution',
     'test_trust_refuses_non_wiki_path',
+    'test_trust_refuses_a_store_that_is_not_utf8_naming_the_byte',
     'test_trust_store_does_not_mark_home_as_wiki_root',
     'test_trust_store_exemption_survives_symlinked_home',
     'test_root_resolution_survives_a_symlink_loop_home',
@@ -378,8 +379,9 @@ def test_page_that_is_not_utf8_stops_a_command_naming_the_byte(
         ('.wiki/settings.json', ('update',)),
         ('.wiki/settings.json', ('lint',)),
         ('.obsidian/app.json', ('config',)),
+        ('.wiki/obsidian/community-plugins.json', ('config',)),
     ],
-    ids=['settings-update', 'settings-lint', 'obsidian-config'],
+    ids=['settings-update', 'settings-lint', 'obsidian-config', 'staged-config'],
 )
 def test_json_file_that_is_not_utf8_is_malformed_at_the_byte(
     tmp_path: pathlib.Path,
@@ -388,9 +390,10 @@ def test_json_file_that_is_not_utf8_is_malformed_at_the_byte(
 ) -> None:
     """A settings or Obsidian JSON file that is not UTF-8 is malformed at a byte.
 
-    The file is refused as it is for bad JSON, by name, and the reason
-    is the offset of its first invalid byte in wiki's own words, never
-    the interpreter's sentence naming its codec.
+    The file is refused by name, whether it is the vault's own or the
+    copy staged under ``.wiki/obsidian/``, and the reason is the offset
+    of its first invalid byte in wiki's own words, never the
+    interpreter's sentence naming its codec.
     """
     root = tmp_path / 'wiki'
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
@@ -4528,6 +4531,31 @@ def test_trust_refuses_non_wiki_path(tmp_path: pathlib.Path) -> None:
     result = _wiki(tmp_path, 'trust', '--path', str(tmp_path / 'nope'))
     assert result.returncode == 2
     assert 'No wiki at' in result.stderr
+
+
+def test_trust_refuses_a_store_that_is_not_utf8_naming_the_byte(
+    tmp_path: pathlib.Path,
+) -> None:
+    """``wiki trust`` refuses a trust store that is not UTF-8, at the byte.
+
+    The refusal names the store and the offset of its first invalid
+    byte in wiki's own words, never the interpreter's sentence naming
+    its codec, and leaves the store's bytes for repair.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # a trusted path spelled with a Latin-1 e-acute
+    store = pathlib.Path(os.environ[WIKI_CONFIG_DIR]) / 'settings.json'
+    valid = b'{"trusted": {"/caf'
+    corrupt = valid + b'\xe9": "2000-01-01T00:00:00Z"}}\n'
+    store.write_bytes(corrupt)
+
+    result = _wiki(root, 'trust', '--path', str(root))
+    assert result.returncode == 2, result.stdout + result.stderr
+    reason = f'not valid UTF-8 at byte {len(valid)}'
+    assert f'Error: Trust store is corrupt: {store} ({reason});' in result.stderr
+    assert 'codec' not in result.stdout + result.stderr
+    assert store.read_bytes() == corrupt
 
 
 def test_trust_store_does_not_mark_home_as_wiki_root(

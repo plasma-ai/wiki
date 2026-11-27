@@ -1409,14 +1409,20 @@ class Wiki:
         # create or merge each top-level json file
         for source in sorted(config_dir.glob('*.json')):
             target = obsidian_dir / source.name
+            # a staged file that is not UTF-8 is named, as a vault file is
+            try:
+                text = source.read_text(encoding='utf-8')
+            except UnicodeDecodeError as e:
+                name = f'{WIKI_DIR}/obsidian/{source.name}'
+                raise _malformed_json_error(name, e) from e
             # create from source when the target is absent (atomically, so a
             # crash mid-create never leaves a torn file the merge rejects)
             if not target.exists():
-                wiki.util.fs.write_atomic(target, source.read_text(encoding='utf-8'))
+                wiki.util.fs.write_atomic(target, text)
                 continue
             # load source and target for merge; the target is user-editable, so
             # name the file on bad JSON instead of a bare, undiagnosable error
-            source_data = json.loads(source.read_text(encoding='utf-8'))
+            source_data = json.loads(text)
             target_data = _read_vault_json(target)
             # merge per the install policy (arrays union, dicts deep)
             merged = _obsidian.merge_settings(

@@ -16,7 +16,10 @@ may include breaking changes, each listed under a Breaking heading.
   place of Python's codec sentence, which put the path last. The exit code is 2,
   as before, and `Wiki` still raises a `UnicodeDecodeError`. A
   `.wiki/settings.json` or `.obsidian/*.json` file that is not UTF-8 gets the
-  same wording: `Malformed JSON in <file>: not valid UTF-8 at byte N`.
+  same wording: `Malformed JSON in <file>: not valid UTF-8 at byte N`. So does a
+  JSON file staged under `.wiki/obsidian/`, where `wiki config` printed the
+  codec sentence with no file name, and `wiki trust` gives the byte when it
+  refuses a trust store that is not UTF-8.
 - `wiki init` and `wiki config` no longer fail on a `.gitattributes` that is not
   UTF-8, such as one with a Latin-1 comment. They append the merge mapping the
   file lacks and leave its existing bytes as they are.
