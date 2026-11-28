@@ -98,8 +98,9 @@ a value longer than 80 characters there with ``...``.
 they do anything else: every block, in the order above, whichever blocks the
 command goes on to use. The first block at fault is named and the command
 exits 2 before it resolves a scope, walks a folder or writes a file, and
-after no note but those about locating the wiki, so ``wiki update --check``
-never passes on a file that ``wiki lint`` or ``wiki map`` refuses. Three paths read only the blocks they use and keep
+after no note but those about locating the wiki and the ``WIKI_FREEZE_TIME``
+line, so ``wiki update --check`` never passes on a file that ``wiki lint`` or
+``wiki map`` refuses. Three paths read only the blocks they use and keep
 running on a wiki with a broken block elsewhere: ``wiki read``, so a page
 stays readable; ``wiki config``, so the repair command stays runnable; and
 the merge driver, so a merge still settles stamps. The check reads the
