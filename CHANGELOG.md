@@ -52,6 +52,24 @@ may include breaking changes, each listed under a Breaking heading.
 - `-h` works as `--help`, on `wiki` and on every command.
 - `wiki` with no command prints the help page, on stderr, and exits 2. Before,
   it printed a usage line and `Error: Missing command.`
+- `wiki lint` reports a `name`, `title`, `desc` or `category` in double quotes
+  that holds a control character. YAML reads a backslash there as an escape, so
+  `"$\frac{1}{2}$"` holds a form feed, and `wiki update` copies it into the
+  parent index. The issue names the field, its line and each character, such as
+  `U+000C (\f)`, and says to write LaTeX in single quotes or a block scalar, or
+  to double each backslash. In `--json` its kind is `control_character`.
+- `wiki lint` reports a `name`, `title`, `desc` or `category` that is a YAML
+  mapping or list, such as an indented `Key: value` line under a bare `desc:`,
+  or `title: [Draft]`. `wiki update` writes the field's source lines into the
+  parent index while other tools read a mapping or a list. The issue names the
+  field and its line, and says to quote the value or write it as a `>-` block.
+  In `--json` its kind is `nonscalar_field`.
+- `wiki lint` notes a control character in a page body, or in an index's text
+  below `***`: a C0 control other than a tab or a line break, or DEL, such as
+  the form feed a tool leaves where `\frac` stood. There is one note for each
+  file, with the first line and the count, and a `no-lint` region is skipped. It
+  is a note under `lint.strict` too. In `--json` its kind is
+  `content_control_character`.
 
 ### Changed
 
@@ -167,6 +185,12 @@ may include breaking changes, each listed under a Breaking heading.
 - The help of `wiki new` marks `--desc` and `--content` as required once, where
   it said `(required). [required]`, and the help of `wiki search --limit` states
   its default of 10.
+- For a bad backslash escape in a double-quoted frontmatter value, such as
+  `title: "Uses \(p\) here"` or `desc: "Uses $\xi$."`, `wiki lint` now says to
+  write LaTeX in single quotes or a block scalar, or to double each backslash.
+  Before, it said to quote a value that was already quoted. The reason it gives
+  for a bad `\x` or `\u` number spells `hexadecimal` correctly, where it read
+  `hexdecimal`.
 - `wiki search --json` prints `[]` on stdout when nothing matches, so its output
   always parses as JSON. Before, it printed nothing. The `No matches found.`
   line on stderr and exit 1 are unchanged.

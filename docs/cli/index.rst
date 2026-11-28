@@ -724,7 +724,10 @@ key, a body that is not ``key: value`` pairs), empty or truncated indexes,
 nested wiki roots, formatter-damage signatures (escaped wikilinks, a missing
 ``***``
 delimiter), hand-wrap mangles, authored descriptions missing their trailing
-period, unparseable ``created:``/``updated:`` stamps, broken links in the
+period, unparseable ``created:``/``updated:`` stamps, a control character in a
+double-quoted ``name:``, ``title:``, ``desc:``, or ``category:`` (a backslash
+escape decoded where LaTeX was typed), a ``name:``, ``title:``, ``desc:``, or
+``category:`` whose value is a YAML mapping or list, broken links in the
 generated index block, prose wikilinks naming a folder rather than its
 ``_index`` page (in this wiki, or in another wiki a ``links.external``
 folder admits, judged by that wiki's own settings), prose wikilinks written
@@ -741,7 +744,9 @@ missing titles when the ``titles.required`` setting is on, and stale
 ``[[wikilinks]]`` in authored prose when the ``lint.strict`` setting is on.
 
 **Notes** (soft, stderr) flag placeholder (``...``) descriptions, descriptions
-over 500 characters, empty index content sections, CRLF line endings, stale
+over 500 characters, empty index content sections, CRLF line endings, control
+characters in authored content (a page's body or an index's text below
+``***``; one note per file, with the first line and the count), stale
 ``[[wikilinks]]`` in authored prose unless ``lint.strict`` is on (inside the
 wiki, or under a ``links.external`` folder present on this machine; the note
 suggests the root-relative form of the target, or the root-relative spelling
@@ -762,9 +767,9 @@ their stderr prose.
 
 A ``<!-- start: no-lint -->`` ... ``<!-- end: no-lint -->`` region suppresses
 the position-based rules (conflict markers, escaped wikilinks, wrap mangles,
-stale-link notes, outside-link, directory-link, relative-link and
-absolute-link issues) for the lines it wraps; a malformed pair is itself an
-issue and suppresses nothing.
+stale-link notes, control-character notes, outside-link, directory-link,
+relative-link and absolute-link issues) for the lines it wraps; a malformed
+pair is itself an issue and suppresses nothing.
 
 .. list-table::
    :header-rows: 1

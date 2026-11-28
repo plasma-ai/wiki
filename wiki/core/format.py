@@ -83,7 +83,8 @@ _INDICATOR_CHARS = ',[]{}#&*!|>\'"%@`'
 _Fields = dict[str, Optional[tuple[str, Optional[str], str]]]
 
 # a strict-reader finding on a block: (1-based file line, reason, cause), the
-# cause one of 'parse', 'nonmapping', 'nonscalar_key', 'duplicate_key'
+# cause one of 'parse', 'escape', 'nonmapping', 'nonscalar_key',
+# 'duplicate_key'
 _Issue = tuple[int, str, str]
 
 # the top-level keys of a block in document order, each with the 0-based line
@@ -132,6 +133,25 @@ _SHORT_ESCAPES = {
     for letter, char in _ESCAPES.items()
     if letter not in ('\t', ' ', '"', '/', '\\')
 }
+
+# the characters a double-quoted text field holds only as damage: the C0
+# controls, the DEL, and the line breaks NEL, LS, and PS -- what a backslash
+# escape decodes to where LaTeX was typed (\theta, \nu, \frac)
+_FIELD_CONTROLS = re.compile(r'[\x00-\x1f\x7f\x85\u2028\u2029]')
+
+# the characters authored content holds only as damage: the C0 controls but
+# the tab and the line break, and the DEL
+_CONTENT_CONTROLS = re.compile(r'[\x00-\x08\x0b-\x1f\x7f]')
+
+# how a parser's problem opens when a double-quoted scalar holds a backslash
+# escape it cannot decode, in libyaml's words (its spelling included) and in
+# the pure loader's
+_ESCAPE_PROBLEMS = (
+    'found unknown escape character',
+    'did not find expected hexdecimal number',
+    'expected escape sequence of',
+    'found invalid Unicode character escape code',
+)
 
 # lone surrogates: text no UTF-8 writer can emit
 _SURROGATES = re.compile(r'[\ud800-\udfff]')
@@ -928,8 +948,9 @@ def frontmatter_issues(frontmatter: str) -> list[_Issue]:
 
     Each is ``(line, reason, cause)``: the 1-based file line, the
     parser's problem or the wiki's description, and the cause -- a
-    ``'parse'`` error, a ``'nonmapping'`` body, a ``'nonscalar_key'``,
-    or a ``'duplicate_key'``. An empty list is a block the installed
+    ``'parse'`` error, a bad backslash ``'escape'`` in a double-quoted
+    value, a ``'nonmapping'`` body, a ``'nonscalar_key'``, or a
+    ``'duplicate_key'``. An empty list is a block the installed
     PyYAML build accepts as a mapping with unique scalar keys -- the
     verdict is that build's, so a pure-Python wheel rejects a tab
     inside a plain value the C loader accepts.
@@ -951,10 +972,50 @@ def field_text(frontmatter: str, key: str) -> Optional[str]:
     return frontmatter[start:end]
 
 
+def field_line(frontmatter: str, key: str) -> Optional[int]:
+    """Return the 1-based file line of ``key``'s key line, or ``None`` when absent.
+
+    The line :func:`_field_span` opens the field on; the block opens the
+    file, so a block line is a file line.
+    """
+    span = _field_span(frontmatter, key)
+    if span is None:
+        return None
+    start, _ = span
+    return frontmatter.count('\n', 0, start) + 1
+
+
 def is_collection_field(frontmatter: str, /, key: str) -> bool:
     """Return whether ``key`` carries a sequence or mapping in a block the parser accepts."""
     fields = _scalar_fields(frontmatter)
     return bool(fields) and (key in fields) and (fields[key] is None)
+
+
+def quoted_controls(
+    frontmatter: str,
+    /,
+    key: str,
+) -> list[tuple[str, Optional[str]]]:
+    r"""Return the control characters a double-quoted ``key`` holds in a block the parser accepts.
+
+    Each is ``(code point, escape)`` -- ``('U+000C', '\\f')``, the escape
+    ``None`` for a character with no one-letter spelling -- once per
+    character, in order of first appearance. Only a double-quoted scalar
+    decodes a backslash, so a plain, single-quoted, or block value holds
+    its text as typed and names nothing here; neither does an escape
+    that decodes to text.
+    """
+    fields = _scalar_fields(frontmatter)
+    if not fields or (fields.get(key) is None):
+        return []
+    value, style, _ = fields[key]
+    if style != '"':
+        return []
+    result = []
+    for char in dict.fromkeys(_FIELD_CONTROLS.findall(value)):
+        escape = _SHORT_ESCAPES.get(char)
+        result.append((f'U+{ord(char):04X}', f'\\{escape}' if escape else None))
+    return result
 
 
 def comment_cuts_desc(frontmatter: str) -> bool:
@@ -1586,6 +1647,25 @@ def wrapped_marker_lines(masked: str, text: str) -> list[int]:
     return result
 
 
+def control_characters(text: str) -> list[tuple[int, str]]:
+    r"""Return the control characters in ``text`` as ``(line, code point)`` pairs, in order.
+
+    A tab and a line break are text; any other C0 control, or the DEL, is
+    what a decoded backslash escape leaves where LaTeX stood (a form
+    feed for the ``\f`` of ``\frac``). Lines are 1-based and end at a
+    line break alone, so a form feed never opens one. The raw text is
+    scanned, code included: an escape decodes there as it does in prose.
+    """
+    # a text holding none is the common case: one search settles it
+    if _CONTENT_CONTROLS.search(text) is None:
+        return []
+    result = []
+    for lineno, line in enumerate(text.split('\n'), 1):
+        for char in _CONTENT_CONTROLS.findall(line):
+            result.append((lineno, f'U+{ord(char):04X}'))
+    return result
+
+
 # ------ helper classes
 
 
@@ -2169,7 +2249,7 @@ def _compose_block(
             # writer can emit, so the block reads as the C loader rejects it
             if _SURROGATES.search(value_node.value):
                 reason = 'found invalid Unicode character escape code'
-                return 'invalid', {}, ((file_line, reason, 'parse'),), (), False
+                return 'invalid', {}, ((file_line, reason, 'escape'),), (), False
         else:
             fields[key] = None
     # an alias composes as the anchored node object reached a second time; a
@@ -2212,10 +2292,21 @@ def _parse_issue(error: Exception, body: str, offset: int) -> _Issue:
     error without a mark (a character YAML forbids, the recursion limit)
     locates by the first forbidden character, else names the block's
     first line. A problem worded as a fragment ("but found another
-    document") keeps the context it continues.
+    document") keeps the context it continues. A backslash escape a
+    double-quoted scalar cannot decode is the ``'escape'`` cause; every
+    other error is ``'parse'``. An escape past U+10FFFF, on which the
+    pure loader raises a bare ``ValueError``, is worded and located as
+    the C loader's finding.
     """
     import yaml
 
+    # the pure loader's chr() raises on an escape past U+10FFFF with no mark
+    # and no problem: the C loader's finding, on the line the scanner stopped
+    if type(error) is ValueError:
+        stopped = _escape_past_unicode(body)
+        if stopped is not None:
+            line = body.count('\n', 0, stopped) + offset + 1
+            return line, 'found invalid Unicode character escape code', 'escape'
     mark = getattr(error, 'problem_mark', None)
     context = getattr(error, 'context', None)
     context_mark = getattr(error, 'context_mark', None)
@@ -2276,7 +2367,35 @@ def _parse_issue(error: Exception, body: str, offset: int) -> _Issue:
         first = body.count('\n', 0, context_mark.index) + offset + 1
         context_head = str(context).split(';')[0]
         reason = f'{context_head} (first at line {first})'
-    return line, str(reason), 'parse'
+    # an escape the scalar cannot decode is its own cause: the value is quoted
+    # already, so the remedy is a different quoting, not a quote
+    problem = str(getattr(error, 'problem', None))
+    cause = 'escape' if problem.startswith(_ESCAPE_PROBLEMS) else 'parse'
+    # libyaml misspells the word in its problem for a bad \x or \u number
+    reason = str(reason).replace('hexdecimal', 'hexadecimal')
+    return line, reason, cause
+
+
+def _escape_past_unicode(body: str) -> Optional[int]:
+    r"""Return where the pure scanner stops on a ``\U`` escape past U+10FFFF, else ``None``.
+
+    The scanner raises ``ValueError`` from ``chr`` with its reader on the
+    escape's number, and the error carries no position, so the body is
+    scanned again for it. A ``ValueError`` raised anywhere else (a
+    directive's version number too long for ``int``) is not this finding.
+    """
+    import yaml
+
+    scanner = yaml.SafeLoader(body)
+    try:
+        while scanner.check_token():
+            scanner.get_token()
+    except ValueError:
+        index = scanner.get_mark().index
+        return index if body[index - 2 : index] == '\\U' else None
+    finally:
+        scanner.dispose()
+    return None
 
 
 def _continues_a_scalar(line: str) -> bool:
