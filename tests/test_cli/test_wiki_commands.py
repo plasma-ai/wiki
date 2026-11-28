@@ -977,21 +977,31 @@ def test_settings_file_that_cannot_be_read_is_named_with_its_cause(
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
 @pytest.mark.parametrize(
-    argnames='staged',
-    argvalues=[False, True],
-    ids=['deleted', 'git-rm'],
+    argnames='state',
+    argvalues=[
+        'deleted',
+        'git-rm',
+        'index-only',
+        'sparse-checkout',
+        'skip-worktree',
+        'assume-unchanged',
+        'unmerged',
+    ],
 )
 def test_lost_settings_file_that_git_holds_stops_every_sweep(
     tmp_path: pathlib.Path,
-    staged: bool,
+    state: str,
 ) -> None:
     """A settings file lost from the working tree is not replaced while git holds it.
 
     A sweep without the file runs on default settings and adopts what its
     ``exclude.patterns`` kept out, so each command that plans a sweep
     refuses and writes nothing, the dry ones too. HEAD holds the file
-    after a ``git rm`` as the index does after a plain delete. The
-    commands that only read still run.
+    after a ``git rm``, as the index does after a plain delete, before a
+    first commit, and at the stages of an unmerged path. A file that
+    ``git status`` leaves out is held all the same: one a sparse checkout
+    does not check out, or one marked skip-worktree or assume-unchanged.
+    The commands that only read still run.
     """
     _git_repo(tmp_path)
     root = tmp_path / 'wiki'
@@ -1003,12 +1013,32 @@ def test_lost_settings_file_that_git_holds_stops_every_sweep(
     _write(root / 'secret' / 'raw.md', 'Raw notes.\n')
     assert _wiki(tmp_path, 'update', '--path', str(root)).returncode == 0
     assert _git(tmp_path, 'add', '-A').returncode == 0
-    assert _git(tmp_path, 'commit', '-q', '-m', 'wiki').returncode == 0
     settings = root / '.wiki' / 'settings.json'
-    if staged:
-        assert _git(tmp_path, 'rm', '-q', str(settings)).returncode == 0
-    else:
-        settings.unlink()
+    tracked = settings.relative_to(tmp_path).as_posix()
+    if state != 'index-only':
+        assert _git(tmp_path, 'commit', '-q', '-m', 'wiki').returncode == 0
+    if state == 'git-rm':
+        assert _git(tmp_path, 'rm', '-q', tracked).returncode == 0
+    elif state == 'sparse-checkout':
+        # every path but the wiki's own .wiki/ folder stays checked out
+        patterns = ('/*', '!/wiki/.wiki/')
+        sparse = _git(tmp_path, 'sparse-checkout', 'set', '--no-cone', *patterns)
+        assert sparse.returncode == 0, sparse.stderr
+    elif state in ('skip-worktree', 'assume-unchanged'):
+        marked = _git(tmp_path, 'update-index', f'--{state}', tracked)
+        assert marked.returncode == 0, marked.stderr
+    elif state == 'unmerged':
+        # one side changes the file and the other removes it, so the merge
+        # stops with the path at its unmerged stages: HEAD lacks it
+        assert _git(tmp_path, 'checkout', '-q', '-b', 'other').returncode == 0
+        _write(settings, json.dumps({'exclude': {'patterns': ['secret', 'raw']}}))
+        assert _git(tmp_path, 'commit', '-q', '-am', 'policy').returncode == 0
+        assert _git(tmp_path, 'checkout', '-q', 'main').returncode == 0
+        assert _git(tmp_path, 'rm', '-q', tracked).returncode == 0
+        assert _git(tmp_path, 'commit', '-q', '-m', 'no settings').returncode == 0
+        assert _git(tmp_path, 'merge', 'other').returncode == 1
+    settings.unlink(missing_ok=True)
+    assert not settings.exists()
     # a bare page awaiting adoption, so a sweep that ran would show
     _write(root / 'core' / 'draft.md', 'A draft.\n')
     before = _tree(root)

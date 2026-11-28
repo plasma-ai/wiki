@@ -985,11 +985,11 @@ class Wiki:
 
         Read only once ``.wiki/settings.json`` is known to be missing, and
         cached, so a wiki with its file pays nothing and one run asks git
-        once. One ``git status`` read answers for HEAD and the index
-        together: it lists the path when either holds it -- deleted from
-        the working tree, staged for removal, or staged and then deleted
-        -- and nothing when neither does. ``False`` outside a repository
-        and when git is unavailable.
+        once. The question is whether HEAD's tree or the index names the
+        path, never what ``git status`` shows: an entry a sparse checkout
+        leaves out, or one marked skip-worktree or assume-unchanged, is
+        held like any other, as is one a merge left unmerged. ``False``
+        outside a repository and when git gives no answer.
         """
         if not self._in_repository():
             return False
@@ -999,22 +999,25 @@ class Wiki:
         while not folder.is_dir():
             folder = folder.parent
         relative = (self._root / WIKI_SETTINGS).relative_to(folder).as_posix()
-        # the path goes as a literal ./<path>, so no character of a folder's
-        # name reads as pathspec magic or as a glob that matches a sibling;
-        # untracked files stay out, since a dangling symlink at the path
-        # reads as missing and is nothing git holds
+        # the listing is the index with HEAD's tree laid over it, so one
+        # read names a path either holds, at any merge stage, and opens no
+        # blob (a partial clone would fetch one it lacks); the path goes as
+        # a literal ./<path>, so no character of a folder's name reads as
+        # pathspec magic or as a glob that matches a sibling
         cmd = [
-            '--no-optional-locks',
             '--literal-pathspecs',
-            'status',
-            '--porcelain',
+            'ls-files',
             '-z',
-            '--no-renames',
-            '--untracked-files=no',
+            '--with-tree=HEAD',
             '--',
             f'./{relative}',
         ]
         result = wiki.util.git._git(cmd, cwd=folder, raw=True)
+        # a repository without a commit has no tree to lay over the index,
+        # and git refuses the listing: the index answers alone
+        if (result is not None) and (result.returncode != 0):
+            cmd.remove('--with-tree=HEAD')
+            result = wiki.util.git._git(cmd, cwd=folder, raw=True)
         if (result is None) or (result.returncode != 0):
             return False
         return bool(result.stdout)

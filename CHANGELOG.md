@@ -91,9 +91,11 @@ may include breaking changes, each listed under a Breaking heading.
   too. Before, `wiki update` recreated the file as `{}` and swept the wiki on
   default settings in the same run, adopting every page the lost
   `exclude.patterns` had kept out. `wiki read`, `search`, `match` and `map`
-  still run. A wiki whose settings file git does not hold is restored as before:
-  outside a repository, with a file never committed, or once the file's removal
-  is committed.
+  still run. A file that `git status` does not list counts as held too, so these
+  commands stop in a sparse checkout that leaves `.wiki/` out, and for a file
+  marked skip-worktree or assume-unchanged. A wiki whose settings file git does
+  not hold is restored as before: outside a repository, with a file never
+  committed, or once the file's removal is committed.
 - The stderr line that names a missing `.wiki/settings.json` says to restore the
   file from git, or to run `wiki update` to recreate it with default settings.
   Before, it said only that `wiki update` will restore the file.

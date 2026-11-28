@@ -162,7 +162,9 @@ Seeding and restoration are asymmetric:
   lack the file. (``wiki update --check`` is a dry run and does not restore
   it.)
 - A missing file that git still holds, in the ``HEAD`` commit or in the
-  index, is never replaced. A run without it would sweep the wiki on default
+  index, is never replaced. That includes a file ``git status`` does not
+  list: one a sparse checkout leaves out, or one marked skip-worktree or
+  assume-unchanged. A run without it would sweep the wiki on default
   settings and adopt every page its ``exclude.patterns`` kept out, so
   ``wiki update`` (and ``--check``), ``wiki new``, ``wiki lint`` and
   ``wiki config`` exit 2 and write nothing, as does ``wiki init`` on a wiki
@@ -175,6 +177,9 @@ Seeding and restoration are asymmetric:
   From the wiki root, restore the file with
   ``git restore .wiki/settings.json``, or with
   ``git restore --staged --worktree .wiki/settings.json`` after a ``git rm``.
+  A file that a sparse checkout leaves out, or that is marked skip-worktree,
+  takes ``git restore --ignore-skip-worktree-bits .wiki/settings.json``; a
+  sparse checkout can also be widened to include ``.wiki/``.
   To give up its settings for the defaults, commit the file's removal first.
   ``wiki read``, ``wiki search``, ``wiki match`` and ``wiki map`` still run.
 

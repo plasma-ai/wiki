@@ -79,11 +79,12 @@ rather than authoring or auditing page by page yourself:
   `settings.json` as `{}` only when git holds no copy of it. When git still
   holds the file, `wiki update`, `new`, `lint`, `init` and `config` stop with an
   error: restore the file from git (`git restore .wiki/settings.json` in the
-  wiki root), never write a new one. A key in `settings.json` that wiki does not
-  know is ignored, so a misspelled key leaves its policy off: `wiki init`,
-  `update`, `new` and `lint` name each one on stderr
-  (`.wiki/settings.json: unknown key 'exclude.pattern' (ignored)`) and exit as
-  they would without it; `lint --json` carries them in its document and
+  wiki root, or `git restore --ignore-skip-worktree-bits .wiki/settings.json`
+  when a sparse checkout leaves the file out), never write a new one. A key in
+  `settings.json` that wiki does not know is ignored, so a misspelled key leaves
+  its policy off: `wiki init`, `update`, `new` and `lint` name each one on
+  stderr (`.wiki/settings.json: unknown key 'exclude.pattern' (ignored)`) and
+  exit as they would without it; `lint --json` carries them in its document and
   `lint --count` only counts them. `wiki init --settings` seeds the file at
   creation only: on an existing wiki it changes nothing, exits 0, and prints
   `--settings was not applied: ...` on stderr when the wiki's settings differ.
