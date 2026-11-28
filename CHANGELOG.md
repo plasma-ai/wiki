@@ -7,6 +7,16 @@ may include breaking changes, each listed under a Breaking heading.
 
 ## [Unreleased]
 
+### Breaking
+
+- `timestamp.format` accepts only `%Y`, `%m`, `%d`, `%H`, `%M`, `%S`, `%z`, `%%`
+  and literal text, and the format must read back the stamp it writes. Any other
+  directive is a settings error that names it, and so is a format whose stamp
+  does not parse back, such as `%Y %Y` or `%z%H%M`. Before, wiki accepted any
+  `strftime` string: some blanked every stamp (`%Ez`), some made lint report
+  every file (`%s`), and `%Y %Y` crashed lint. A wiki with such a format changes
+  it and rewrites its stamps by hand, as any format change requires.
+
 ### Changed
 
 - `.wiki/settings.json` and `init --settings` must be strict JSON. `NaN`,

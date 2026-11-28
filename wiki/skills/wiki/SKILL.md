@@ -105,8 +105,9 @@ rather than authoring or auditing page by page yourself:
   undetected unless the value stops parsing under the configured format, which
   `wiki lint` fails. `created`/`updated` default to UTC in `%Y-%m-%dT%H:%M:%SZ`;
   set `timestamp.timezone` (an IANA name) and `timestamp.format` (a strftime
-  string) in `.wiki/settings.json` to change them — use `%z` rather than a
-  literal `Z` for a non-UTC zone.
+  string of `%Y`, `%m`, `%d`, `%H`, `%M`, `%S`, `%z`, `%%` and literal text; any
+  other directive is a settings error) in `.wiki/settings.json` to change them —
+  use `%z` rather than a literal `Z` for a non-UTC zone.
 - **Names are path-derived; titles are authored.** `wiki update` sets each
   page's `name` and H1 heading to the path-joined name (e.g. `core/design`) so
   names stay consistent with the tree structure — to rename an entry, move its

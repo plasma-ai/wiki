@@ -47,6 +47,7 @@ __all__ = [
     'test_settings_file_that_cannot_be_read_is_named_with_its_cause',
     'test_malformed_settings_block_stops_every_policy_command',
     'test_settings_are_validated_before_the_scope',
+    'test_timestamp_format_verdict_ignores_the_clock_and_the_local_zone',
     'test_malformed_block_spares_read_config_and_the_merge_driver',
     'test_install_copies_skill_into_home',
     'test_install_project_targets_cwd',
@@ -747,6 +748,11 @@ def test_settings_file_that_cannot_be_read_is_named_with_its_cause(
             "Unknown timestamp.timezone 'Mars/Olympus'",
         ),
         (
+            {'timestamp': {'format': '%Y %Y'}},
+            "timestamp.format must read back the stamp it writes ('2023 2023'"
+            ' does not), got "%Y %Y"',
+        ),
+        (
             {'map': {'desc_limit': 'ten'}},
             'map.desc_limit must be an int >= -1 or null, got "ten"',
         ),
@@ -764,7 +770,16 @@ def test_settings_file_that_cannot_be_read_is_named_with_its_cause(
             'links.external must be a list of folder paths, got "../src"',
         ),
     ],
-    ids=['naming', 'timestamp', 'map', 'titles', 'lint', 'exclude', 'links'],
+    ids=[
+        'naming',
+        'timestamp',
+        'timestamp-format',
+        'map',
+        'titles',
+        'lint',
+        'exclude',
+        'links',
+    ],
 )
 def test_malformed_settings_block_stops_every_policy_command(
     tmp_path: pathlib.Path,
@@ -777,6 +792,8 @@ def test_malformed_settings_block_stops_every_policy_command(
     blocks it goes on to use: the same line and exit code from all of
     them, and nothing written. A length minimum above the maximum is one
     such block: no name could pass it, and a sweep would prune every row.
+    A timestamp format that cannot parse its own stamps is another: no
+    page is stamped under it, and lint reports the format, not each stamp.
     """
     root = tmp_path / 'wiki'
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
@@ -813,6 +830,51 @@ def test_settings_are_validated_before_the_scope(tmp_path: pathlib.Path) -> None
         result = _wiki(tmp_path, *args, '--path', str(root))
         assert result.returncode == 2, (args, result.stdout + result.stderr)
         assert result.stderr == error, args
+
+
+@pytest.mark.parametrize(
+    argnames='env',
+    argvalues=[
+        {},
+        {'TZ': 'Pacific/Kiritimati'},
+        {WIKI_FREEZE_TIME: '2026-01-05T22:30:00Z'},
+        {'TZ': 'America/St_Johns', WIKI_FREEZE_TIME: '2026-01-05T22:30:00Z'},
+    ],
+    ids=['ambient', 'local-zone', 'frozen-clock', 'both'],
+)
+def test_timestamp_format_verdict_ignores_the_clock_and_the_local_zone(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    env: dict[str, str],
+) -> None:
+    """A timestamp format gets one verdict, whenever and wherever a command runs.
+
+    The read-back check renders two fixed instants in the wiki's own zone
+    and never reads the clock or the machine's zone. The refused format
+    here reads back at the frozen instant, an early hour in the wiki's
+    zone, and is refused there all the same, for the same stamp.
+    """
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    notice = _PINNED_CLOCK_NOTICE if WIKI_FREEZE_TIME in env else ''
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    settings = root / '.wiki' / 'settings.json'
+
+    timestamp = {'format': '%Y%z%d%H', 'timezone': 'Europe/Moscow'}
+    _write(settings, json.dumps({'timestamp': timestamp}))
+    refused = _wiki(tmp_path, 'map', '--path', str(root))
+    assert refused.returncode == 2, refused.stdout + refused.stderr
+    assert refused.stderr == (
+        f'{notice}Error: timestamp.format must read back the stamp it writes'
+        ' (\'2023+03001313\' does not), got "%Y%z%d%H" in .wiki/settings.json.\n'
+    )
+
+    timestamp = {'format': '%d.%m.%Y %H:%M', 'timezone': 'Europe/Moscow'}
+    _write(settings, json.dumps({'timestamp': timestamp}))
+    accepted = _wiki(tmp_path, 'map', '--path', str(root))
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert accepted.stderr == notice
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
@@ -4960,11 +5022,7 @@ def test_root_resolution_survives_a_symlink_loop_home(tmp_path: pathlib.Path) ->
             '2026-01-01T22:04:05-0500',
         ),
         ('2026-01-02T20:04:05-10:30', {'format': '%Y-%m-%d'}, '2026-01-03'),
-        (
-            '2026-01-02T03:04:05.25Z',
-            {'format': '%Y-%m-%dT%H:%M:%S.%fZ'},
-            '2026-01-02T03:04:05.250000Z',
-        ),
+        ('2026-01-02T03:04:05.25Z', {}, '2026-01-02T03:04:05Z'),
         (' \x1f2026-01-02T03:04:05Z\n', {}, '2026-01-02T03:04:05Z'),
         (
             '1001-01-01T00:00:00Z',
@@ -5000,10 +5058,10 @@ def test_wiki_freeze_time_fixes_every_stamp(
     The seam replaces the clock, not the rendering: the instant passes
     through the wiki's own zone and format, so two runs given one value
     write the same bytes whenever they run. Each command says so in a
-    fixed line that opens its stderr. Whitespace around the value is
-    stripped as Python strips it, the ASCII separators included, and
-    the first and last years the seam takes render in the zones farthest
-    from UTC.
+    fixed line that opens its stderr. A fraction of a second is dropped,
+    since no format renders one. Whitespace around the value is stripped
+    as Python strips it, the ASCII separators included, and the first
+    and last years the seam takes render in the zones farthest from UTC.
     """
     monkeypatch.setenv(WIKI_FREEZE_TIME, now)
     root = tmp_path / 'wiki'
