@@ -98,17 +98,6 @@ may include breaking changes, each listed under a Breaking heading.
 - An `exclude.patterns` entry that holds `[^` is refused, with a pointer to
   `[!...]`, the spelling that negates a class. Before, `[^a]` matched `a`, the
   opposite of gitignore.
-- An empty `--lines`, `--words` or `--chars` value of `wiki read` is an invalid
-  slice. Before, it returned the whole page, so a script with an unset variable
-  read a page it meant to slice. `wiki read` also checks its slice before it
-  looks for the wiki, so a malformed slice is reported as one whatever a
-  non-empty `--path` names.
-- `--path ""` is a usage error, `--path must not be empty.`, in every command
-  that takes `--path`. Before, an empty value meant the wiki the current folder
-  resolves to, so a script with an unset variable ran on the wrong wiki and
-  exited 0. When another argument is bad too, the empty `--path` is the error
-  reported, ahead of a malformed slice of `wiki read`. Only a value the option
-  parser refuses, such as a `--limit` that is not an integer, comes first.
 - When `.wiki/settings.json` is missing but git still holds it, in the `HEAD`
   commit or in the index, `wiki update` (and `--check`), `wiki new`, `wiki lint`
   and `wiki config` stop with exit code 2, write nothing and say to restore the
@@ -124,6 +113,17 @@ may include breaking changes, each listed under a Breaking heading.
 - The stderr line that names a missing `.wiki/settings.json` says to restore the
   file from git, or to run `wiki update` to recreate it with default settings.
   Before, it said only that `wiki update` will restore the file.
+- `--path ""` is a usage error, `--path must not be empty.`, in every command
+  that takes `--path`. Before, an empty value meant the wiki the current folder
+  resolves to, so a script with an unset variable ran on the wrong wiki and
+  exited 0. When another argument is bad too, the empty `--path` is the error
+  reported, ahead of a malformed slice of `wiki read`. Only a value the option
+  parser refuses, such as a `--limit` that is not an integer, comes first.
+- An empty `--lines`, `--words` or `--chars` value of `wiki read` is an invalid
+  slice. Before, it returned the whole page, so a script with an unset variable
+  read a page it meant to slice. `wiki read` also checks its slice before it
+  looks for the wiki, so a malformed slice is reported as one whatever a
+  non-empty `--path` names.
 
 ### Fixed
 
@@ -155,9 +155,6 @@ may include breaking changes, each listed under a Breaking heading.
   JSON file staged under `.wiki/obsidian/`, where `wiki config` printed the
   codec sentence with no file name, and `wiki trust` gives the byte when it
   refuses a trust store that is not UTF-8.
-- `wiki init` and `wiki config` no longer fail on a `.gitattributes` that is not
-  UTF-8, such as one with a Latin-1 comment. They append the merge mapping the
-  file lacks and leave its existing bytes as they are.
 - `wiki match` says when it skips a page it cannot decode, as `wiki search`
   does: `Skipping <path>: unreadable, or not valid UTF-8` on stderr. Before, a
   match inside such a page was reported as `No matches found.` A file that is
@@ -189,15 +186,6 @@ may include breaking changes, each listed under a Breaking heading.
   its help promises. Before, they were removed unless the output went to a
   terminal. `wiki match`, `wiki search` and `wiki map` print page text the same
   way.
-- The help of `wiki new` marks `--desc` and `--content` as required once, where
-  it said `(required). [required]`, and the help of `wiki search --limit` states
-  its default of 10.
-- For a bad backslash escape in a double-quoted frontmatter value, such as
-  `title: "Uses \(p\) here"` or `desc: "Uses $\xi$."`, `wiki lint` now says to
-  write LaTeX in single quotes or a block scalar, or to double each backslash.
-  Before, it said to quote a value that was already quoted. The reason it gives
-  for a bad `\x` or `\u` number spells `hexadecimal` correctly, where it read
-  `hexdecimal`.
 - `wiki search --json` prints `[]` on stdout when nothing matches, so its output
   always parses as JSON. Before, it printed nothing. The `No matches found.`
   line on stderr and exit 1 are unchanged.
@@ -213,6 +201,21 @@ may include breaking changes, each listed under a Breaking heading.
   `(a scope is a folder and this is a page in the wiki root)`. `Wiki.update`,
   `lint`, `map`, `search` and `match` raise the same `FileNotFoundError` with
   the longer message.
+- The help of `wiki new` marks `--desc` and `--content` as required once, where
+  it said `(required). [required]`, and the help of `wiki search --limit` states
+  its default of 10.
+- For a bad backslash escape in a double-quoted frontmatter value, such as
+  `title: "Uses \(p\) here"` or `desc: "Uses $\xi$."`, `wiki lint` now says to
+  write LaTeX in single quotes or a block scalar, or to double each backslash.
+  Before, it said to quote a value that was already quoted. The reason it gives
+  for a bad `\x` or `\u` number spells `hexadecimal` correctly, where it read
+  `hexdecimal`.
+- `wiki update --check --full` says what would change:
+  `Would adopt bare page: notes/draft.md`, `Would add link: ...`,
+  `Would prune link: ...`, `Would create index: ...`, `Would restamp ...` and
+  `Would overwrite desc: ...`. Before, it printed the lines of a writing run,
+  such as `Adopted bare page: notes/draft.md (frontmatter added)`, while the
+  file was untouched. A run without `--check` prints the same lines as before.
 - The condensed output of `wiki update` names a file it skipped. A skip changes
   no file, so its line is the only record of it: one invalid name, one file
   edited during the run, one file with malformed frontmatter or one empty or
@@ -230,18 +233,15 @@ may include breaking changes, each listed under a Breaking heading.
   Before, it printed a line for each path, so a personal ignore rule that
   matched many pages filled the condensed output. One path still prints its own
   line, and `--full` lists each.
-- `wiki update --check --full` says what would change:
-  `Would adopt bare page: notes/draft.md`, `Would add link: ...`,
-  `Would prune link: ...`, `Would create index: ...`, `Would restamp ...` and
-  `Would overwrite desc: ...`. Before, it printed the lines of a writing run,
-  such as `Adopted bare page: notes/draft.md (frontmatter added)`, while the
-  file was untouched. A run without `--check` prints the same lines as before.
 - The `wiki update` line about an overwritten desc names the page's real file
   when the page sits beside a file of the same name. For `tools/Makefile.md`
   beside `tools/Makefile` it says `edit it in tools/Makefile.md`. Before, it
   said `tools/Makefile.md.md`, a file that does not exist. `DescOverwriteEvent`
   carries the file in a new optional `page` field; an event built without it
   names the target plus `.md`.
+- `wiki init` and `wiki config` no longer fail on a `.gitattributes` that is not
+  UTF-8, such as one with a Latin-1 comment. They append the merge mapping the
+  file lacks and leave its existing bytes as they are.
 - `wiki init` and `wiki config` say when they skip a `.gitattributes` that has
   uncommitted changes, and name the line they did not add:
   `Skipping <path>: it has uncommitted changes, so wiki did not add '**/_index.md merge=wiki'`,
