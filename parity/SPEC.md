@@ -2088,10 +2088,12 @@ files must be.
   `PYTHONUSERBASE`, `PYENV_ROOT`, `PIPX_HOME`, `PIPX_BIN_DIR`, `CARGO_HOME`,
   `RUSTUP_HOME`, `UV_CACHE_DIR`, `UV_TOOL_DIR` and `UV_TOOL_BIN_DIR` below that
   home; an empty global git config; `UV_NO_CONFIG`, so uv reads no settings
-  file, neither of a folder above the one it runs in nor of the system; and a
-  `PATH` of the system's folders and one folder that holds links to the caller's
-  uv and git and nothing else. So no install reaches an interpreter, a cache or
-  a toolchain of the user's.
+  file, neither of a folder above the one it runs in nor of the system;
+  `PYTHONDONTWRITEBYTECODE`, so an interpreter that lies outside the work folder
+  keeps no bytecode of the pip a check runs from it; and a `PATH` of the
+  system's folders and one folder that holds links to the caller's uv and git
+  and nothing else. So no install reaches an interpreter, a cache or a toolchain
+  of the user's.
 - **No Rust.** The scratch host holds no `cargo`, and a run is refused when a
   system folder holds one. A build there is the build of a host with no Rust:
   the build backend fetches the toolchain the checkout pins, so it needs the

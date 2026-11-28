@@ -284,6 +284,10 @@ def run(
         # NOTE: uv reads a settings file from every folder above the one it
         # runs in, and from the system's own
         'UV_NO_CONFIG': '1',
+        # NOTE: a check runs pip and venv of the interpreter the venvs are made
+        # from, which may lie outside the work folder, and Python would keep
+        # the bytecode of those modules beside them
+        'PYTHONDONTWRITEBYTECODE': '1',
         'LANG': _LANG,
     }
     env.update({name: f'{home / folder}' for name, folder in _HOMES.items()})
