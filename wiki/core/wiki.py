@@ -1309,7 +1309,9 @@ class Wiki:
         if not self._git_read(['config', '--get', 'merge.wiki.driver']):
             self.on_merge_driver_unconfigured()
         # NOTE: the ignored-wiki test reads the fence's batch probe, which
-        #   lint's walk runs anyway, so the note costs no git call of its own
+        #   lint's walk runs for the first entry it weighs against the fence,
+        #   so the note costs a git call of its own only where the walk
+        #   weighs none (a wiki that holds nothing but its root index)
         if (f'{_PAGE_PROBE}: merge: wiki' not in lines) and not self._gitignored_wiki:
             self.on_page_merge_unmapped()
 
