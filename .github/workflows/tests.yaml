@@ -169,7 +169,9 @@ jobs:
         with:
           tool: cargo-nextest@0.9.152
       - name: Run the YAML reader's tests under Miri
-        run: cargo +"$RUST_NIGHTLY" miri nextest run -p wiki-yaml --locked
+        env:
+          RUSTUP_TOOLCHAIN: ${{ env.RUST_NIGHTLY }}
+        run: cargo miri nextest run -p wiki-yaml --locked
   nightly:
     name: nightly
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
