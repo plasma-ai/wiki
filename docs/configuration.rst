@@ -159,8 +159,9 @@ Seeding and restoration are asymmetric:
 - ``wiki update`` and ``wiki config`` restore a *missing* file as ``{}`` —
   all defaults; custom policy is never re-invented — when git holds no copy
   of it: outside a repository, or in one whose ``HEAD`` commit and index both
-  lack the file. (``wiki update --check`` is a dry run and does not restore
-  it.)
+  lack the file. A repository that git cannot read, or one on a machine
+  without git, counts as holding none. (``wiki update --check`` is a dry run
+  and does not restore it.)
 - A missing file that git still holds, in the ``HEAD`` commit or in the
   index, is never replaced. That includes a file ``git status`` does not
   list: one a sparse checkout leaves out, or one marked skip-worktree or

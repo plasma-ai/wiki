@@ -1094,7 +1094,12 @@ def test_lost_settings_file_that_git_holds_stops_every_sweep(
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
 @pytest.mark.parametrize(
     argnames='state',
-    argvalues=['no-repository', 'never-committed', 'removal-committed'],
+    argvalues=[
+        'no-repository',
+        'never-committed',
+        'removal-committed',
+        'unreadable-repository',
+    ],
 )
 def test_missing_settings_file_that_git_does_not_hold_is_recreated(
     tmp_path: pathlib.Path,
@@ -1105,7 +1110,8 @@ def test_missing_settings_file_that_git_does_not_hold_is_recreated(
     Nothing can be restored from git here, so a writing ``update`` writes
     the file with default settings and says so, and a dry run leaves it
     missing. Committing the file's removal is how a wiki gives up its
-    settings for the defaults.
+    settings for the defaults. A repository git cannot read holds nothing
+    it can answer for.
     """
     if state != 'no-repository':
         _git_repo(tmp_path)
@@ -1117,15 +1123,25 @@ def test_missing_settings_file_that_git_does_not_hold_is_recreated(
     if state == 'never-committed':
         assert _git(tmp_path, 'add', '--', str(root / 'core')).returncode == 0
         assert _git(tmp_path, 'commit', '-q', '-m', 'pages').returncode == 0
-    elif state == 'removal-committed':
+    elif state in ('removal-committed', 'unreadable-repository'):
         assert _git(tmp_path, 'add', '-A').returncode == 0
         assert _git(tmp_path, 'commit', '-q', '-m', 'wiki').returncode == 0
+    if state == 'removal-committed':
         assert _git(tmp_path, 'rm', '-q', '--', str(settings)).returncode == 0
         assert _git(tmp_path, 'commit', '-q', '-m', 'no settings').returncode == 0
+    elif state == 'unreadable-repository':
+        _write(tmp_path / '.git' / 'HEAD', 'not a ref\n')
     settings.unlink(missing_ok=True)
 
     # a dry run names the missing file and leaves it missing
     notice = _MISSING_SETTINGS_NOTICE.format(root=root)
+    # a run in a repository git cannot read says so for the gitignore fence
+    if state == 'unreadable-repository':
+        notice += (
+            'Gitignore fence unavailable: `git check-ignore` failed inside the'
+            ' enclosing repository (is git installed?); indexing proceeds'
+            ' unfenced, so paths the repository ignores are adopted\n'
+        )
     check = _wiki(tmp_path, 'update', '--check', '--path', str(root))
     assert check.returncode == 0, check.stdout + check.stderr
     assert check.stderr == notice
