@@ -762,8 +762,8 @@ their stderr prose.
 A ``<!-- start: no-lint -->`` ... ``<!-- end: no-lint -->`` region suppresses
 the position-based rules (conflict markers, escaped wikilinks, wrap mangles,
 stale-link notes, control-character notes, outside-link, directory-link,
-relative-link and absolute-link issues) for the lines it wraps; a malformed pair is itself an
-issue and suppresses nothing.
+relative-link and absolute-link issues) for the lines it wraps; a malformed
+pair is itself an issue and suppresses nothing.
 
 .. list-table::
    :header-rows: 1
