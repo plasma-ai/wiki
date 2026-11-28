@@ -28,6 +28,27 @@ may include breaking changes, each listed under a Breaking heading.
 
 ### Added
 
+- `wiki init`, `wiki update`, `wiki new` and `wiki lint` warn about a key in
+  `.wiki/settings.json` that wiki does not know, at the top level or inside a
+  block, named as a dotted path:
+  `.wiki/settings.json: unknown key 'exclude.pattern' (ignored)`. Each key gets
+  one stderr line per run, before the command's other notes, in the order the
+  keys stand in the file. The key is still ignored and exit codes do not change.
+  `wiki lint --json` lists each warning in its document instead, as a note of
+  kind `settings_warning` with `path`, `key` and `reason` fields, and
+  `wiki lint --count` only counts it. `wiki read`, `search`, `match`, `map`,
+  `config` and the merge driver print none. A `.wiki/wiki.py` hook that reads a
+  key of its own lists it in its class's `settings_keys` table.
+- The same warning names an `exclude.patterns` entry that starts or ends with a
+  space, such as `"drafts "`. The pattern is not trimmed: the space is part of
+  it, so it leaves `drafts/` indexed.
+- The same warning names `naming.leading_digits: false` set without the
+  `identifier` rule in `naming.validate`, where the flag has no effect.
+- `wiki init --settings` says on stderr when the settings given are not the
+  wiki's settings once the command has run:
+  `--settings was not applied: init leaves the settings of the wiki at <path> as they are.`
+  It still exits 0, and `--quiet` does not hide the line. The same object in
+  another key order or spacing prints nothing.
 - `-h` works as `--help`, on `wiki` and on every command.
 - `wiki` with no command prints the help page, on stderr, and exits 2. Before,
   it printed a usage line and `Error: Missing command.`

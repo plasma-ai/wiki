@@ -38,6 +38,7 @@ __all__ = [
     'test_exclude_policy_rejects_invalid_settings',
     'test_init_rejects_invalid_exclude_seed',
     'test_caret_class_is_refused_where_a_bang_class_negates',
+    'test_spaced_pattern_warns_and_matches_as_written',
     'test_exclude_pattern_matching',
     'test_exclusion_names_the_pattern_a_full_scan_names',
     'test_update_skips_excluded_subtree',
@@ -447,6 +448,39 @@ def test_caret_class_is_refused_where_a_bang_class_negates(
     rows = (tmp_path / 'a' / '_index.md').read_text(encoding='utf-8')
     assert '[[a/p|' in rows
     assert '[[a/q|' not in rows
+
+
+def test_spaced_pattern_warns_and_matches_as_written(tmp_path: pathlib.Path) -> None:
+    """A pattern with a space at either end draws a warning and is not trimmed.
+
+    The space is part of the pattern, so ``'drafts '`` leaves ``drafts/``
+    indexed and excludes only a folder whose name ends with the space. A
+    space inside a pattern is no stray: the pair of comment-shaped entries
+    that marks off a part of the list draws nothing.
+    """
+    _make_wiki(tmp_path, folders={'drafts': ['idea'], 'scratch': ['note']})
+    (tmp_path / 'drafts ').mkdir()
+    (tmp_path / 'drafts ' / 'idea.md').write_text('An idea.\n', encoding='utf-8')
+    start = '<!-- start: generated patterns -->'
+    end = '<!-- end: generated patterns -->'
+    patterns = ['drafts ', start, 'old notes/', end, ' scratch']
+    _set_exclude_patterns(tmp_path, patterns)
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+    wiki.update()
+
+    assert [event.description for event in notices] == [
+        ".wiki/settings.json: exclude.patterns entry 'drafts ' starts or ends with"
+        ' a space (the space is part of the pattern)',
+        ".wiki/settings.json: exclude.patterns entry ' scratch' starts or ends"
+        ' with a space (the space is part of the pattern)',
+    ]
+    assert [event.key for event in notices] == ['exclude.patterns'] * 2
+    index = (tmp_path / '_index.md').read_text(encoding='utf-8')
+    assert '[[drafts/_index|' in index
+    assert '[[scratch/_index|' in index
+    assert '[[drafts /' not in index
+    assert not (tmp_path / 'drafts ' / '_index.md').exists()
 
 
 # ------ matching semantics

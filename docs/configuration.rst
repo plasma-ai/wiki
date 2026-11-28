@@ -87,8 +87,9 @@ nesting 128 levels deep and a key named twice in one object, at any level, are
 each malformed, and the message names the cause (``Malformed JSON in
 .wiki/settings.json: duplicate key 'exclude'``). The recognized blocks —
 ``naming``, ``timestamp``, ``map``, ``titles``, ``lint``, ``exclude``, and
-``links`` — are all optional, all objects. Unknown top-level keys are ignored,
-but a wrong-typed known block or key is an error naming the file and key. The
+``links`` — are all optional, all objects. A key the wiki does not know, at
+the top level or inside a block, is ignored with a warning (below), while a
+wrong-typed known block or key is an error naming the file and key. The
 error shows the wrong value as JSON
 (``map.indent must be a string, got null in .wiki/settings.json.``), and cuts
 a value longer than 80 characters there with ``...``.
@@ -111,6 +112,33 @@ checkout — a ``links.external`` folder that resolves inside the wiki through a
 symlink — is left to ``wiki lint`` and ``wiki init``, since a symlink differs
 from one checkout to the next.
 
+A setting that is accepted and does nothing draws a warning, one stderr line
+each. A key the wiki does not know is named as a dotted path:
+``.wiki/settings.json: unknown key 'exclude.pattern' (ignored)``. An
+``exclude.patterns`` entry that starts or ends with a space is named too, since
+the space is part of the pattern and keeps it off the name it was typed beside:
+``.wiki/settings.json: exclude.patterns entry 'drafts ' starts or ends with a
+space (the space is part of the pattern)``. So is ``naming.leading_digits``
+set to ``false`` while ``naming.validate`` does not list ``identifier``, the one
+rule the flag narrows: ``.wiki/settings.json: naming.leading_digits is false
+without 'identifier' in naming.validate (it has no effect)``. The unknown key is
+still ignored and the pattern is not trimmed, and a warning changes no exit
+code and no written file.
+
+``wiki update`` (``--check`` included), ``wiki new`` and ``wiki lint`` print
+the warnings once per run, and ``wiki init`` prints them when it scaffolds a
+wiki: a re-run on an initialized wiki prints none. They come before the
+command's other notes, after any root-resolution diagnostic, and in the order
+the keys stand in the file. ``wiki lint`` counts each as a note, so ``--count``
+shows it in the summary alone, and ``wiki lint --json`` prints no line for it
+and lists it in the document, with the kind ``settings_warning`` and the fields
+``path`` (the settings file), ``key`` and ``reason``; ``lint.strict`` leaves it
+a note. ``wiki read``, ``wiki search``, ``wiki match``, ``wiki map``,
+``wiki config`` and the merge driver print none, and a wiki that another
+wiki's ``links.external`` admits keeps its warnings for its own runs. A
+``.wiki/wiki.py`` hook that reads a key of its own lists it in its class's
+``settings_keys`` table, which maps each block to the keys read inside it.
+
 A file that cannot be read fails the same commands with
 ``Cannot read .wiki/settings.json (<reason>).`` The reason is the system's own
 (``Permission denied``, ``Too many levels of symbolic links``), ``not a regular
@@ -126,7 +154,8 @@ Seeding and restoration are asymmetric:
   below) so the knobs are discoverable, or with the object passed via
   ``--settings '<json>'``. The seed is held to the same strict JSON and
   validated before anything is written, and re-init never overwrites an
-  existing settings file.
+  existing settings file: when ``--settings`` names something else than the
+  file holds, ``init`` says so on stderr and exits 0 (see :doc:`/cli/index`).
 - ``wiki update`` and ``wiki config`` restore a *missing* file as ``{}`` —
   all defaults; custom policy is never re-invented. Deleting the file
   therefore silently drops any authored policy once the next mutating run
@@ -205,6 +234,8 @@ predicates sets ``"allow": "."``.
 ``naming.leading_digits``
    Boolean, default ``true``. Only affects the ``identifier`` predicate: when
    true, a leading digit passes (the check runs with an underscore prefixed).
+   Set to ``false`` without ``identifier`` in ``naming.validate``, it has no
+   effect and draws a settings warning.
 
 ``naming.reserved``
    List of strings, default ``[]``. Names rejected outright. ``_index`` is
@@ -358,7 +389,8 @@ content (dot-paths read the same way).
      no escapes (``\`` is rejected — ``/`` is the separator). Empty or
      whitespace-only patterns, empty segments (``//``), and ``.``/``..``
      segments are rejected when the policy loads. A pattern that matches
-     nothing is not an error (the gitignore precedent).
+     nothing is not an error (the gitignore precedent). A space at either
+     end of a pattern is part of it, and draws a settings warning.
 
 The built-in exclusions need no pattern: dot-paths (including ``.wiki``),
 symlinked files and directories, and ``_index.md`` files are always

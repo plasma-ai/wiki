@@ -629,6 +629,23 @@ notes is clean — lint exits 0.
      - A ``.git`` directory encloses the wiki root but ``git check-ignore``
        could not run (git missing or broken), so the walk proceeds without
        the gitignore fence and adopts paths the repository ignores.
+   * - ``.wiki/settings.json: unknown key '<key>' (ignored)``
+     - The settings file holds a key the wiki does not know, so it sets
+       nothing: a misspelled key leaves its policy off. The key is a dotted
+       path inside a block (``exclude.pattern``). Printed before the other
+       notes, after any resolver diagnostic, in file order. Typed ``settings_warning`` in ``--json``, with
+       ``path`` (the settings file), ``key`` and ``reason`` fields (see
+       :doc:`/configuration`).
+   * - ``.wiki/settings.json: exclude.patterns entry '<pattern>' starts or ends with a space (the space is part of the pattern)``
+     - The pattern is matched as written, so it excludes only a name that
+       carries the space: remove the space to exclude the name beside it.
+       A ``settings_warning`` like the unknown key, with the ``key``
+       ``exclude.patterns``.
+   * - ``.wiki/settings.json: naming.leading_digits is false without 'identifier' in naming.validate (it has no effect)``
+     - The flag only narrows the ``identifier`` rule, so without that rule a
+       name that opens on a digit still passes: add ``identifier`` to
+       ``naming.validate``, or drop the flag. A ``settings_warning`` with
+       the ``key`` ``naming.leading_digits``.
    * - resolver diagnostics (``resolver_notice`` in ``--json``)
      - Emitted by wiki-root resolution before the walk, prefixed with the
        absolute root rather than a root-relative path: an upward resolution
@@ -782,6 +799,11 @@ mode:
 - ``Link targets a symlink: [[target|label]] in <path> (symlinked files are
   not indexed)`` — likewise the excluded-path and gitignored-path cause
   lines beside a prune
+- ``.wiki/settings.json: unknown key '<key>' (ignored)`` — a settings
+  warning, printed before the other notes and after any resolver diagnostic,
+  as are the ones for an ``exclude.patterns`` entry that starts or ends with
+  a space and for a ``naming.leading_digits`` that has no effect (see
+  :doc:`/configuration`)
 - ``Restored missing .wiki/settings.json ({} -- all defaults)``
 - ``Recreated .wiki/cache/ (derived counts cache)``
 - ``Gitignore fence unavailable: `git check-ignore` failed inside the

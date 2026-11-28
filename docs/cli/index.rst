@@ -156,6 +156,15 @@ Re-running ``init`` on an initialized wiki (root ``_index.md`` present) prints
 ``Wiki already initialized at: <path>`` and exits 0 without changing anything;
 ``--settings`` is ignored whenever the settings file already exists.
 
+``init`` says so when ``--settings`` was given and is not in force. If the
+object is not what the wiki's settings file holds once the command has run,
+one stderr line follows, under ``--quiet`` too, and the exit code stays 0:
+``--settings was not applied: init leaves the settings of the wiki at <path>
+as they are.`` The two are compared as JSON with sorted keys, so the same
+object in another key order or spacing prints nothing, and a caller that
+passes its seed on every run stays silent. A settings file that is missing or
+cannot be read counts as different. The wiki name is not compared.
+
 ``init`` refuses to scaffold inside an enclosing wiki, refuses an invalid wiki
 name (naming the violated rule) before any write, refuses a re-init sweep over
 merge conflict markers, and fails on an invalid ``OFFLINE_MODE`` value before
