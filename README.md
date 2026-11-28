@@ -229,6 +229,20 @@ prettier, add it to `.prettierignore`:
 wiki/
 ```
 
+### Large Trees on macOS
+
+On macOS, a walk of the wiki slows down sharply when the tree has more entries
+than `kern.maxvnodes`, the number of files and folders the kernel keeps cached.
+The same happens when several large checkouts are walked in turn and together
+exceed it. Check the limit, and raise it if a large wiki is slow:
+
+```bash
+sysctl kern.maxvnodes
+sudo sysctl kern.maxvnodes=1052672
+```
+
+A reboot resets the value.
+
 ## Development
 
 ### Install
