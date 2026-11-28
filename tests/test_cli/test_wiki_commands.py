@@ -118,6 +118,8 @@ __all__ = [
     'test_read_slice_short_aliases',
     'test_colliding_short_flags_are_rejected',
     'test_read_outputs_bytes_verbatim',
+    'test_piped_output_keeps_a_pages_escape_sequences',
+    'test_help_and_errors_hold_no_escape_byte',
     'test_config_applies_obsidian',
     'test_config_downloads_plugin',
     'test_config_adopts_undeclared_tree',
@@ -2961,6 +2963,68 @@ def test_read_outputs_bytes_verbatim(wiki: pathlib.Path) -> None:
     result = _wiki(wiki, 'read', 'core/design', '--path', str(wiki))
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout == page.read_text(encoding='utf-8')
+
+
+# ------ piped output
+
+
+def test_piped_output_keeps_a_pages_escape_sequences(tmp_path: pathlib.Path) -> None:
+    """Output through a pipe carries the escape sequences a page holds.
+
+    A script or an agent reads a command through a pipe or a file, where
+    it needs the page's own bytes: ``wiki read page > file`` must give the
+    page back, color sequences included.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # a page with a color sequence in its desc (YAML's \e) and in its body
+    desc = '"A \\e[31mred\\e[0m page."'
+    line = 'An \x1b[31malert\x1b[0m line.'
+    _write(root / 'alert.md', f'---\ndesc: {desc}\n---\n\n# alert\n\n{line}\n')
+    assert _wiki(root, 'update').returncode == 0
+    text = (root / 'alert.md').read_text(encoding='utf-8')
+    # read: the page as it is on disk
+    read = _wiki(root, 'read', 'alert')
+    assert read.returncode == 0, read.stdout + read.stderr
+    assert read.stdout == text
+    # match --lines: the matching line as written
+    number = text.split('\n').index(line) + 1
+    match = _wiki(root, 'match', 'alert', '--lines')
+    assert match.returncode == 0, match.stdout + match.stderr
+    assert f'alert.md:{number}: {line}\n' in match.stdout
+    # map: the desc as YAML decodes it
+    tree = _wiki(root, 'map')
+    assert tree.returncode == 0, tree.stdout + tree.stderr
+    assert 'A \x1b[31mred\x1b[0m page.' in tree.stdout
+    # search: the body snippet around the hit
+    search = _wiki(root, 'search', 'line')
+    assert search.returncode == 0, search.stdout + search.stderr
+    assert '\x1b[31malert\x1b[0m' in search.stdout
+
+
+@pytest.mark.parametrize(
+    argnames='args',
+    argvalues=[
+        ('--help',),
+        ('read', '--help'),
+        ('map', '--depth', 'deep'),
+        (),
+        ('--version',),
+    ],
+    ids=['help', 'command-help', 'usage-error', 'no-command', 'version'],
+)
+def test_help_and_errors_hold_no_escape_byte(
+    tmp_path: pathlib.Path,
+    args: tuple[str, ...],
+) -> None:
+    """Help, a usage error and the version print plain text through a pipe.
+
+    The command line styles nothing of its own, so the only escape
+    sequences a pipe ever carries are a page's.
+    """
+    result = _wiki(tmp_path, *args)
+    assert result.stdout + result.stderr
+    assert '\x1b' not in result.stdout + result.stderr
 
 
 # ------ config

@@ -273,6 +273,8 @@ future-proofing; the output notes it.
 
 Prints a named entry to stdout verbatim, with no appended newline — redirected
 output round-trips byte-for-byte for LF files (reads normalize CRLF endings).
+An escape sequence the page holds is printed as written, to a pipe or a file as
+to a terminal; ``match``, ``search`` and ``map`` print page text the same way.
 
 The name resolves relative to the wiki root: a directory reads its
 ``_index.md``; an existing file reads itself; otherwise ``.md`` is appended

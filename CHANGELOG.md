@@ -102,6 +102,11 @@ may include breaking changes, each listed under a Breaking heading.
   character Python reads as a line boundary, split the line in two and came back
   as a newline. The diff under a `Requires update` issue of `wiki lint` breaks
   lines the same way.
+- Output sent to a pipe or a file keeps the escape sequences a page holds, such
+  as color codes, so `wiki read page > file` gives the page's exact bytes, as
+  its help promises. Before, they were removed unless the output went to a
+  terminal. `wiki match`, `wiki search` and `wiki map` print page text the same
+  way.
 
 ## [1.10.0] - 2026-11-27
 

@@ -16,6 +16,9 @@ def cli(**kwargs: Any) -> None:
     # construct app
     kwargs.setdefault('rich_markup_mode', None)
     kwargs.setdefault('pretty_exceptions_enable', False)
+    # NOTE: without a color setting, a write to a pipe or a file drops the
+    #   escape sequences a page holds, and the output is not the page's bytes
+    kwargs.setdefault('context_settings', {'color': True})
     app = typer.Typer(name='wiki', **kwargs)
     # version callback
     cmd.version(app)
