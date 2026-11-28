@@ -398,6 +398,8 @@ def test_settings_blocks_are_validated_in_the_documented_order(
             'map.desc_limit must be an int >= -1 or null, got true',
         ),
         ({'map': {'indent': 1.5}}, 'map.indent must be a string, got 1.5'),
+        # a float with an exponent prints in the interpreter's spelling
+        ({'map': {'indent': 1e104}}, 'map.indent must be a string, got 1e+104'),
         (
             {'links': {'external': '../src'}},
             'links.external must be a list of folder paths, got "../src"',
@@ -405,6 +407,11 @@ def test_settings_blocks_are_validated_in_the_documented_order(
         (
             {'timestamp': {'format': 'a\nb'}},
             'timestamp.format must render a single non-empty line, got "a\\nb"',
+        ),
+        # text outside ASCII prints as escapes
+        (
+            {'links': {'external': 'café'}},
+            'links.external must be a list of folder paths, got "caf\\u00e9"',
         ),
         (
             {'exclude': {'patterns': {'a': True, 'b': [1.5, None]}}},
@@ -438,8 +445,10 @@ def test_settings_blocks_are_validated_in_the_documented_order(
         'null',
         'true',
         'number',
+        'number-with-an-exponent',
         'string',
         'string-with-a-line-break',
+        'string-outside-ascii',
         'object',
         'eighty-characters',
         'cut-past-eighty',
