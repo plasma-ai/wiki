@@ -73,9 +73,24 @@ rather than authoring or auditing page by page yourself:
 
 - **`.wiki/` is the tool's namespace.** Every root carries a `.wiki/` directory
   holding `settings.json` — the file that declares the wiki root; `wiki init`
-  writes it and `wiki update` restores a missing one — plus the derived
-  word-counts and ranked-search caches and the staged Obsidian config. Never
-  author content there; the walk skips dot-directories by construction.
+  writes it — plus the derived word-counts and ranked-search caches and the
+  staged Obsidian config. Never author content there; the walk skips
+  dot-directories by construction. `wiki update` recreates a missing
+  `settings.json` as `{}` only when git holds no copy of it. When git still
+  holds the file, `wiki update`, `new`, `lint` and `config` stop with an error,
+  as does a `wiki init` that would scaffold (one whose root `_index.md` is
+  missing too): restore the file from git, never write a new one. In the wiki
+  root, `git restore .wiki/settings.json` brings it back, or
+  `git restore --staged --worktree .wiki/settings.json` after a `git rm`, or
+  `git restore --ignore-skip-worktree-bits .wiki/settings.json` when a sparse
+  checkout leaves the file out. A key in `settings.json` that wiki does not know
+  is ignored, so a misspelled key leaves its policy off: `wiki init`, `update`,
+  `new` and `lint` name each one on stderr
+  (`.wiki/settings.json: unknown key 'exclude.pattern' (ignored)`) and exit as
+  they would without it; `lint --json` carries them in its document and
+  `lint --count` only counts them. `wiki init --settings` seeds the file at
+  creation only: on an existing wiki it changes nothing, exits 0, and prints
+  `--settings was not applied: ...` on stderr when the wiki's settings differ.
 - **Exclusions are configurable.** Beyond the built-ins (dot-paths, symlinks,
   `_index.md`), gitignore-style globs in `exclude.patterns` in
   `.wiki/settings.json` exclude whole subtrees from indexing — never walked,
@@ -105,8 +120,10 @@ rather than authoring or auditing page by page yourself:
   undetected unless the value stops parsing under the configured format, which
   `wiki lint` fails. `created`/`updated` default to UTC in `%Y-%m-%dT%H:%M:%SZ`;
   set `timestamp.timezone` (an IANA name) and `timestamp.format` (a strftime
-  string) in `.wiki/settings.json` to change them — use `%z` rather than a
-  literal `Z` for a non-UTC zone.
+  string of `%Y`, `%m`, `%d`, `%H`, `%M`, `%S`, `%z`, `%%` and literal text; any
+  other directive is a settings error, and so is a digit straight after `%z`) in
+  `.wiki/settings.json` to change them — use `%z` rather than a literal `Z` for
+  a non-UTC zone.
 - **Names are path-derived; titles are authored.** `wiki update` sets each
   page's `name` and H1 heading to the path-joined name (e.g. `core/design`) so
   names stay consistent with the tree structure — to rename an entry, move its
@@ -148,6 +165,16 @@ rather than authoring or auditing page by page yourself:
   block whose repair would leave a strict reader worse off (an accepted block
   rejected, or authored lines folded into a quoted value), which it leaves
   untouched.
+- **Keep LaTeX out of double quotes.** In a double-quoted value YAML reads a
+  backslash as an escape: `"$\theta$"` holds a tab, `"$\nu$"` a line break,
+  `"$\frac12$"` a form feed, and `wiki update` copies them into the H1 and the
+  parent's row. Write the value in single quotes or as a block scalar (`>-`), or
+  double each backslash. `wiki lint` fails a double-quoted `name`, `title`,
+  `desc`, or `category` that holds a control character (`control_character`),
+  and reports a backslash that opens no YAML escape (`"\(p\)"`, `"$\xi$"`) as
+  `invalid_yaml` with the same remedy. A control character in a page body or
+  below an index's `***` (a form feed where the `\f` of `\frac` was decoded on
+  the way in) draws a soft note with its first line; retype the text there.
 - **Wikilinks stay inside the wiki unless a folder is allowlisted.** Every
   wikilink (`[[...]]`) target is read from the wiki root, one rule per spelling:
   a prefix-free target (`[[core/design]]`) must name something inside the wiki;
@@ -236,12 +263,13 @@ rather than authoring or auditing page by page yourself:
   `: ` or ` #` must be YAML-quoted — a strict reader rejects the unquoted colon
   on a one-line desc or on a continuation line of one (`wiki lint` reports it as
   `invalid_yaml`; under a bare `desc:` key an indented `Key: value` line nests a
-  mapping instead, which no strict reader shows as text and lint does not
-  report) and reads ` #` as a comment (lint names it as the likely cause only
-  when the cut-short desc loses its period); surrounding quotes are stripped
-  when the value is read. Never hand-wrap a desc mid-word or onto a list-marker
-  start — let the block scalar carry the breaks; lint fails the wrap artifacts
-  (a hyphen dangle, a phantom list item).
+  mapping instead, which no strict reader shows as text and lint reports as
+  `nonscalar_field`, as it does a `title` or `category` that is a list) and
+  reads ` #` as a comment (lint names it as the likely cause only when the
+  cut-short desc loses its period); surrounding quotes are stripped when the
+  value is read. Never hand-wrap a desc mid-word or onto a list-marker start —
+  let the block scalar carry the breaks; lint fails the wrap artifacts (a hyphen
+  dangle, a phantom list item).
 - **Fill in auto-created index descs.** `wiki update` creates a missing
   `_index.md` for every new directory with a `desc: ...` placeholder and
   announces the batch in its condensed summary
@@ -318,8 +346,13 @@ rather than authoring or auditing page by page yourself:
   the driver in local git config and write `**/_index.md merge=wiki` to the
   repository root's `.gitattributes` and `*.md merge=wiki` to one in the wiki
   root, in the working tree only — you stage and commit them yourself, and each
-  clone runs `wiki config` once to register the driver. Without `wiki` on PATH
-  the driver falls back to git's own text merge.
+  clone runs `wiki config` once to register the driver. A `.gitattributes` with
+  uncommitted changes is skipped, and a stderr line names it and the mapping
+  line it lacks: commit the file and run `wiki config` again. `wiki lint` notes
+  a wiki whose index files are mapped and whose pages are not: its pages merge
+  as plain text and conflict on their `updated:` lines until `wiki config` adds
+  the mapping. Without `wiki` on PATH the driver falls back to git's own text
+  merge.
 - **Leave new-directory index bodies empty during concurrent work.** When
   sibling branches both create the same new directory, its two `_index.md`s
   merge add/add with no common ancestor: the generated region resolves

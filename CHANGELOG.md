@@ -7,6 +7,254 @@ may include breaking changes, each listed under a Breaking heading.
 
 ## [Unreleased]
 
+### Breaking
+
+- `timestamp.format` accepts only `%Y`, `%m`, `%d`, `%H`, `%M`, `%S`, `%z`, `%%`
+  and literal text, and the format must read back the stamp it writes. Any other
+  directive is a settings error that names it. So is a digit straight after
+  `%z`, whether a directive or a literal one (`%z%H`), since it can read as the
+  offset's seconds, and so is a format whose stamp does not parse back, such as
+  `%Y %Y`. Before, wiki accepted any `strftime` string: some blanked every stamp
+  (`%Ez`), some made lint report every file (`%s`), and `%Y %Y` crashed lint. A
+  wiki with such a format changes it and rewrites its stamps by hand, as any
+  format change requires.
+- A number on the command line takes an optional sign and plain digits only, and
+  must fit a signed 64-bit integer. That covers the bounds of a `wiki read`
+  slice and the options `map --depth`, `map --desc-limit` and `search --limit`.
+  Forms that Python happened to read, such as `' 10'`, `1_0` and non-ASCII
+  digits, are usage errors: write the number in plain digits. The three options
+  are labeled `INTEGER` in help and refuse a value as
+  `'<value>' is not a valid integer.` whatever version of typer is installed.
+
+### Added
+
+- `wiki init`, `wiki update`, `wiki new` and `wiki lint` warn about a key in
+  `.wiki/settings.json` that wiki does not know, at the top level or inside a
+  block, named as a dotted path:
+  `.wiki/settings.json: unknown key 'exclude.pattern' (ignored)`. Each key gets
+  one stderr line per run, before the command's other notes, in the order the
+  keys stand in the file. The key is still ignored and exit codes do not change.
+  `wiki lint --json` lists each warning in its document instead, as a note of
+  kind `settings_warning` with `path`, `key` and `reason` fields, and
+  `wiki lint --count` only counts it. `wiki read`, `search`, `match`, `map`,
+  `config` and the merge driver print none. A `.wiki/wiki.py` hook that reads a
+  key of its own lists it in its class's `settings_keys` table.
+- The same warning names an `exclude.patterns` entry that starts or ends with a
+  space, such as `"drafts "`. The pattern is not trimmed: the space is part of
+  it, so it leaves `drafts/` indexed.
+- The same warning names `naming.leading_digits: false` set without the
+  `identifier` rule in `naming.validate`, where the flag has no effect.
+- `wiki init --settings` says on stderr when the settings given are not the
+  wiki's settings once the command has run:
+  `--settings was not applied: init leaves the settings of the wiki at <path> as they are.`
+  It still exits 0, and `--quiet` does not hide the line. The same object in
+  another key order or spacing prints nothing.
+- `-h` works as `--help`, on `wiki` and on every command.
+- `wiki` with no command prints the help page, on stderr, and exits 2. Before,
+  it printed a usage line and `Error: Missing command.`
+- `wiki lint` reports a `name`, `title`, `desc` or `category` in double quotes
+  that holds a control character. YAML reads a backslash there as an escape, so
+  `"$\frac{1}{2}$"` holds a form feed, and `wiki update` copies it into the
+  parent index. The issue names the field, its line and each character, such as
+  `U+000C (\f)`, and says to write LaTeX in single quotes or a block scalar, or
+  to double each backslash. In `--json` its kind is `control_character`.
+- `wiki lint` reports a `name`, `title`, `desc` or `category` that is a YAML
+  mapping or list, such as an indented `Key: value` line under a bare `desc:`,
+  or `title: [Draft]`. `wiki update` writes the field's source lines into the
+  parent index while other tools read a mapping or a list. The issue names the
+  field and its line, and says to quote the value or write it as a `>-` block.
+  In `--json` its kind is `nonscalar_field`.
+- `wiki lint` notes a control character in a page body, or in an index's text
+  below `***`: a C0 control other than a tab or a line break, or DEL, such as
+  the form feed a tool leaves where `\frac` stood. There is one note for each
+  file, with the first line and the count, and a `no-lint` region is skipped. It
+  is a note under `lint.strict` too. In `--json` its kind is
+  `content_control_character`.
+- `wiki lint` notes a wiki whose index files are mapped to the merge driver but
+  whose pages are not: git maps the root `_index.md` to `merge=wiki` and not a
+  page in the wiki root. Such pages merge as plain text and conflict on their
+  `updated:` lines. `wiki config` adds the mapping, in a `.gitattributes` in the
+  wiki root that you commit. A wiki with no mapping at all, a wiki the
+  repository ignores and a wiki outside a repository draw no note. In `--json`
+  its kind is `page_merge_unmapped`.
+
+### Changed
+
+- `.wiki/settings.json` and `init --settings` must be strict JSON. `NaN`,
+  `Infinity`, a number too large to represent, a lone surrogate escape, nesting
+  128 levels deep and a key named twice in one object are refused with a message
+  that names the cause. Before, wiki read such a file, kept only the last of two
+  equal keys, and `init --settings` could write a file that is not JSON.
+- Every command that reads policy (`wiki update`, `wiki new`, `wiki lint`,
+  `wiki map`, `wiki search` and `wiki match`) checks the whole settings file
+  before it does anything else, so `wiki update --check` no longer passes on a
+  file that `wiki lint` or `wiki map` refuses. The blocks are checked in the
+  order the documentation lists them, and the first one at fault is named.
+  `wiki read`, `wiki config` and the merge driver still run on a wiki with a
+  broken block they do not use.
+- A `naming.min_length` above `naming.max_length` is a settings error that names
+  both keys. Before, every name was skipped and `wiki update` pruned every index
+  row.
+- An `exclude.patterns` entry that holds `[^` is refused, with a pointer to
+  `[!...]`, the spelling that negates a class. Before, `[^a]` matched `a`, the
+  opposite of gitignore.
+- When `.wiki/settings.json` is missing but git still holds it, in the `HEAD`
+  commit or in the index, `wiki update` (and `--check`), `wiki new`, `wiki lint`
+  and `wiki config` stop with exit code 2, write nothing and say to restore the
+  file from git. So does `wiki init` on a wiki whose root `_index.md` is missing
+  too. Before, `wiki update` recreated the file as `{}` and swept the wiki on
+  default settings in the same run, adopting every page the lost
+  `exclude.patterns` had kept out. `wiki read`, `search`, `match` and `map`
+  still run. A file that `git status` does not list counts as held too, so these
+  commands stop in a sparse checkout that leaves `.wiki/` out, and for a file
+  marked skip-worktree or assume-unchanged. A wiki whose settings file git does
+  not hold is restored as before: outside a repository, with a file never
+  committed, or once the file's removal is committed.
+- The stderr line that names a missing `.wiki/settings.json` says to restore the
+  file from git, or to run `wiki update` to recreate it with default settings.
+  Before, it said only that `wiki update` will restore the file. The line prints
+  only when nothing stands at the path. A `--path` inside an index tree rooted
+  at the home folder, where `.wiki/settings.json` is the trust store, no longer
+  draws it, nor the note `wiki lint` counted for it.
+- `--path ""` is a usage error, `--path must not be empty.`, in every command
+  that takes `--path`. Before, an empty value meant the wiki the current folder
+  resolves to, so a script with an unset variable ran on the wrong wiki and
+  exited 0. When another argument is bad too, the empty `--path` is the error
+  reported, ahead of a malformed slice of `wiki read`. Only a value the option
+  parser refuses, such as a `--limit` that is not an integer, comes first.
+- An empty `--lines`, `--words` or `--chars` value of `wiki read` is an invalid
+  slice. Before, it returned the whole page, so a script with an unset variable
+  read a page it meant to slice. `wiki read` also checks its slice before it
+  looks for the wiki, so a malformed slice is reported as one whatever a
+  non-empty `--path` names.
+
+### Fixed
+
+- A settings error shows the wrong value as JSON: `got null` and
+  `got {"a": true}`, where it printed Python's `None` and `{'a': True}`. A value
+  longer than 80 characters is cut there with `...`. An entry of
+  `naming.validate` or `naming.reserved` that is not a string gets a settings
+  error that names the key, such as
+  `naming.reserved entry must be a string, got ["x"] in .wiki/settings.json.`,
+  in place of a raw Python error or, for a number in `naming.reserved`, no error
+  at all.
+- A `.wiki/settings.json` that cannot be read (no permission, a folder or a
+  symlink loop at its path, a file where the `.wiki` folder belongs, a
+  byte-order mark) gets an error that names the file and the cause, such as
+  `Cannot read .wiki/settings.json (Permission denied).`, in place of a raw
+  Python error. A folder or a symlink loop at the path is no longer first
+  reported as a missing settings file that `wiki update` will restore, and
+  neither a symlink loop nor a file in place of `.wiki` leaves `map` and `lint`
+  running on default settings. A byte-order mark gets a message that says to
+  remove it. A `links.external` wiki's settings file gets the same sentence
+  after its `links.external wiki '<path>': ` prefix.
+- A page that is not valid UTF-8 stops `wiki read`, `wiki update` and
+  `wiki lint` with a message that leads with the page's path and gives the
+  offset of the first invalid byte, such as
+  `notes/draft.md: not valid UTF-8 at byte 4; re-save the file as UTF-8`, in
+  place of Python's codec sentence, which put the path last. The exit code is 2,
+  as before, and `Wiki` still raises a `UnicodeDecodeError`. A
+  `.wiki/settings.json` or `.obsidian/*.json` file that is not UTF-8 gets the
+  same wording: `Malformed JSON in <file>: not valid UTF-8 at byte N`. So does a
+  JSON file staged under `.wiki/obsidian/`, where `wiki config` printed the
+  codec sentence with no file name, and `wiki trust` gives the byte when it
+  refuses a trust store that is not UTF-8.
+- `wiki match` says when it skips a page it cannot decode, as `wiki search`
+  does: `Skipping <path>: unreadable, or not valid UTF-8` on stderr. Before, a
+  match inside such a page was reported as `No matches found.` A file that is
+  not a page, such as an image under `--all`, is still skipped in silence. The
+  line replaces `Skipping <path>: unreadable during search refresh` in
+  `wiki search`, which prints it for a page it cannot open or cannot decode, so
+  both commands print the same words.
+- `wiki match` reports a pattern that does not compile as
+  `Invalid regex '<pattern>': <reason>`, which names the pattern and says it is
+  read as a regex. A pattern with an unescaped `[[` gets one line on stderr that
+  says `[[` opens a character class and that `\[\[` matches a wikilink, and a
+  doubled `--`, `&&`, `~~` or `||` inside a character class gets a line of its
+  own. Before, each printed a Python warning that showed an install path and a
+  line of wiki's source. The matches and the exit code are unchanged. A
+  `naming.pattern` that Python warns about no longer prints that warning either.
+  `Wiki.match` raises a `ValueError` for a pattern that does not compile, with
+  Python's error as its cause. Before, it raised `re.error`.
+- `wiki match` no longer reports a line past the end of a file that ends with a
+  newline: the final newline ends the last line and opens no empty one. Before,
+  `wiki match '^$' --lines` reported line 15 of a 14-line file, and a pattern
+  that can match an empty line hit every file.
+- `wiki read --lines` counts lines as `wiki match` numbers them: a line ends at
+  a newline and at nothing else. Before, a form feed inside a line, or another
+  character Python reads as a line boundary, split the line in two and came back
+  as a newline. The diff under a `Requires update` issue of `wiki lint` breaks
+  lines the same way.
+- Output sent to a pipe or a file keeps the escape sequences a page holds, such
+  as color codes, so `wiki read page > file` gives the page's exact bytes, as
+  its help promises. Before, they were removed unless the output went to a
+  terminal. `wiki match`, `wiki search` and `wiki map` print page text the same
+  way.
+- `wiki search --json` prints `[]` on stdout when nothing matches, so its output
+  always parses as JSON. Before, it printed nothing. The `No matches found.`
+  line on stderr and exit 1 are unchanged.
+- `wiki map` says `No entries match.` when a name, `--category` or
+  `--markdown`/`--no-markdown` left nothing to show. Before, it said
+  `Wiki is empty.` of a wiki that holds pages.
+- A scope that is not found suggests the fix after
+  `Wiki folder not found: '<name>'`. A name that leads with the root's own
+  folder name, such as `wiki lint wiki/core --path wiki`, gets
+  `(did you mean core?)`, and a page name gets
+  `(a scope is a folder and this is a page; did you mean core?)`. A page in the
+  wiki root has no folder to name and gets
+  `(a scope is a folder and this is a page in the wiki root)`. `Wiki.update`,
+  `lint`, `map`, `search` and `match` raise the same `FileNotFoundError` with
+  the longer message.
+- The help of `wiki new` marks `--desc` and `--content` as required once, where
+  it said `(required). [required]`, and the help of `wiki search --limit` states
+  its default of 10.
+- For a bad backslash escape in a double-quoted frontmatter value, such as
+  `title: "Uses \(p\) here"` or `desc: "Uses $\xi$."`, `wiki lint` now says to
+  write LaTeX in single quotes or a block scalar, or to double each backslash.
+  Before, it said to quote a value that was already quoted. The reason it gives
+  for a bad `\x` or `\u` number spells `hexadecimal` correctly, where it read
+  `hexdecimal`.
+- `wiki update --check --full` says what would change:
+  `Would adopt bare page: notes/draft.md`, `Would add link: ...`,
+  `Would prune link: ...`, `Would create index: ...`, `Would restamp ...` and
+  `Would overwrite desc: ...`. Before, it printed the lines of a writing run,
+  such as `Adopted bare page: notes/draft.md (frontmatter added)`, while the
+  file was untouched. A run without `--check` prints the same lines as before.
+- The condensed output of `wiki update` names a file it skipped. A skip changes
+  no file, so its line is the only record of it: one invalid name, one file
+  edited during the run, one file with malformed frontmatter or one empty or
+  truncated index prints its own line, such as
+  `Skipping notes/a|b.md: invalid name (contains a denied character)`. Before,
+  it printed `Skipped 1 invalid name` with no path. When a kind repeats, its
+  count line (`Skipped 3 invalid names`) stays and the narration ends with
+  `Run with --full to list each line.` `wiki new` prints the same lines for the
+  sweep it runs, and its pointer names `wiki update --check --full`. A dry run
+  cannot list files edited during a run, so that count line alone draws no
+  pointer from `wiki new`.
+- `wiki update` prints one count line for indexed paths this machine's git
+  ignores when there are two or more, as `wiki lint` does:
+  `N indexed paths this machine's git ignores; their rows ship where the files cannot`.
+  Before, it printed a line for each path, so a personal ignore rule that
+  matched many pages filled the condensed output. One path still prints its own
+  line, and `--full` lists each.
+- The `wiki update` line about an overwritten desc names the page's real file
+  when the page sits beside a file of the same name. For `tools/Makefile.md`
+  beside `tools/Makefile` it says `edit it in tools/Makefile.md`. Before, it
+  said `tools/Makefile.md.md`, a file that does not exist. `DescOverwriteEvent`
+  carries the file in a new optional `page` field; an event built without it
+  names the target plus `.md`.
+- `wiki init` and `wiki config` no longer fail on a `.gitattributes` that is not
+  UTF-8, such as one with a Latin-1 comment. They append the merge mapping the
+  file lacks and leave its existing bytes as they are.
+- `wiki init` and `wiki config` say when they skip a `.gitattributes` that has
+  uncommitted changes, and name the line they did not add:
+  `Skipping <path>: it has uncommitted changes, so wiki did not add '**/_index.md merge=wiki'`,
+  then the remedy: commit the file and run `wiki config`. There is one stderr
+  line for each skipped file, `--quiet` does not hide it, and the exit code
+  stays 0. Before, they skipped the file in silence, so the files it would map
+  kept merging as plain text. `configure_git_merge_driver` returns the lines,
+  where it returned `None`.
+
 ## [1.10.0] - 2026-11-27
 
 ### Added

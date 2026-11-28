@@ -35,3 +35,26 @@ def format_words(count: int, /) -> str:
                 return f'{(count * 10 // threshold) / 10:.1f}{suffix}'
             return f'{scaled:.1f}{suffix}'
     return str(count)
+
+
+def split_lines(text: str, /) -> list[str]:
+    r"""Split ``text`` into its lines on ``\n`` alone.
+
+    A final ``\n`` ends the last line without opening another, and no
+    other character breaks a line: ``str.splitlines`` also breaks on a
+    form feed and on the Unicode separators, which a page keeps inside
+    its lines.
+
+    >>> split_lines('a\nb\n')
+    ['a', 'b']
+    >>> split_lines('a\n\nb')
+    ['a', '', 'b']
+    >>> split_lines('a\x0cb\n')
+    ['a\x0cb']
+    >>> split_lines('')
+    []
+    """
+    lines = text.split('\n')
+    if not lines[-1]:
+        lines.pop()
+    return lines

@@ -413,6 +413,13 @@ See `pyproject.toml` for formatter/linter config.
 - Use the `@command(app, 'name')` decorator (from `wiki.cli.utils`) — commands
   are error-wrapped, catching all but typer's `Exit`/`Abort`/`BadParameter`
 - Typer args/options as local variables before the inner function
+- A command that takes `--path` opens with `refuse_empty_path(path)` (from
+  `wiki.cli.utils`): an empty value is a usage error, never the default root
+- `-h`, `--help` and the color setting that keeps a page's escape sequences in
+  piped output come from the app's context settings in `cli/main.py`, so a
+  command sets none of them. `_merge` alone registers with
+  `add_help_option=False`: git hands it any pathname, and one read as a help
+  flag would exit 0 with nothing merged
 - Do not inline method calls in `typer.echo()` — assign to a variable first
 - When mixing positional and keyword args in multi-line calls, pass all as
   kwargs (unless the param is positional-only with `/`)
@@ -482,6 +489,29 @@ frontmatter itself carries the decorator too, whether or not it calls the base
 method: a call inside a run joins it. The decorator count
 (`grep -c '@format.run_scoped' wiki/core/wiki.py`) equals the count of
 operations the class docstring names.
+
+### Settings Check
+
+An operation that reads policy (`update`, `new`, `lint`, `map`, `search`,
+`match`) opens with `self._validate_settings()` (`core/wiki.py`), and `init`
+runs it on its seed before its first write: every settings block, in the order
+`docs/configuration.rst` lists them. `read`, `update_config`, `_settle_stamps`
+and `canonicalize_index` never call it; each reads only the per-block policy
+properties it uses, so a page stays readable, the repair runnable and a merge
+settled on a wiki with a broken block elsewhere. A settings check that follows a
+path in the checkout stays out of the routine: the one there is,
+`_refuse_aliased_link_folders`, runs in `lint` and `init`. The routine's one
+read outside the settings file is the lookup of a named `timestamp.timezone` in
+the interpreter's zone database.
+
+`init`, `update`, `new` and `lint` then call `self._warn_settings()`, which
+emits a `settings_warning` notice for each setting the file holds to no effect,
+ahead of every other notice: `update`, `new` and `lint` straight after the
+check, `init` once it has written its seed. No other operation calls it and no
+settings property emits a notice, so `read`, `search`, `match`, `map`,
+`update_config`, the merge driver's engines and a linked wiki's stay silent. The
+keys the file may hold are the `Wiki.settings_keys` table; a new settings key
+joins the table and `docs/configuration.rst` together.
 
 ### Shell Scripts
 

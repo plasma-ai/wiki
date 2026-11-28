@@ -7,9 +7,11 @@ package on PyPI; see :doc:`/guide/getting-started` for installation. This page
 is the complete reference for the public command surface; each command has a
 section below.
 
-``wiki --version`` prints the package version and exits. The ``typer``
-built-ins ``--install-completion`` and ``--show-completion`` manage shell
-completion.
+``wiki --version`` prints the package version and exits. ``-h`` and ``--help``
+print the help page of ``wiki`` or of a command and exit 0. ``wiki`` with no
+command is a usage error: it prints the same help page on stderr and exits 2.
+The ``typer`` built-ins ``--install-completion`` and ``--show-completion``
+manage shell completion.
 
 Conventions
 -----------
@@ -30,6 +32,11 @@ existing wiki and accepts ``--path <dir>`` to name its root directly. Without
    folder anywhere below it is a project directory, not a folder of an outer
    tree, so resolution declines to climb from it.
 3. ``{cwd}/wiki/``, when that directory is declared or indexed.
+
+An empty ``--path`` value is a usage error (``--path must not be empty.``,
+exit 2) in every command that takes the option, ``wiki init`` included. It is
+never read as no ``--path``, so a script that passes an unset variable does not
+run on the wiki the current directory resolves to.
 
 When none of these produce a wiki, the command fails with ``Could not locate
 .wiki/settings.json, _index.md, or wiki/_index.md from the current directory.``
@@ -54,13 +61,28 @@ Subtree scope
 
 ``map``, ``search``, ``match``, ``update``, and ``lint`` take an optional
 positional ``name`` argument restricting the operation to a subtree. The scope
-must resolve to a directory relative to the wiki root — a page name fails with
-``Wiki folder not found: '<name>'``. A scope outside the root is refused, as
+must resolve to a directory relative to the wiki root. A name that reaches
+none fails with ``Wiki folder not found: '<name>'``, followed by a hint in
+parentheses when the tree offers a fix: a page name is told that a scope is a
+folder and is given the page's folder (``did you mean core?``), a page in the
+wiki root is told only that it is one
+(``a scope is a folder and this is a page in the wiki root``), and a name that
+leads with the root's own folder name (``wiki/core`` in the wiki at ``wiki``)
+is given the rest. A scope outside the root is refused, as
 is one inside an excluded directory — dot-prefixed (``.wiki``, ``.git``,
 ``.obsidian``), matched by ``exclude.patterns`` (refused with a message
 naming the matching pattern), or fenced by the enclosing repo's gitignore.
 A symlinked scope is not refused as such: it resolves to its real target,
 and the root and exclusion checks apply to that target.
+
+Number arguments
+~~~~~~~~~~~~~~~~
+
+A number on the command line — a bound of a ``wiki read`` slice, ``map
+--depth``, ``map --desc-limit`` or ``search --limit`` — is an optional sign
+followed by ASCII digits, within the signed 64-bit range. Anything else is a
+usage error: a padded ``' 10'``, ``1_0``, ``1.0``, or a digit of another
+script.
 
 Errors and exit codes
 ~~~~~~~~~~~~~~~~~~~~~
@@ -134,12 +156,27 @@ Re-running ``init`` on an initialized wiki (root ``_index.md`` present) prints
 ``Wiki already initialized at: <path>`` and exits 0 without changing anything;
 ``--settings`` is ignored whenever the settings file already exists.
 
-``init`` refuses to scaffold inside an enclosing wiki, refuses an invalid wiki
-name (naming the violated rule) before any write, refuses a re-init sweep over
-merge conflict markers, and fails on an invalid ``OFFLINE_MODE`` value before
-touching the filesystem (``OFFLINE_MODE=true`` skips the Front Matter Title
-download with a warning; the bundled plugin needs no network; see
-:doc:`/configuration`).
+``init`` says so when ``--settings`` was given and is not in force. If the
+object is not what the wiki's settings file holds once the command has run,
+one stderr line follows, under ``--quiet`` too, and the exit code stays 0:
+``--settings was not applied: init leaves the settings of the wiki at <path>
+as they are.`` The two are compared as JSON with sorted keys, so the same
+object in another key order or spacing prints nothing, and a caller that
+passes its seed on every run stays silent. A settings file that is missing or
+cannot be read counts as different. The wiki name is not compared.
+
+``init`` leaves a ``.gitattributes`` that has uncommitted changes as it
+stands, as ``wiki config`` does. One stderr line names the file and the
+mapping line it lacks, under ``--quiet`` too, and the exit code stays 0; see
+:doc:`/guide/merge-driver`.
+
+``init`` refuses to scaffold inside an enclosing wiki, refuses to scaffold
+while ``.wiki/settings.json`` is missing and git still holds it (see
+:doc:`/configuration`), refuses an invalid wiki name (naming the violated
+rule) before any write, refuses a re-init sweep over merge conflict markers,
+and fails on an invalid ``OFFLINE_MODE`` value before touching the filesystem
+(``OFFLINE_MODE=true`` skips the Front Matter Title download with a warning;
+the bundled plugin needs no network; see :doc:`/configuration`).
 
 .. list-table::
    :header-rows: 1
@@ -184,12 +221,14 @@ Wiki Root Links plugin is copied from the package and enabled, Obsidian's
 new-link format is seeded when the vault has none, and top-level
 ``.json`` files are created when absent or merged when present (arrays
 union-merged, dicts deep-merged with the source winning). It restores a missing
-``.wiki/settings.json`` as ``{}``, registers the ``merge.wiki`` driver in the
+``.wiki/settings.json`` as ``{}`` (or exits 2 when git still holds the file,
+see :doc:`/configuration`), registers the ``merge.wiki`` driver in the
 repository's local git config, and maps the driver in ``.gitattributes`` —
 ``**/_index.md merge=wiki`` in the repository root's file and
 ``*.md merge=wiki`` in the wiki root's own — skipping a file that has
-uncommitted changes; it never stages or commits. See :doc:`/guide/obsidian`
-and :doc:`/guide/merge-driver`.
+uncommitted changes, with one stderr line that names the file and the mapping
+line it lacks; it never stages or commits. See :doc:`/guide/obsidian` and
+:doc:`/guide/merge-driver`.
 
 Because the merge driver lives in each clone's local git config while
 ``.gitattributes`` only names it, every contributor runs ``wiki config`` once
@@ -264,6 +303,8 @@ future-proofing; the output notes it.
 
 Prints a named entry to stdout verbatim, with no appended newline — redirected
 output round-trips byte-for-byte for LF files (reads normalize CRLF endings).
+An escape sequence the page holds is printed as written, to a pipe or a file as
+to a terminal; ``match``, ``search`` and ``map`` print page text the same way.
 
 The name resolves relative to the wiki root: a directory reads its
 ``_index.md``; an existing file reads itself; otherwise ``.md`` is appended
@@ -280,7 +321,10 @@ The slice options are pairwise mutually exclusive and share the format
 body only: the frontmatter is lifted off, structural leading and trailing
 blank lines are stripped, the slice is taken, and the output re-emits the
 frontmatter plus the slice — with a trailing newline appended, unlike an
-unsliced read. Non-markdown files slice as a whole.
+unsliced read. Non-markdown files slice as a whole. ``--lines`` counts lines as
+``wiki match`` numbers them: a line ends at a newline and at nothing else, so a
+form feed stays inside its line and comes back unchanged. An empty slice value
+is refused as an invalid slice, as any other malformed one is.
 
 .. list-table::
    :header-rows: 1
@@ -350,7 +394,8 @@ carries the full float).
 
 The exit code follows the grep convention: matches exit 0; no match prints
 ``No matches found.`` on stderr and exits 1; an invalid FTS5 query, unavailable
-FTS5 support, or unresolved wiki exits 2.
+FTS5 support, or unresolved wiki exits 2. With ``--json``, no match still
+prints a document on stdout, the empty list ``[]``.
 
 .. list-table::
    :header-rows: 1
@@ -421,6 +466,23 @@ refuses still match through the line grammar. An empty ``--field ""`` is an
 explicit empty field set that matches nothing — it does not fall back to a
 body match.
 
+The pattern runs on one line at a time. A line ends at a newline, and the
+newline that ends a file opens no empty line after it, so ``^$`` matches the
+blank lines a file holds and none past its end.
+
+A pattern that does not compile fails with ``Invalid regex '<pattern>':
+<reason>``. In a regex an unescaped ``[[`` opens a character class, so a
+pattern such as ``[[topics/example`` does not look for a wikilink: the command
+says so in one line on stderr and names the form that does, ``\[\[``. A
+doubled ``--``, ``&&``, ``~~`` or ``||`` inside a character class is not a set
+operation in a Python regex and draws a line of its own. Neither line changes
+the matches or the exit code.
+
+A page that is not valid UTF-8 cannot be matched. It is skipped and named on
+stderr (``Skipping <path>: unreadable, or not valid UTF-8``, the line
+``wiki search`` prints for a page it cannot open or decode), so a pattern it
+may hold is never reported as no match in silence.
+
 .. list-table::
    :header-rows: 1
    :widths: 26 18 56
@@ -446,7 +508,7 @@ body match.
    * - ``-a``, ``--all``
      - off
      - Include non-markdown files, matched whole (``--field`` never matches
-       them; undecodable files are skipped).
+       them; one that is not UTF-8, such as an image, is skipped in silence).
    * - ``--lines``
      - off
      - Print ``path:lineno: line`` for each match.
@@ -493,8 +555,8 @@ keeps the tool-owned surfaces in sync with the filesystem (see
 - **Normalizes CRLF endings** to LF, without re-stamping ``updated:``.
 - **Repairs formatter-mangled indexes** (an escaped link block or a rewritten
   ``***`` delimiter) in place.
-- **Restores a missing** ``.wiki/settings.json`` as ``{}`` and recreates a
-  deleted ``.wiki/cache/``.
+- **Restores a missing** ``.wiki/settings.json`` as ``{}``, when git holds no
+  copy of it, and recreates a deleted ``.wiki/cache/``.
 
 ``updated:`` is re-stamped only on files whose content actually changed —
 and, inside a git repository, on a tracked file edited since its last commit
@@ -509,12 +571,18 @@ during the run (re-run to converge).
 
 Narration goes to stderr — condensed to one count line per category by
 default (e.g. ``Created 1 new index (fill in its desc)``, ``Added 2 new
-links``); ``--full`` prints every line instead. The stdout summary is
-``Updated N file(s).`` or ``Nothing to update.``
+links``); ``--full`` prints every line instead. A skip changes no file, so
+one skip of a kind keeps its own line, which names the file (``Skipping
+<path>: invalid name (<rule>)``); two or more print a count line (``Skipped 3
+invalid names``), and the narration then ends with ``Run with --full to list
+each line.`` The stdout summary is ``Updated N file(s).`` or ``Nothing to
+update.``
 
 The sweep refuses (exit 2, dry run included) when the scope crosses a nested
 declared wiki or when any in-scope file carries git merge conflict markers
-outside a ``no-lint`` region — resolve the conflicts and re-run.
+outside a ``no-lint`` region — resolve the conflicts and re-run. It refuses
+the same way when ``.wiki/settings.json`` is missing while git still holds
+it — restore the file from git and re-run (see :doc:`/configuration`).
 
 .. list-table::
    :header-rows: 1
@@ -533,15 +601,18 @@ outside a ``no-lint`` region — resolve the conflicts and re-run.
      - off
      - Dry run: writes nothing, lists ``Would update: <path>`` lines, and
        exits 1 when changes are pending, 0 when clean. A nonzero exit is not
-       an error — it is a formatter-style check result. ``--check`` never
-       restores a missing ``.wiki/settings.json``; only a writing run does.
+       an error — it is a formatter-style check result. Narration words each
+       change as pending (``Would add 2 new links``; with ``--full``, ``Would
+       add link: ...``). ``--check`` never restores a missing
+       ``.wiki/settings.json``; only a writing run does, and only when git
+       holds no copy of the file.
    * - ``--full``
      - off
      - Print every narration line in emission order.
    * - ``--count``
      - on (the default behavior)
-     - Print one count line per narration category (mutually exclusive with
-       ``--full``).
+     - Print one line per narration category: its count, or a lone skip
+       (mutually exclusive with ``--full``).
 
 .. code-block:: console
 
@@ -584,9 +655,10 @@ exist yet: under ``*``, ``!*/`` and ``!*.md`` the new folder is admitted. A
 repository that ignores ``_index.md`` files refuses every new folder, since
 that index could never be committed.
 The wiring sweep's own refusals (merge conflict markers or a nested wiki in the
-parent scope) are checked before the index is written — marker-shaped lines in
-the authored inputs are refused the same way — so a refused adoption leaves
-nothing on disk.
+parent scope, or a missing ``.wiki/settings.json`` that git still holds, see
+:doc:`/configuration`) are checked before the index is written — marker-shaped
+lines in the authored inputs are refused the same way — so a refused adoption
+leaves nothing on disk.
 
 .. list-table::
    :header-rows: 1
@@ -640,8 +712,9 @@ stderr note is not a blocking issue). ``--json`` replaces the prose report
 with one JSON document on stdout carrying every finding under an explicit
 ``severity`` (``issue``/``note``) and a machine ``kind`` with its per-kind
 payload fields (``path`` on every issue and on most notes — the
-``resolver_notice``, ``merge_driver_unconfigured``, ``git_fence_unavailable``,
-and ``link_folder_missing`` notes carry none — plus e.g. ``target``/``label``
+``resolver_notice``, ``merge_driver_unconfigured``, ``page_merge_unmapped``,
+``git_fence_unavailable``, and ``link_folder_missing`` notes carry none — plus
+e.g. ``target``/``label``
 on a broken link, ``line`` on a wrap mangle, or ``line``/``reason`` on
 invalid YAML frontmatter), the rendered prose under ``text``, and a
 ``summary`` with both counts; the exit-code contract is unchanged.
@@ -658,7 +731,10 @@ key, a body that is not ``key: value`` pairs), empty or truncated indexes,
 nested wiki roots, formatter-damage signatures (escaped wikilinks, a missing
 ``***``
 delimiter), hand-wrap mangles, authored descriptions missing their trailing
-period, unparseable ``created:``/``updated:`` stamps, broken links in the
+period, unparseable ``created:``/``updated:`` stamps, a control character in a
+double-quoted ``name:``, ``title:``, ``desc:``, or ``category:`` (a backslash
+escape decoded where LaTeX was typed), a ``name:``, ``title:``, ``desc:``, or
+``category:`` whose value is a YAML mapping or list, broken links in the
 generated index block, prose wikilinks naming a folder rather than its
 ``_index`` page (in this wiki, or in another wiki a ``links.external``
 folder admits, judged by that wiki's own settings), prose wikilinks written
@@ -675,7 +751,9 @@ missing titles when the ``titles.required`` setting is on, and stale
 ``[[wikilinks]]`` in authored prose when the ``lint.strict`` setting is on.
 
 **Notes** (soft, stderr) flag placeholder (``...``) descriptions, descriptions
-over 500 characters, empty index content sections, CRLF line endings, stale
+over 500 characters, empty index content sections, CRLF line endings, control
+characters in authored content (a page's body or an index's text below
+``***``; one note per file, with the first line and the count), stale
 ``[[wikilinks]]`` in authored prose unless ``lint.strict`` is on (inside the
 wiki, or under a ``links.external`` folder present on this machine; the note
 suggests the root-relative form of the target, or the root-relative spelling
@@ -685,10 +763,12 @@ indexed path this machine's git ignores (a personal ``core.excludesFile`` rule
 — the row ships where the file cannot, so every other clone reds on a broken
 link), a gitignore fence the probe cannot read inside an enclosing repository
 (``git check-ignore`` failed — git off ``PATH`` or a broken install — so
-indexing proceeds unfenced and adopts what the repository ignores), and a
+indexing proceeds unfenced and adopts what the repository ignores), a
 ``.gitattributes`` mapping ``merge=wiki`` with no ``merge.wiki.driver``
 configured — the fresh-clone state where index and page merges silently fall
-back to a plain text merge until ``wiki config`` registers the driver. Resolver
+back to a plain text merge until ``wiki config`` registers the driver — and
+index files mapped to ``merge=wiki`` while the wiki's pages are not, so the
+pages merge as plain text until ``wiki config`` adds their mapping. Resolver
 diagnostics (an upward resolution, a missing settings marker or root index,
 an outer index above the declared root) join the notes too — counted in the
 closing summary and typed as ``resolver_notice`` rows in ``--json`` — beside
@@ -696,9 +776,9 @@ their stderr prose.
 
 A ``<!-- start: no-lint -->`` ... ``<!-- end: no-lint -->`` region suppresses
 the position-based rules (conflict markers, escaped wikilinks, wrap mangles,
-stale-link notes, outside-link, directory-link, relative-link and
-absolute-link issues) for the lines it wraps; a malformed pair is itself an
-issue and suppresses nothing.
+stale-link notes, control-character notes, outside-link, directory-link,
+relative-link and absolute-link issues) for the lines it wraps; a malformed
+pair is itself an issue and suppresses nothing.
 
 .. list-table::
    :header-rows: 1
@@ -774,9 +854,10 @@ iterated in index order, so a file not yet linked (update pending) does not
 appear. An unindexed folder renders as ``name/ (unindexed)`` with no children;
 a row whose target is gone (pending prune) renders ``(broken)`` and is never
 recursed into. Each line has the shape ``[category] name[/] (count): desc``.
-An empty result prints ``Wiki is empty.``; an index missing its ``***``
-delimiter still maps via a best-effort recovery of its link block, with a
-stderr warning to run ``wiki update``.
+An empty result prints ``Wiki is empty.``, or ``No entries match.`` when a
+``name``, ``--category`` or ``--markdown``/``--no-markdown`` narrowed the run;
+an index missing its ``***`` delimiter still maps via a best-effort recovery of
+its link block, with a stderr warning to run ``wiki update``.
 
 .. list-table::
    :header-rows: 1

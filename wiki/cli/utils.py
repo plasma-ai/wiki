@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import errno
 import fcntl
@@ -10,9 +11,11 @@ import importlib.util
 import json
 import os
 import pathlib
+import re
 import stat
 import sys
 import time
+import warnings
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any, Literal, Optional
 
@@ -28,14 +31,23 @@ from wiki.constants import (
     WIKI_SETTINGS,
 )
 from wiki.core.event import Event
-from wiki.core.wiki import Wiki, _encloses_wiki_error, _now, _pinned_now
+from wiki.core.wiki import (
+    Wiki,
+    _encloses_wiki_error,
+    _invalid_utf8,
+    _now,
+    _pinned_now,
+)
 from wiki.util.git import _git
 
 __all__ = [
     'command',
+    'parse_int',
     'parse_slice',
     'parse_settings',
     'require_utf8',
+    'refuse_empty_path',
+    'pattern_hints',
     'is_trusted',
     'trust_root',
     'load_wiki_class',
@@ -74,6 +86,30 @@ _PINNED_CLOCK_NOTICE = (
 # is a breaking change)
 _INDEX_ATTRIBUTES = ('# Wiki index merge driver', '**/_index.md merge=wiki')
 _PAGE_ATTRIBUTES = ('# Wiki page merge driver', '*.md merge=wiki')
+
+# the one form a number argument takes: an optional sign, then ASCII digits,
+# with the leading zeros grouped apart from the digits that carry the value
+_INTEGER = re.compile(r'([+-]?)0*([0-9]+)')
+
+# the range a number argument must fit: a signed 64-bit integer, whose
+# largest magnitude has 19 digits
+_INT64_MIN = -(2**63)
+_INT64_MAX = 2**63 - 1
+_INT64_DIGITS = 19
+
+# the constructs Python's regex parser warns about, in the order their lines
+# print: the words that mark the warning, and the line printed in its place
+_PATTERN_HINTS = (
+    (
+        'nested set',
+        "An unescaped '[[' opens a character class; match a wikilink with '\\[\\['.",
+    ),
+    (
+        'Possible set ',
+        "A doubled '--', '&&', '~~' or '||' inside a character class is not a set"
+        ' operation; escape each character to match it as written.',
+    ),
+)
 
 
 def command(
@@ -127,6 +163,25 @@ def command(
     return decorator
 
 
+def parse_int(value: str) -> int:
+    """Parse a number argument: an optional sign and ASCII digits.
+
+    The number must fit a signed 64-bit integer. ``int`` reads more than
+    this form (surrounding whitespace, ``_`` between digits, the digits
+    of any script), so the form is checked before ``int`` sees the value.
+    """
+    message = f'{value!r} is not a valid integer.'
+    match = _INTEGER.fullmatch(value)
+    # a run past the digit count is out of range whatever it holds, and
+    # int() raises on one of several thousand digits
+    if (match is None) or (len(match[2]) > _INT64_DIGITS):
+        raise typer.BadParameter(message)
+    result = int(match[1] + match[2])
+    if not (_INT64_MIN <= result <= _INT64_MAX):
+        raise typer.BadParameter(message)
+    return result
+
+
 def parse_slice(value: Optional[str]) -> tuple[Optional[int], Optional[int]]:
     """Parse a slice string into ``(start, stop)``."""
     if value is None:
@@ -136,20 +191,25 @@ def parse_slice(value: Optional[str]) -> tuple[Optional[int], Optional[int]]:
         raise typer.BadParameter(message)
     left, right = value.split(':', 1)
     try:
-        start = int(left) if left else None
-        stop = int(right) if right else None
-    except ValueError as e:
+        start = parse_int(left) if left else None
+        stop = parse_int(right) if right else None
+    except typer.BadParameter as e:
         raise typer.BadParameter(message) from e
     return start, stop
 
 
 def parse_settings(value: Optional[str]) -> Optional[dict]:
-    """Parse a ``--settings`` JSON object string."""
+    """Parse a ``--settings`` JSON object string.
+
+    The text is held to what a settings file is held to (see
+    :func:`wiki.util.json.strict_loads`), so a seed that parses is never
+    written as a file the next command refuses.
+    """
     if value is None:
         return None
     try:
-        result = json.loads(value)
-    except json.JSONDecodeError as e:
+        result = wiki.util.json.strict_loads(value)
+    except ValueError as e:
         raise typer.BadParameter(f'--settings must be valid JSON ({e}).') from e
     if not isinstance(result, dict):
         raise typer.BadParameter('--settings must be a JSON object.')
@@ -167,6 +227,45 @@ def require_utf8(option: str, value: str) -> None:
         value.encode('utf-8')
     except UnicodeEncodeError:
         raise typer.BadParameter(f'{option} is not valid UTF-8.') from None
+
+
+def refuse_empty_path(path: Optional[str]) -> None:
+    """Refuse an empty ``--path`` value.
+
+    Read as no ``--path`` at all, an empty value would send a script with
+    an unset variable (``--path "$WIKI"``) to whichever wiki the current
+    folder resolves to, where the command would run and exit 0.
+    """
+    if path == '':
+        raise typer.BadParameter('--path must not be empty.')
+
+
+def pattern_hints(pattern: str) -> list[str]:
+    """Return one line for each risky construct in a regex ``pattern``.
+
+    The lines stand in for the warnings Python's parser raises: one for an
+    unescaped ``[[``, then one for a doubled set operator inside a
+    character class. A pattern that does not compile keeps the lines its
+    parse reached.
+    """
+    # the cache answers a pattern it has compiled without parsing it, and
+    # only the parser warns
+    re.purge()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always', FutureWarning)
+        # refusing a pattern that does not compile is the engine's job
+        with contextlib.suppress(re.error, OverflowError, RecursionError):
+            re.compile(pattern)
+    messages = [
+        str(warning.message)
+        for warning in caught
+        if issubclass(warning.category, FutureWarning)
+    ]
+    return [
+        hint
+        for marker, hint in _PATTERN_HINTS
+        if any(marker in message for message in messages)
+    ]
 
 
 def is_trusted(root: pathlib.Path, /) -> bool:
@@ -399,7 +498,18 @@ def resolve_wiki(
             raise _islands_wiki_error(island)
     # corroboration diagnostics: name what resolution tolerated
     if not declared:
-        _say(f'{wiki_root}: {WIKI_SETTINGS} missing; `wiki update` will restore it')
+        # NOTE: only a marker path that holds nothing is missing -- update
+        #   restores nothing at one that holds anything or cannot be reached,
+        #   and the settings read names what stands there
+        try:
+            os.stat(wiki_root / WIKI_SETTINGS)
+        except FileNotFoundError:
+            _say(
+                f'{wiki_root}: {WIKI_SETTINGS} missing; restore it from git, or'
+                f' run `wiki update` to recreate it with default settings'
+            )
+        except OSError:
+            pass
     elif not has_index:
         _say(
             f'{wiki_root}: wiki root is missing its {WIKI_INDEX};'
@@ -552,7 +662,7 @@ def refuse_nested_init(path: pathlib.Path) -> None:
         )
 
 
-def configure_git_merge_driver(path: pathlib.Path) -> None:
+def configure_git_merge_driver(path: pathlib.Path) -> list[str]:
     """Wire git's wiki merge driver for the repo holding the wiki.
 
     Sets the ``merge.wiki`` config, maps ``_index.md`` files to the driver
@@ -565,12 +675,16 @@ def configure_git_merge_driver(path: pathlib.Path) -> None:
     Args:
         path: The wiki root (also used to find the enclosing repo).
 
+    Returns:
+        One line for each ``.gitattributes`` left as it stands for its
+        uncommitted changes, naming the file and the mapping it lacks.
+
     """
     # resolve enclosing git repo (no-op outside one)
     cmd = ['rev-parse', '--show-toplevel']
     toplevel = _git(cmd, cwd=path, check=False)
     if toplevel is None:
-        return
+        return []
     repo = pathlib.Path(toplevel)
     # name the merge driver
     cmd = [
@@ -595,19 +709,27 @@ def configure_git_merge_driver(path: pathlib.Path) -> None:
     # a failed query names no place: map nothing rather than take it for the
     # top level, which would map every page in the repo
     if prefix is None:
-        return
+        return []
     if prefix:
-        _append_attributes(repo / '.gitattributes', [_INDEX_ATTRIBUTES])
-        _append_attributes(pathlib.Path(path) / '.gitattributes', [_PAGE_ATTRIBUTES])
+        skipped = [
+            _append_attributes(repo / '.gitattributes', [_INDEX_ATTRIBUTES]),
+            _append_attributes(
+                pathlib.Path(path) / '.gitattributes', [_PAGE_ATTRIBUTES]
+            ),
+        ]
     else:
         blocks = [_INDEX_ATTRIBUTES, _PAGE_ATTRIBUTES]
-        _append_attributes(repo / '.gitattributes', blocks)
+        skipped = [_append_attributes(repo / '.gitattributes', blocks)]
+    return [line for line in skipped if line is not None]
 
 
 # ------ helper functions
 
 
-def _append_attributes(path: pathlib.Path, blocks: list[tuple[str, str]]) -> None:
+def _append_attributes(
+    path: pathlib.Path,
+    blocks: list[tuple[str, str]],
+) -> Optional[str]:
     """Append to ``path`` each attribute block whose mapping line it lacks.
 
     Existing bytes are never rewritten: each block follows the file's last
@@ -621,17 +743,28 @@ def _append_attributes(path: pathlib.Path, blocks: list[tuple[str, str]]) -> Non
         path: The ``.gitattributes`` file to append to.
         blocks: Comment and mapping-line pairs, in the order they land.
 
+    Returns:
+        The line that says the file was left untouched and names each
+        mapping line it lacks, or ``None`` when nothing was held back.
+
     """
-    current = path.read_bytes().decode('utf-8') if path.exists() else ''
+    # git reads the file as bytes, in any encoding: a byte that is not UTF-8
+    # rides through the append as it is, escaped here and restored at the write
+    data = path.read_bytes() if path.exists() else b''
+    current = data.decode('utf-8', errors='surrogateescape')
     lines = current.splitlines()
     missing = [block for block in blocks if block[1] not in lines]
     if not missing:
-        return
+        return None
     # read without the optional index lock a plain status takes, which would
     # fail a concurrent git add or commit in the same repository
     cmd = ['--no-optional-locks', 'status', '--porcelain', '--', f'./{path.name}']
     if _git(cmd, cwd=path.parent, check=False):
-        return
+        mappings = ' and '.join(f"'{mapping}'" for _, mapping in missing)
+        return (
+            f'Skipping {path}: it has uncommitted changes, so wiki did not add'
+            f' {mappings}; commit the file, then run `wiki config`'
+        )
     eol = '\r\n' if '\r\n' in current else '\n'
     text = current
     for block in missing:
@@ -644,7 +777,8 @@ def _append_attributes(path: pathlib.Path, blocks: list[tuple[str, str]]) -> Non
         text += prefix + eol.join(block) + eol
     # write into the working tree only; the user stages and commits the file
     # (this command never touches the index)
-    wiki.util.fs.write_atomic(path, text)
+    wiki.util.fs.write_atomic(path, text.encode('utf-8', errors='surrogateescape'))
+    return None
 
 
 def _config_home() -> pathlib.Path:
@@ -877,8 +1011,9 @@ def _read_global_settings(*, strict: bool = False) -> dict:
         # undecodable bytes are corruption too, and escape json's own error
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
             if strict:
+                reason = _invalid_utf8(e) if isinstance(e, UnicodeDecodeError) else e
                 raise ValueError(
-                    f'Trust store is corrupt: {path} ({e});{stakes}'
+                    f'Trust store is corrupt: {path} ({reason});{stakes}'
                 ) from e
             return {}
     if not isinstance(result, dict):

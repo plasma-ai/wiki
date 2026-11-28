@@ -11,6 +11,7 @@ reporting as observable output rather than internal state.
 from __future__ import annotations
 
 import datetime as dt
+import errno
 import json
 import os
 import pathlib
@@ -23,26 +24,47 @@ import pytest
 
 from wiki import __version__ as WIKI_VERSION
 from wiki.cli.utils import configure_git_merge_driver
-from wiki.constants import WIKI_CONFIG_DIR, WIKI_FREEZE_TIME
+from wiki.constants import DEFAULT_SEARCH_LIMIT, WIKI_CONFIG_DIR, WIKI_FREEZE_TIME
 
+from .._helpers import _needs_unprivileged
 from .conftest import GIT, WIKI, _env, _git, _git_repo, _wiki
 
 __all__ = [
     'test_command_errors_exit_two',
+    'test_empty_path_is_a_usage_error',
+    'test_empty_path_error_order',
     'test_untrusted_hook_refusal_exits_two',
     'test_update_check_separates_pending_from_error',
+    'test_page_that_is_not_utf8_stops_a_command_naming_the_byte',
+    'test_json_file_that_is_not_utf8_is_malformed_at_the_byte',
     'test_init_creates_root_index',
     'test_init_guards_existing_wiki',
     'test_init_seeds_settings',
+    'test_init_says_when_settings_are_not_applied',
     'test_init_refuses_nested_wiki',
     'test_home_directory_is_never_a_wiki',
     'test_init_quiet_suppresses_chatter',
+    'test_settings_file_refuses_text_that_is_not_strict_json',
+    'test_init_refuses_settings_that_are_not_strict_json',
+    'test_settings_nesting_is_refused_from_128_levels',
+    'test_settings_file_that_cannot_be_read_is_named_with_its_cause',
+    'test_lost_settings_file_that_git_holds_stops_every_sweep',
+    'test_missing_settings_file_that_git_does_not_hold_is_recreated',
+    'test_malformed_settings_block_stops_every_policy_command',
+    'test_settings_are_validated_before_the_scope',
+    'test_timestamp_format_verdict_ignores_the_clock_and_the_local_zone',
+    'test_malformed_block_spares_read_config_and_the_merge_driver',
+    'test_unknown_settings_keys_draw_one_warning_each',
+    'test_settings_warnings_are_lint_notes',
+    'test_settings_warnings_stay_out_of_readers_and_merges',
     'test_install_copies_skill_into_home',
     'test_install_project_targets_cwd',
     'test_install_link_swaps_copy_and_symlink',
     'test_update_generates_child_links',
     'test_update_prunes_broken_link',
     'test_update_check_reports_changes_without_writing',
+    'test_update_check_full_words_each_change_as_pending',
+    'test_update_names_the_page_of_an_overwrite_a_hook_announces',
     'test_update_noop_reports_nothing_to_update',
     'test_update_failed_entry_mutates_nothing',
     'test_update_narrations_condense_by_default',
@@ -50,6 +72,8 @@ __all__ = [
     'test_new_requires_authored_desc_and_content',
     'test_new_refuses_an_argument_that_is_not_utf8',
     'test_update_counts_files_with_malformed_frontmatter',
+    'test_update_names_a_lone_skip_and_counts_a_repeated_kind',
+    'test_update_counts_paths_git_ignores_as_lint_does',
     'test_new_refuses_interior_path',
     'test_read_only_commands_are_deterministic',
     'test_path_inside_wiki_resolves_upward',
@@ -63,6 +87,7 @@ __all__ = [
     'test_update_cli_refuses_nested_wiki',
     'test_update_refuses_a_scope_inside_a_nested_wiki',
     'test_update_refuses_an_excluded_dot_directory_scope',
+    'test_scope_that_is_not_found_suggests_the_fix',
     'test_exclude_patterns_end_to_end',
     'test_links_external_end_to_end',
     'test_update_cli_refuses_conflict_markers',
@@ -70,6 +95,8 @@ __all__ = [
     'test_lint_summary_counts_notes',
     'test_lint_condenses_repeated_notes',
     'test_lint_json_reports_typed_findings',
+    'test_lint_fails_on_latex_in_a_double_quoted_desc',
+    'test_lint_notes_a_form_feed_in_a_page_body',
     'test_lint_types_resolver_diagnostics',
     'test_lint_error_exits_two',
     'test_lint_error_keeps_the_notes_before_it',
@@ -77,6 +104,7 @@ __all__ = [
     'test_map_respects_view_options',
     'test_map_filters_by_category',
     'test_map_empty_wiki_reports_empty',
+    'test_map_says_no_entries_match_when_narrowed_to_nothing',
     'test_map_stat_and_desc_limit_bounds',
     'test_match_output_modes',
     'test_match_field_and_ignore_case',
@@ -84,25 +112,41 @@ __all__ = [
     'test_match_no_match_exits_nonzero',
     'test_match_line_flags_are_mutually_exclusive',
     'test_match_invalid_regex_reports_error',
+    'test_match_explains_an_unescaped_wikilink',
+    'test_match_hints_follow_the_pattern',
+    'test_match_reports_no_line_past_the_end',
+    'test_naming_pattern_prints_no_line_for_a_risky_regex',
     'test_match_resolution_failure_exits_two',
     'test_match_all_skips_undecodable_files',
+    'test_match_names_a_page_it_cannot_decode',
     'test_search_ranked_and_json_output',
     'test_search_no_match_exits_nonzero',
+    'test_search_json_prints_an_empty_list_for_no_match',
     'test_search_invalid_query_reports_error',
     'test_search_prefix_and_raw_are_mutually_exclusive',
     'test_search_limit_must_be_positive',
+    'test_number_options_take_plain_digits_only',
+    'test_number_arguments_accept_a_sign_and_leading_zeros',
+    'test_number_options_are_labeled_integer',
     'test_read_slice_forms',
+    'test_read_lines_count_as_match_numbers_them',
     'test_read_resolves_dotted_page_name',
     'test_read_errors',
+    'test_read_checks_its_slice_before_the_wiki',
     'test_read_slice_short_aliases',
     'test_colliding_short_flags_are_rejected',
     'test_read_outputs_bytes_verbatim',
+    'test_piped_output_keeps_a_pages_escape_sequences',
+    'test_help_and_errors_hold_no_escape_byte',
     'test_config_applies_obsidian',
     'test_config_downloads_plugin',
     'test_config_adopts_undeclared_tree',
     'test_lint_clean_after_update',
     'test_merge_driver_no_op_without_git',
     'test_init_writes_gitattributes_without_committing',
+    'test_init_and_config_append_to_gitattributes_that_is_not_utf8',
+    'test_init_and_config_name_a_gitattributes_they_skip',
+    'test_lint_notes_pages_unmapped_to_the_merge_driver',
     'test_merge_driver_merges_authored_frontmatter',
     'test_merge_driver_moves_regenerated_keys_with_their_bodies',
     'test_merge_driver_takes_the_other_sides_row_edit',
@@ -126,6 +170,7 @@ __all__ = [
     'test_merge_reads_an_escaped_sides_rows',
     'test_merge_keeps_frontmatter_when_side_is_mangled',
     'test_merge_dispatches_on_pathname',
+    'test_merge_driver_takes_no_help_option',
     'test_merge_settles_the_stamps_of_a_managed_page',
     'test_merge_of_a_restamped_page_is_clean',
     'test_markdown_outside_the_wiki_keeps_its_own_merge',
@@ -134,8 +179,14 @@ __all__ = [
     'test_merge_conflicts_when_side_loses_separator',
     'test_merge_hints_add_add_body_conflicts',
     'test_version_flag_reports_a_version',
+    'test_short_help_flag_prints_the_help_page',
+    'test_usage_error_points_at_the_long_help_flag',
+    'test_wiki_with_no_command_prints_help_as_a_usage_error',
+    'test_help_marks_a_required_option_once',
+    'test_search_help_states_the_default_limit',
     'test_trust_gates_hook_execution',
     'test_trust_refuses_non_wiki_path',
+    'test_trust_refuses_a_store_that_is_not_utf8_naming_the_byte',
     'test_trust_store_does_not_mark_home_as_wiki_root',
     'test_trust_store_exemption_survives_symlinked_home',
     'test_root_resolution_survives_a_symlink_loop_home',
@@ -196,6 +247,31 @@ _NOTING_HOOK = (
     "        raise RuntimeError('boom')\n"
 )
 
+# a hook whose update announces an overwritten desc of its own, by entry and
+# index alone
+_ANNOUNCING_HOOK = (
+    'from wiki.core.wiki import Wiki\n\n'
+    "__all__ = ['Announcing']\n\n\n"
+    'class Announcing(Wiki):\n'
+    '    def update(self, name=None, *, check=False):\n'
+    "        entry = {'target': 'core/keep', 'label': 'keep'}\n"
+    "        self.on_desc_overwrite(path='core/_index.md', **entry)\n"
+    '        return super().update(name, check=check)\n'
+)
+
+# a hook whose plan is followed by another writer's edit to each core/page*.md
+_RACING_HOOK = (
+    'from wiki.core.wiki import Wiki\n\n'
+    "__all__ = ['Racing']\n\n\n"
+    'class Racing(Wiki):\n'
+    '    def _plan(self, folder, **kwargs):\n'
+    '        result = super()._plan(folder, **kwargs)\n'
+    "        for page in self._root.glob('core/page*.md'):\n"
+    "            with page.open('a', encoding='utf-8') as file:\n"
+    "                file.write('Edited.\\n')\n"
+    '        return result\n'
+)
+
 # the line a command opens stderr with while WIKI_FREEZE_TIME fixes the clock
 _PINNED_CLOCK_NOTICE = (
     'WIKI_FREEZE_TIME is set: timestamps use its fixed instant, not the clock.\n'
@@ -206,6 +282,87 @@ _PINNED_CLOCK_NOTICE = (
 _PINNED_CLOCK_ERROR = (
     'Error: WIKI_FREEZE_TIME must be an RFC 3339 instant in the UTC years'
     ' 1001 to 9998, like 2026-01-02T03:04:05Z, got {now}.\n'
+)
+
+# the texts ``json`` reads and strict JSON does not hold, each with the
+# reason its refusal words, for the settings file and ``init --settings`` alike
+_not_strict_json = pytest.mark.parametrize(
+    argnames=('text', 'reason'),
+    argvalues=[
+        # constants
+        ('{"x": NaN}', 'NaN is not a JSON number'),
+        ('{"x": Infinity}', 'Infinity is not a JSON number'),
+        ('{"x": -Infinity}', '-Infinity is not a JSON number'),
+        # numbers past the range of a double
+        ('{"x": 1e400}', 'number too large to represent'),
+        ('{"x": 1' + '0' * 400 + '}', 'number too large to represent'),
+        # surrogate escapes with no pair
+        ('{"x": "\\ud800"}', "lone surrogate '\\ud800' in a string"),
+        ('{"\\udc00": 1}', "lone surrogate '\\udc00' in a string"),
+        # a key named twice in one object, at the top level and in a block
+        (
+            '{"exclude": {"patterns": ["secret"]}, "exclude": {}}',
+            "duplicate key 'exclude'",
+        ),
+        ('{"naming": {"allow": "-", "allow": ""}}', "duplicate key 'allow'"),
+        # an object holding 127 arrays, one inside the next
+        ('{"x": ' + '[' * 127 + ']' * 127 + '}', 'nested more than 127 levels deep'),
+    ],
+    ids=[
+        'nan',
+        'infinity',
+        'negative-infinity',
+        'float-too-large',
+        'integer-too-large',
+        'surrogate-in-value',
+        'surrogate-in-key',
+        'key-twice-at-top-level',
+        'key-twice-in-a-block',
+        'nested-128-levels',
+    ],
+)
+
+# the line match prints for a pattern holding an unescaped [[
+_NESTED_SET_HINT = (
+    "An unescaped '[[' opens a character class; match a wikilink with '\\[\\['."
+)
+
+# the line match prints for a doubled set operator inside a character class
+_SET_OPERATOR_HINT = (
+    "A doubled '--', '&&', '~~' or '||' inside a character class is not a set"
+    ' operation; escape each character to match it as written.'
+)
+
+# the line a scaffolding init prints offline, where the suite runs it
+_OFFLINE_SKIP = (
+    'Skipped obsidian-front-matter-title-plugin download (OFFLINE_MODE). Re-run'
+    ' `wiki config` online to finish setup.\n'
+)
+
+# the line the resolver prints for a wiki whose settings file is missing,
+# formatted with the wiki root
+_MISSING_SETTINGS_NOTICE = (
+    '{root}: .wiki/settings.json missing; restore it from git, or run'
+    ' `wiki update` to recreate it with default settings\n'
+)
+
+# the error for a missing settings file that git still holds
+_LOST_SETTINGS_ERROR = (
+    'Error: .wiki/settings.json is missing, but git still holds it. Restore it'
+    ' from git and rerun: the file is recreated with default settings only'
+    ' when git does not hold it.\n'
+)
+
+# one run of each command that reads policy, each with something to do in
+# the wiki the settings tests build
+_POLICY_COMMANDS = (
+    ('update',),
+    ('update', '--check'),
+    ('new', 'notes', '--desc', 'Notes.', '--content', 'Body.'),
+    ('lint',),
+    ('map',),
+    ('search', 'design'),
+    ('match', 'design'),
 )
 
 pytestmark = pytest.mark.skipif(
@@ -284,6 +441,95 @@ def test_command_errors_exit_two(tmp_path: pathlib.Path, args: tuple[str, ...]) 
     assert 'Error:' in result.stderr
 
 
+@pytest.mark.parametrize(
+    argnames='args',
+    argvalues=[
+        ('init',),
+        ('config',),
+        ('trust',),
+        ('read', 'core/design'),
+        ('search', 'design'),
+        ('match', 'design'),
+        ('update',),
+        ('update', '--check'),
+        ('new', 'notes', '--desc', 'Notes.', '--content', 'Body.'),
+        ('lint',),
+        ('map',),
+    ],
+    ids=[
+        'init',
+        'config',
+        'trust',
+        'read',
+        'search',
+        'match',
+        'update',
+        'update-check',
+        'new',
+        'lint',
+        'map',
+    ],
+)
+def test_empty_path_is_a_usage_error(
+    tmp_path: pathlib.Path,
+    args: tuple[str, ...],
+) -> None:
+    """``--path ""`` is a usage error in every command that takes ``--path``.
+
+    A script with an unset variable (``--path "$WIKI"``) passes the empty
+    value. Read as no ``--path``, it would send the command to the wiki
+    the current folder resolves to, which is not the one the script named.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # a page no index lists yet, so the default wiki has work pending
+    _write(root / 'core' / 'design.md', _page('Design', 'A design.', 'Body.'))
+    before = _tree(tmp_path)
+    result = _wiki(tmp_path, *args, '--path', '')
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stdout == ''
+    assert result.stderr.endswith('Error: Invalid value: --path must not be empty.\n')
+    assert _tree(tmp_path) == before
+
+
+@pytest.mark.parametrize(
+    argnames=('args', 'error'),
+    argvalues=[
+        (
+            ('read', 'core/design', '--lines', 'x'),
+            'Invalid value: --path must not be empty.',
+        ),
+        (
+            ('read', 'core/design', '--lines', '1:2', '--words', '1:2'),
+            'Invalid value: --path must not be empty.',
+        ),
+        (
+            ('search', 'design', '--limit', 'x'),
+            "Invalid value for '--limit': 'x' is not a valid integer.",
+        ),
+    ],
+    ids=['bad-slice', 'exclusive-pair', 'bad-number'],
+)
+def test_empty_path_error_order(
+    tmp_path: pathlib.Path,
+    args: tuple[str, ...],
+    error: str,
+) -> None:
+    """An empty ``--path`` is the first error a command reports of its own.
+
+    A run with two bad arguments names one of them. The empty ``--path``
+    comes ahead of every check a command makes itself, the slice of
+    ``read`` included, and behind a value the option parser refuses,
+    which ends the run before the command starts.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    result = _wiki(tmp_path, *args, '--path', '')
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stdout == ''
+    assert result.stderr.endswith(f'Error: {error}\n')
+
+
 def test_untrusted_hook_refusal_exits_two(tmp_path: pathlib.Path) -> None:
     """The untrusted-hook refusal is exit 2 in every command alike.
 
@@ -319,6 +565,88 @@ def test_update_check_separates_pending_from_error(tmp_path: pathlib.Path) -> No
     entry = _wiki(root, 'update', '--check', 'nowhere', '--path', str(root))
     assert entry.returncode == 2, entry.stdout + entry.stderr
     assert 'Error:' in entry.stderr
+
+
+@pytest.mark.parametrize(
+    argnames=('valid', 'rest'),
+    argvalues=[
+        (b'', b'\xff# Design\n'),
+        ('# Café\n\nBody '.encode(), b'\xff text.\n'),
+        (b'# Design\n\nBody ends mid-character: caf', b'\xc3'),
+        (b'# Design\n\n' + b'Body text. ' * 1000, b'\xff\n'),
+    ],
+    ids=['first-byte', 'middle', 'cut-off-final-character', 'past-one-read-buffer'],
+)
+def test_page_that_is_not_utf8_stops_a_command_naming_the_byte(
+    tmp_path: pathlib.Path,
+    valid: bytes,
+    rest: bytes,
+) -> None:
+    """A page that is not valid UTF-8 stops a command with its path and the byte.
+
+    The error leads with the page's path, gives the offset of the first
+    byte that is not UTF-8 -- a count of bytes, not characters, so an
+    editor's go-to-byte lands on it -- and names the remedy. The words
+    are wiki's own: the interpreter's sentence for the failure, which
+    names its codec, never prints.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    (root / 'core').mkdir()
+    (root / 'core' / 'design.md').write_bytes(valid + rest)
+
+    # every command that reads the page stops on it, with the one error line
+    error = (
+        f'Error: core/design.md: not valid UTF-8 at byte {len(valid)};'
+        ' re-save the file as UTF-8'
+    )
+    commands = (
+        ('read', 'core/design'),
+        ('update',),
+        ('update', '--check'),
+        ('lint',),
+        ('lint', '--json'),
+    )
+    for args in commands:
+        result = _wiki(root, *args, '--path', str(root))
+        assert result.returncode == 2, (args, result.stdout + result.stderr)
+        assert result.stderr.splitlines() == [error], args
+        assert 'codec' not in result.stdout + result.stderr, args
+
+
+@pytest.mark.parametrize(
+    argnames=('name', 'args'),
+    argvalues=[
+        ('.wiki/settings.json', ('update',)),
+        ('.wiki/settings.json', ('lint',)),
+        ('.obsidian/app.json', ('config',)),
+        ('.wiki/obsidian/community-plugins.json', ('config',)),
+    ],
+    ids=['settings-update', 'settings-lint', 'obsidian-config', 'staged-config'],
+)
+def test_json_file_that_is_not_utf8_is_malformed_at_the_byte(
+    tmp_path: pathlib.Path,
+    name: str,
+    args: tuple[str, ...],
+) -> None:
+    """A settings or Obsidian JSON file that is not UTF-8 is malformed at a byte.
+
+    The file is refused by name, whether it is the vault's own or the
+    copy staged under ``.wiki/obsidian/``, and the reason is the offset
+    of its first invalid byte in wiki's own words, never the
+    interpreter's sentence naming its codec.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # a Latin-1 e-acute, where UTF-8 text holds two bytes for the letter
+    valid = b'{"note": "caf'
+    (root / name).write_bytes(valid + b'\xe9"}\n')
+
+    result = _wiki(root, *args, '--path', str(root))
+    assert result.returncode == 2, result.stdout + result.stderr
+    error = f'Error: Malformed JSON in {name}: not valid UTF-8 at byte {len(valid)}'
+    assert result.stderr.splitlines() == [error]
+    assert 'codec' not in result.stdout + result.stderr
 
 
 # ------ init
@@ -365,6 +693,68 @@ def test_init_seeds_settings(tmp_path: pathlib.Path) -> None:
     settings = root / '.wiki' / 'settings.json'
     data = json.loads(settings.read_text(encoding='utf-8'))
     assert data == {'naming': {'validate': ['ascii', 'identifier']}}
+
+
+def test_init_says_when_settings_are_not_applied(tmp_path: pathlib.Path) -> None:
+    """``init --settings`` on an existing wiki says so when it changes nothing.
+
+    ``init`` never changes the settings of an existing wiki and exits 0, so
+    one stderr line, printed under ``--quiet`` too, tells a caller that the
+    policy it passed is not in force. The same object draws nothing, in
+    any key order and spacing and under another wiki name, so a caller
+    that sends its seed again on every run stays silent. A settings file
+    that is missing or cannot be read holds something else.
+    """
+    root = tmp_path / 'wiki'
+    seed = '{"naming":{"validate":["ascii"],"allow":"-"},"lint":{"strict":true}}'
+    line = (
+        '--settings was not applied: init leaves the settings of the wiki at'
+        f' {root} as they are.\n'
+    )
+    init = _wiki(tmp_path, 'init', '--path', str(root), '--quiet', '--settings', seed)
+    assert init.returncode == 0, init.stdout + init.stderr
+    assert line not in init.stderr
+    settings = root / '.wiki' / 'settings.json'
+    written = settings.read_bytes()
+
+    def reinit(*args: str) -> str:
+        """Run ``init --quiet`` on the wiki again and return its stderr."""
+        result = _wiki(tmp_path, 'init', '--path', str(root), '--quiet', *args)
+        assert result.returncode == 0, (args, result.stdout + result.stderr)
+        assert result.stdout == '', args
+        return result.stderr
+
+    # the same object, however it is spelled, is in force
+    reordered = (
+        '{ "lint": {"strict": true},\n'
+        '  "naming": {"allow": "-", "validate": ["ascii"]} }'
+    )
+    assert reinit('--settings', seed) == ''
+    assert reinit('--settings', reordered) == ''
+    assert reinit('Other Name', '--settings', seed) == ''
+    assert reinit() == ''
+    # another object is not, and the file stays as it was
+    assert reinit('--settings', '{}') == line
+    assert reinit('--settings', '{"lint": {"strict": 1}}') == line
+    assert settings.read_bytes() == written
+    loud = _wiki(tmp_path, 'init', '--path', str(root), '--settings', '{}')
+    assert loud.returncode == 0, loud.stdout + loud.stderr
+    assert loud.stdout == f'Wiki already initialized at: {root}\n'
+    assert loud.stderr == line
+
+    # a wiki that lost its root index is rebuilt around the settings it has
+    (root / '_index.md').unlink()
+    assert reinit('--settings', seed) == _OFFLINE_SKIP
+    (root / '_index.md').unlink()
+    assert reinit('--settings', '{}') == line + _OFFLINE_SKIP
+    assert settings.read_bytes() == written
+
+    # a file that cannot be read, or is missing, holds something else
+    _write(settings, '{"lint": {"strict": NaN}}')
+    assert reinit('--settings', seed) == line
+    settings.unlink()
+    assert reinit('--settings', '{}') == line
+    assert not settings.exists()
 
 
 def test_init_refuses_nested_wiki(tmp_path: pathlib.Path) -> None:
@@ -461,6 +851,687 @@ def test_init_quiet_suppresses_chatter(tmp_path: pathlib.Path) -> None:
     rerun = _wiki(tmp_path, 'init', '--path', str(root), '--quiet')
     assert rerun.returncode == 0, rerun.stdout + rerun.stderr
     assert rerun.stdout.strip() == ''
+
+
+# ------ settings file
+
+
+@_not_strict_json
+def test_settings_file_refuses_text_that_is_not_strict_json(
+    tmp_path: pathlib.Path,
+    text: str,
+    reason: str,
+) -> None:
+    """A settings file that is not strict JSON stops a command before it acts.
+
+    ``json`` reads every one of these texts and a reader held to the JSON
+    grammar reads none, so the file is refused with its cause worded
+    rather than read one way here and another way elsewhere.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # a page awaiting adoption, so a sweep that ran would show
+    _write(root / 'core' / 'design.md', _page('Design', 'A design.', 'Body.'))
+    _write(root / '.wiki' / 'settings.json', text)
+    before = _tree(root)
+
+    # each command that reads policy says the one line and writes nothing
+    error = f'Error: Malformed JSON in .wiki/settings.json: {reason}\n'
+    for args in (('update', '--check'), ('update',), ('lint',), ('map',)):
+        result = _wiki(tmp_path, *args, '--path', str(root))
+        assert result.returncode == 2, (args, result.stdout + result.stderr)
+        assert result.stderr == error, args
+        assert _tree(root) == before, args
+
+
+@_not_strict_json
+def test_init_refuses_settings_that_are_not_strict_json(
+    tmp_path: pathlib.Path,
+    text: str,
+    reason: str,
+) -> None:
+    """``init --settings`` refuses what a settings file is refused for.
+
+    The seed is held to the reader's own rules, so ``init`` never writes
+    a settings file the next command refuses.
+    """
+    root = tmp_path / 'wiki'
+    result = _wiki(tmp_path, 'init', '--path', str(root), '--settings', text)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert f'--settings must be valid JSON ({reason}).' in result.stderr
+    assert not root.exists()
+
+
+def test_settings_nesting_is_refused_from_128_levels(tmp_path: pathlib.Path) -> None:
+    """Settings nested 127 levels deep are read; one level more is refused.
+
+    The depth is counted on the text before it is parsed, so the limit is
+    the same on every interpreter, whatever its stack allows.
+    """
+    limit = 127
+    # an object holding arrays, one inside the next
+    accepted = '{"x": ' + '[' * (limit - 1) + ']' * (limit - 1) + '}'
+    refused = '{"x": ' + '[' * limit + ']' * limit + '}'
+    root = tmp_path / 'wiki'
+
+    # the deepest seed is written, and the file it makes is read back
+    seeded = _wiki(tmp_path, 'init', '--path', str(root), '--settings', accepted)
+    assert seeded.returncode == 0, seeded.stdout + seeded.stderr
+    listed = _wiki(tmp_path, 'map', '--path', str(root))
+    assert listed.returncode == 0, listed.stdout + listed.stderr
+
+    # one level more stops both readers
+    _write(root / '.wiki' / 'settings.json', refused)
+    listed = _wiki(tmp_path, 'map', '--path', str(root))
+    assert listed.returncode == 2, listed.stdout + listed.stderr
+    assert 'nested more than 127 levels deep' in listed.stderr
+    fresh = tmp_path / 'fresh'
+    seeded = _wiki(tmp_path, 'init', '--path', str(fresh), '--settings', refused)
+    assert seeded.returncode == 2, seeded.stdout + seeded.stderr
+    assert 'nested more than 127 levels deep' in seeded.stderr
+    assert not fresh.exists()
+
+
+@pytest.mark.parametrize(
+    argnames=('fault', 'reason'),
+    argvalues=[
+        pytest.param('no-permission', 'Permission denied', marks=_needs_unprivileged),
+        ('folder', 'not a regular file'),
+        ('looped-symlink', os.strerror(errno.ELOOP)),
+        ('byte-order-mark', 'it starts with a byte-order mark; remove the mark'),
+    ],
+    ids=['no-permission', 'folder', 'looped-symlink', 'byte-order-mark'],
+)
+def test_settings_file_that_cannot_be_read_is_named_with_its_cause(
+    tmp_path: pathlib.Path,
+    fault: str,
+    reason: str,
+) -> None:
+    """A settings file that yields no text is refused in one line with its cause.
+
+    The line names the file by its path in the wiki, and a path that holds
+    a folder or a symlink loop is never called missing: nothing a command
+    could restore is absent there.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    settings = root / '.wiki' / 'settings.json'
+    if fault == 'no-permission':
+        os.chmod(settings, 0o000)
+    elif fault == 'folder':
+        settings.unlink()
+        settings.mkdir()
+    elif fault == 'looped-symlink':
+        settings.unlink()
+        settings.symlink_to(settings.name)
+    else:
+        settings.write_bytes(b'\xef\xbb\xbf{}\n')
+
+    # each command that reads policy says the one line
+    error = f'Error: Cannot read .wiki/settings.json ({reason}).\n'
+    try:
+        for args in (('update', '--check'), ('update',), ('lint',), ('map',)):
+            result = _wiki(tmp_path, *args, '--path', str(root))
+            assert result.returncode == 2, (args, result.stdout + result.stderr)
+            assert result.stderr == error, args
+    finally:
+        if fault == 'no-permission':
+            os.chmod(settings, 0o600)
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
+    argnames='state',
+    argvalues=[
+        'deleted',
+        'git-rm',
+        'index-only',
+        'sparse-checkout',
+        'skip-worktree',
+        'assume-unchanged',
+        'unmerged',
+    ],
+)
+def test_lost_settings_file_that_git_holds_stops_every_sweep(
+    tmp_path: pathlib.Path,
+    state: str,
+) -> None:
+    """A settings file lost from the working tree is not replaced while git holds it.
+
+    A sweep without the file runs on default settings and adopts what its
+    ``exclude.patterns`` kept out, so each command that plans a sweep
+    refuses and writes nothing, the dry ones too. HEAD holds the file
+    after a ``git rm``, as the index does after a plain delete, before a
+    first commit, and at the stages of an unmerged path. A file that
+    ``git status`` leaves out is held all the same: one a sparse checkout
+    does not check out, or one marked skip-worktree or assume-unchanged.
+    The commands that only read still run.
+    """
+    _git_repo(tmp_path)
+    root = tmp_path / 'wiki'
+    seed = json.dumps({'exclude': {'patterns': ['secret']}})
+    seeded = _wiki(tmp_path, 'init', '--path', str(root), '--settings', seed)
+    assert seeded.returncode == 0, seeded.stdout + seeded.stderr
+    _write(root / 'core' / 'design.md', _page('design', 'A design.', 'Body.'))
+    # a bare page the pattern keeps out of the wiki
+    _write(root / 'secret' / 'raw.md', 'Raw notes.\n')
+    assert _wiki(tmp_path, 'update', '--path', str(root)).returncode == 0
+    assert _git(tmp_path, 'add', '-A').returncode == 0
+    settings = root / '.wiki' / 'settings.json'
+    tracked = settings.relative_to(tmp_path).as_posix()
+    if state != 'index-only':
+        assert _git(tmp_path, 'commit', '-q', '-m', 'wiki').returncode == 0
+    if state == 'git-rm':
+        assert _git(tmp_path, 'rm', '-q', tracked).returncode == 0
+    elif state == 'sparse-checkout':
+        # every path but the wiki's own .wiki/ folder stays checked out
+        patterns = ('/*', '!/wiki/.wiki/')
+        sparse = _git(tmp_path, 'sparse-checkout', 'set', '--no-cone', *patterns)
+        assert sparse.returncode == 0, sparse.stderr
+    elif state in ('skip-worktree', 'assume-unchanged'):
+        marked = _git(tmp_path, 'update-index', f'--{state}', tracked)
+        assert marked.returncode == 0, marked.stderr
+    elif state == 'unmerged':
+        # one side changes the file and the other removes it, so the merge
+        # stops with the path at its unmerged stages: HEAD lacks it
+        assert _git(tmp_path, 'checkout', '-q', '-b', 'other').returncode == 0
+        _write(settings, json.dumps({'exclude': {'patterns': ['secret', 'raw']}}))
+        assert _git(tmp_path, 'commit', '-q', '-am', 'policy').returncode == 0
+        assert _git(tmp_path, 'checkout', '-q', 'main').returncode == 0
+        assert _git(tmp_path, 'rm', '-q', tracked).returncode == 0
+        assert _git(tmp_path, 'commit', '-q', '-m', 'no settings').returncode == 0
+        assert _git(tmp_path, 'merge', 'other').returncode == 1
+    settings.unlink(missing_ok=True)
+    assert not settings.exists()
+    # a bare page awaiting adoption, so a sweep that ran would show
+    _write(root / 'core' / 'draft.md', 'A draft.\n')
+    # config wires the merge driver into the repository's own git config,
+    # outside the wiki root: with the wiring removed, a run that reached it
+    # would show there
+    assert _git(tmp_path, 'config', '--remove-section', 'merge.wiki').returncode == 0
+    wiring = _git(tmp_path, 'config', '--local', '--list').stdout
+    before = _tree(root)
+
+    # each command that plans a sweep refuses, and the tree stays as it was:
+    # no settings file, no adopted page, nothing indexed under secret/
+    notice = _MISSING_SETTINGS_NOTICE.format(root=root)
+    commands = (
+        ('update',),
+        ('update', '--check'),
+        ('new', 'notes', '--desc', 'Notes.', '--content', 'Body.'),
+        ('lint',),
+        ('config',),
+    )
+    for args in commands:
+        result = _wiki(tmp_path, *args, '--path', str(root))
+        assert result.returncode == 2, (args, result.stdout + result.stderr)
+        assert result.stderr == notice + _LOST_SETTINGS_ERROR, args
+        assert _tree(root) == before, args
+    assert not settings.exists()
+    assert not (root / 'secret' / '_index.md').exists()
+    assert _git(tmp_path, 'config', '--local', '--list').stdout == wiring
+    # init leaves a wiki whose root index stands as it is
+    result = _wiki(tmp_path, 'init', '--path', str(root))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _tree(root) == before
+
+    # the commands that only read still run
+    for args in (('read', 'core/design'), ('map',)):
+        result = _wiki(tmp_path, *args, '--path', str(root))
+        assert result.returncode == 0, (args, result.stdout + result.stderr)
+        assert result.stderr == notice, args
+
+    # init refuses where it would write: on a wiki whose root index is gone
+    # too, and on one whose whole folder is
+    (root / '_index.md').unlink()
+    before = _tree(root)
+    result = _wiki(tmp_path, 'init', '--path', str(root))
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stderr == _LOST_SETTINGS_ERROR
+    assert _tree(root) == before
+    shutil.rmtree(root)
+    result = _wiki(tmp_path, 'init', '--path', str(root))
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stderr == _LOST_SETTINGS_ERROR
+    assert not root.exists()
+
+    # a new wiki is judged by its own path, whatever its name matches as a glob
+    fresh = tmp_path / 'wik[ia]'
+    result = _wiki(tmp_path, 'init', 'notes', '--path', str(fresh))
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
+    argnames='state',
+    argvalues=[
+        'no-repository',
+        'never-committed',
+        'removal-committed',
+        'dangling-symlink',
+        'unreadable-repository',
+    ],
+)
+def test_missing_settings_file_that_git_does_not_hold_is_recreated(
+    tmp_path: pathlib.Path,
+    state: str,
+) -> None:
+    """A missing settings file git holds no copy of is recreated as ``{}``.
+
+    Nothing can be restored from git here, so a writing ``update`` writes
+    the file with default settings and says so, and a dry run leaves it
+    missing. Committing the file's removal is how a wiki gives up its
+    settings for the defaults. A symlink to nothing that git does not
+    track is a missing file too, and a repository git cannot read holds
+    nothing it can answer for.
+    """
+    if state != 'no-repository':
+        _git_repo(tmp_path)
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'core' / 'design.md', _page('design', 'A design.', 'Body.'))
+    assert _wiki(tmp_path, 'update', '--path', str(root)).returncode == 0
+    settings = root / '.wiki' / 'settings.json'
+    if state in ('never-committed', 'dangling-symlink'):
+        assert _git(tmp_path, 'add', '--', str(root / 'core')).returncode == 0
+        assert _git(tmp_path, 'commit', '-q', '-m', 'pages').returncode == 0
+    elif state in ('removal-committed', 'unreadable-repository'):
+        assert _git(tmp_path, 'add', '-A').returncode == 0
+        assert _git(tmp_path, 'commit', '-q', '-m', 'wiki').returncode == 0
+    if state == 'removal-committed':
+        assert _git(tmp_path, 'rm', '-q', '--', str(settings)).returncode == 0
+        assert _git(tmp_path, 'commit', '-q', '-m', 'no settings').returncode == 0
+    elif state == 'unreadable-repository':
+        _write(tmp_path / '.git' / 'HEAD', 'not a ref\n')
+    settings.unlink(missing_ok=True)
+    if state == 'dangling-symlink':
+        settings.symlink_to('nowhere.json')
+
+    # a dry run names the missing file and leaves it missing
+    notice = _MISSING_SETTINGS_NOTICE.format(root=root)
+    # a run in a repository git cannot read says so for the gitignore fence
+    if state == 'unreadable-repository':
+        notice += (
+            'Gitignore fence unavailable: `git check-ignore` failed inside the'
+            ' enclosing repository (is git installed?); indexing proceeds'
+            ' unfenced, so paths the repository ignores are adopted\n'
+        )
+    check = _wiki(tmp_path, 'update', '--check', '--path', str(root))
+    assert check.returncode == 0, check.stdout + check.stderr
+    assert check.stderr == notice
+    assert not settings.exists()
+
+    # a writing run recreates it with default settings
+    result = _wiki(tmp_path, 'update', '--path', str(root))
+    assert result.returncode == 0, result.stdout + result.stderr
+    restored = 'Restored missing .wiki/settings.json ({} -- all defaults)\n'
+    assert result.stderr == notice + restored
+    assert settings.read_text(encoding='utf-8') == '{}\n'
+
+
+@pytest.mark.parametrize(
+    argnames=('settings', 'message'),
+    argvalues=[
+        (
+            {'naming': {'min_length': 5, 'max_length': 2}},
+            'naming.min_length (5) must not exceed naming.max_length (2)',
+        ),
+        (
+            {'timestamp': {'timezone': 'Mars/Olympus'}},
+            "Unknown timestamp.timezone 'Mars/Olympus'",
+        ),
+        (
+            {'timestamp': {'format': '%Y %Y'}},
+            "timestamp.format must read back the stamp it writes ('2023 2023'"
+            ' does not), got "%Y %Y"',
+        ),
+        (
+            {'map': {'desc_limit': 'ten'}},
+            'map.desc_limit must be an int >= -1 or null, got "ten"',
+        ),
+        (
+            {'titles': {'required': 'yes'}},
+            'titles.required must be a boolean, got "yes"',
+        ),
+        ({'lint': {'strict': 1}}, 'lint.strict must be a boolean, got 1'),
+        (
+            {'exclude': {'patterns': ['!keep']}},
+            "Invalid exclude.patterns pattern '!keep': negation ('!') is not supported",
+        ),
+        (
+            {'links': {'external': '../src'}},
+            'links.external must be a list of folder paths, got "../src"',
+        ),
+    ],
+    ids=[
+        'naming',
+        'timestamp',
+        'timestamp-format',
+        'map',
+        'titles',
+        'lint',
+        'exclude',
+        'links',
+    ],
+)
+def test_malformed_settings_block_stops_every_policy_command(
+    tmp_path: pathlib.Path,
+    settings: dict,
+    message: str,
+) -> None:
+    """A malformed block stops every command that reads policy, alike.
+
+    Each command checks the whole settings file before it acts, whichever
+    blocks it goes on to use: the same line and exit code from all of
+    them, and nothing written. A length minimum above the maximum is one
+    such block: no name could pass it, and a sweep would prune every row.
+    A timestamp format that cannot parse its own stamps is another: no
+    page is stamped under it, and lint reports the format, not each stamp.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'core' / '_index.md', _index('Core', 'Core concepts.', 'Text.'))
+    _write(root / 'core' / 'design.md', _page('Design', 'A design.', 'Body.'))
+    assert _wiki(tmp_path, 'update', '--path', str(root)).returncode == 0
+    # a page awaiting adoption, so a sweep that ran would show
+    _write(root / 'core' / 'draft.md', 'A draft.\n')
+    _write(root / '.wiki' / 'settings.json', json.dumps(settings))
+    before = _tree(root)
+
+    error = f'Error: {message} in .wiki/settings.json.\n'
+    for args in _POLICY_COMMANDS:
+        result = _wiki(tmp_path, *args, '--path', str(root))
+        assert result.returncode == 2, (args, result.stdout + result.stderr)
+        assert result.stderr == error, args
+        assert _tree(root) == before, args
+
+
+def test_settings_are_validated_before_the_scope(tmp_path: pathlib.Path) -> None:
+    """A malformed block is reported ahead of a scope that names no folder."""
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / '.wiki' / 'settings.json', '{"map": []}')
+
+    error = 'Error: The map block must be a JSON object in .wiki/settings.json.\n'
+    for args in (
+        ('update', 'nowhere'),
+        ('lint', 'nowhere'),
+        ('map', 'nowhere'),
+        ('search', 'design', 'nowhere'),
+        ('match', 'design', 'nowhere'),
+    ):
+        result = _wiki(tmp_path, *args, '--path', str(root))
+        assert result.returncode == 2, (args, result.stdout + result.stderr)
+        assert result.stderr == error, args
+
+
+@pytest.mark.parametrize(
+    argnames='env',
+    argvalues=[
+        {},
+        {'TZ': 'Pacific/Kiritimati'},
+        {WIKI_FREEZE_TIME: '2026-01-05T22:30:00Z'},
+        {'TZ': 'America/St_Johns', WIKI_FREEZE_TIME: '2026-01-05T22:30:00Z'},
+    ],
+    ids=['ambient', 'local-zone', 'frozen-clock', 'both'],
+)
+def test_timestamp_format_verdict_ignores_the_clock_and_the_local_zone(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    env: dict[str, str],
+) -> None:
+    """A timestamp format gets one verdict, whenever and wherever a command runs.
+
+    The read-back check renders two fixed instants in the wiki's own zone
+    and never reads the clock or the machine's zone. The refused format
+    here names the hour twice, and the error shows the same stamp under
+    each: the first fixed instant, at the wiki zone's date and hour.
+    """
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    notice = _PINNED_CLOCK_NOTICE if WIKI_FREEZE_TIME in env else ''
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    settings = root / '.wiki' / 'settings.json'
+
+    timestamp = {'format': '%Y-%m-%d %H %H', 'timezone': 'Europe/Moscow'}
+    _write(settings, json.dumps({'timestamp': timestamp}))
+    refused = _wiki(tmp_path, 'map', '--path', str(root))
+    assert refused.returncode == 2, refused.stdout + refused.stderr
+    assert refused.stderr == (
+        f'{notice}Error: timestamp.format must read back the stamp it writes'
+        ' (\'2023-11-26 01 01\' does not), got "%Y-%m-%d %H %H" in'
+        ' .wiki/settings.json.\n'
+    )
+
+    timestamp = {'format': '%d.%m.%Y %H:%M', 'timezone': 'Europe/Moscow'}
+    _write(settings, json.dumps({'timestamp': timestamp}))
+    accepted = _wiki(tmp_path, 'map', '--path', str(root))
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert accepted.stderr == notice
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_malformed_block_spares_read_config_and_the_merge_driver(
+    tmp_path: pathlib.Path,
+) -> None:
+    """``read``, ``config`` and a merge run on a wiki with a block they do not use.
+
+    Each reads only the blocks it needs: a page stays readable, the
+    repair command runnable, and two branches that each edit and restamp
+    a page still merge on the later stamp, while ``map`` is refused.
+    """
+    root = tmp_path / 'wiki'
+    _git_repo(tmp_path)
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    page = root / 'notes.md'
+    base = (
+        '---\nname: notes\ndesc: Notes.\nupdated: 2026-01-01T00:00:00Z\n---\n'
+        '\n# notes\n\nFirst line.\n\nMiddle line.\n\nLast line.\n'
+    )
+    _write(page, base)
+    _write(root / '.wiki' / 'settings.json', '{"map": {"desc_limit": "ten"}}')
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+    assert _wiki(tmp_path, 'map', '--path', str(root)).returncode == 2
+
+    # a page reads, and config installs
+    read = _wiki(tmp_path, 'read', 'notes', '--path', str(root))
+    assert read.returncode == 0, read.stdout + read.stderr
+    assert read.stdout == base
+    config = _wiki(tmp_path, 'config', '--path', str(root))
+    assert config.returncode == 0, config.stdout + config.stderr
+
+    # each branch edits its own line and restamps the page
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    theirs = base.replace('2026-01-01T00:00:00Z', '2026-01-03T00:00:00Z')
+    _write(page, theirs.replace('Last line.', 'Their last line.'))
+    _git(tmp_path, 'commit', '-q', '-am', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    ours = base.replace('2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z')
+    _write(page, ours.replace('First line.', 'Our first line.'))
+    _git(tmp_path, 'commit', '-q', '-am', 'ours')
+
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    merged = page.read_text(encoding='utf-8')
+    assert re.findall(r'^updated:.*$', merged, re.M) == [
+        'updated: 2026-01-03T00:00:00Z'
+    ]
+    assert 'Our first line.' in merged
+    assert 'Their last line.' in merged
+
+
+def test_unknown_settings_keys_draw_one_warning_each(tmp_path: pathlib.Path) -> None:
+    """A settings key the wiki does not know is named, and still ignored.
+
+    ``init``, ``update``, ``update --check``, ``new`` and ``lint`` each
+    open their stderr with one line per unknown key, a key inside a block
+    as a dotted path, in the order the keys stand in the file. ``new``
+    runs an update inside and says each line once. A warning changes no
+    exit code and no written file: the misspelled exclusion is not applied.
+    """
+    root = tmp_path / 'wiki'
+    settings = (
+        '{"nameing": {}, "exclude": {"pattern": ["drafts"], "patterns": []},'
+        ' "lint": {"strick": true}, "links": {}}'
+    )
+    warnings = (
+        ".wiki/settings.json: unknown key 'nameing' (ignored)\n"
+        ".wiki/settings.json: unknown key 'exclude.pattern' (ignored)\n"
+        ".wiki/settings.json: unknown key 'lint.strick' (ignored)\n"
+    )
+    init = _wiki(tmp_path, 'init', '--path', str(root), '--settings', settings)
+    assert init.returncode == 0, init.stdout + init.stderr
+    assert init.stderr.startswith(warnings)
+    assert init.stderr.count('unknown key') == 3
+    _write(root / 'drafts' / 'idea.md', 'An idea.\n')
+
+    # the dry run names the page the misspelled exclusion was meant to keep out
+    check = _wiki(tmp_path, 'update', '--check', '--path', str(root))
+    assert check.returncode == 1, check.stdout + check.stderr
+    assert check.stderr.startswith(warnings)
+    assert check.stderr.count('unknown key') == 3
+    assert 'Would update: drafts/idea.md\n' in check.stdout
+    update = _wiki(tmp_path, 'update', '--path', str(root))
+    assert update.returncode == 0, update.stdout + update.stderr
+    assert update.stderr.startswith(warnings)
+    assert update.stderr.count('unknown key') == 3
+
+    new = _wiki(
+        tmp_path,
+        'new',
+        'notes',
+        '--desc',
+        'Notes.',
+        '--content',
+        'Body.',
+        '--path',
+        str(root),
+    )
+    assert new.returncode == 0, new.stdout + new.stderr
+    assert new.stderr == warnings + 'Added 1 new link\n'
+    lint = _wiki(tmp_path, 'lint', '--full', '--path', str(root))
+    assert lint.returncode == 0, lint.stdout + lint.stderr
+    assert lint.stderr.startswith(warnings)
+    assert lint.stderr.count('unknown key') == 3
+
+
+def test_settings_warnings_are_lint_notes(tmp_path: pathlib.Path) -> None:
+    """Lint carries a settings warning as a note, never as an issue.
+
+    The ``--json`` document types each warning ``settings_warning`` with
+    the file and the dotted key, and the run exits 0 when warnings are all
+    it found -- under ``lint.strict`` too, which makes issues of stale
+    links alone. ``--count`` shows the warnings in its summary and prints
+    no line for them.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    index = root / '_index.md'
+    text = index.read_text(encoding='utf-8')
+    text = text.replace('desc: ...', 'desc: The root.').replace(
+        '***\n', '***\n\nText.\n'
+    )
+    _write(index, text)
+    settings = '{"lint": {"strict": true, "strick": true}, "review": "weekly"}'
+    _write(root / '.wiki' / 'settings.json', settings)
+
+    document = _wiki(tmp_path, 'lint', '--json', '--path', str(root))
+    assert document.returncode == 0, document.stdout + document.stderr
+    assert document.stderr == ''
+    assert json.loads(document.stdout) == {
+        'issues': [],
+        'notes': [
+            {
+                'severity': 'note',
+                'kind': 'settings_warning',
+                'path': '.wiki/settings.json',
+                'key': 'lint.strick',
+                'reason': "unknown key 'lint.strick' (ignored)",
+                'text': ".wiki/settings.json: unknown key 'lint.strick' (ignored)",
+            },
+            {
+                'severity': 'note',
+                'kind': 'settings_warning',
+                'path': '.wiki/settings.json',
+                'key': 'review',
+                'reason': "unknown key 'review' (ignored)",
+                'text': ".wiki/settings.json: unknown key 'review' (ignored)",
+            },
+        ],
+        'summary': {'issues': 0, 'notes': 2},
+    }
+    prose = _wiki(tmp_path, 'lint', '--path', str(root))
+    assert prose.returncode == 0, prose.stdout + prose.stderr
+    assert prose.stdout == 'No issues found (2 notes).\n'
+    assert prose.stderr == (
+        ".wiki/settings.json: unknown key 'lint.strick' (ignored)\n"
+        ".wiki/settings.json: unknown key 'review' (ignored)\n"
+    )
+    count = _wiki(tmp_path, 'lint', '--count', '--path', str(root))
+    assert count.returncode == 0, count.stdout + count.stderr
+    assert count.stdout == 'No issues found (2 notes).\n'
+    assert count.stderr == ''
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_settings_warnings_stay_out_of_readers_and_merges(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Only the commands that maintain a wiki warn about its settings file.
+
+    ``read``, ``search``, ``match``, ``map`` and ``config`` print no
+    warning, and neither does a merge through the driver, which builds the
+    engine several times for each merged file. A wiki that another wiki's
+    ``links.external`` admits keeps its warnings for its own runs.
+    """
+    root = tmp_path / 'wiki'
+    _git_repo(tmp_path)
+    settings = '{"review": "weekly", "links": {"external": ["../manual"]}}'
+    init = _wiki(tmp_path, 'init', '--path', str(root), '--settings', settings)
+    assert init.returncode == 0, init.stdout + init.stderr
+    manual = tmp_path / 'manual'
+    seed = '{"exclude": {"pattern": []}}'
+    init = _wiki(tmp_path, 'init', '--path', str(manual), '--settings', seed)
+    assert init.returncode == 0, init.stdout + init.stderr
+    _write(manual / 'glossary.md', _page('Glossary', 'Glossary.', 'Body.'))
+    _write(root / 'notes.md', _page('Notes', 'Notes.', 'See [[../manual/glossary]].'))
+    assert _wiki(tmp_path, 'update', '--path', str(root)).returncode == 0
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    for args in (
+        ('read', 'notes'),
+        ('search', 'notes'),
+        ('match', 'Notes'),
+        ('map',),
+        ('config',),
+    ):
+        result = _wiki(tmp_path, *args, '--path', str(root))
+        assert result.returncode == 0, (args, result.stdout + result.stderr)
+        assert 'unknown key' not in result.stderr, args
+    # lint reads the linked wiki's exclusions and says only its own warning
+    lint = _wiki(tmp_path, 'lint', '--full', '--path', str(root))
+    assert lint.returncode == 0, lint.stdout + lint.stderr
+    assert lint.stderr.count('unknown key') == 1
+    assert ".wiki/settings.json: unknown key 'review' (ignored)\n" in lint.stderr
+
+    # each branch adds a page, so the merge runs the driver on the root index
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    _write(root / 'theirs.md', _page('Theirs', 'Their page.', 'Body.'))
+    assert _wiki(tmp_path, 'update', '--path', str(root)).returncode == 0
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    _write(root / 'ours.md', _page('Ours', 'Our page.', 'Body.'))
+    assert _wiki(tmp_path, 'update', '--path', str(root)).returncode == 0
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'ours')
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    assert 'unknown key' not in merge.stdout + merge.stderr
+    assert {'ours', 'theirs'} <= set(_row_labels((root / '_index.md').read_text()))
 
 
 # ------ install
@@ -589,6 +1660,100 @@ def test_update_check_reports_changes_without_writing(tmp_path: pathlib.Path) ->
     clean = _wiki(root, 'update', '--check', '--path', str(root))
     assert clean.returncode == 0, clean.stdout + clean.stderr
     assert 'Nothing to update.' in clean.stdout
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_update_check_full_words_each_change_as_pending(tmp_path: pathlib.Path) -> None:
+    """``update --check --full`` says what would change, never that it did.
+
+    A dry run writes nothing, so each change line reads ``Would ...``;
+    the applied run narrates the same plan as done work.
+    """
+    root = tmp_path / 'wiki'
+    _git_repo(tmp_path)
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'core' / '_index.md', _index('core', 'Core concepts.', 'Text.'))
+    _write(root / 'core' / 'keep.md', _page('keep', 'Stays.', 'Body.'))
+    _write(root / 'core' / 'gone.md', _page('gone', 'Removed soon.', 'Body.'))
+    _write(root / 'core' / 'edited.md', _page('edited', 'Edited later.', 'Body.'))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    _git(tmp_path, 'add', '-A')
+    assert _git(tmp_path, 'commit', '-q', '-m', 'base').returncode == 0
+
+    # one pending change of each kind: a bare page to adopt, a folder with no
+    # index, a row whose page is gone, a row desc edited away from its page,
+    # and a committed page edited by hand well after its stamp
+    _write(root / 'core' / 'bare.md', '# Bare\n\nBody.\n')
+    _write(root / 'guides' / 'setup.md', _page('setup', 'A guide.', 'Body.'))
+    (root / 'core' / 'gone.md').unlink()
+    index = root / 'core' / '_index.md'
+    text = index.read_text(encoding='utf-8')
+    index.write_text(text.replace('Stays.', 'Edited in the index.'), encoding='utf-8')
+    edited = root / 'core' / 'edited.md'
+    edited.write_text(edited.read_text(encoding='utf-8') + 'More.\n', encoding='utf-8')
+    later = edited.stat().st_mtime + 300
+    os.utime(edited, (later, later))
+    before = _tree(root)
+
+    # the dry run words every change as pending and writes nothing
+    check = _wiki(root, 'update', '--check', '--full', '--path', str(root))
+    assert check.returncode == 1, check.stdout + check.stderr
+    assert sorted(check.stderr.splitlines()) == sorted(
+        [
+            'Would adopt bare page: core/bare.md (would seed title: from its H1)',
+            'Would create index: guides/_index.md',
+            'Would add link: [[core/bare|bare]] in core/_index.md',
+            'Would add link: [[guides/setup|setup]] in guides/_index.md',
+            'Would add link: [[guides/_index|guides/]] in _index.md',
+            'Would prune link: [[core/gone|gone]] from core/_index.md',
+            'Would overwrite desc: [[core/keep|keep]] in core/_index.md (the page'
+            ' frontmatter desc wins; edit it in core/keep.md)',
+            'Would restamp core/edited.md: edited since its updated: stamp',
+        ]
+    )
+    assert _tree(root) == before
+
+    # the applied run narrates the same changes as done
+    applied = _wiki(root, 'update', '--full', '--path', str(root))
+    assert applied.returncode == 0, applied.stdout + applied.stderr
+    assert sorted(applied.stderr.splitlines()) == sorted(
+        [
+            'Adopted bare page: core/bare.md (frontmatter added; title: seeded'
+            ' from its H1)',
+            'New index: guides/_index.md (fill in its desc)',
+            'New link: [[core/bare|bare]] in core/_index.md',
+            'New link: [[guides/setup|setup]] in guides/_index.md',
+            'New link: [[guides/_index|guides/]] in _index.md',
+            'Pruned link: [[core/gone|gone]] from core/_index.md',
+            'Overwrote desc: [[core/keep|keep]] in core/_index.md (the page'
+            ' frontmatter desc wins; edit it in core/keep.md)',
+            'Restamped core/edited.md: edited since its updated: stamp',
+        ]
+    )
+
+
+def test_update_names_the_page_of_an_overwrite_a_hook_announces(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An overwritten-desc notice built without its page still names the file to edit.
+
+    A hook that announces an overwrite itself passes the entry and its
+    index. The line names the target plus ``.md``, in a writing run and in
+    a dry run.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / '.wiki' / 'wiki.py', _ANNOUNCING_HOOK)
+    assert _wiki(tmp_path, 'trust', '--path', str(root)).returncode == 0
+    entry = '[[core/keep|keep]] in core/_index.md'
+    place = '(the page frontmatter desc wins; edit it in core/keep.md)'
+
+    # the dry run words the hook's notice as pending, the writing run as done
+    check = _wiki(root, 'update', '--check', '--full', '--path', str(root))
+    assert f'Would overwrite desc: {entry} {place}' in check.stderr.splitlines()
+    applied = _wiki(root, 'update', '--full', '--path', str(root))
+    assert applied.returncode == 0, applied.stdout + applied.stderr
+    assert f'Overwrote desc: {entry} {place}' in applied.stderr.splitlines()
 
 
 def test_update_noop_reports_nothing_to_update(tmp_path: pathlib.Path) -> None:
@@ -846,6 +2011,150 @@ def test_update_counts_files_with_malformed_frontmatter(tmp_path: pathlib.Path) 
         'Malformed frontmatter (not a key: value mapping) in core/listed.md'
         in full.stderr
     )
+
+
+@pytest.mark.parametrize(
+    argnames=('path', 'text', 'racing', 'lone', 'many'),
+    argvalues=[
+        (
+            'core/bad|{n}.md',
+            '---\nname: x\ndesc: A page.\n---\n\n# x\n\nBody.\n',
+            False,
+            'Skipping core/bad|1.md: invalid name (contains a denied character)',
+            'Skipped 3 invalid names',
+        ),
+        (
+            'core/page{n}.md',
+            'A bare page, edited while update runs.\n',
+            True,
+            'Skipping core/page1.md: changed during update; re-run `wiki update`',
+            'Skipped 3 concurrently-edited files (re-run `wiki update`)',
+        ),
+        (
+            'core/page{n}.md',
+            '---\nname: x\ndesc: Never closes.\n\nBody.\n',
+            False,
+            'Malformed frontmatter (no closing ---) in core/page1.md',
+            '3 files with malformed frontmatter',
+        ),
+        (
+            'core{n}/_index.md',
+            '',
+            False,
+            'Empty or truncated index (no frontmatter) in core1/_index.md;'
+            ' restore it from git or delete it to rebuild',
+            '3 empty or truncated indexes (restore from git or delete to rebuild)',
+        ),
+    ],
+    ids=['invalid_name', 'concurrent_edit', 'malformed_frontmatter', 'empty_index'],
+)
+def test_update_names_a_lone_skip_and_counts_a_repeated_kind(
+    tmp_path: pathlib.Path,
+    path: str,
+    text: str,
+    racing: bool,
+    lone: str,
+    many: str,
+) -> None:
+    """A lone skip keeps its line; a kind that repeats gets a count and a pointer.
+
+    A skip leaves no diff, so its line is the only record of the file: the
+    condensed default names a kind's one skipped file, and from two up it
+    prints the kind's count line and says that ``--full`` lists each.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'core' / '_index.md', _index('core', 'Core concepts.', 'Text.'))
+    # a trusted hook edits each page between update's plan and its writes
+    if racing:
+        _write(root / '.wiki' / 'wiki.py', _RACING_HOOK)
+        assert _wiki(tmp_path, 'trust', '--path', str(root)).returncode == 0
+    pointer = 'Run with --full to list each line.'
+
+    # one skip: its own line names the file, and nothing points to --full
+    _write(root / path.format(n=1), text)
+    one = _wiki(root, 'update', '--path', str(root))
+    assert one.returncode == 0, one.stdout + one.stderr
+    assert lone in one.stderr.splitlines()
+    assert pointer not in one.stderr
+
+    # three: the count line stands for them and the narration ends on the pointer
+    _write(root / path.format(n=2), text)
+    _write(root / path.format(n=3), text)
+    # (a dry run reports the same, short of the skip only a write can meet)
+    runs = [[]] if racing else [[], ['--check']]
+    for args in runs:
+        three = _wiki(root, 'update', *args, '--path', str(root))
+        lines = three.stderr.splitlines()
+        assert many in lines
+        assert lone not in lines
+        assert lines[-1] == pointer
+
+    # --full lists each file and needs no pointer
+    full = _wiki(root, 'update', '--full', '--path', str(root))
+    assert full.returncode == 0, full.stdout + full.stderr
+    for n in (1, 2, 3):
+        assert path.format(n=n) in full.stderr
+    assert pointer not in full.stderr
+
+    # new sweeps as update does and takes no --full, so it points to a dry
+    # run, which lists every skip but the one only a write can meet
+    args = ['new', 'fresh', '--desc', 'A desc.', '--content', 'Body.']
+    new = _wiki(root, *args, '--path', str(root))
+    assert new.returncode == 0, new.stdout + new.stderr
+    lines = new.stderr.splitlines()
+    assert many in lines
+    pointer = 'Run `wiki update --check --full` to list each line.'
+    if racing:
+        assert pointer not in lines
+    else:
+        assert lines[-1] == pointer
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_update_counts_paths_git_ignores_as_lint_does(tmp_path: pathlib.Path) -> None:
+    """Indexed paths this machine's git ignores condense in update as in lint.
+
+    The note names a row that ships where its file cannot. One such path
+    keeps its line; from two up, update prints the count line lint prints,
+    and ``--full`` lists each path.
+    """
+    root = tmp_path / 'wiki'
+    _git_repo(tmp_path)
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # a personal ignore file, in force for this repository on this machine only
+    excludes = tmp_path / 'personal_ignore'
+    excludes.write_text('*.draft.md\n', encoding='utf-8')
+    _git(tmp_path, 'config', 'core.excludesFile', str(excludes))
+    count = (
+        "2 indexed paths this machine's git ignores; their rows ship where the"
+        ' files cannot'
+    )
+
+    # one ignored path: the note's own line names it
+    _write(root / 'one.draft.md', _page('one', 'A draft.', 'Body.'))
+    one = _wiki(root, 'update', '--path', str(root))
+    assert one.returncode == 0, one.stdout + one.stderr
+    note = f"one.draft.md: indexed, but this machine's git ignores it ({excludes}:1"
+    assert note in one.stderr
+    assert '--full' not in one.stderr
+
+    # two: update prints lint's count line, and each command its own pointer
+    _write(root / 'two.draft.md', _page('two', 'A draft.', 'Body.'))
+    update = _wiki(root, 'update', '--path', str(root))
+    assert update.returncode == 0, update.stdout + update.stderr
+    lines = update.stderr.splitlines()
+    assert lines[0] == count
+    assert lines[-1] == 'Run with --full to list each line.'
+    lint = _wiki(root, 'lint', '--path', str(root))
+    assert count in lint.stderr.splitlines()
+
+    # --full lists each path in place of the count line
+    full = _wiki(root, 'update', '--full', '--path', str(root))
+    assert full.returncode == 0, full.stdout + full.stderr
+    assert count not in full.stderr
+    for name in ('one.draft.md', 'two.draft.md'):
+        assert f"{name}: indexed, but this machine's git ignores it" in full.stderr
 
 
 def test_new_refuses_interior_path(tmp_path: pathlib.Path) -> None:
@@ -1232,6 +2541,51 @@ def test_update_refuses_an_excluded_dot_directory_scope(
     assert not (root / '.wiki' / '_index.md').exists()
 
 
+def test_scope_that_is_not_found_suggests_the_fix(tmp_path: pathlib.Path) -> None:
+    """A scope that reaches no folder names the fix the tree offers.
+
+    Two misses are common and each has one fix: the name carries the
+    root's own folder name (``wiki/core`` in the wiki at ``wiki``), or it
+    is the read key of a page, and a scope is a folder. Any other miss,
+    and every other refusal of a scope, keeps its line.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'core' / 'design.md', _page('Design', 'A design.', 'Body.'))
+    _write(root / 'note.md', _page('Note', 'A note.', 'Body.'))
+    assert _wiki(root, 'update').returncode == 0
+    page_hint = 'a scope is a folder and this is a page'
+    lines = {
+        # the root's own folder name leads a name whose rest is a folder
+        'wiki/core': "Wiki folder not found: 'wiki/core' (did you mean core?)",
+        # a page, by its read key and by its file name
+        'core/design': (
+            f"Wiki folder not found: 'core/design' ({page_hint}; did you mean core?)"
+        ),
+        'core/design.md': (
+            f"Wiki folder not found: 'core/design.md' ({page_hint}; did you mean core?)"
+        ),
+        'note': f"Wiki folder not found: 'note' ({page_hint} in the wiki root)",
+        # a name the tree has no fix for
+        'nowhere': "Wiki folder not found: 'nowhere'",
+        'wiki/nowhere': "Wiki folder not found: 'wiki/nowhere'",
+        # the root's folder name twice: the rest is no folder
+        'wiki/wiki/core': "Wiki folder not found: 'wiki/wiki/core'",
+        # the other refusals of a scope
+        '.wiki': "Path is inside an excluded directory: '.wiki'",
+        '..': "Path is outside wiki root: '..'",
+    }
+    for name, line in lines.items():
+        result = _wiki(tmp_path, 'lint', name, '--path', 'wiki')
+        assert result.returncode == 2, name
+        assert result.stderr == f'Error: {line}\n'
+    # every command that takes a scope resolves it the same way
+    for command in (('update', '--check'), ('map',), ('search', 'x'), ('match', 'x')):
+        result = _wiki(tmp_path, *command, 'core/design', '--path', 'wiki')
+        assert result.returncode == 2, command
+        assert result.stderr == f'Error: {lines["core/design"]}\n'
+
+
 def test_exclude_patterns_end_to_end(tmp_path: pathlib.Path) -> None:
     """``exclude.patterns`` flows through init, update, and lint.
 
@@ -1423,14 +2777,14 @@ def test_links_external_end_to_end(tmp_path: pathlib.Path) -> None:
     read = _wiki(root, 'read', '../src/main.py', '--path', str(root))
     assert read.returncode == 2
     assert 'outside wiki root' in (read.stdout + read.stderr).lower()
-    # a malformed block fails lint, naming the file and key, never update
+    # a malformed block fails update and lint alike, naming the file and key
     data['links'] = {'external': ['src']}
     config.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
-    update = _wiki(root, 'update', '--path', str(root))
-    assert update.returncode == 0, update.stdout + update.stderr
-    lint = _wiki(root, 'lint', '--path', str(root))
-    assert lint.returncode == 2
-    assert "Invalid links.external folder 'src': inside the wiki root" in lint.stderr
+    for command in ('update', 'lint'):
+        refused = _wiki(root, command, '--path', str(root))
+        assert refused.returncode == 2, command
+        error = "Invalid links.external folder 'src': inside the wiki root"
+        assert error in refused.stderr, command
     # a malformed sibling settings file is named as that wiki's -- read the
     # moment a link needs its rules, which a bare folder link does
     data['links'] = {'external': ['../manual']}
@@ -1610,6 +2964,81 @@ def test_lint_json_reports_typed_findings(tmp_path: pathlib.Path) -> None:
     # --json owns the report shape; the prose modes cannot combine with it
     both = _wiki(root, 'lint', '--path', str(root), '--json', '--count')
     assert both.returncode == 2
+
+
+def test_lint_fails_on_latex_in_a_double_quoted_desc(tmp_path: pathlib.Path) -> None:
+    r"""LaTeX in a double-quoted desc fails lint, in prose and in ``--json``.
+
+    YAML decodes ``\nu``, ``\theta``, and ``\frac`` there to a line
+    break, a tab, and a form feed, which update has copied into the
+    parent's row: lint exits 1 on the one issue, and the document types
+    it with the field, the line, and the characters.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    desc = '"Bound on $\\nu$ and $\\theta$ and $\\frac12$."'
+    _write(root / 'bound.md', _page('bound', desc, 'Body.'))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+
+    prose = _wiki(root, 'lint', '--path', str(root))
+    assert prose.returncode == 1
+    assert prose.stdout.splitlines()[0] == (
+        'bound.md: Control character in desc (line 3): U+000A (\\n), U+0009 (\\t),'
+        ' U+000C (\\f); a backslash starts an escape inside double quotes, so write'
+        ' LaTeX in single quotes or a block scalar, or double each backslash'
+    )
+    as_json = _wiki(root, 'lint', '--path', str(root), '--json')
+    assert as_json.returncode == 1
+    assert json.loads(as_json.stdout)['issues'] == [
+        {
+            'severity': 'issue',
+            'kind': 'control_character',
+            'path': 'bound.md',
+            'field': 'desc',
+            'line': 3,
+            'characters': ['U+000A', 'U+0009', 'U+000C'],
+            'text': prose.stdout.splitlines()[0],
+        }
+    ]
+
+
+def test_lint_notes_a_form_feed_in_a_page_body(tmp_path: pathlib.Path) -> None:
+    r"""A form feed in a page body is a note: lint exits 0, and ``--json`` types it.
+
+    The byte is what is left of ``\frac`` once a tool decoded ``\f``. One
+    page prints its own line on stderr; a second page condenses the kind
+    to a count line.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'half.md', _page('half', 'A half.', 'The value $\x0crac12$.'))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+
+    prose = _wiki(root, 'lint', '--path', str(root))
+    assert prose.returncode == 0, prose.stdout + prose.stderr
+    line = 'half.md: Control character in content (line 10): U+000C'
+    assert line in prose.stderr.splitlines()
+    as_json = _wiki(root, 'lint', '--path', str(root), '--json')
+    assert as_json.returncode == 0
+    notes = json.loads(as_json.stdout)['notes']
+    assert [note for note in notes if note['kind'] == 'content_control_character'] == [
+        {
+            'severity': 'note',
+            'kind': 'content_control_character',
+            'path': 'half.md',
+            'line': 10,
+            'character': 'U+000C',
+            'count': 1,
+            'text': line,
+        }
+    ]
+
+    # a second page with the damage condenses the kind to one count line
+    _write(root / 'third.md', _page('third', 'A third.', 'The value $\x0crac13$.'))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    condensed = _wiki(root, 'lint', '--path', str(root))
+    assert condensed.returncode == 0
+    assert '2 files have control characters in content' in condensed.stderr.splitlines()
 
 
 def test_lint_types_resolver_diagnostics(tmp_path: pathlib.Path) -> None:
@@ -1796,12 +3225,42 @@ def test_map_filters_by_category(tmp_path: pathlib.Path) -> None:
 
 
 def test_map_empty_wiki_reports_empty(tmp_path: pathlib.Path) -> None:
-    """A map of a wiki with no folders reports emptiness, not a crash."""
+    """A map of a wiki with no folders reports emptiness, not a crash.
+
+    The line follows the arguments alone: a run that a filter narrowed
+    says that no entries match, on a wiki that holds nothing too.
+    """
     root = tmp_path / 'wiki'
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     result = _wiki(root, 'map', '--path', str(root))
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'empty' in result.stdout.lower()
+    assert result.stdout == 'Wiki is empty.\n'
+    result = _wiki(root, 'map', '--path', str(root), '--category', 'nosuch')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == 'No entries match.\n'
+
+
+def test_map_says_no_entries_match_when_narrowed_to_nothing(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A scope or a filter that shows nothing says so, not that the wiki is empty."""
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # a wiki that holds one page, at its root
+    _write(root / 'note.md', _page('Note', 'A note.', 'Body.'))
+    assert _wiki(root, 'update').returncode == 0
+    assert _wiki(root, 'map').stdout.startswith('note ')
+    # a filter: a category no entry has, then a kind the wiki lacks
+    for narrowing in (('--category', 'nosuch'), ('--no-markdown',)):
+        result = _wiki(root, 'map', *narrowing)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.stdout == 'No entries match.\n', narrowing
+    # a scope: a folder that holds nothing
+    args = ('new', 'empty', '--desc', 'Nothing yet.', '--content', 'Body.')
+    assert _wiki(root, *args).returncode == 0
+    result = _wiki(root, 'map', 'empty')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == 'No entries match.\n'
 
 
 def test_map_stat_and_desc_limit_bounds(wiki: pathlib.Path) -> None:
@@ -1916,16 +3375,134 @@ def test_match_line_flags_are_mutually_exclusive(wiki: pathlib.Path) -> None:
     assert 'mutually exclusive' in (result.stdout + result.stderr).lower()
 
 
-def test_match_invalid_regex_reports_error(wiki: pathlib.Path) -> None:
+@pytest.mark.parametrize(
+    argnames='pattern',
+    argvalues=['[', 'a{4294967296}', '(' * 3000 + 'a' + ')' * 3000],
+    ids=['syntax', 'repeat-count', 'nesting'],
+)
+def test_match_invalid_regex_reports_error(wiki: pathlib.Path, pattern: str) -> None:
     """A malformed regex is an error (exit 2), distinct from a clean no-match.
 
     Grep reserves exit 2 for errors so a script following the documented
     branch-on-exit-code contract never reads a failed match (bad regex, no
-    wiki) as an absent term (exit 1).
+    wiki) as an absent term (exit 1). A repeat count past the parser's
+    limit and a nesting past the interpreter's stack are refused in the
+    same words as a syntax error.
     """
-    result = _wiki(wiki, 'match', '[', '--path', str(wiki))
+    result = _wiki(wiki, 'match', pattern, '--path', str(wiki))
     assert result.returncode == 2
-    assert 'error' in (result.stdout + result.stderr).lower()
+    # one line names the pattern as a regex, ahead of the parser's reason
+    assert result.stderr.startswith(f'Error: Invalid regex {pattern!r}: ')
+    assert result.stderr.count('\n') == 1
+    assert result.stdout == ''
+
+
+def test_match_explains_an_unescaped_wikilink(tmp_path: pathlib.Path) -> None:
+    """An unescaped ``[[`` draws a line that says how to match a wikilink.
+
+    ``[[`` is the wiki's own link syntax and a character class in a
+    regex, so the pattern most likely to be typed means something else.
+    The line stands in for Python's warning, which names a source line
+    of the install; the pattern still runs, or is refused, as the regex
+    it is.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', 'notes', '--path', str(root)).returncode == 0
+    body = 'see [[foo|bar]] here\ncar] park'
+    _write(root / 'p.md', _page(name='p', desc='A page.', body=body))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    # the pattern runs as a class and a literal ], matching what it matched
+    result = _wiki(root, 'match', '[[foo|bar]]', '--path', str(root), '--lines')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == 'p.md:10: see [[foo|bar]] here\np.md:11: car] park\n'
+    assert result.stderr.splitlines() == [_NESTED_SET_HINT]
+    # a pattern that does not compile gets the line and one error line
+    result = _wiki(root, 'match', '[[a/p', '--path', str(root))
+    assert result.returncode == 2
+    assert result.stdout == ''
+    lines = result.stderr.splitlines()
+    assert lines[:-1] == [_NESTED_SET_HINT]
+    assert lines[-1].startswith("Error: Invalid regex '[[a/p': ")
+
+
+@pytest.mark.parametrize(
+    argnames=('pattern', 'hints'),
+    argvalues=[
+        (r'[q&&]', [_SET_OPERATOR_HINT]),
+        (r'[[q&&]', [_NESTED_SET_HINT, _SET_OPERATOR_HINT]),
+        (r'\[\[foo|fish \& chips', []),
+    ],
+    ids=['doubled-operator', 'both', 'neither'],
+)
+def test_match_hints_follow_the_pattern(
+    tmp_path: pathlib.Path,
+    pattern: str,
+    hints: list[str],
+) -> None:
+    """Each risky construct draws one line, in a fixed order, and no other.
+
+    A doubled ``&&`` inside a character class reads as two characters
+    where another regex dialect intersects sets; a pattern holding
+    neither construct prints nothing beside its matches.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', 'notes', '--path', str(root)).returncode == 0
+    body = 'see [[foo|bar]] here\nfish & chips'
+    _write(root / 'p.md', _page(name='p', desc='A page.', body=body))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    result = _wiki(root, 'match', pattern, '--path', str(root))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'p.md' in result.stdout.splitlines()
+    assert result.stderr.splitlines() == hints
+
+
+def test_match_reports_no_line_past_the_end(wiki: pathlib.Path) -> None:
+    """``match '^$'`` reports the blank lines of a file and none past its end.
+
+    A file that ends with a newline has as many lines as newlines; the
+    newline that ends the last line is not an empty line after it.
+    """
+    text = (wiki / 'core' / 'design.md').read_text(encoding='utf-8')
+    assert text.endswith('\n')
+    line_count = text.count('\n')
+    result = _wiki(wiki, 'match', '^$', 'core', '--path', str(wiki), '--lineno')
+    assert result.returncode == 0, result.stdout + result.stderr
+    hits = result.stdout.splitlines()
+    assert any(hit.startswith('core/design.md:') for hit in hits)
+    assert f'core/design.md:{line_count + 1}' not in hits
+
+
+def test_naming_pattern_prints_no_line_for_a_risky_regex(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A ``naming.pattern`` Python warns about loads without a word.
+
+    The pattern is settings, not a command argument, so the warning's
+    source line would say nothing to whoever ran the command, and no
+    line of the command's own stands in for it: each run prints what it
+    prints under a pattern that draws no warning.
+    """
+    stderr = {}
+    for label, pattern in (('risky', '[[a-z&&]+'), ('plain', '[a-z]+')):
+        root = tmp_path / label / 'wiki'
+        settings = json.dumps({'naming': {'pattern': pattern}})
+        result = _wiki(
+            tmp_path,
+            'init',
+            'notes',
+            '--path',
+            str(root),
+            '--settings',
+            settings,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        stderr[label] = [result.stderr]
+        # the policy loads again in every run that checks a name
+        _write(root / 'p.md', _page(name='p', desc='A page.', body='Text.'))
+        result = _wiki(root, 'update', '--path', str(root))
+        assert result.returncode == 0, result.stdout + result.stderr
+        stderr[label].append(result.stderr)
+    assert stderr['risky'] == stderr['plain']
 
 
 def test_match_resolution_failure_exits_two(
@@ -1972,15 +3549,46 @@ def test_match_resolution_failure_exits_two(
 
 
 def test_match_all_skips_undecodable_files(wiki: pathlib.Path) -> None:
-    """``match --all`` skips a non-UTF-8 file instead of crashing the whole run."""
+    """``match --all`` skips a non-UTF-8 file instead of crashing the whole run.
+
+    A binary file is expected under ``--all``, so the skip prints nothing.
+    """
     binary = wiki / 'diagram.png'
     binary.write_bytes(b'\x89PNG\r\n\x1a\n\xff\xfe\x00\x01')
     try:
         result = _wiki(wiki, 'match', 'widget', '--path', str(wiki), '--all')
         assert result.returncode == 0, result.stdout + result.stderr
         assert 'snippet.txt' in result.stdout
+        assert result.stderr == ''
     finally:
         binary.unlink()
+
+
+def test_match_names_a_page_it_cannot_decode(wiki: pathlib.Path) -> None:
+    """``match`` names a page that is not UTF-8 on stderr and matches the rest.
+
+    The page may hold the pattern, so skipping it in silence could turn
+    a match into ``No matches found.``; the line says the page was not
+    looked at, and the other results and the exit code are unchanged.
+    """
+    before = _wiki(wiki, 'match', 'widget', '--path', str(wiki))
+    assert before.returncode == 0, before.stdout + before.stderr
+    # a Latin-1 page holding the pattern, and a word no other page holds
+    page = wiki / 'core' / 'legacy.md'
+    page.write_bytes('The widget caf\xe9 serves gizmos.\n'.encode('latin-1'))
+    skip = 'Skipping core/legacy.md: unreadable, or not valid UTF-8'
+    try:
+        # the other pages match as before, under the line naming the page
+        result = _wiki(wiki, 'match', 'widget', '--path', str(wiki))
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.stdout == before.stdout
+        assert result.stderr.splitlines() == [skip]
+        # a pattern only that page holds is no match, with the reason above it
+        result = _wiki(wiki, 'match', 'gizmos', '--path', str(wiki))
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert result.stderr.splitlines() == [skip, 'No matches found.']
+    finally:
+        page.unlink()
 
 
 # ------ search
@@ -2029,6 +3637,20 @@ def test_search_no_match_exits_nonzero(wiki: pathlib.Path) -> None:
     assert result.stdout == ''
 
 
+def test_search_json_prints_an_empty_list_for_no_match(wiki: pathlib.Path) -> None:
+    """``search --json`` with no hits prints ``[]``, a document as any other.
+
+    A consumer parses stdout whatever the exit code, and empty output is
+    not JSON. The notice and exit 1 stand beside the document.
+    """
+    args = ('search', 'zzz_no_such_token', '--json', '--path', str(wiki))
+    result = _wiki(wiki, *args)
+    assert result.returncode == 1
+    assert result.stdout == '[]\n'
+    assert json.loads(result.stdout) == []
+    assert result.stderr == 'No matches found.\n'
+
+
 def test_search_invalid_query_reports_error(wiki: pathlib.Path) -> None:
     """Invalid raw FTS input is an error (exit 2), distinct from a clean no-match.
 
@@ -2069,6 +3691,104 @@ def test_search_limit_must_be_positive(wiki: pathlib.Path) -> None:
     )
     assert result.returncode == 2
     assert '--limit must be >= 1' in (result.stdout + result.stderr)
+
+
+# ------ number arguments
+
+
+@pytest.mark.parametrize(
+    argnames='args',
+    argvalues=[
+        ['map', '--depth', ' 1_0'],
+        ['map', '--depth', '\u0661'],
+        ['map', '--depth', ''],
+        ['map', '--desc-limit', '1.0'],
+        ['map', '--desc-limit', '9223372036854775808'],
+        ['search', 'widget', '--limit', '1e1'],
+    ],
+    ids=[
+        'padded-and-underscored',
+        'non-ascii-digit',
+        'empty',
+        'decimal-point',
+        'past-64-bits',
+        'exponent',
+    ],
+)
+def test_number_options_take_plain_digits_only(
+    wiki: pathlib.Path,
+    args: list[str],
+) -> None:
+    """A number option is an optional sign and ASCII digits, in 64 bits.
+
+    Anything else Python's ``int`` would read -- padding, ``_`` between
+    digits, a digit of another script (here an Arabic-Indic one) -- is a
+    usage error that names the option and shows the value, as is a
+    number outside the signed 64-bit range.
+    """
+    option, value = args[-2:]
+    result = _wiki(wiki, *args, '--path', str(wiki))
+    assert result.returncode == 2
+    assert result.stdout == ''
+    error = f"Error: Invalid value for '{option}': {value!r} is not a valid integer."
+    assert result.stderr.splitlines()[-1] == error
+
+
+@pytest.mark.parametrize(
+    argnames=('args', 'plain'),
+    argvalues=[
+        (['map', '--depth', '+01'], ['map', '--depth', '1']),
+        (['map', '--desc-limit', '-01'], ['map', '--desc-limit', '-1']),
+        (['map', '--depth', '9223372036854775807'], ['map']),
+        (['search', 'widget', '--limit', '01'], ['search', 'widget', '--limit', '1']),
+        (
+            ['read', 'core/design', '--lines', '+1:03'],
+            ['read', 'core/design', '--lines', '1:3'],
+        ),
+        (
+            ['read', 'core/design', '--lines', '-02:'],
+            ['read', 'core/design', '--lines', '-2:'],
+        ),
+    ],
+    ids=[
+        'depth-signed',
+        'desc-limit-negative',
+        'depth-at-the-64-bit-bound',
+        'limit-zero-led',
+        'slice-signed',
+        'slice-negative',
+    ],
+)
+def test_number_arguments_accept_a_sign_and_leading_zeros(
+    wiki: pathlib.Path,
+    args: list[str],
+    plain: list[str],
+) -> None:
+    """A sign and leading zeros spell the same number as its plain digits."""
+    result = _wiki(wiki, *args, '--path', str(wiki))
+    expected = _wiki(wiki, *plain, '--path', str(wiki))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == expected.stdout
+
+
+@pytest.mark.parametrize(
+    argnames=('command', 'options'),
+    argvalues=[
+        ('map', ['--depth', '--desc-limit']),
+        ('search', ['--limit']),
+    ],
+    ids=['map', 'search'],
+)
+def test_number_options_are_labeled_integer(
+    wiki: pathlib.Path,
+    command: str,
+    options: list[str],
+) -> None:
+    """Help labels each number option ``INTEGER``."""
+    result = _wiki(wiki, command, '--help')
+    assert result.returncode == 0, result.stdout + result.stderr
+    for option in options:
+        assert re.search(rf'^ +{option} INTEGER ', result.stdout, re.MULTILINE)
 
 
 # ------ read
@@ -2114,6 +3834,34 @@ def test_read_slice_forms(
     assert unexpected not in result.stdout
 
 
+def test_read_lines_count_as_match_numbers_them(tmp_path: pathlib.Path) -> None:
+    """``read --lines`` counts lines as ``match --lines`` numbers them.
+
+    Both break a page on newlines alone, so a form feed inside a line
+    shifts neither count, and the slice returns the line with the form
+    feed where the page has it.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', 'notes', '--path', str(root)).returncode == 0
+    body = 'alpha\nbe\x0cta\ngamma'
+    _write(root / 'p.md', _page(name='p', desc='A page.', body=body))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    # the slice's index 0 is the first body line, the H1
+    result = _wiki(root, 'match', '^# p$|^gamma$', '--path', str(root), '--lineno')
+    assert result.returncode == 0, result.stdout + result.stderr
+    heading, gamma = (
+        int(hit.removeprefix('p.md:'))
+        for hit in result.stdout.splitlines()
+        if hit.startswith('p.md:')
+    )
+    index = gamma - heading
+    # the two lines up to that index: the form-feed line whole, then gamma
+    spec = f'{index - 1}:{index + 1}'
+    result = _wiki(root, 'read', 'p', '--path', str(root), '--lines', spec)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.endswith('---\n\nbe\x0cta\ngamma\n')
+
+
 def test_read_resolves_dotted_page_name(wiki: pathlib.Path) -> None:
     """A page whose name contains a dot reads by its bare name (not just <name>.md).
 
@@ -2140,6 +3888,16 @@ def test_read_resolves_dotted_page_name(wiki: pathlib.Path) -> None:
         ('core/design', ['--words', 'abc'], 2, 'slice format'),
         # a slice with non-integer bounds is a usage error
         ('core/design', ['--words', 'a:b'], 2, 'slice format'),
+        # an empty slice value is a malformed slice, not an absent one
+        ('core/design', ['--lines', ''], 2, 'slice format'),
+        ('core/design', ['--words', ''], 2, 'slice format'),
+        ('core/design', ['--chars', ''], 2, 'slice format'),
+        # ... and still excludes another unit
+        ('core/design', ['--lines', '', '--words', '0:2'], 2, 'mutually exclusive'),
+        # a slice bound is an optional sign and plain digits, in 64 bits
+        ('core/design', ['--lines', ' +0:\u0661'], 2, 'slice format'),
+        ('core/design', ['--chars', '1_0:'], 2, 'slice format'),
+        ('core/design', ['--words', ':9223372036854775808'], 2, 'slice format'),
         # a missing entry is a clean runtime error, not a traceback
         ('core/missing_entry', [], 2, 'not found'),
         # a name escaping the wiki root is refused, not resolved
@@ -2150,6 +3908,13 @@ def test_read_resolves_dotted_page_name(wiki: pathlib.Path) -> None:
     ids=[
         'non-colon-slice',
         'non-integer-slice',
+        'empty-lines-slice',
+        'empty-words-slice',
+        'empty-chars-slice',
+        'empty-slice-beside-another',
+        'padded-and-non-ascii-slice',
+        'underscored-slice',
+        'slice-past-64-bits',
         'missing-entry',
         'escaping-name',
         'blank-name',
@@ -2166,6 +3931,24 @@ def test_read_errors(
     result = _wiki(wiki, 'read', name, '--path', str(wiki), *args)
     assert result.returncode == returncode
     assert needle in (result.stdout + result.stderr).lower()
+
+
+def test_read_checks_its_slice_before_the_wiki(tmp_path: pathlib.Path) -> None:
+    """A malformed slice is reported as one whatever ``--path`` names.
+
+    The slice is checked with the other arguments, before the wiki is
+    looked for, so a command line that is wrong in two ways is reported
+    as malformed first.
+    """
+    missing = tmp_path / 'nonexistent'
+    result = _wiki(tmp_path, 'read', 'a/p', '--path', str(missing), '--lines', 'zz')
+    assert result.returncode == 2
+    assert "Invalid slice format: 'zz'" in result.stderr
+    assert 'No wiki' not in result.stderr
+    # a well-formed slice leaves the missing wiki as the error
+    result = _wiki(tmp_path, 'read', 'a/p', '--path', str(missing), '--lines', '0:1')
+    assert result.returncode == 2
+    assert 'No wiki' in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -2228,6 +4011,68 @@ def test_read_outputs_bytes_verbatim(wiki: pathlib.Path) -> None:
     result = _wiki(wiki, 'read', 'core/design', '--path', str(wiki))
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout == page.read_text(encoding='utf-8')
+
+
+# ------ piped output
+
+
+def test_piped_output_keeps_a_pages_escape_sequences(tmp_path: pathlib.Path) -> None:
+    """Output through a pipe carries the escape sequences a page holds.
+
+    A script or an agent reads a command through a pipe or a file, where
+    it needs the page's own bytes: ``wiki read page > file`` must give the
+    page back, color sequences included.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # a page with a color sequence in its desc (YAML's \e) and in its body
+    desc = '"A \\e[31mred\\e[0m page."'
+    line = 'An \x1b[31malert\x1b[0m line.'
+    _write(root / 'alert.md', f'---\ndesc: {desc}\n---\n\n# alert\n\n{line}\n')
+    assert _wiki(root, 'update').returncode == 0
+    text = (root / 'alert.md').read_text(encoding='utf-8')
+    # read: the page as it is on disk
+    read = _wiki(root, 'read', 'alert')
+    assert read.returncode == 0, read.stdout + read.stderr
+    assert read.stdout == text
+    # match --lines: the matching line as written
+    number = text.split('\n').index(line) + 1
+    match = _wiki(root, 'match', 'alert', '--lines')
+    assert match.returncode == 0, match.stdout + match.stderr
+    assert f'alert.md:{number}: {line}\n' in match.stdout
+    # map: the desc as YAML decodes it
+    tree = _wiki(root, 'map')
+    assert tree.returncode == 0, tree.stdout + tree.stderr
+    assert 'A \x1b[31mred\x1b[0m page.' in tree.stdout
+    # search: the body snippet around the hit
+    search = _wiki(root, 'search', 'line')
+    assert search.returncode == 0, search.stdout + search.stderr
+    assert '\x1b[31malert\x1b[0m' in search.stdout
+
+
+@pytest.mark.parametrize(
+    argnames='args',
+    argvalues=[
+        ('--help',),
+        ('read', '--help'),
+        ('map', '--depth', 'deep'),
+        (),
+        ('--version',),
+    ],
+    ids=['help', 'command-help', 'usage-error', 'no-command', 'version'],
+)
+def test_help_and_errors_hold_no_escape_byte(
+    tmp_path: pathlib.Path,
+    args: tuple[str, ...],
+) -> None:
+    """Help, a usage error and the version print plain text through a pipe.
+
+    The command line styles nothing of its own, so the only escape
+    sequences a pipe ever carries are a page's.
+    """
+    result = _wiki(tmp_path, *args)
+    assert result.stdout + result.stderr
+    assert '\x1b' not in result.stdout + result.stderr
 
 
 # ------ config
@@ -2360,6 +4205,139 @@ def test_init_writes_gitattributes_without_committing(tmp_path: pathlib.Path) ->
     assert _git(tmp_path, 'rev-parse', 'HEAD').stdout == head
     staged = _git(tmp_path, 'diff', '--cached', '--name-only').stdout
     assert '.gitattributes' not in staged
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_init_and_config_append_to_gitattributes_that_is_not_utf8(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A ``.gitattributes`` that is not UTF-8 gains its mapping, bytes intact.
+
+    Git reads the file as bytes, so a comment in another encoding is a
+    working file: ``init`` and ``config`` append the block it lacks and
+    leave every existing byte as it is.
+    """
+    # a repo whose committed .gitattributes holds a Latin-1 comment
+    _git_repo(tmp_path)
+    latin1 = '# café assets\n*.png binary\n'.encode('latin-1')
+    attributes = tmp_path / '.gitattributes'
+    attributes.write_bytes(latin1)
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'attributes')
+    root = tmp_path / 'wiki'
+
+    # init appends the index mapping after the file's own bytes
+    init = _wiki(tmp_path, 'init', '--path', str(root))
+    assert init.returncode == 0, init.stdout + init.stderr
+    assert 'codec' not in init.stdout + init.stderr
+    index_block = b'\n# Wiki index merge driver\n**/_index.md merge=wiki\n'
+    assert attributes.read_bytes() == latin1 + index_block
+
+    # config does the same for the wiki's own file, once it holds such bytes
+    (root / '.gitattributes').write_bytes(latin1)
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'wiki')
+    config = _wiki(root, 'config', '--path', str(root))
+    assert config.returncode == 0, config.stdout + config.stderr
+    assert 'codec' not in config.stdout + config.stderr
+    page_block = b'\n# Wiki page merge driver\n*.md merge=wiki\n'
+    assert (root / '.gitattributes').read_bytes() == latin1 + page_block
+    assert attributes.read_bytes() == latin1 + index_block
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_init_and_config_name_a_gitattributes_they_skip(
+    tmp_path: pathlib.Path,
+) -> None:
+    """``init`` and ``config`` say which mapping a skipped ``.gitattributes`` lacks.
+
+    A ``.gitattributes`` with uncommitted changes is left as it stands, so
+    the mapping it lacks is still missing after a run that exits 0. One
+    stderr line names the file and the line, ``--quiet`` or not; once the
+    file is committed, ``config`` adds the line and prints nothing about it.
+    """
+    # a repo whose root .gitattributes is new and not yet committed
+    _git_repo(tmp_path)
+    attributes = tmp_path / '.gitattributes'
+    attributes.write_bytes(b'*.png binary\n')
+    root = tmp_path / 'wiki'
+
+    # init leaves the file alone and names the index mapping it did not add
+    init = _wiki(tmp_path, 'init', '--path', str(root), '--quiet')
+    assert init.returncode == 0, init.stdout + init.stderr
+    assert attributes.read_bytes() == b'*.png binary\n'
+    skip = (
+        f'Skipping {attributes}: it has uncommitted changes, so wiki did not add'
+        " '**/_index.md merge=wiki'; commit the file, then run `wiki config`"
+    )
+    assert [line for line in init.stderr.splitlines() if '.gitattributes' in line] == [
+        skip
+    ]
+
+    # config repeats the line while the file stays uncommitted
+    config = _wiki(root, 'config', '--path', str(root))
+    assert config.returncode == 0, config.stdout + config.stderr
+    assert skip in config.stderr.splitlines()
+
+    # after a commit config adds the mapping and says nothing about the file
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'attributes')
+    config = _wiki(root, 'config', '--path', str(root))
+    assert config.returncode == 0, config.stdout + config.stderr
+    assert '.gitattributes' not in config.stdout + config.stderr
+    index_block = b'\n# Wiki index merge driver\n**/_index.md merge=wiki\n'
+    assert attributes.read_bytes() == b'*.png binary\n' + index_block
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_lint_notes_pages_unmapped_to_the_merge_driver(tmp_path: pathlib.Path) -> None:
+    """``lint`` notes a wiki whose indexes reach the merge driver and pages do not.
+
+    The note is one stderr line and a typed ``--json`` row, the exit code
+    stays 0, and it follows the unconfigured-driver note when a clone
+    lacks both halves. ``wiki config`` adds the page mapping and
+    registers the driver, which clears both.
+    """
+    # a wiki whose root holds no .gitattributes of its own: the repository
+    # root's file maps its index files alone
+    _git_repo(tmp_path)
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    (root / '.gitattributes').unlink()
+
+    # the note prints on stderr, and lint still passes
+    unmapped = (
+        ".gitattributes maps _index.md files to merge=wiki but not the wiki's pages;"
+        ' run `wiki config` to map them (pages merge as plain text, and conflict on'
+        ' their updated: lines, until then)'
+    )
+    prose = _wiki(root, 'lint', '--path', str(root))
+    assert prose.returncode == 0, prose.stdout + prose.stderr
+    assert [line for line in prose.stderr.splitlines() if 'merge=wiki' in line] == [
+        unmapped
+    ]
+    as_json = _wiki(root, 'lint', '--path', str(root), '--json')
+    assert as_json.returncode == 0
+    notes = json.loads(as_json.stdout)['notes']
+    assert [note for note in notes if 'merge' in note['kind']] == [
+        {'severity': 'note', 'kind': 'page_merge_unmapped', 'text': unmapped}
+    ]
+
+    # a clone with no driver registered either draws that note first
+    _git(tmp_path, 'config', '--unset', 'merge.wiki.driver')
+    both = _wiki(root, 'lint', '--path', str(root), '--json')
+    assert both.returncode == 0
+    notes = json.loads(both.stdout)['notes']
+    assert [note['kind'] for note in notes if 'merge' in note['kind']] == [
+        'merge_driver_unconfigured',
+        'page_merge_unmapped',
+    ]
+
+    # config wires both halves, and neither note is left
+    assert _wiki(root, 'config', '--path', str(root)).returncode == 0
+    wired = _wiki(root, 'lint', '--path', str(root))
+    assert wired.returncode == 0
+    assert 'merge=wiki' not in wired.stderr
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
@@ -3931,6 +5909,35 @@ def test_merge_dispatches_on_pathname(tmp_path: pathlib.Path) -> None:
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
 @pytest.mark.parametrize(
+    argnames='pathname',
+    argvalues=['-h.md', '-h', '--help.md', '--help'],
+)
+def test_merge_driver_takes_no_help_option(
+    tmp_path: pathlib.Path,
+    pathname: str,
+) -> None:
+    """A pathname that reads as a help flag is merged like any other.
+
+    git hands the driver the pathname of every mapped file. A help page
+    printed for one would exit 0 with the current branch's file as it was,
+    which git takes for a clean merge, so the other branch's edit would
+    be lost in silence.
+    """
+    base = tmp_path / 'base'
+    ours = tmp_path / 'ours'
+    theirs = tmp_path / 'theirs'
+    base.write_text('one\ntwo\nthree\n', encoding='utf-8')
+    ours.write_text('ONE\ntwo\nthree\n', encoding='utf-8')
+    theirs.write_text('one\ntwo\nTHREE\n', encoding='utf-8')
+    args = [str(base), str(ours), str(theirs), '7', pathname]
+    result = _wiki(tmp_path, '_merge', *args)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == ''
+    assert ours.read_text(encoding='utf-8') == 'ONE\ntwo\nTHREE\n'
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
     argnames=('pathname', 'later', 'hook', 'eol', 'settled'),
     argvalues=[
         ('wiki/core/notes.md', 'ours', None, '\n', True),
@@ -4335,6 +6342,79 @@ def test_version_flag_reports_a_version(tmp_path: pathlib.Path) -> None:
     assert result.stdout.strip() == WIKI_VERSION
 
 
+# ------ help
+
+
+@pytest.mark.parametrize(
+    argnames='command',
+    argvalues=[
+        (),
+        ('install',),
+        ('init',),
+        ('config',),
+        ('trust',),
+        ('read',),
+        ('search',),
+        ('match',),
+        ('update',),
+        ('new',),
+        ('lint',),
+        ('map',),
+    ],
+    ids=lambda command: command[0] if command else 'wiki',
+)
+def test_short_help_flag_prints_the_help_page(
+    tmp_path: pathlib.Path,
+    command: tuple[str, ...],
+) -> None:
+    """``-h`` prints what ``--help`` prints, on ``wiki`` and on every command."""
+    short = _wiki(tmp_path, *command, '-h')
+    assert short.returncode == 0, short.stdout + short.stderr
+    assert short.stdout.startswith('Usage: wiki')
+    assert '-h, --help' in short.stdout
+    long = _wiki(tmp_path, *command, '--help')
+    assert (short.stdout, short.stderr) == (long.stdout, long.stderr)
+
+
+def test_usage_error_points_at_the_long_help_flag(tmp_path: pathlib.Path) -> None:
+    """A usage error names ``--help`` as the way to the help page."""
+    result = _wiki(tmp_path, 'map', '--depth', 'deep')
+    assert result.returncode == 2
+    assert "Try 'wiki map --help' for help.\n" in result.stderr
+
+
+def test_wiki_with_no_command_prints_help_as_a_usage_error(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Bare ``wiki`` prints the help page on stderr and exits 2.
+
+    The page tells a person what to run next, and the stream and the exit
+    code tell a script that nothing ran.
+    """
+    result = _wiki(tmp_path)
+    assert result.returncode == 2
+    assert result.stdout == ''
+    assert result.stderr == _wiki(tmp_path, '--help').stdout
+    assert result.stderr.startswith('Usage: wiki [OPTIONS] COMMAND [ARGS]...\n')
+
+
+def test_help_marks_a_required_option_once(tmp_path: pathlib.Path) -> None:
+    """The help of ``wiki new`` says ``required`` once per required input."""
+    result = _wiki(tmp_path, 'new', '--help')
+    assert result.returncode == 0, result.stdout + result.stderr
+    # the name, --desc and --content each carry the one generated marker
+    assert result.stdout.count('[required]') == 3
+    assert result.stdout.count('required') == 3
+
+
+def test_search_help_states_the_default_limit(tmp_path: pathlib.Path) -> None:
+    """The help of ``wiki search --limit`` names the limit an unset one gets."""
+    result = _wiki(tmp_path, 'search', '--help')
+    assert result.returncode == 0, result.stdout + result.stderr
+    entry = result.stdout.partition('--limit INTEGER')[2].partition('--tag')[0]
+    assert f'defaults to {DEFAULT_SEARCH_LIMIT}' in ' '.join(entry.split())
+
+
 # ------ trust
 
 
@@ -4377,6 +6457,31 @@ def test_trust_refuses_non_wiki_path(tmp_path: pathlib.Path) -> None:
     result = _wiki(tmp_path, 'trust', '--path', str(tmp_path / 'nope'))
     assert result.returncode == 2
     assert 'No wiki at' in result.stderr
+
+
+def test_trust_refuses_a_store_that_is_not_utf8_naming_the_byte(
+    tmp_path: pathlib.Path,
+) -> None:
+    """``wiki trust`` refuses a trust store that is not UTF-8, at the byte.
+
+    The refusal names the store and the offset of its first invalid
+    byte in wiki's own words, never the interpreter's sentence naming
+    its codec, and leaves the store's bytes for repair.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # a trusted path spelled with a Latin-1 e-acute
+    store = pathlib.Path(os.environ[WIKI_CONFIG_DIR]) / 'settings.json'
+    valid = b'{"trusted": {"/caf'
+    corrupt = valid + b'\xe9": "2000-01-01T00:00:00Z"}}\n'
+    store.write_bytes(corrupt)
+
+    result = _wiki(root, 'trust', '--path', str(root))
+    assert result.returncode == 2, result.stdout + result.stderr
+    reason = f'not valid UTF-8 at byte {len(valid)}'
+    assert f'Error: Trust store is corrupt: {store} ({reason});' in result.stderr
+    assert 'codec' not in result.stdout + result.stderr
+    assert store.read_bytes() == corrupt
 
 
 def test_trust_store_does_not_mark_home_as_wiki_root(
@@ -4463,11 +6568,7 @@ def test_root_resolution_survives_a_symlink_loop_home(tmp_path: pathlib.Path) ->
             '2026-01-01T22:04:05-0500',
         ),
         ('2026-01-02T20:04:05-10:30', {'format': '%Y-%m-%d'}, '2026-01-03'),
-        (
-            '2026-01-02T03:04:05.25Z',
-            {'format': '%Y-%m-%dT%H:%M:%S.%fZ'},
-            '2026-01-02T03:04:05.250000Z',
-        ),
+        ('2026-01-02T03:04:05.25Z', {}, '2026-01-02T03:04:05Z'),
         (' \x1f2026-01-02T03:04:05Z\n', {}, '2026-01-02T03:04:05Z'),
         (
             '1001-01-01T00:00:00Z',
@@ -4503,10 +6604,10 @@ def test_wiki_freeze_time_fixes_every_stamp(
     The seam replaces the clock, not the rendering: the instant passes
     through the wiki's own zone and format, so two runs given one value
     write the same bytes whenever they run. Each command says so in a
-    fixed line that opens its stderr. Whitespace around the value is
-    stripped as Python strips it, the ASCII separators included, and
-    the first and last years the seam takes render in the zones farthest
-    from UTC.
+    fixed line that opens its stderr. A fraction of a second is dropped,
+    since no format renders one. Whitespace around the value is stripped
+    as Python strips it, the ASCII separators included, and the first
+    and last years the seam takes render in the zones farthest from UTC.
     """
     monkeypatch.setenv(WIKI_FREEZE_TIME, now)
     root = tmp_path / 'wiki'
@@ -4754,6 +6855,15 @@ def _write(path: pathlib.Path, text: str) -> None:
     """Write ``text`` to ``path`` as UTF-8, creating parents as needed."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding='utf-8')
+
+
+def _tree(root: pathlib.Path) -> dict[str, bytes]:
+    """Return the bytes of every file under ``root``, keyed by relative path."""
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in sorted(root.rglob('*'))
+        if path.is_file()
+    }
 
 
 def _page(name: str, desc: str, body: str) -> str:

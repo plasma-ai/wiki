@@ -37,6 +37,8 @@ from ._helpers import (
 __all__ = [
     'test_exclude_policy_rejects_invalid_settings',
     'test_init_rejects_invalid_exclude_seed',
+    'test_caret_class_is_refused_where_a_bang_class_negates',
+    'test_spaced_pattern_warns_and_matches_as_written',
     'test_exclude_pattern_matching',
     'test_exclusion_names_the_pattern_a_full_scan_names',
     'test_update_skips_excluded_subtree',
@@ -44,6 +46,8 @@ __all__ = [
     'test_update_symlink_precedence',
     'test_exclude_lifts_nested_wiki_refusal',
     'test_scope_inside_excluded_dir_refused',
+    'test_scope_hint_never_names_an_excluded_folder',
+    'test_scope_led_by_the_root_name_many_times_is_a_plain_miss',
     'test_gitignored_residue_is_never_adopted',
     'test_fenced_directory_is_invisible_to_every_check',
     'test_gitignore_fence_is_pattern_pure',
@@ -162,7 +166,6 @@ _CORNER_PATTERNS = [
     '[a&&b]',
     '[a~~b]',
     '[a||b]',
-    '[^a]',
     '[[:alpha:]]',
     '[[a]',
     '[a[b]',
@@ -356,6 +359,12 @@ _FUZZ_MEMBER_CHARS = ['a', 'b', '-', '!', 'z', '^']
         ({'patterns': ['a//b']}, r'empty segment'),
         ({'patterns': ['!vendor']}, r'negation'),
         ({'patterns': ['a\\b']}, r'separator'),
+        (
+            {'patterns': ['a/[^p]*.md']},
+            r"'\[\^' does not negate a class \(use '\[!\.\.\.\]'\)",
+        ),
+        ({'patterns': ['[a][^b]']}, r"'\[\^' does not negate a class"),
+        ({'patterns': ['x[^']}, r"'\[\^' does not negate a class"),
         ({'patterns': ['./vendor']}, r'segments are not allowed'),
         ({'patterns': ['a/../b']}, r'segments are not allowed'),
     ],
@@ -370,6 +379,9 @@ _FUZZ_MEMBER_CHARS = ['a', 'b', '-', '!', 'z', '^']
         'empty-segment',
         'negation',
         'backslash',
+        'caret-class',
+        'caret-class-after-a-class',
+        'caret-class-unclosed',
         'dot-segment',
         'dot-dot-segment',
     ],
@@ -383,9 +395,11 @@ def test_exclude_policy_rejects_invalid_settings(
 
     ``settings.json`` is user-editable input: a wrong-typed block or a
     pattern outside the supported grammar (negation and escapes are
-    reserved, ``.``/``..`` and empty segments never name a wiki path)
-    raises ``ValueError`` through any command that walks the tree,
-    rather than silently indexing what the author meant to exclude.
+    reserved, ``[^`` reads as a negated class in gitignore and as a
+    literal caret here, ``.``/``..`` and empty segments never name a
+    wiki path) raises ``ValueError`` through any command that reads
+    policy, rather than silently indexing what the author meant to
+    exclude.
     """
     _make_wiki(tmp_path, folders={'core': ['design']})
     settings = tmp_path / '.wiki' / 'settings.json'
@@ -401,14 +415,72 @@ def test_exclude_policy_rejects_invalid_settings(
 def test_init_rejects_invalid_exclude_seed(tmp_path: pathlib.Path) -> None:
     """A rejected ``exclude`` seed aborts ``init`` before writing anything.
 
-    The exclude policy is read lazily (first inside the walk), so init
-    touches it up front: a bad seed must fail before the settings file,
-    the root index, or any sweep write lands.
+    Init validates its whole seed up front: a bad one must fail before
+    the settings file, the root index, or any sweep write lands.
     """
     root = tmp_path / 'wiki'
     with pytest.raises(ValueError, match=r'exclude\.patterns'):
         Wiki(root).init(settings={'exclude': {'patterns': ['!vendor']}})
     assert not root.exists()
+
+
+def test_caret_class_is_refused_where_a_bang_class_negates(
+    tmp_path: pathlib.Path,
+) -> None:
+    """``[^...]`` is refused with a pointer to ``[!...]``, which negates.
+
+    A gitignore reader takes ``[^p]`` for "any character but p", and the
+    pattern would exclude ``p.md`` itself here, in silence: the refusal
+    names the spelling that excludes every other page.
+    """
+    _make_wiki(tmp_path, folders={'a': ['p', 'q']})
+    _set_exclude_patterns(tmp_path, ['a/[^p]*.md'])
+    with pytest.raises(ValueError) as excinfo:
+        Wiki(tmp_path).update(check=True)
+    assert str(excinfo.value) == (
+        "Invalid exclude.patterns pattern 'a/[^p]*.md': '[^' does not negate a"
+        " class (use '[!...]') in .wiki/settings.json."
+    )
+
+    # the bang class excludes every page but p
+    _set_exclude_patterns(tmp_path, ['a/[!p]*.md'])
+    Wiki(tmp_path).update()
+    rows = (tmp_path / 'a' / '_index.md').read_text(encoding='utf-8')
+    assert '[[a/p|' in rows
+    assert '[[a/q|' not in rows
+
+
+def test_spaced_pattern_warns_and_matches_as_written(tmp_path: pathlib.Path) -> None:
+    """A pattern with a space at either end draws a warning and is not trimmed.
+
+    The space is part of the pattern, so ``'drafts '`` leaves ``drafts/``
+    indexed and excludes only a folder whose name ends with the space. A
+    space inside a pattern is no stray: the pair of comment-shaped entries
+    that marks off a part of the list draws nothing.
+    """
+    _make_wiki(tmp_path, folders={'drafts': ['idea'], 'scratch': ['note']})
+    (tmp_path / 'drafts ').mkdir()
+    (tmp_path / 'drafts ' / 'idea.md').write_text('An idea.\n', encoding='utf-8')
+    start = '<!-- start: generated patterns -->'
+    end = '<!-- end: generated patterns -->'
+    patterns = ['drafts ', start, 'old notes/', end, ' scratch']
+    _set_exclude_patterns(tmp_path, patterns)
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+    wiki.update()
+
+    assert [event.description for event in notices] == [
+        ".wiki/settings.json: exclude.patterns entry 'drafts ' starts or ends with"
+        ' a space (the space is part of the pattern)',
+        ".wiki/settings.json: exclude.patterns entry ' scratch' starts or ends"
+        ' with a space (the space is part of the pattern)',
+    ]
+    assert [event.key for event in notices] == ['exclude.patterns'] * 2
+    index = (tmp_path / '_index.md').read_text(encoding='utf-8')
+    assert '[[drafts/_index|' in index
+    assert '[[scratch/_index|' in index
+    assert '[[drafts /' not in index
+    assert not (tmp_path / 'drafts ' / '_index.md').exists()
 
 
 # ------ matching semantics
@@ -763,6 +835,46 @@ def test_scope_inside_excluded_dir_refused(
     with pytest.raises(ValueError, match='excluded directory') as excinfo:
         calls[operation]()
     assert "exclude.patterns 'vendor'" in str(excinfo.value)
+
+
+def test_scope_hint_never_names_an_excluded_folder(tmp_path: pathlib.Path) -> None:
+    """A scope that is not found suggests only a folder that resolves as one.
+
+    The hint is a name to retry with, so a page under an excluded
+    directory, or the root's folder name before one, draws no hint: the
+    retry would be refused.
+    """
+    root = tmp_path / 'wiki'
+    root.mkdir()
+    _make_wiki(root, folders={'vendor/pkg': ['mod']})
+    names = ['vendor/pkg/mod', 'wiki/vendor/pkg']
+    # while the folder is indexed, each miss names it
+    for name in names:
+        with pytest.raises(FileNotFoundError, match=r'did you mean vendor/pkg\?'):
+            Wiki(root).lint(name)
+    _set_exclude_patterns(root, ['vendor'])
+    for name in names:
+        with pytest.raises(FileNotFoundError) as excinfo:
+            Wiki(root).lint(name)
+        assert str(excinfo.value) == f'Wiki folder not found: {name!r}'
+
+
+def test_scope_led_by_the_root_name_many_times_is_a_plain_miss(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A scope name led by the root's folder name many times over is one miss.
+
+    The hint drops one leading root name and no more, so the rest of such
+    a name is no folder and the line carries no hint, however long the
+    name is.
+    """
+    root = tmp_path / 'w'
+    root.mkdir()
+    _make_wiki(root, folders={'core': ['mod']})
+    name = '/'.join(['w'] * 350 + ['core'])
+    with pytest.raises(FileNotFoundError) as excinfo:
+        Wiki(root).lint(name)
+    assert str(excinfo.value) == f'Wiki folder not found: {name!r}'
 
 
 # ------ gitignore fences

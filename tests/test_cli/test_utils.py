@@ -7,10 +7,12 @@ import fcntl
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import threading
 import time
+import warnings
 from typing import Optional
 
 import pytest
@@ -23,6 +25,7 @@ from wiki.cli.utils import (
     enclosing_wiki_root,
     is_trusted,
     load_wiki_class,
+    pattern_hints,
     resolve_wiki,
     resolve_wiki_root,
     trust_root,
@@ -59,10 +62,12 @@ __all__ = [
     'test_reused_command_honors_resolve_override',
     'test_resolve_wiki_default_class',
     'test_interrupt_reports_and_exits_130',
+    'test_pattern_hints_depend_on_the_pattern_alone',
     'test_merge_driver_wiring_ignores_ambient_git_dir',
     'test_configure_git_merge_driver',
     'test_merge_driver_maps_indexes_at_the_root_and_pages_in_the_wiki',
     'test_merge_driver_skips_dirty_gitattributes',
+    'test_merge_driver_names_each_gitattributes_it_skips',
     'test_merge_driver_reads_gitattributes_without_the_index_lock',
     'test_merge_driver_tolerates_undecodable_git_output',
     'test_merge_driver_maps_nothing_when_git_cannot_place_the_wiki',
@@ -967,6 +972,25 @@ def test_interrupt_reports_and_exits_130() -> None:
     assert result.stderr == 'Interrupted.\n'
 
 
+# ------ pattern_hints
+
+
+def test_pattern_hints_depend_on_the_pattern_alone() -> None:
+    """A pattern draws the same lines whatever compiled before it.
+
+    Python answers a pattern it has compiled from a cache, without the
+    parse that warns, so lines read off that warning could vanish for a
+    pattern another caller compiled first, or on a second ask.
+    """
+    pattern = '[[foo|bar]]'
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        re.compile(pattern)
+    hints = pattern_hints(pattern)
+    assert len(hints) == 1
+    assert pattern_hints(pattern) == hints
+
+
 # ------ configure_git_merge_driver
 
 
@@ -1178,6 +1202,94 @@ def test_merge_driver_skips_dirty_gitattributes(tmp_path: pathlib.Path) -> None:
     _git(tmp_path, 'commit', '-m', 'edit')
     configure_git_merge_driver(wiki_dir)
     assert '**/_index.md merge=wiki' in attributes.read_text(encoding='utf-8')
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
+    argnames=('folder', 'committed', 'pending', 'expected'),
+    argvalues=[
+        (
+            'wiki',
+            {'.gitattributes': '*.png binary\n'},
+            {'.gitattributes': '*.png binary\n*.jpg binary\n'},
+            [('.gitattributes', "'**/_index.md merge=wiki'")],
+        ),
+        (
+            'wiki',
+            {'.gitattributes': _INDEX_BLOCK},
+            {'wiki/.gitattributes': '*.svg binary\n'},
+            [('wiki/.gitattributes', "'*.md merge=wiki'")],
+        ),
+        (
+            'wiki',
+            {},
+            {'.gitattributes': '*.png binary\n', 'wiki/.gitattributes': '\n'},
+            [
+                ('.gitattributes', "'**/_index.md merge=wiki'"),
+                ('wiki/.gitattributes', "'*.md merge=wiki'"),
+            ],
+        ),
+        (
+            '',
+            {},
+            {'.gitattributes': '*.png binary\n'},
+            [('.gitattributes', "'**/_index.md merge=wiki' and '*.md merge=wiki'")],
+        ),
+        (
+            '',
+            {},
+            {'.gitattributes': _INDEX_BLOCK},
+            [('.gitattributes', "'*.md merge=wiki'")],
+        ),
+        (
+            'wiki',
+            {},
+            {'.gitattributes': _INDEX_BLOCK, 'wiki/.gitattributes': _PAGE_BLOCK},
+            [],
+        ),
+    ],
+    ids=[
+        'root-modified',
+        'wiki-untracked',
+        'both-untracked',
+        'repo-root-wiki',
+        'repo-root-wiki-indexes-mapped',
+        'both-mapped-uncommitted',
+    ],
+)
+def test_merge_driver_names_each_gitattributes_it_skips(
+    tmp_path: pathlib.Path,
+    folder: str,
+    committed: dict[str, str],
+    pending: dict[str, str],
+    expected: list[tuple[str, str]],
+) -> None:
+    """The wiring returns one line for each ``.gitattributes`` it leaves alone.
+
+    A file with uncommitted changes, modified or new, keeps its bytes, and
+    its line names the file and every mapping line it lacks, the
+    repository root's file first. A file that already holds its mapping
+    draws no line, committed or not.
+    """
+    _git_repo(tmp_path)
+    wiki_dir = tmp_path / folder
+    wiki_dir.mkdir(exist_ok=True)
+    (tmp_path / 'README').write_bytes(b'project\n')
+    for name, text in committed.items():
+        (tmp_path / name).write_bytes(text.encode('utf-8'))
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-m', 'project')
+    for name, text in pending.items():
+        (tmp_path / name).write_bytes(text.encode('utf-8'))
+
+    skipped = configure_git_merge_driver(wiki_dir)
+    assert skipped == [
+        f'Skipping {tmp_path / name}: it has uncommitted changes, so wiki did not'
+        f' add {mappings}; commit the file, then run `wiki config`'
+        for name, mappings in expected
+    ]
+    written = {name: (tmp_path / name).read_bytes().decode('utf-8') for name in pending}
+    assert written == pending
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')

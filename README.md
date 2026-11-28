@@ -82,25 +82,27 @@ their work in project-specific knowledge.
 
 Every wiki root carries a `.wiki/` directory — the tool's namespace, holding
 `settings.json` (the file that declares the root; `wiki init` writes it and
-`wiki update` restores a missing one), the derived word counts and ranked
-full-text search caches, and the staged Obsidian config. Page, folder, and wiki
-names are lenient by default: spaces, dashes, mixed case, and unicode are all
-fine. Only characters that would break the wiki's structure — its path, link,
-and index syntax — are rejected, along with leading dots (hidden files) and the
-reserved `_index` name. A wiki can opt into stricter rules, such as ASCII-only
-or identifier-style names, through the `naming` block in `.wiki/settings.json`;
-`wiki lint` flags any name that violates the policy. Whole subtrees can be
-excluded from indexing with gitignore-style globs in `exclude.patterns` —
-excluded paths are never walked or linted, though `wiki read` still serves them.
-Prose wikilinks stay inside the wiki unless `links.external` lists folders
-outside it, as paths relative to the wiki root (`../src`, `../manual`): a `./`
-or `../` link, read from the wiki root like every other link, may then target a
-file or another wiki's page under a listed folder, whose entry is the link's
-prefix. The allowlist is a lint rule alone — `wiki lint` checks such links in
-place, while `wiki read` and every other command stay confined to the wiki root.
+`wiki update` restores a missing one that git does not hold), the derived word
+counts and ranked full-text search caches, and the staged Obsidian config. Page,
+folder, and wiki names are lenient by default: spaces, dashes, mixed case, and
+unicode are all fine. Only characters that would break the wiki's structure —
+its path, link, and index syntax — are rejected, along with leading dots (hidden
+files) and the reserved `_index` name. A wiki can opt into stricter rules, such
+as ASCII-only or identifier-style names, through the `naming` block in
+`.wiki/settings.json`; `wiki lint` flags any name that violates the policy.
+Whole subtrees can be excluded from indexing with gitignore-style globs in
+`exclude.patterns` — excluded paths are never walked or linted, though
+`wiki read` still serves them. Prose wikilinks stay inside the wiki unless
+`links.external` lists folders outside it, as paths relative to the wiki root
+(`../src`, `../manual`): a `./` or `../` link, read from the wiki root like
+every other link, may then target a file or another wiki's page under a listed
+folder, whose entry is the link's prefix. The allowlist is a lint rule alone —
+`wiki lint` checks such links in place, while `wiki read` and every other
+command stay confined to the wiki root.
 
 Frontmatter timestamps default to UTC in ISO-8601. To change them, set a
-timezone (any IANA name) and format (a strftime string) under `timestamp` in
+timezone (any IANA name) and format (a strftime string of `%Y`, `%m`, `%d`,
+`%H`, `%M`, `%S`, `%z`, `%%` and literal text) under `timestamp` in
 `.wiki/settings.json`. The stamps are tool-owned: `created:` is written when a
 file gains frontmatter and kept from then on, and `updated:` is rewritten on
 every write that changes content (a write that only normalizes CRLF line endings
@@ -228,6 +230,22 @@ prettier, add it to `.prettierignore`:
 ```text
 wiki/
 ```
+
+### Large Trees on macOS
+
+On macOS, a walk of the wiki slows down sharply when the tree has more entries
+than `kern.maxvnodes`, the number of files and folders the kernel keeps cached.
+The same happens when several large checkouts are walked in turn and together
+exceed it. Check the limit, and if a large wiki is slow, raise it above the
+number of files and folders in the trees you walk. The value in the second line
+is an example:
+
+```bash
+sysctl kern.maxvnodes
+sudo sysctl kern.maxvnodes=1052672
+```
+
+A reboot resets the value.
 
 ## Development
 

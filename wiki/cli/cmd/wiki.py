@@ -21,8 +21,11 @@ from wiki.cli.utils import (
     command,
     configure_git_merge_driver,
     load_wiki_class,
+    parse_int,
     parse_settings,
     parse_slice,
+    pattern_hints,
+    refuse_empty_path,
     refuse_nested_init,
     require_utf8,
     resolve_wiki,
@@ -30,6 +33,7 @@ from wiki.cli.utils import (
     trust_root,
 )
 from wiki.constants import (
+    DEFAULT_SEARCH_LIMIT,
     DEFAULT_WIKI_NAME,
     WIKI_DIR,
     WIKI_INDEX,
@@ -37,6 +41,7 @@ from wiki.constants import (
 )
 from wiki.core.event import Event
 from wiki.core.wiki import (
+    ContentControlCharacterEvent,
     ContentEmptyEvent,
     CrlfNoticeEvent,
     DescLongEvent,
@@ -85,9 +90,11 @@ _OBSIDIAN_SETUP_HINT = (
     ' Mode, then enable Front Matter Title and Wiki Root Links if needed.'
 )
 
-# condensed-mode narration categories, as (event class, one, many, check_one,
-# check_many): a notice of the class collapses into the category's count
-# line, worded for apply and --check runs
+# change categories, as (event class, one, many, check_one, check_many,
+# check_line): a notice of the class collapses into the category's count
+# line, worded for apply and --check runs; check_line is the notice's own
+# line under --check --full, over the event's fields, where the event's
+# description words the change as done
 _UPDATE_CATEGORIES = [
     (
         IndexCreateEvent,
@@ -95,6 +102,7 @@ _UPDATE_CATEGORIES = [
         'Created {n} new indexes (fill in their descs)',
         'Would create 1 new index',
         'Would create {n} new indexes',
+        'Would create index: {path}',
     ),
     (
         PageAdoptEvent,
@@ -102,6 +110,7 @@ _UPDATE_CATEGORIES = [
         'Adopted {n} bare pages (frontmatter added)',
         'Would adopt 1 bare page',
         'Would adopt {n} bare pages',
+        'Would adopt bare page: {path}',
     ),
     (
         RestampEvent,
@@ -109,6 +118,7 @@ _UPDATE_CATEGORIES = [
         'Restamped {n} files edited since their stamps',
         'Would restamp 1 file edited since its stamp',
         'Would restamp {n} files edited since their stamps',
+        'Would restamp {path}: edited since its updated: stamp',
     ),
     (
         LinkAddEvent,
@@ -116,6 +126,7 @@ _UPDATE_CATEGORIES = [
         'Added {n} new links',
         'Would add 1 new link',
         'Would add {n} new links',
+        'Would add link: [[{target}|{label}]] in {path}',
     ),
     (
         LinkPruneEvent,
@@ -123,6 +134,7 @@ _UPDATE_CATEGORIES = [
         'Pruned {n} broken links',
         'Would prune 1 broken link',
         'Would prune {n} broken links',
+        'Would prune link: [[{target}|{label}]] from {path}',
     ),
     (
         DescOverwriteEvent,
@@ -130,33 +142,32 @@ _UPDATE_CATEGORIES = [
         'Overwrote {n} link descs (page frontmatter descs win)',
         'Would overwrite 1 link desc (page frontmatter descs win)',
         'Would overwrite {n} link descs (page frontmatter descs win)',
+        'Would overwrite desc: [[{target}|{label}]] in {path} (the page'
+        ' frontmatter desc wins; edit it in {page})',
     ),
-    (
-        NameSkipEvent,
-        'Skipped 1 invalid name',
-        'Skipped {n} invalid names',
-        'Skipped 1 invalid name',
-        'Skipped {n} invalid names',
-    ),
+]
+
+# the count row update and lint share for indexed paths this machine's git
+# ignores
+_PATH_UNTRACKABLE_CATEGORY = (
+    PathUntrackableEvent,
+    "{n} indexed paths this machine's git ignores; their rows ship where the"
+    ' files cannot',
+)
+
+# update notice kinds that change no file, as (event class, many): the
+# notice is the only record of what it names, so a lone one prints verbatim
+# and two or more collapse into the kind's count line
+_UPDATE_NOTE_CATEGORIES = [
+    _PATH_UNTRACKABLE_CATEGORY,
+    (NameSkipEvent, 'Skipped {n} invalid names'),
     (
         WriteSkipEvent,
-        'Skipped 1 concurrently-edited file (re-run `wiki update`)',
-        'Skipped {n} concurrently-edited files (re-run `wiki update`)',
-        'Skipped 1 concurrently-edited file (re-run `wiki update`)',
         'Skipped {n} concurrently-edited files (re-run `wiki update`)',
     ),
-    (
-        FrontmatterMalformedEvent,
-        '1 file with malformed frontmatter',
-        '{n} files with malformed frontmatter',
-        '1 file with malformed frontmatter',
-        '{n} files with malformed frontmatter',
-    ),
+    (FrontmatterMalformedEvent, '{n} files with malformed frontmatter'),
     (
         IndexTruncatedEvent,
-        '1 empty or truncated index (restore from git or delete to rebuild)',
-        '{n} empty or truncated indexes (restore from git or delete to rebuild)',
-        '1 empty or truncated index (restore from git or delete to rebuild)',
         '{n} empty or truncated indexes (restore from git or delete to rebuild)',
     ),
 ]
@@ -169,22 +180,19 @@ _LINT_NOTE_CATEGORIES = [
     (DescLongEvent, '{n} long descs'),
     (ContentEmptyEvent, '{n} indexes have empty content'),
     (CrlfNoticeEvent, '{n} files have CRLF line endings; update will normalize'),
+    (ContentControlCharacterEvent, '{n} files have control characters in content'),
     (LinkStaleEvent, '{n} stale links'),
     (
         LinkFolderMissingEvent,
         '{n} links.external entries name no folder on this machine; links into'
         ' them are not checked',
     ),
-    (
-        PathUntrackableEvent,
-        "{n} indexed paths this machine's git ignores; their rows ship where"
-        ' the files cannot',
-    ),
+    _PATH_UNTRACKABLE_CATEGORY,
 ]
 
 
 def version(app: typer.Typer) -> typer.Typer:
-    """Register the ``--version`` flag on the root callback."""
+    """Register the root callback: ``--version``, and help for a run with no command."""
 
     def _version_callback(value: bool) -> None:
         """Print the running ``wiki`` package's version and exit."""
@@ -202,9 +210,20 @@ def version(app: typer.Typer) -> typer.Typer:
         help=version_help,
     )
 
-    @app.callback()
-    def _main(version: Optional[bool] = version) -> None:
+    # NOTE: the group runs with no command only to refuse the run, so its
+    #   usage line names the command as required, whatever click would
+    #   derive from invoke_without_command
+    @app.callback(
+        invoke_without_command=True,
+        subcommand_metavar='COMMAND [ARGS]...',
+    )
+    def _main(ctx: typer.Context, version: Optional[bool] = version) -> None:
         """Wiki command-line interface."""
+        # a run with no command is a usage error whose message is the help page
+        if ctx.invoked_subcommand is None:
+            usage = ctx.get_help()
+            typer.echo(usage, err=True)
+            raise typer.Exit(2)
 
     return app
 
@@ -314,8 +333,12 @@ def init(app: typer.Typer) -> typer.Typer:
         characters, a leading dot, and the reserved _index stem are rejected);
         stricter rules are opt-in per wiki via naming.validate in
         .wiki/settings.json, which --settings seeds at creation. The wiki is
-        created at {cwd}/wiki/ when no --path is given.
+        created at {cwd}/wiki/ when no --path is given. An existing wiki keeps
+        its settings: when --settings names something else, one stderr line
+        says it was not applied, and the exit code stays 0.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         # resolve wiki root and display name
         if path:
             path = resolve_wiki_root(path)
@@ -333,6 +356,7 @@ def init(app: typer.Typer) -> typer.Typer:
         if (path / WIKI_INDEX).is_file():
             if not quiet:
                 typer.echo(f'Wiki already initialized at: {path}')
+            _echo_unapplied_settings(path, settings)
             return
         # initialize wiki, streaming its notices to stderr
         wiki = Wiki(path)
@@ -341,9 +365,14 @@ def init(app: typer.Typer) -> typer.Typer:
         # materialize Obsidian config (plugins, new-link format seed)
         warnings = wiki.update_config()
         # configure git merge driver
-        configure_git_merge_driver(path)
+        skipped = configure_git_merge_driver(path)
         if not quiet:
             typer.echo(f'Initialized wiki at: {path}')
+        # a settings file that stood before the root index was kept
+        _echo_unapplied_settings(path, settings)
+        # a .gitattributes with uncommitted changes was left as it stands
+        for line in skipped:
+            typer.echo(line, err=True)
         # surface soft warnings, else point at the one manual step
         if warnings:
             for warning in warnings:
@@ -388,8 +417,11 @@ def config(
         commit both yourself). Run once per clone.
         Exits 0 even when a plugin download fails -- download failures are
         stderr warnings (re-run online to finish setup), never the exit
-        code.
+        code. A missing .wiki/settings.json that git still holds is not
+        restored: the command stops and says to restore it from git.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         # merge Obsidian config, streaming notices (the restored-marker
         # line the help text documents) to stderr
         wiki = resolve(path)
@@ -405,8 +437,11 @@ def config(
             if sys.stderr.isatty():
                 typer.echo('', err=True)
                 typer.echo(_OBSIDIAN_SETUP_HINT, err=True)
-        # (re)configure git merge driver
-        configure_git_merge_driver(wiki._root)
+        # (re)configure git merge driver, naming each .gitattributes left as
+        # it stands for its uncommitted changes
+        skipped = configure_git_merge_driver(wiki._root)
+        for line in skipped:
+            typer.echo(line, err=True)
 
     return app
 
@@ -434,6 +469,8 @@ def trust(app: typer.Typer) -> typer.Typer:
         future-proofing a hook added later). Only trust a wiki whose
         contents you have vetted.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         # resolve the root without loading the hook (resolve_wiki_root
         # never execs .wiki/wiki.py), then record it as trusted
         root = resolve_wiki_root(path)
@@ -494,20 +531,24 @@ def read(
         normalize CRLF); a slice keeps the frontmatter and appends a
         trailing newline.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         # validate arguments: the slice units are pairwise exclusive
-        if lines and words:
+        if (lines is not None) and (words is not None):
             raise typer.BadParameter('--lines and --words are mutually exclusive.')
-        if lines and chars:
+        if (lines is not None) and (chars is not None):
             raise typer.BadParameter('--lines and --chars are mutually exclusive.')
-        if words and chars:
+        if (words is not None) and (chars is not None):
             raise typer.BadParameter('--words and --chars are mutually exclusive.')
-        # resolve the one given slice unit, if any
+        # parse the one given slice unit, if any (an empty value is a
+        # malformed slice, not an absent one)
         ranges = {'lines': lines, 'words': words, 'chars': chars}
-        given = {on: spec for on, spec in ranges.items() if spec}
+        given = {
+            on: parse_slice(spec) for on, spec in ranges.items() if spec is not None
+        }
         wiki = resolve(path)
         if given:
-            on, spec = next(iter(given.items()))
-            start, stop = parse_slice(spec)
+            on, (start, stop) = next(iter(given.items()))
             content = wiki.read(name=name, start=start, stop=stop, on=on)
         else:
             content = wiki.read(name=name)
@@ -538,8 +579,17 @@ def search(
     )
     path = typer.Option(None, '--path', help=path_help)
     # result limit option
-    limit_help = 'Maximum number of ranked pages to return (at least 1).'
-    limit = typer.Option(None, '--limit', help=limit_help)
+    limit_help = (
+        'Maximum number of ranked pages to return (at least 1; defaults to'
+        f' {DEFAULT_SEARCH_LIMIT}).'
+    )
+    limit = typer.Option(
+        None,
+        '--limit',
+        help=limit_help,
+        parser=parse_int,
+        metavar='INTEGER',
+    )
     # tag filter option
     tag_help = 'Require a frontmatter tag token.'
     tag = typer.Option(None, '--tag', help=tag_help)
@@ -572,6 +622,8 @@ def search(
         resolvable wiki) exits 2, so scripts should branch on the exit
         code rather than parse the output.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         if prefix and raw:
             raise typer.BadParameter('--prefix and --raw are mutually exclusive.')
         if (limit is not None) and (limit < 1):
@@ -588,12 +640,9 @@ def search(
             prefix=prefix,
             raw=raw,
         )
-        # grep convention: no-match exits 1 with the notice on stderr, so
-        # scripts can distinguish no-match from match by exit code alone
-        if not matches:
-            typer.echo('No matches found.', err=True)
-            raise SystemExit(1)
-        elif as_json:
+        # --json: stdout carries one document whatever the outcome, so a
+        # consumer that parses it reads no match as an empty list
+        if as_json:
             results = [
                 {'path': relpath, 'snippet': snippet, 'score': score}
                 for relpath, snippet, score in matches
@@ -603,6 +652,11 @@ def search(
         else:
             for relpath, snippet, score in matches:
                 typer.echo(f'{score:>7.3f}  {relpath}\n         {snippet}')
+        # grep convention: no-match exits 1 with the notice on stderr, so
+        # scripts can distinguish no-match from match by exit code alone
+        if not matches:
+            typer.echo('No matches found.', err=True)
+            raise SystemExit(1)
 
     return app
 
@@ -660,12 +714,18 @@ def match(
         resolvable wiki) exits 2, so scripts should branch on the exit
         code rather than parse the output.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         if lines and lineno:
             raise typer.BadParameter('--lines and --lineno are mutually exclusive.')
         # every failure here -- a bad pattern, an unresolvable wiki or
         # subtree, a refused or broken hook -- is the triple's error leg,
         # which the command wrapper renders and exits 2 on
         wiki = resolve(path)
+        # a risky construct draws its line before the pattern runs or is refused
+        hints = pattern_hints(pattern)
+        for hint in hints:
+            typer.echo(hint, err=True)
         matches = wiki.match(
             pattern=pattern,
             name=name,
@@ -717,7 +777,10 @@ def update(
     full_help = 'Print every narration line instead of per-category counts.'
     full = typer.Option(False, '--full', help=full_help)
     # count flag
-    count_help = 'Print one count line per narration category (the default).'
+    count_help = (
+        'Print one line per narration category: its count, or a lone skip'
+        ' (the default).'
+    )
     count = typer.Option(False, '--count', help=count_help)
 
     @command(app, 'update')
@@ -734,11 +797,16 @@ def update(
         frontmatter fields, and CRLF line endings. Restores a missing
         .wiki/settings.json ({}) and prunes broken links, announcing
         each removal. Narrations condense to one count line per category
-        by default; --full prints every line. Exits 0 after a successful
-        run; with --check, writes nothing and exits 1 when changes are
+        by default, a lone skip keeping its own line, which names the
+        file; --full prints every line. Exits 0 after a successful run;
+        with --check, writes nothing and exits 1 when changes are
         pending, and a command error exits 2 -- so a gate reading
         --check's 1 as pending drift never reads a failed run as one.
+        A missing .wiki/settings.json that git still holds is not
+        restored: the command stops and says to restore it from git.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         if full and count:
             raise typer.BadParameter('--full and --count are mutually exclusive.')
         wiki = resolve(path)
@@ -750,7 +818,9 @@ def update(
             """Capture a notice; stream it in --full mode (order preserved)."""
             notices.append(event)
             if full:
-                typer.echo(event.description, err=True)
+                # a dry run words a change as pending, never as done
+                line = _check_line(event) if check else event.description
+                typer.echo(line, err=True)
             return event
 
         wiki.on_notice = _capture
@@ -761,7 +831,8 @@ def update(
             updated = wiki.update(name=name, check=check)
         finally:
             if not full:
-                for line in _condense(notices, check):
+                pointer = 'Run with --full to list each line.'
+                for line in _condense(notices, check, pointer):
                     typer.echo(line, err=True)
         file_count = len(updated)
         s = 's' if file_count != 1 else ''
@@ -802,12 +873,10 @@ def new(
     )
     path = typer.Option(None, '--path', help=path_help)
     # desc option
-    desc_help = 'Authored description for the index frontmatter (required).'
+    desc_help = 'Authored description for the index frontmatter.'
     desc = typer.Option(..., '--desc', help=desc_help)
     # content option
-    content_help = (
-        'Authored content for the section below the *** delimiter (required).'
-    )
+    content_help = 'Authored content for the section below the *** delimiter.'
     content = typer.Option(..., '--content', help=content_help)
 
     @command(app, 'new')
@@ -832,12 +901,14 @@ def new(
         folder), so pending maintenance in that scope -- adoptions,
         prunes -- lands in the same run.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         # the inputs land in frontmatter and prose, which every writer encodes
         # as UTF-8: an argv byte no UTF-8 decodes is refused at the boundary
         for option, value in (('NAME', name), ('--desc', desc), ('--content', content)):
             require_utf8(option, value)
         wiki = resolve(path)
-        # the scoped sweep narrates like update: condensed count lines
+        # the scoped sweep narrates like update's condensed default
         notices: list[Event] = []
 
         def _capture(event: Event, **kwargs: Any) -> Event:
@@ -849,7 +920,12 @@ def new(
         try:
             created = wiki.new(name, desc=desc, content=content)
         finally:
-            for line in _condense(notices, False):
+            # new takes no --full, and its sweep is done: a dry run of
+            # update lists each skip without writing, save a file edited
+            # during a run, which only a write meets and whose count line
+            # names its own remedy
+            pointer = 'Run `wiki update --check --full` to list each line.'
+            for line in _condense(notices, False, pointer, unlisted=(WriteSkipEvent,)):
                 typer.echo(line, err=True)
         typer.echo(f'Created {created}.')
 
@@ -908,6 +984,8 @@ def lint(
         finding typed, with an explicit severity and kind), never parse
         the prose streams.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         if full and count:
             raise typer.BadParameter('--full and --count are mutually exclusive.')
         if as_json and (full or count):
@@ -993,7 +1071,13 @@ def map(
     path = typer.Option(None, '--path', help=path_help)
     # maximum depth option
     depth_help = 'Maximum tree depth (0 means top-level only).'
-    depth = typer.Option(None, '--depth', help=depth_help)
+    depth = typer.Option(
+        None,
+        '--depth',
+        help=depth_help,
+        parser=parse_int,
+        metavar='INTEGER',
+    )
     # description flag
     desc_help = 'Show descriptions from parent index.'
     desc = typer.Option(True, '--desc/--no-desc', help=desc_help)
@@ -1002,7 +1086,13 @@ def map(
         'Max characters per description (defaults to the map.desc_limit'
         ' setting, else untruncated); -1 disables truncation.'
     )
-    desc_limit = typer.Option(None, '--desc-limit', help=desc_limit_help)
+    desc_limit = typer.Option(
+        None,
+        '--desc-limit',
+        help=desc_limit_help,
+        parser=parse_int,
+        metavar='INTEGER',
+    )
     # category filter option
     category_help = 'Comma-separated categories (empty string for uncategorized only).'
     category = typer.Option(None, '--category', help=category_help)
@@ -1040,6 +1130,8 @@ def map(
         --stat sizes the dump instead of printing it -- the cheap probe
         before dumping a large wiki.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         # validate numeric bounds
         if (depth is not None) and (depth < 0):
             raise typer.BadParameter('--depth must be >= 0.')
@@ -1082,7 +1174,12 @@ def map(
         # warned about the missing *** marker, so don't also claim emptiness
         folder = wiki._resolve_folder(name) if name else wiki._root
         if not wiki._index_missing_marker(folder):
-            typer.echo('Wiki is empty.')
+            # a scope or a filter narrowed the run: nothing shown is no sign
+            # that the wiki holds nothing
+            if name or (category is not None) or (markdown is not None):
+                typer.echo('No entries match.')
+            else:
+                typer.echo('Wiki is empty.')
 
     return app
 
@@ -1106,7 +1203,14 @@ def merge(app: typer.Typer) -> typer.Typer:
     pathname = typer.Argument(..., help=pathname_help)
 
     # a %P pathname may lead with a dash; never parse it as an option
-    @command(app, '_merge', context_settings={'ignore_unknown_options': True})
+    # NOTE: a help option is one too: -h.md read as a help flag would exit 0
+    #   with nothing merged, which git takes for a clean merge
+    @command(
+        app=app,
+        name='_merge',
+        context_settings={'ignore_unknown_options': True},
+        add_help_option=False,
+    )
     def _merge(
         base: str = base,
         ours: str = ours,
@@ -1240,43 +1344,97 @@ def _lint_document(issues: list[Issue], notices: list[Event]) -> dict:
     }
 
 
-def _condense(notices: list[Event], check: bool) -> list[str]:
-    """Collapse captured update events to one count line per category.
+def _condense(
+    notices: list[Event],
+    check: bool,
+    pointer: str,
+    unlisted: tuple[type[Event], ...] = (),
+) -> list[str]:
+    """Collapse captured update events to one line per category.
 
-    Each known category (see ``_UPDATE_CATEGORIES``) aggregates into a
+    Each change category (see ``_UPDATE_CATEGORIES``) aggregates into a
     single count line standing at its first occurrence, worded for an
-    apply or ``--check`` run; events with no category row (one-time
-    restore lines) pass through as their description verbatim in place.
+    apply or ``--check`` run. A kind that changes no file (see
+    ``_UPDATE_NOTE_CATEGORIES``) aggregates the same way from two
+    notices up, and a closing ``pointer`` line then says how to list
+    them; its lone notice, and every event with no row (one-time restore
+    lines), passes through as its description verbatim in place.
 
     Args:
         notices: Captured update events, in emission order.
         check: Whether the run is a ``--check`` dry run.
+        pointer: The line that says how to list what a count line of
+            ``_UPDATE_NOTE_CATEGORIES`` stands for.
+        unlisted: The kinds of ``_UPDATE_NOTE_CATEGORIES`` the pointer's
+            command never lists; a count line of one draws no pointer.
 
     Returns:
         Condensed narration lines, in first-occurrence order.
 
     """
-    # tally each category, remembering where it first appeared
-    counts: dict[int, int] = {}
-    first_seen: dict[int, int] = {}
+    changes = {event_class: row for event_class, *row in _UPDATE_CATEGORIES}
+    notes = dict(_UPDATE_NOTE_CATEGORIES)
+    # tally each category, remembering its first event and where it appeared
+    counts: dict[type[Event], int] = {}
+    first_seen: dict[type[Event], tuple[int, Event]] = {}
     lines: list[tuple[int, str]] = []
     for position, event in enumerate(notices):
-        for index, (event_class, *_rest) in enumerate(_UPDATE_CATEGORIES):
-            if type(event) is event_class:
-                counts[index] = counts.get(index, 0) + 1
-                first_seen.setdefault(index, position)
-                break
+        event_class = type(event)
+        if (event_class in changes) or (event_class in notes):
+            counts[event_class] = counts.get(event_class, 0) + 1
+            first_seen.setdefault(event_class, (position, event))
         else:
             lines.append((position, event.description))
-    # render one count line per category at its first-seen position
-    for index, position in first_seen.items():
-        _event_class, one, many, check_one, check_many = _UPDATE_CATEGORIES[index]
-        if check:
-            one, many = check_one, check_many
-        n = counts[index]
-        line = one if n == 1 else many.format(n=n)
+    # render one line per category at its first-seen position: a change
+    # category is always a count line, a lone note keeps its own
+    for event_class, (position, event) in first_seen.items():
+        n = counts[event_class]
+        if event_class in changes:
+            one, many, check_one, check_many, _line = changes[event_class]
+            if check:
+                one, many = check_one, check_many
+            line = one if n == 1 else many.format(n=n)
+        elif n == 1:
+            line = event.description
+        else:
+            line = notes[event_class].format(n=n)
         lines.append((position, line))
+    # say how to list what the note count lines stand for
+    listed = [event_class for event_class in notes if event_class not in unlisted]
+    if any(counts.get(event_class, 0) > 1 for event_class in listed):
+        lines.append((len(notices), pointer))
     return [line for _position, line in sorted(lines)]
+
+
+def _check_line(event: Event) -> str:
+    """Return an update event's line as a ``--check --full`` run words it.
+
+    A change reads as pending (``Would adopt bare page: ...``), from its
+    category's ``check_line`` in ``_UPDATE_CATEGORIES``, where the
+    event's description reads as done. Every other event reports a skip
+    or a state, true of a dry run as written, and keeps its description.
+
+    Args:
+        event: The update event to word.
+
+    Returns:
+        The event's dry-run narration line.
+
+    """
+    for event_class, *_counts, check_line in _UPDATE_CATEGORIES:
+        if type(event) is event_class:
+            fields = dict(vars(event))
+            # an overwrite built without its page names the target plus the
+            # .md it strips, as its description does
+            if isinstance(event, DescOverwriteEvent):
+                fields['page'] = event.page or f'{event.target}.md'
+            result = check_line.format(**fields)
+            # an adoption says when the page's H1 would seed its title, as
+            # the applied line does
+            if isinstance(event, PageAdoptEvent) and event.title:
+                result += ' (would seed title: from its H1)'
+            return result
+    return event.description
 
 
 def _condense_notes(notices: list[Event]) -> list[str]:
@@ -1335,6 +1493,39 @@ def _echo_notice(event: Event, **kwargs: Any) -> Event:
     """
     typer.echo(event.description, err=True)
     return event
+
+
+def _echo_unapplied_settings(root: pathlib.Path, settings: Optional[dict]) -> None:
+    """Say on stderr when ``init --settings`` is not what the wiki at ``root`` holds.
+
+    ``init`` never changes the settings of an existing wiki, and it exits
+    0 there, so the line is the caller's one sign that the policy it
+    passed is not in force. The two compare as JSON text with sorted
+    keys, so key order and spacing never matter, and a settings file that
+    is missing or cannot be read holds something else.
+
+    Args:
+        root: Wiki root the command ran on.
+        settings: The parsed ``--settings`` object, or ``None`` without one.
+
+    """
+    if settings is None:
+        return
+    # NOTE: the engine reads a missing file as all defaults, as it reads an
+    #   empty object, so only a file that stands is compared
+    held = None
+    if (root / WIKI_SETTINGS).is_file():
+        try:
+            held = json.dumps(Wiki(root)._settings, sort_keys=True)
+        # a file that cannot be read holds something else
+        except ValueError:
+            held = None
+    if held != json.dumps(settings, sort_keys=True):
+        line = (
+            '--settings was not applied: init leaves the settings of the wiki at'
+            f' {root} as they are.'
+        )
+        typer.echo(line, err=True)
 
 
 def _index_canonicalizer(root: pathlib.Path, path: pathlib.Path) -> Optional[Wiki]:

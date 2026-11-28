@@ -85,7 +85,9 @@ rewrites only the files that differ. It owns:
 **Tool housekeeping.**
    A missing ``.wiki/settings.json`` (the declared-root marker) is restored as
    ``{}`` — all defaults; custom settings are never reinvented — and a deleted
-   ``.wiki/cache/`` directory is recreated, each with a notice.
+   ``.wiki/cache/`` directory is recreated, each with a notice. A missing
+   settings file that git still holds is not restored: update refuses to run
+   (below).
 
 ``wiki init`` runs the same sweep over any existing tree when it scaffolds a
 wiki, and running ``wiki update`` after a git merge regenerates the merged
@@ -129,8 +131,8 @@ stdout; all narration prints to stderr. Update exits 0 after a successful run
      - Print every narration line individually, in emission order.
    * - ``--count``
      - on (the effective default)
-     - Print one count line per narration category. Mutually exclusive with
-       ``--full``.
+     - Print one line per narration category: its count, or a lone skip.
+       Mutually exclusive with ``--full``.
 
 One caveat on scoped runs: a category change on the page or index at the
 scope's root cannot refresh its label in the *parent* index, because the
@@ -176,12 +178,13 @@ Like a formatter's check mode, it **exits 1 when changes are pending** and 0
 (``Nothing to update.``) when the wiki is clean — a nonzero exit is not an
 error, and a real error (an unresolvable wiki, a bad subtree) exits 2, so a
 gate reading 1 as pending drift never mistakes a typo'd path for one.
-Pending-action narration (create, adopt, add, prune, overwrite) uses
-``Would ...`` wording; the state-report categories — skipped names and files,
-malformed frontmatter, truncated indexes — keep their normal wording. A dry
-run performs no housekeeping either: it neither restores a missing
-``.wiki/settings.json`` nor reports it (the resolver's stderr diagnostic
-covers the gap).
+Pending-action narration (create, adopt, restamp, add, prune, overwrite) uses
+``Would ...`` wording, in the count lines and in the lines ``--full`` prints
+(``Would adopt bare page: topics/sample.md``); the state-report categories —
+skipped names and files, malformed frontmatter, truncated indexes — keep
+their normal wording. A dry run performs no housekeeping either: it neither
+restores a missing ``.wiki/settings.json`` nor reports it (the resolver's
+stderr diagnostic covers the gap).
 
 What update leaves alone
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -238,6 +241,12 @@ the error code, never ``--check``'s pending-changes 1):
   :doc:`/configuration`).
 - **A legacy** ``_config/settings.json`` **layout**, refused with a migration
   message.
+- **A lost settings file**: ``.wiki/settings.json`` is missing from the
+  working tree while git still holds it, in the ``HEAD`` commit or in the
+  index. The sweep would run on default settings and adopt every page the
+  file's ``exclude.patterns`` kept out, so the error says to restore the
+  file from git. ``wiki new``, ``wiki lint``, ``wiki config`` and a
+  ``wiki init`` that scaffolds refuse alike; see :doc:`/configuration`.
 
 What ``wiki lint`` checks
 -------------------------
@@ -251,7 +260,8 @@ reports two kinds of problem — without writing anything:
 - **Notes** (stderr): soft advisories — unauthored descriptions, stale prose
   links (issues under ``lint.strict``), a ``links.external`` entry naming no
   folder on this machine,
-  pending CRLF normalization, an unconfigured merge driver in a fresh clone.
+  pending CRLF normalization, an unconfigured merge driver in a fresh clone,
+  pages left out of the merge driver's mapping.
   Notes **never affect the exit code**. A note kind that repeats condenses to
   one count line (``12 indexes have empty content``) unless you pass
   ``--full``.
@@ -318,8 +328,8 @@ followed by an indented unified diff of exactly the change update would make —
 the comparison is byte-exact against update's plan, so lint and update agree
 about what is pending, with one exception: lint does not judge hand edits, so
 a file update restamps only because it was edited since its last commit
-(below) is listed by ``update --check`` and not by lint. A change only to the
-file's final
+(below) is listed by ``update --check`` and not by lint. The diff breaks lines
+on newlines alone, as the file does. A change only to the file's final
 newline reports as ``Requires update (final newline differs)``. A bare page
 (no frontmatter) is additionally named — ``Bare page (no frontmatter); update
 will adopt it`` — so the pending adoption is legible without reading its diff.
@@ -377,16 +387,52 @@ its meaning:
 ``Invalid YAML frontmatter (line N): <reason>; <advice>``
    A strict YAML reader rejects the block — an unquoted ``': '`` inside a
    one-line value, a value ending in ``:``, a duplicate key, a control
-   character, a key that is not a scalar, or a body that is not ``key: value``
-   pairs — so Obsidian and any YAML library lose every field, while the wiki
+   character, a backslash escape a double-quoted value cannot decode, a key
+   that is not a scalar, or a body that is not ``key: value`` pairs — so
+   Obsidian and any YAML library lose every field, while the wiki
    still reads the block through its line grammar (or, for a body that is not
    a mapping, leaves it untouched). The advice names the cause: a parse error
    (``a strict reader drops the whole block, so quote or rewrite the value``),
+   a bad backslash escape in a double-quoted value, such as the ``\(`` of
+   ``"\(p\)"`` or the ``\x`` of ``"$\xi$"`` (``a backslash starts an escape
+   inside double quotes, so write LaTeX in single quotes or a block scalar, or
+   double each backslash``),
    a duplicate key (``a strict reader rejects the block or keeps the last
    copy, the wiki reads the first``), a key that is not a scalar (``the wiki
    reads the block by its line grammar alone``), or a body that is not a
    mapping (``no strict reader finds key: value pairs in it``). Quote the
-   value, drop the duplicate, or rewrite the block.
+   value, requote the LaTeX, drop the duplicate, or rewrite the block.
+
+``Control character in <field> (line N): <characters>; <advice>``
+   A double-quoted ``name:``, ``title:``, ``desc:``, or ``category:`` holds a
+   control character: a C0 control (a tab and a line break included), DEL,
+   U+0085, U+2028, or U+2029. YAML reads a backslash inside double quotes as
+   an escape, so LaTeX typed there decodes — ``\theta`` opens with a tab,
+   ``\nu`` with a line break, ``\frac`` with a form feed — and update copies
+   the result into the H1 and the parent index's row. Each character is named
+   once by its code point, with the one-letter escape that spells it where it
+   has one (``U+000C (\f)``); N is the field's key line. The advice is ``a
+   backslash starts an escape inside double quotes, so write LaTeX in single
+   quotes or a block scalar, or double each backslash``. The decoded value is
+   what is judged, so a control character typed raw between the quotes — a
+   tab, or the line break a blank line inside a multi-line value folds to —
+   draws the same finding and the same advice, though no backslash wrote it.
+   An escape that decodes to text (``\u00e9``, ``\"``) is not reported, and
+   neither are the generated copies: the finding stands once, on the file that
+   holds the field. Typed ``control_character`` in ``--json``, with ``path``,
+   ``field``, ``line``, and ``characters`` (the code points) fields.
+
+``Mapping or list in <field> (line N): a strict reader finds no text there, so quote the value or write it as a >- block``
+   A ``name:``, ``title:``, ``desc:``, or ``category:`` whose value YAML reads
+   as a mapping or a list: an indented ``Key: value`` line under a bare
+   ``desc:``, a ``title: [Draft]``, a ``category:`` over ``- item`` lines.
+   The block is valid YAML, so it is not an ``Invalid YAML frontmatter``
+   issue; update writes the field's source lines, joined, into the H1 and the
+   parent index's row, while Obsidian and any YAML library read a collection.
+   N is the field's key line. Quote the value, or write it as a block scalar.
+   A field that is a list by design (``tags:``, ``sources:``) is not judged.
+   Typed ``nonscalar_field`` in ``--json``, with ``path``, ``field``, and
+   ``line`` fields.
 
 ``Empty or truncated index (no frontmatter); restore it from git or delete it to rebuild``
    An emptied or truncated ``_index.md``; update keeps it as-is. Restore or
@@ -536,6 +582,20 @@ notes is clean — lint exits 0.
      - An index's user-content section below ``***`` is empty.
    * - ``<path>: CRLF line endings; update will normalize``
      - The next writing update rewrites the file to LF.
+   * - ``<path>: Control character in content (line N): <character>``
+     - Authored content — a page's body, or an index's text below ``***`` —
+       holds a C0 control character other than a tab or a line break, or
+       DEL: typically what is left of LaTeX once a tool decoded a backslash
+       escape (a form feed where the ``\f`` of ``\frac`` stood). One note per
+       file names the first line and its character by code point
+       (``U+000C``); when the file holds more, the line ends ``, the first
+       of M``. Code samples are scanned too. Generated text — a page's H1,
+       an index's link rows — is not: a control character there is copied
+       from a frontmatter field and reported on the file that holds the
+       field (``Control character in <field>``, above). It stays a note
+       under ``lint.strict``. Typed ``content_control_character`` in
+       ``--json``, with ``path``, ``line``, ``character``, and ``count``
+       fields.
    * - ``<path>: Stale link [[target]]``
      - A ``[[wikilink]]`` in authored prose points at nothing — inside the
        wiki for a prefix-free target, or under a ``links.external`` folder
@@ -569,6 +629,17 @@ notes is clean — lint exits 0.
        per-clone ``merge.wiki.driver`` config, so git text-merges
        ``_index.md`` files and pages until ``wiki config`` registers the
        driver (see :doc:`/guide/merge-driver`).
+   * - ``.gitattributes maps _index.md files to merge=wiki but not the wiki's pages; run `wiki config` to map them (pages merge as plain text, and conflict on their updated: lines, until then)``
+     - Git maps the root ``_index.md`` to the merge driver but not a page in
+       the wiki root: the repository root's ``.gitattributes`` holds
+       ``**/_index.md merge=wiki`` and nothing maps the wiki's ``*.md``
+       files, typically because the wiki root has no ``.gitattributes`` of
+       its own. Two branches that both ran ``wiki update`` on a page then
+       conflict on its ``updated:`` line. ``wiki config`` writes the missing
+       file; commit it. A page mapped by any file counts, the repository
+       root's included. A wiki with no ``merge=wiki`` mapping at all, a wiki
+       the repository ignores, and a wiki outside a repository draw no note.
+       Typed ``page_merge_unmapped`` in ``--json``, with no ``path``.
    * - ``links.external entry '<folder>' names no folder on this machine; links into it are not checked``
      - A ``links.external`` entry names a folder absent from this clone (a
        sibling checkout missing from a partial clone) or names a file
@@ -581,12 +652,30 @@ notes is clean — lint exits 0.
      - A ``.git`` directory encloses the wiki root but ``git check-ignore``
        could not run (git missing or broken), so the walk proceeds without
        the gitignore fence and adopts paths the repository ignores.
+   * - ``.wiki/settings.json: unknown key '<key>' (ignored)``
+     - The settings file holds a key the wiki does not know, so it sets
+       nothing: a misspelled key leaves its policy off. The key is a dotted
+       path inside a block (``exclude.pattern``). Printed before the other
+       notes, after any resolver diagnostic, in file order. Typed ``settings_warning`` in ``--json``, with
+       ``path`` (the settings file), ``key`` and ``reason`` fields (see
+       :doc:`/configuration`).
+   * - ``.wiki/settings.json: exclude.patterns entry '<pattern>' starts or ends with a space (the space is part of the pattern)``
+     - The pattern is matched as written, so it excludes only a name that
+       carries the space: remove the space to exclude the name beside it.
+       A ``settings_warning`` like the unknown key, with the ``key``
+       ``exclude.patterns``.
+   * - ``.wiki/settings.json: naming.leading_digits is false without 'identifier' in naming.validate (it has no effect)``
+     - The flag only narrows the ``identifier`` rule, so without that rule a
+       name that opens on a digit still passes: add ``identifier`` to
+       ``naming.validate``, or drop the flag. A ``settings_warning`` with
+       the ``key`` ``naming.leading_digits``.
    * - resolver diagnostics (``resolver_notice`` in ``--json``)
      - Emitted by wiki-root resolution before the walk, prefixed with the
        absolute root rather than a root-relative path: an upward resolution
        into an enclosing root (``<path>: inside the wiki at <root>; using
        that root``), a missing settings marker (``.wiki/settings.json
-       missing; `wiki update` will restore it``), a declared root missing
+       missing; restore it from git, or run `wiki update` to recreate it
+       with default settings``), a declared root missing
        its ``_index.md`` (``restore it from git or run `wiki update` to
        rebuild it``), or an ``_index.md`` extending above the declared root.
        They stream to stderr as resolution runs and join the note count and
@@ -607,9 +696,11 @@ wrapped lines:
 
 Each marker stands alone on its line. The region suppresses the positional
 rules — conflict markers, escaped wikilinks, wrap mangles, stale-link notes,
-outside-link, directory-link, relative-link and absolute-link issues — for the
-wrapped lines only; file-level checks are unaffected. Content inside fenced or
-inline code is already masked, so those code samples need no region. The link
+control-character notes, outside-link, directory-link, relative-link and
+absolute-link issues — for the wrapped lines only; file-level checks are
+unaffected. Content inside fenced or inline code is already masked, so those
+code samples need no region — except for the control-character note, which
+scans code too. The link
 rules — the stale-link notes, the outside-link, directory-link, relative-link
 and absolute-link issues — also skip a wikilink inside an HTML comment or an
 indented code block, so a link sample in either needs no wrapping; the
@@ -624,7 +715,7 @@ sanctions them.
 Update narration reference
 --------------------------
 
-Update's narration streams to stderr. By default each category of event
+Update's narration streams to stderr. By default each category of change
 condenses to one count line; ``--full`` prints every event individually, in
 emission order (e.g. ``New link: [[topics/example|example]] in
 topics/_index.md``). The condensed lines and what they mean:
@@ -654,32 +745,91 @@ topics/_index.md``). The condensed lines and what they mean:
    * - ``Overwrote N link descs (page frontmatter descs win)``
      - Diverged index-side descriptions were replaced by the child pages'
        ``desc:`` values; edit the page, not the index.
-   * - ``Skipped N invalid names``
+
+A skip changes no file, so its line is the only record of what was skipped.
+One skip of a kind prints its own line, which names the file. Two or more
+print the kind's count line, and the narration then ends with ``Run with
+--full to list each line.``
+
+.. list-table::
+   :header-rows: 1
+   :widths: 36 30 34
+
+   * - One skip
+     - Two or more
+     - What happened
+   * - ``Skipping <path>: invalid name (<rule>)``
+     - ``Skipped N invalid names``
      - Entries violating the naming policy were left unlinked.
-   * - ``Skipped N concurrently-edited files (re-run `wiki update`)``
+   * - ``Skipping <path>: changed during update; re-run `wiki update```
+     - ``Skipped N concurrently-edited files (re-run `wiki update`)``
      - Files changed while update was planning; re-run to converge.
-   * - ``N files with malformed frontmatter``
-     - Left untouched; the per-file notice names the reason — close an
-       unclosed block by hand, rewrite a body that is not ``key: value``
-       pairs or a flow or indented mapping as column-0 ``key: value`` lines,
-       or remove the alias the repair would break.
-   * - ``N empty or truncated indexes (restore from git or delete to rebuild)``
+   * - ``Malformed frontmatter (<reason>) in <path>``
+     - ``N files with malformed frontmatter``
+     - Left untouched; the reason says what to fix — close an unclosed block
+       by hand, rewrite a body that is not ``key: value`` pairs or a flow or
+       indented mapping as column-0 ``key: value`` lines, or remove the alias
+       the repair would break.
+   * - ``Empty or truncated index (no frontmatter) in <path>; restore it from
+       git or delete it to rebuild``
+     - ``N empty or truncated indexes (restore from git or delete to rebuild)``
      - Left untouched; restore or delete.
 
+The note for an indexed path this machine's git ignores condenses the same
+way. One path prints its line (``<path>: indexed, but this machine's git
+ignores it (<source>:<line> '<pattern>'); its generated row ships where the
+file cannot, so every other clone reds on a broken link``). Two or more print
+``N indexed paths this machine's git ignores; their rows ship where the files
+cannot``, the count line ``wiki lint`` prints for them.
+
+``wiki new`` narrates its sweep the same way. It takes no ``--full``, so its
+pointer names a dry run: ``Run `wiki update --check --full` to list each
+line.`` A dry run writes nothing, so it never skips a file edited during a
+run: that count line alone draws no pointer from ``wiki new``, and the line
+itself says to re-run ``wiki update``.
+
 Under ``--check`` the pending-action categories read ``Would create ...``,
-``Would add ...``, ``Would prune ...``, and so on; the state-report categories
-(skipped names and files, malformed frontmatter, truncated indexes) keep
-their normal wording. A few notices have no category and always print
-verbatim, even in condensed mode:
+``Would add ...``, ``Would prune ...``, and so on; the skips keep their
+wording. The lines ``--full`` prints for a change follow the run the same
+way:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 50 50
+
+   * - ``--full`` line
+     - Under ``--check``
+   * - ``New index: <path> (fill in its desc)``
+     - ``Would create index: <path>``
+   * - ``Adopted bare page: <path> (frontmatter added)``
+     - ``Would adopt bare page: <path>``
+   * - ``Adopted bare page: <path> (frontmatter added; title: seeded from its
+       H1)``
+     - ``Would adopt bare page: <path> (would seed title: from its H1)``
+   * - ``Restamped <path>: edited since its updated: stamp``
+     - ``Would restamp <path>: edited since its updated: stamp``
+   * - ``New link: [[target|label]] in <path>``
+     - ``Would add link: [[target|label]] in <path>``
+   * - ``Pruned link: [[target|label]] from <path>``
+     - ``Would prune link: [[target|label]] from <path>``
+   * - ``Overwrote desc: [[target|label]] in <path> (the page frontmatter
+       desc wins; edit it in <page>)``
+     - ``Would overwrite desc: [[target|label]] in <path> (the page
+       frontmatter desc wins; edit it in <page>)``
+
+A few notices have no category and always print verbatim, even in condensed
+mode:
 
 - ``Link targets a symlink: [[target|label]] in <path> (symlinked files are
   not indexed)`` — likewise the excluded-path and gitignored-path cause
   lines beside a prune
+- ``.wiki/settings.json: unknown key '<key>' (ignored)`` — a settings
+  warning, printed before the other notes and after any resolver diagnostic,
+  as are the ones for an ``exclude.patterns`` entry that starts or ends with
+  a space and for a ``naming.leading_digits`` that has no effect (see
+  :doc:`/configuration`)
 - ``Restored missing .wiki/settings.json ({} -- all defaults)``
 - ``Recreated .wiki/cache/ (derived counts cache)``
-- ``<path>: indexed, but this machine's git ignores it (<source>:<line>
-  '<pattern>'); its generated row ships where the file cannot, so every other
-  clone reds on a broken link``
 - ``Gitignore fence unavailable: `git check-ignore` failed inside the
   enclosing repository (is git installed?); indexing proceeds unfenced, so
   paths the repository ignores are adopted``
@@ -730,6 +880,6 @@ Both commands are safe to run at any time, as often as you like:
   freely: update recreates the directory and its counts (with a notice), and
   the next ``wiki search`` rebuilds the index.
 - **A restored** ``.wiki/settings.json`` **is empty.** Update restores the
-  missing marker as ``{}`` — all defaults. If the file held custom settings,
-  restore it from version control instead of relying on the marker restore;
-  see :doc:`/configuration`.
+  missing marker as ``{}`` — all defaults — only when git holds no copy of
+  the file. While git still holds it, update refuses to run until the file
+  is restored from git; see :doc:`/configuration`.

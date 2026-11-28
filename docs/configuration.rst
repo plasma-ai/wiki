@@ -36,8 +36,7 @@ order:
    ``--path .`` does. One exception: a raw current directory that itself
    holds an indexed directory below it is a project directory, not a folder
    of the outer tree, and the climb declines. The result is an *undeclared*
-   wiki, tolerated with a stderr notice that ``wiki update`` will restore
-   the marker.
+   wiki, tolerated with a stderr notice that the settings file is missing.
 3. ``{cwd}/wiki/``, when that directory is declared or at least indexed.
 4. Otherwise the command fails: ``Could not locate .wiki/settings.json,
    _index.md, or wiki/_index.md from the current directory.``
@@ -80,22 +79,114 @@ The settings file: ``.wiki/settings.json``
 
 A JSON object at the wiki root. An absent file means all defaults; malformed
 JSON or a non-object top level fails every command that reads policy, with a
-message naming the file. The recognized blocks — ``naming``, ``timestamp``,
-``map``, ``titles``, ``lint``, ``exclude``, and ``links`` — are all optional,
-all objects. Unknown top-level keys are ignored, but a wrong-typed known block
-or key is an error naming the file and key.
+message naming the file. The file is held to strict JSON, so that every reader
+takes it the same way: ``NaN``, ``Infinity`` and ``-Infinity``, a number too
+large to represent (``1e400``), a lone surrogate escape (``"\ud800"``),
+nesting 128 levels deep and a key named twice in one object, at any level, are
+each malformed, and the message names the cause (``Malformed JSON in
+.wiki/settings.json: duplicate key 'exclude'``). The recognized blocks —
+``naming``, ``timestamp``, ``map``, ``titles``, ``lint``, ``exclude``, and
+``links`` — are all optional, all objects. A key the wiki does not know, at
+the top level or inside a block, is ignored with a warning (below), while a
+wrong-typed known block or key is an error naming the file and key. The
+error shows the wrong value as JSON
+(``map.indent must be a string, got null in .wiki/settings.json.``), and cuts
+a value longer than 80 characters there with ``...``.
+
+``wiki update`` (``--check`` included), ``wiki new``, ``wiki lint``,
+``wiki map``, ``wiki search`` and ``wiki match`` check the whole file before
+they do anything else: every block, in the order above, whichever blocks the
+command goes on to use. The first block at fault is named and the command
+exits 2 before it resolves a scope, walks a folder or writes a file, and
+after no note but those about locating the wiki and the ``WIKI_FREEZE_TIME``
+line, so ``wiki update --check`` never passes on a file that ``wiki lint`` or
+``wiki map`` refuses. Three paths read only the blocks they use and keep
+running on a wiki with a broken block elsewhere: ``wiki read``, so a page
+stays readable; ``wiki config``, so the repair command stays runnable; and
+the merge driver, so a merge still settles stamps. The check reads the
+settings file and no other file in or around the wiki. A ``timestamp.timezone``
+name is checked against the machine's zone database, so a zone one machine
+knows can be refused on another. The one check that follows a path in the
+checkout — a ``links.external`` folder that resolves inside the wiki through a
+symlink — is left to ``wiki lint`` and ``wiki init``, since a symlink differs
+from one checkout to the next.
+
+A setting that is accepted and does nothing draws a warning, one stderr line
+each. A key the wiki does not know is named as a dotted path:
+``.wiki/settings.json: unknown key 'exclude.pattern' (ignored)``. An
+``exclude.patterns`` entry that starts or ends with a space is named too, since
+the space is part of the pattern and keeps it off the name it was typed beside:
+``.wiki/settings.json: exclude.patterns entry 'drafts ' starts or ends with a
+space (the space is part of the pattern)``. So is ``naming.leading_digits``
+set to ``false`` while ``naming.validate`` does not list ``identifier``, the one
+rule the flag narrows: ``.wiki/settings.json: naming.leading_digits is false
+without 'identifier' in naming.validate (it has no effect)``. The unknown key is
+still ignored and the pattern is not trimmed, and a warning changes no exit
+code and no written file.
+
+``wiki update`` (``--check`` included), ``wiki new`` and ``wiki lint`` print
+the warnings once per run, and ``wiki init`` prints them when it scaffolds a
+wiki: a re-run on an initialized wiki prints none. They come before the
+command's other notes, after any root-resolution diagnostic, and in the order
+the keys stand in the file. ``wiki lint`` counts each as a note, so ``--count``
+shows it in the summary alone, and ``wiki lint --json`` prints no line for it
+and lists it in the document, with the kind ``settings_warning`` and the fields
+``path`` (the settings file), ``key`` and ``reason``; ``lint.strict`` leaves it
+a note. ``wiki read``, ``wiki search``, ``wiki match``, ``wiki map``,
+``wiki config`` and the merge driver print none, and a wiki that another
+wiki's ``links.external`` admits keeps its warnings for its own runs. A
+``.wiki/wiki.py`` hook that reads a key of its own lists it in its class's
+``settings_keys`` table, which maps each block to the keys read inside it.
+
+A file that cannot be read fails the same commands with
+``Cannot read .wiki/settings.json (<reason>).`` The reason is the system's own
+(``Permission denied``, ``Too many levels of symbolic links``), ``not a regular
+file`` for a folder or anything else at the path that is not a file, or ``it
+starts with a byte-order mark; remove the mark``. Only a path that holds
+nothing is a missing settings file, which ``wiki update`` restores unless git
+still holds it (below). The one message that names a path holding something as
+missing is ``No wiki at: ...``, for a folder with neither a settings file nor a
+root ``_index.md``.
 
 Seeding and restoration are asymmetric:
 
 - ``wiki init`` seeds the file with the full ``naming`` defaults block (shown
   below) so the knobs are discoverable, or with the object passed via
-  ``--settings '<json>'``. The seed is validated before anything is written,
-  and re-init never overwrites an existing settings file.
+  ``--settings '<json>'``. The seed is held to the same strict JSON and
+  validated before anything is written, and re-init never overwrites an
+  existing settings file: when ``--settings`` names something else than the
+  file holds, ``init`` says so on stderr and exits 0 (see :doc:`/cli/index`).
 - ``wiki update`` and ``wiki config`` restore a *missing* file as ``{}`` —
-  all defaults; custom policy is never re-invented. Deleting the file
-  therefore silently drops any authored policy once the next mutating run
-  restores the bare marker. (``wiki update --check`` is a dry run and does
-  not restore it.)
+  all defaults; custom policy is never re-invented — when git holds no copy
+  of it: outside a repository, or in one whose ``HEAD`` commit and index both
+  lack the file. A repository that git cannot read, or one on a machine
+  without git, counts as holding none. (``wiki update --check`` is a dry run
+  and does not restore it.)
+- A missing file that git still holds, in the ``HEAD`` commit or in the
+  index, is never replaced. That includes a file ``git status`` does not
+  list: one a sparse checkout leaves out, or one marked skip-worktree or
+  assume-unchanged. A run without it would sweep the wiki on default
+  settings and adopt every page its ``exclude.patterns`` kept out, so
+  ``wiki update`` (and ``--check``), ``wiki new``, ``wiki lint`` and
+  ``wiki config`` exit 2 and write nothing, as does ``wiki init`` on a wiki
+  whose root ``_index.md`` is missing too:
+
+  .. code-block:: text
+
+     Error: .wiki/settings.json is missing, but git still holds it. Restore it from git and rerun: the file is recreated with default settings only when git does not hold it.
+
+  From the wiki root, restore the file with
+  ``git restore .wiki/settings.json``, or with
+  ``git restore --staged --worktree .wiki/settings.json`` after a ``git rm``.
+  A file that a sparse checkout leaves out, or that is marked skip-worktree,
+  takes ``git restore --ignore-skip-worktree-bits .wiki/settings.json``; a
+  sparse checkout can also be widened to include ``.wiki/``.
+  To give up its settings for the defaults, commit the file's removal first.
+  Until that commit lands, ``HEAD`` still holds the file, so a commit hook
+  that runs ``wiki lint`` or ``wiki update --check`` refuses and blocks it:
+  such a wiki writes ``{}`` to the file and commits that, or commits the
+  removal with the hook skipped.
+  ``wiki read``, ``wiki search``, ``wiki match`` and ``wiki map`` still run.
 
 The init-seeded file:
 
@@ -133,7 +224,7 @@ rules are opt-in. An entry whose name breaks the policy is skipped by
    name after removing any ``allow`` characters: ``ascii``, ``alpha``,
    ``alphanum``, or ``identifier`` (each maps to the corresponding
    Python ``str.is*`` check). Unknown names are rejected when the policy
-   loads.
+   loads, as is an entry that is not a string.
 
 ``naming.allow``
    String of characters, default ``""``. Characters stripped from the name
@@ -163,15 +254,19 @@ predicates sets ``"allow": "."``.
 
 ``naming.max_length``
    Integer ``>= 1`` or ``null``, default ``null``. Maximum name length;
-   ``null`` means no cap.
+   ``null`` means no cap. A ``min_length`` above the ``max_length`` is an
+   error naming both keys, since no name could pass.
 
 ``naming.leading_digits``
    Boolean, default ``true``. Only affects the ``identifier`` predicate: when
    true, a leading digit passes (the check runs with an underscore prefixed).
+   Set to ``false`` without ``identifier`` in ``naming.validate``, it has no
+   effect and draws a settings warning.
 
 ``naming.reserved``
    List of strings, default ``[]``. Names rejected outright. ``_index`` is
-   always reserved regardless of this list.
+   always reserved regardless of this list. An entry that is not a string is
+   rejected when the policy loads.
 
 Where the ``naming`` keys require integers, booleans are rejected — the
 checks are exact-type.
@@ -197,9 +292,35 @@ are rendered (see :doc:`/guide/generation` for when they are written).
    ``%Y-%m-%dT%H:%M:%S%z`` — the stock default's literal ``Z`` asserts UTC,
    so the swap keeps the rendered offset honest. An authored format always
    passes through untouched (a literal ``Z`` alongside a non-UTC zone is the
-   author's own claim). The format must render a single non-empty line:
-   empty or whitespace-only values, ``%n``, ``%t``, and literal line breaks
-   are rejected.
+   author's own claim). Four rules are checked when the policy loads:
+
+   - The format renders a single non-empty line: empty or whitespace-only
+     values and literal line breaks are rejected. A NUL character is
+     rejected too: a stamp that holds one never reads back.
+   - The format holds only the directives ``%Y``, ``%m``, ``%d``, ``%H``,
+     ``%M``, ``%S``, ``%z`` and ``%%`` (a percent sign), with literal text
+     around them. Each renders the same text on every machine. Any other
+     ``%`` sequence is rejected by name, a ``%`` that ends the format
+     included: ``Unsupported timestamp.format directive '%b' (must be one of
+     %Y, %m, %d, %H, %M, %S, %z, %%), got "%d %b %Y" in .wiki/settings.json.``
+   - No digit comes straight after ``%z``: not ``%Y``, ``%m``, ``%d``,
+     ``%H``, ``%M`` or ``%S``, and not a literal digit. A parser can read two
+     digits after the offset as the offset's seconds, so some stamps of such
+     a format would read back as another instant. Put ``%z`` last or follow
+     it with a separator: ``timestamp.format must not follow %z with a digit
+     ('%z%H' does), got "%z%H%M" in .wiki/settings.json.``
+   - The format reads back the stamp it writes. Two fixed instants are
+     rendered in the wiki's zone, parsed under the format and rendered again;
+     a format whose stamp fails to parse or comes back as other text is
+     rejected with that stamp: ``timestamp.format must read back the stamp it
+     writes ('2023 2023' does not), got "%Y %Y" in .wiki/settings.json.`` A
+     directive named twice never parses. A date-only format passes: the
+     comparison is of text, not of instants. The check reads neither the
+     clock nor ``WIKI_FREEZE_TIME``, so a format gets the same verdict on
+     every run. Two instants are a sample, and one case passes them: a
+     format with ``%m`` and ``%d`` but no ``%Y`` reads its date in the year
+     1900, which has no 29 February, so ``wiki lint`` fails each stamp
+     written on a leap day. Name the year in a format that names the day.
 
 Changing ``timestamp.format`` on an existing wiki requires rewriting the
 existing stamps by hand — ``wiki lint`` flags each stamp that no longer
@@ -287,12 +408,15 @@ content (dot-paths read the same way).
    - Within a segment, ``*``, ``?``, and ``[...]`` never cross ``/``.
      Classes are fnmatch-style (``[!...]`` negates); a reversed range
      like ``[z-a]`` matches nothing. An embedded ``**`` (``a**b``)
-     collapses to ``*``.
+     collapses to ``*``. A pattern holding ``[^`` is rejected: gitignore
+     reads ``[^a]`` as "not ``a``", and the message names ``[!...]``, the
+     spelling that negates here.
    - No negation (a leading ``!`` is rejected; the syntax is reserved) and
      no escapes (``\`` is rejected — ``/`` is the separator). Empty or
      whitespace-only patterns, empty segments (``//``), and ``.``/``..``
      segments are rejected when the policy loads. A pattern that matches
-     nothing is not an error (the gitignore precedent).
+     nothing is not an error (the gitignore precedent). A space at either
+     end of a pattern is part of it, and draws a settings warning.
 
 The built-in exclusions need no pattern: dot-paths (including ``.wiki``),
 symlinked files and directories, and ``_index.md`` files are always
@@ -387,9 +511,10 @@ a lint rule and nothing more: ``wiki read``, ``wiki map``, ``wiki match``,
 ``wiki search``, ``wiki update``, and ``wiki new`` stay confined to the wiki
 root (a name under a listed folder still fails with ``Path is outside wiki
 root``), generated index rows never carry an external target, and ``wiki map``
-never shows an external folder. ``wiki lint`` reads the block on every run,
-links or none; ``wiki update`` never reads it; ``wiki init`` validates a block
-passed through ``--settings`` but seeds none.
+never shows an external folder. Every command that reads policy validates the
+block with the rest of the settings file, links or none, and only ``wiki lint``
+acts on it; ``wiki init`` validates a block passed through ``--settings`` but
+seeds none.
 
 .. code-block:: json
 
@@ -431,9 +556,11 @@ its links.
      ``~`` path; a ``\`` separator; a ``#``, ``|``, ``[``, ``]``, or NUL
      character (no wikilink target can carry one); an empty segment
      (``//``); a ``.`` segment; a ``..`` segment anywhere but the start; a
-     path naming the whole filesystem; a path inside the wiki root (an
-     in-wiki link needs no allowlist); and a path that resolves inside the
-     wiki root through a symlink alias.
+     path naming the whole filesystem; and a path inside the wiki root (an
+     in-wiki link needs no allowlist). ``wiki lint`` and ``wiki init`` also
+     reject a path that resolves inside the wiki root through a symlink
+     alias; the other commands leave that check out, since it depends on
+     the checkout and not on the file.
    - An entry may name a folder absent from this machine — a sibling
      checkout missing from a partial clone. ``wiki lint`` notes it once per
      run (``links.external entry '../src' names no folder on this machine;

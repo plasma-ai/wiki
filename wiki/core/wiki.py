@@ -7,6 +7,7 @@ import difflib
 import functools
 import hashlib
 import http.client
+import itertools
 import json
 import logging
 import operator
@@ -67,9 +68,29 @@ _PINNED_INSTANT = re.compile(
 # 9999, where the calendar holds it and %Y is four digits on every platform
 _PINNED_YEARS = (1001, 9998)
 
+# the timestamp.format directives: each renders a fixed-width number, the
+# offset or a percent sign, alike on every platform
+_STAMP_DIRECTIVES = ('%Y', '%m', '%d', '%H', '%M', '%S', '%z', '%%')
+
+# what opens on a digit: a parser takes two digits straight after %z for the
+# offset's seconds wherever the rest still parses, so none of these follows it
+_STAMP_DIGITS = ('%Y', '%m', '%d', '%H', '%M', '%S', *'0123456789')
+
+# the instants an authored timestamp.format must read back. A misread
+# regroups digits, which %m and %d allow only on nonzero ones: so the month,
+# day, minute and second hold two nonzero digits in every zone, and the
+# hours sit twelve apart, so one of the two opens on a nonzero digit
+_STAMP_PROBES = (
+    dt.datetime(2023, 11, 25, 22, 14, 56, tzinfo=dt.UTC),
+    dt.datetime(2023, 12, 13, 10, 12, 34, tzinfo=dt.UTC),
+)
+
 # soft ceiling for a folded frontmatter desc: past it lint notes the page,
 # since every map row and parent index link reproduces the whole desc
 _DESC_NOTE_CHARS = 500
+
+# how much of a wrong settings value an error prints before cutting it
+_VALUE_CHARS = 80
 
 # closing words shared by the index merge driver's repair hints, which it
 # plants above the first conflict marker (_assets/git/merge_index.sh)
@@ -77,6 +98,10 @@ _MERGE_HINT_TAIL = 'delete this line when resolving -->'
 
 # the marker line _conflict_marker_lines scans for, shape documented there
 _CONFLICT_MARKER = re.compile(r'^(<{7,}|>{7,})( |$)')
+
+# the path lint asks git about to learn whether the wiki's pages are mapped
+# to the merge driver: a page name in the wiki root, which need not exist
+_PAGE_PROBE = 'page.md'
 
 # a folder's indexed entries, sorted: the child folders the walk descends
 # into and the files it indexes, each judged once against the exclusions
@@ -97,10 +122,17 @@ _UNREPAIRABLE = 'its repair would break the YAML'
 # for an outside miss the page's folder resolves, so both spell it identically
 _RELATIVE_LINK_TEXT = "points inside the wiki through './' or '../'"
 
+# the remedy for a backslash a double-quoted scalar reads as an escape
+_ESCAPE_ADVICE = (
+    'a backslash starts an escape inside double quotes, so write LaTeX in'
+    ' single quotes or a block scalar, or double each backslash'
+)
+
 # the remedy lint appends to an invalid_yaml finding, per
 # cause (see format.frontmatter_issues)
 _YAML_ADVICE = {
     'parse': 'a strict reader drops the whole block, so quote or rewrite the value',
+    'escape': _ESCAPE_ADVICE,
     'nonmapping': 'no strict reader finds key: value pairs in it',
     'nonscalar_key': 'the wiki reads the block by its line grammar alone',
     'duplicate_key': (
@@ -108,6 +140,10 @@ _YAML_ADVICE = {
         ' reads the first'
     ),
 }
+
+# the frontmatter fields whose value is text the generated surfaces copy: the
+# H1 and the parent's row
+_TEXT_FIELDS = ('name', 'title', 'desc', 'category')
 
 # str.is* predicates a policy may require (applied to the name minus allow chars)
 _NAMING_PREDICATES = {
@@ -154,6 +190,27 @@ class Wiki:
     path_sep: str = '/'
     index_delimiter: str = '***'
     category_order: Optional[list[str]] = None
+    #: the keys ``.wiki/settings.json`` may hold: each block with the keys
+    #: read inside it. A key outside the table draws a settings warning, so
+    #: a subclass that reads a key of its own lists it here
+    settings_keys: dict[str, tuple[str, ...]] = {
+        'naming': (
+            'validate',
+            'allow',
+            'deny',
+            'pattern',
+            'min_length',
+            'max_length',
+            'leading_digits',
+            'reserved',
+        ),
+        'timestamp': ('timezone', 'format'),
+        'map': ('desc_limit', 'indent', 'ellipsis'),
+        'titles': ('required',),
+        'lint': ('strict',),
+        'exclude': ('patterns',),
+        'links': ('external',),
+    }
 
     def __init__(self: Wiki, path: PathLike) -> None:
         """Initialize the wiki manager.
@@ -170,6 +227,9 @@ class Wiki:
         # the verdict on each folder the link scan has climbed through: the
         # wiki rooted there, or None for a plain folder, judged once per instance
         self._link_wikis: dict[pathlib.Path, Optional[Wiki]] = {}
+        # whether an enclosing operation has said the settings warnings, so
+        # the operation it runs inside repeats none
+        self._settings_warned = False
 
     @functools.cached_property
     def _root_name(self: Wiki) -> str:
@@ -198,15 +258,40 @@ class Wiki:
         """Return the per-wiki settings overlay from ``.wiki/settings.json``.
 
         Returns an empty dict when the file is absent. Raises ``ValueError``
-        on malformed JSON or a non-object top level, since the file is
-        user-editable input that should fail loudly rather than be ignored.
+        on a file that cannot be read, text that is not strict JSON (see
+        :func:`wiki.util.json.strict_loads`) or a non-object top level,
+        since the file is user-editable input that should fail loudly
+        rather than be ignored.
         """
         path = self._root / WIKI_SETTINGS
-        if not path.exists():
-            return {}
+        # NOTE: only a path that holds nothing is an absent file -- one the
+        #   filesystem cannot reach (a symlink loop, an unsearchable folder)
+        #   is unreadable, never read as all defaults
         try:
-            result = json.loads(path.read_text(encoding='utf-8'))
-        except (ValueError, RecursionError) as e:
+            os.stat(path)
+        except FileNotFoundError:
+            return {}
+        except OSError as e:
+            raise _unreadable_settings_error(e.strerror) from e
+        # NOTE: a FIFO blocks its reader until a writer comes, so only a
+        #   regular file is opened
+        if not path.is_file():
+            raise _unreadable_settings_error('not a regular file')
+        # read the text, naming the cause of a file that yields none
+        try:
+            text = path.read_text(encoding='utf-8')
+        except OSError as e:
+            raise _unreadable_settings_error(e.strerror) from e
+        except UnicodeDecodeError as e:
+            raise _malformed_json_error(WIKI_SETTINGS, e) from e
+        if text.startswith('\ufeff'):
+            raise _unreadable_settings_error(
+                'it starts with a byte-order mark; remove the mark'
+            )
+        # parse the text as strict JSON
+        try:
+            result = wiki.util.json.strict_loads(text)
+        except ValueError as e:
             raise _malformed_json_error(WIKI_SETTINGS, e) from e
         if not isinstance(result, dict):
             raise ValueError(f'{WIKI_SETTINGS} must be a JSON object.')
@@ -233,9 +318,14 @@ class Wiki:
         if not isinstance(validate, list):
             raise ValueError(
                 f'naming.validate must be a list of predicate names, got'
-                f' {validate!r} in {WIKI_SETTINGS}.'
+                f' {_as_json(validate)} in {WIKI_SETTINGS}.'
             )
         for predicate in validate:
+            if not isinstance(predicate, str):
+                raise ValueError(
+                    f'naming.validate entry must be a string, got'
+                    f' {_as_json(predicate)} in {WIKI_SETTINGS}.'
+                )
             if predicate not in _NAMING_PREDICATES:
                 options = ', '.join(_NAMING_PREDICATES)
                 raise ValueError(
@@ -250,7 +340,7 @@ class Wiki:
         elif (type(min_length) is not int) or (min_length < 1):
             raise ValueError(
                 f'naming.min_length must be an int >= 1 or null, got'
-                f' {min_length!r} in {WIKI_SETTINGS}.'
+                f' {_as_json(min_length)} in {WIKI_SETTINGS}.'
             )
         # max_length is null (no cap) or a positive int
         max_length = policy['max_length']
@@ -258,26 +348,38 @@ class Wiki:
             if (type(max_length) is not int) or (max_length < 1):
                 raise ValueError(
                     f'naming.max_length must be an int >= 1 or null, got'
-                    f' {max_length!r} in {WIKI_SETTINGS}.'
+                    f' {_as_json(max_length)} in {WIKI_SETTINGS}.'
+                )
+            # a minimum above the maximum admits no name at all
+            if min_length > max_length:
+                raise ValueError(
+                    f'naming.min_length ({min_length}) must not exceed'
+                    f' naming.max_length ({max_length}) in {WIKI_SETTINGS}.'
                 )
         # deny/allow are strings of characters; reserved is a list of names
         for leaf in ('deny', 'allow'):
             if not isinstance(policy[leaf], str):
                 raise ValueError(
                     f'naming.{leaf} must be a string of characters, got'
-                    f' {policy[leaf]!r} in {WIKI_SETTINGS}.'
+                    f' {_as_json(policy[leaf])} in {WIKI_SETTINGS}.'
                 )
         reserved = policy['reserved']
         if not isinstance(reserved, list):
             raise ValueError(
                 f'naming.reserved must be a list of strings, got'
-                f' {reserved!r} in {WIKI_SETTINGS}.'
+                f' {_as_json(reserved)} in {WIKI_SETTINGS}.'
             )
+        for entry in reserved:
+            if not isinstance(entry, str):
+                raise ValueError(
+                    f'naming.reserved entry must be a string, got'
+                    f' {_as_json(entry)} in {WIKI_SETTINGS}.'
+                )
         leading_digits = policy['leading_digits']
         if not isinstance(leading_digits, bool):
             raise ValueError(
                 f'naming.leading_digits must be a boolean, got'
-                f' {leading_digits!r} in {WIKI_SETTINGS}.'
+                f' {_as_json(leading_digits)} in {WIKI_SETTINGS}.'
             )
         # always deny the path separator, index delimiter, and link/markdown grammar
         deny = set(policy['deny'])
@@ -296,10 +398,10 @@ class Wiki:
             if not isinstance(pattern, str):
                 raise ValueError(
                     f'naming.pattern must be a string or null, got'
-                    f' {pattern!r} in {WIKI_SETTINGS}.'
+                    f' {_as_json(pattern)} in {WIKI_SETTINGS}.'
                 )
             try:
-                pattern = re.compile(pattern)
+                pattern = wiki.util.re.quiet_compile(pattern)
             except re.error as e:
                 raise ValueError(
                     f'naming.pattern in {WIKI_SETTINGS} is not a valid regex: {e}'
@@ -321,7 +423,11 @@ class Wiki:
 
         Validates the per-wiki ``timestamp`` block (``timezone`` / ``format``) so
         a bad value fails loudly with a file+key message rather than leaking a raw
-        exception from :meth:`_utc_now` (settings.json is user input).
+        exception from :meth:`_utc_now` (settings.json is user input). A
+        format holds only the directives that render alike on every
+        platform, puts no digit straight after ``%z``, and reads back the
+        stamp it writes: the verdict comes from fixed instants, never from
+        the clock.
         """
         # overlay the settings.json timestamp block onto the defaults
         override = self._settings.get('timestamp', {})
@@ -329,7 +435,8 @@ class Wiki:
             raise ValueError(
                 f'The timestamp block must be a JSON object in {WIKI_SETTINGS}.'
             )
-        # format is a strftime string; timezone is an IANA name or null (UTC)
+        # format is a strftime string of the directives _STAMP_DIRECTIVES
+        # lists; timezone is an IANA name or null (UTC)
         # -- the default format's literal 'Z' asserts UTC, so a configured
         # zone swaps it for %z to keep the rendered offset honest, while an
         # authored format always passes through untouched (author's choice)
@@ -341,22 +448,49 @@ class Wiki:
             format = '%Y-%m-%dT%H:%M:%SZ'
         if not isinstance(format, str):
             raise ValueError(
-                f'timestamp.format must be a string, got {format!r} in {WIKI_SETTINGS}.'
+                f'timestamp.format must be a string, got'
+                f' {_as_json(format)} in {WIKI_SETTINGS}.'
             )
         # a blank or multi-line value would corrupt the YAML frontmatter -- reject
-        # an empty/whitespace format, strftime's %n/%t newline/tab directives, and
-        # literal line breaks, the only ways the rendered value splits or empties
-        breakers = ('%n', '%t', '\n', '\r')
+        # an empty/whitespace format and literal line breaks, the only ways
+        # the rendered value splits or empties
+        breakers = ('\n', '\r')
         if not format.strip() or any(token in format for token in breakers):
             raise ValueError(
                 f'timestamp.format must render a single non-empty line, got'
-                f' {format!r} in {WIKI_SETTINGS}.'
+                f' {_as_json(format)} in {WIKI_SETTINGS}.'
             )
+        # a NUL cuts the format short where strftime takes a C string, and a
+        # stamp that holds one never reads back from frontmatter
+        if '\0' in format:
+            raise ValueError(
+                f'timestamp.format must not hold a NUL character, got'
+                f' {_as_json(format)} in {WIKI_SETTINGS}.'
+            )
+        # every % opens a listed directive, so a % that ends the format opens none
+        for directive in re.findall(r'%.?', format, re.DOTALL):
+            if directive not in _STAMP_DIRECTIVES:
+                options = ', '.join(_STAMP_DIRECTIVES)
+                raise ValueError(
+                    f'Unsupported timestamp.format directive {directive!r} (must'
+                    f' be one of {options}), got {_as_json(format)} in'
+                    f' {WIKI_SETTINGS}.'
+                )
+        # no digit straight after %z: the rule holds for every stamp, where
+        # the read-back below samples two
+        tokens = re.findall(r'%.|[^%]', format, re.DOTALL)
+        for directive, follower in itertools.pairwise(tokens):
+            if (directive == '%z') and (follower in _STAMP_DIGITS):
+                raise ValueError(
+                    f'timestamp.format must not follow %z with a digit'
+                    f' ({directive + follower!r} does), got {_as_json(format)}'
+                    f' in {WIKI_SETTINGS}.'
+                )
         timezone = override.get('timezone')
         if (timezone is not None) and not isinstance(timezone, str):
             raise ValueError(
                 f'timestamp.timezone must be a string or null, got'
-                f' {timezone!r} in {WIKI_SETTINGS}.'
+                f' {_as_json(timezone)} in {WIKI_SETTINGS}.'
             )
         if timezone:
             try:
@@ -367,6 +501,23 @@ class Wiki:
                 ) from e
         else:
             timezone = dt.UTC
+        # an authored format reads back the stamp it writes, or lint fails
+        # every stamp the wiki holds; the defaults read back in every zone,
+        # and skip a parse whose first call costs milliseconds
+        if 'format' in override:
+            for probe in _STAMP_PROBES:
+                stamp = probe.astimezone(timezone).strftime(format)
+                # a directive named twice is a pattern strptime cannot compile
+                try:
+                    reread = dt.datetime.strptime(stamp, format).strftime(format)
+                except (ValueError, re.error):
+                    reread = None
+                if reread != stamp:
+                    raise ValueError(
+                        f'timestamp.format must read back the stamp it writes'
+                        f' ({stamp!r} does not), got {_as_json(format)} in'
+                        f' {WIKI_SETTINGS}.'
+                    )
         return {'format': format, 'zone': timezone}
 
     @functools.cached_property
@@ -389,18 +540,20 @@ class Wiki:
         if (type(desc_limit) is not int) or (desc_limit < -1):
             raise ValueError(
                 f'map.desc_limit must be an int >= -1 or null, got'
-                f' {desc_limit!r} in {WIKI_SETTINGS}.'
+                f' {_as_json(desc_limit)} in {WIKI_SETTINGS}.'
             )
         # indent is the per-level unit; ellipsis marks a truncated desc
         indent = override.get('indent', '  ')
         if not isinstance(indent, str):
             raise ValueError(
-                f'map.indent must be a string, got {indent!r} in {WIKI_SETTINGS}.'
+                f'map.indent must be a string, got'
+                f' {_as_json(indent)} in {WIKI_SETTINGS}.'
             )
         ellipsis = override.get('ellipsis', '...')
         if not isinstance(ellipsis, str):
             raise ValueError(
-                f'map.ellipsis must be a string, got {ellipsis!r} in {WIKI_SETTINGS}.'
+                f'map.ellipsis must be a string, got'
+                f' {_as_json(ellipsis)} in {WIKI_SETTINGS}.'
             )
         return {'desc_limit': desc_limit, 'indent': indent, 'ellipsis': ellipsis}
 
@@ -423,7 +576,7 @@ class Wiki:
         if not isinstance(required, bool):
             raise ValueError(
                 f'titles.required must be a boolean, got'
-                f' {required!r} in {WIKI_SETTINGS}.'
+                f' {_as_json(required)} in {WIKI_SETTINGS}.'
             )
         return required
 
@@ -444,7 +597,8 @@ class Wiki:
         strict = override.get('strict', False)
         if not isinstance(strict, bool):
             raise ValueError(
-                f'lint.strict must be a boolean, got {strict!r} in {WIKI_SETTINGS}.'
+                f'lint.strict must be a boolean, got'
+                f' {_as_json(strict)} in {WIKI_SETTINGS}.'
             )
         return strict
 
@@ -470,7 +624,7 @@ class Wiki:
         if not isinstance(patterns, list):
             raise ValueError(
                 f'exclude.patterns must be a list of glob strings, got'
-                f' {patterns!r} in {WIKI_SETTINGS}.'
+                f' {_as_json(patterns)} in {WIKI_SETTINGS}.'
             )
         # compile each pattern, keeping its text as written so a match
         # names its cause; the segment checks mirror the grammar the
@@ -481,7 +635,7 @@ class Wiki:
             if not isinstance(pattern, str):
                 raise ValueError(
                     f'exclude.patterns entry must be a string, got'
-                    f' {pattern!r} in {WIKI_SETTINGS}.'
+                    f' {_as_json(pattern)} in {WIKI_SETTINGS}.'
                 )
             stripped = pattern[:-1] if pattern.endswith('/') else pattern
             body = stripped[1:] if stripped.startswith('/') else stripped
@@ -492,6 +646,8 @@ class Wiki:
                 reason = "negation ('!') is not supported"
             elif '\\' in pattern:
                 reason = "use '/' as the separator (no '\\')"
+            elif '[^' in pattern:
+                reason = "'[^' does not negate a class (use '[!...]')"
             elif '' in segments:
                 reason = "empty segment ('//')"
             elif ('.' in segments) or ('..' in segments):
@@ -560,7 +716,7 @@ class Wiki:
         if not isinstance(external, list):
             raise ValueError(
                 f'links.external must be a list of folder paths, got'
-                f' {external!r} in {WIKI_SETTINGS}.'
+                f' {_as_json(external)} in {WIKI_SETTINGS}.'
             )
         # contain each folder lexically, keeping its text as written so a
         # note names its cause; the segment grammar mirrors exclude.patterns,
@@ -571,7 +727,7 @@ class Wiki:
             if not isinstance(folder, str):
                 raise ValueError(
                     f'links.external entry must be a string, got'
-                    f' {folder!r} in {WIKI_SETTINGS}.'
+                    f' {_as_json(folder)} in {WIKI_SETTINGS}.'
                 )
             stripped = folder[:-1] if folder.endswith('/') else folder
             segments = stripped.split('/')
@@ -603,8 +759,6 @@ class Wiki:
                 reason = 'names the whole filesystem'
             elif joined.is_relative_to(self._root):
                 reason = 'inside the wiki root (in-wiki links need no allowlist)'
-            elif pathlib.Path(os.path.realpath(joined)).is_relative_to(self._root):
-                reason = 'resolves inside the wiki root through an alias'
             else:
                 reason = None
             if reason is not None:
@@ -617,6 +771,127 @@ class Wiki:
                 continue
             result.append((folder, joined))
         return result
+
+    def _validate_settings(self: Wiki) -> None:
+        """Validate every ``settings.json`` block, in the documented order.
+
+        An operation that reads policy runs this first -- before it
+        resolves a scope, walks, emits a notice, or writes -- so a
+        malformed block fails each of them alike, whichever blocks it goes
+        on to use. ``read``, ``update_config``, and the merge driver's
+        entry points never run it: each reads only the blocks it uses, so
+        a page stays readable, the repair runnable, and a merge settled on
+        a wiki with a malformed block elsewhere. No check here reads a
+        path in or around the wiki (see
+        :meth:`_refuse_aliased_link_folders`). One leaves the settings
+        text: a named ``timestamp.timezone`` is looked up in the
+        interpreter's zone database, so that verdict can differ by machine.
+        """
+        self._naming_policy  # noqa: B018
+        self._timestamp_policy  # noqa: B018
+        self._map_policy  # noqa: B018
+        self._titles_required  # noqa: B018
+        self._lint_strict  # noqa: B018
+        self._exclude_policy  # noqa: B018
+        self._links_policy  # noqa: B018
+
+    def _warn_settings(self: Wiki) -> None:
+        """Warn of each setting the file holds that does nothing as written.
+
+        The warnings follow the keys in file order, and each operation
+        says them once: the sweep ``new`` runs inside repeats none. Only
+        ``init``, ``update``, ``new`` and ``lint`` call this, each ahead of
+        its other notices: a warning from the settings loader would reach
+        every reader, the merge driver's engines and a linked wiki's among
+        them.
+        """
+        if self._settings_warned:
+            return
+        # collect each warning as (dotted key, reason)
+        warnings = []
+        for key, block in self._settings.items():
+            if key not in self.settings_keys:
+                warnings.append((key, f'unknown key {key!r} (ignored)'))
+                continue
+            # a subclass's own key may hold any value
+            if not isinstance(block, dict):
+                continue
+            for leaf, value in block.items():
+                dotted = f'{key}.{leaf}'
+                if leaf not in self.settings_keys[key]:
+                    warnings.append((dotted, f'unknown key {dotted!r} (ignored)'))
+                # a pattern is matched as written, so a space at either end
+                # keeps it off the name it was typed beside
+                elif dotted == 'exclude.patterns':
+                    for pattern in value:
+                        if pattern != pattern.strip(' '):
+                            reason = (
+                                f'{dotted} entry {pattern!r} starts or ends with a'
+                                ' space (the space is part of the pattern)'
+                            )
+                            warnings.append((dotted, reason))
+                # the flag narrows the identifier rule and no other
+                elif (dotted == 'naming.leading_digits') and (value is False):
+                    if 'identifier' not in self._naming_policy['validate']:
+                        reason = (
+                            f"{dotted} is false without 'identifier' in"
+                            ' naming.validate (it has no effect)'
+                        )
+                        warnings.append((dotted, reason))
+        for key, reason in warnings:
+            self.on_settings_warning(path=WIKI_SETTINGS, key=key, reason=reason)
+
+    def _refuse_aliased_link_folders(self: Wiki) -> None:
+        """Refuse a ``links.external`` folder a symlink leads back into the wiki.
+
+        The one settings check that follows a path in the checkout, so it
+        stays out of :meth:`_validate_settings`: a symlink differs from
+        one checkout to the next.
+        """
+        for folder, joined in self._links_policy:
+            if pathlib.Path(os.path.realpath(joined)).is_relative_to(self._root):
+                raise ValueError(
+                    f'Invalid links.external folder {folder!r}: resolves inside'
+                    f' the wiki root through an alias in {WIKI_SETTINGS}.'
+                )
+
+    @functools.cached_property
+    def _gitignore_matches(self: Wiki) -> Optional[frozenset[str]]:
+        """Return the root-relative POSIX paths the repo's ignore rules match.
+
+        The one batch probe behind the fence (:attr:`_gitignore_fence`)
+        and the ignored-wiki test (:attr:`_gitignored_wiki`), so a run
+        asks git once for both: the root reads as ``.``. ``None`` where
+        no fence applies (see :meth:`_check_ignore`).
+        """
+        # enumerate the candidates one batch probe covers: the root and its
+        # index (together probing the fence-disable case) and every non-dot
+        # entry below it (dot paths and symlinked dirs are excluded either way)
+        candidates = ['.', WIKI_INDEX]
+        for dirpath, dirnames, filenames in os.walk(self._root):
+            dirnames[:] = [d for d in dirnames if not d.startswith('.')]
+            prefix = self._relpath(pathlib.Path(dirpath))
+            if prefix:
+                prefix += '/'
+            for name in (*dirnames, *filenames):
+                if name.startswith('.'):
+                    continue
+                candidates.append(prefix + name)
+        matched = self._check_ignore(candidates)
+        if matched is None:
+            return None
+        return frozenset(matched)
+
+    @property
+    def _gitignored_wiki(self: Wiki) -> bool:
+        """Return ``True`` if the repo's ignore rules match the root and its index.
+
+        The index must read ignored too, since at a repository's top
+        level git reads ``.`` as ignored under any ``*`` line, whatever
+        re-includes follow it.
+        """
+        matched = self._gitignore_matches
+        return (matched is not None) and ({'.', WIKI_INDEX} <= matched)
 
     @functools.cached_property
     def _gitignore_fence(self: Wiki) -> frozenset[str]:
@@ -635,27 +910,10 @@ class Wiki:
         repository), and when the root and its index are both ignored (a
         deliberately unindexed wiki inside a repo must keep working).
         """
-        # enumerate the candidates one batch probe covers: the root and its
-        # index (together probing the fence-disable case) and every non-dot
-        # entry below it (dot paths and symlinked dirs are excluded either way)
-        candidates = ['.', WIKI_INDEX]
-        for dirpath, dirnames, filenames in os.walk(self._root):
-            dirnames[:] = [d for d in dirnames if not d.startswith('.')]
-            prefix = self._relpath(pathlib.Path(dirpath))
-            if prefix:
-                prefix += '/'
-            for name in (*dirnames, *filenames):
-                if name.startswith('.'):
-                    continue
-                candidates.append(prefix + name)
-        matched = self._check_ignore(candidates)
-        if matched is None:
-            return frozenset()
+        matched = self._gitignore_matches
         # a fenced root would fence the whole wiki out of itself: leave a
-        # deliberately ignored wiki unfenced instead; its index must read
-        # ignored too, since at a repository's top level git reads '.' as
-        # ignored under any '*' line, whatever re-includes follow it
-        if {'.', WIKI_INDEX} <= matched:
+        # deliberately ignored wiki unfenced instead
+        if (matched is None) or self._gitignored_wiki:
             return frozenset()
         return frozenset(matched - {'.'})
 
@@ -756,6 +1014,49 @@ class Wiki:
             if (ancestor / '.git').exists():
                 return True
         return False
+
+    @functools.cached_property
+    def _settings_in_git(self: Wiki) -> bool:
+        """Return ``True`` if git holds a settings file the working tree lacks.
+
+        Read only once ``.wiki/settings.json`` is known to be missing, and
+        cached, so a wiki with its file pays nothing and one run asks git
+        once. The question is whether HEAD's tree or the index names the
+        path, never what ``git status`` shows: an entry a sparse checkout
+        leaves out, or one marked skip-worktree or assume-unchanged, is
+        held like any other, as is one a merge left unmerged. ``False``
+        outside a repository and when git gives no answer.
+        """
+        if not self._in_repository():
+            return False
+        # git runs in a folder that exists: the root, or the nearest
+        # ancestor of a root the working tree lacks too
+        folder = self._root
+        while not folder.is_dir():
+            folder = folder.parent
+        relative = (self._root / WIKI_SETTINGS).relative_to(folder).as_posix()
+        # the listing is the index with HEAD's tree laid over it, so one
+        # read names a path either holds, at any merge stage, and opens no
+        # blob (a partial clone would fetch one it lacks); the path goes as
+        # a literal ./<path>, so no character of a folder's name reads as
+        # pathspec magic or as a glob that matches a sibling
+        cmd = [
+            '--literal-pathspecs',
+            'ls-files',
+            '-z',
+            '--with-tree=HEAD',
+            '--',
+            f'./{relative}',
+        ]
+        result = wiki.util.git._git(cmd, cwd=folder, raw=True)
+        # a repository without a commit has no tree to lay over the index,
+        # and git refuses the listing: the index answers alone
+        if (result is not None) and (result.returncode != 0):
+            cmd.remove('--with-tree=HEAD')
+            result = wiki.util.git._git(cmd, cwd=folder, raw=True)
+        if (result is None) or (result.returncode != 0):
+            return False
+        return bool(result.stdout)
 
     def _warn_untrackable_rows(self: Wiki, walk: Iterable[_WalkStep]) -> None:
         """Note indexed paths the caller's full ignore stack excludes.
@@ -970,8 +1271,8 @@ class Wiki:
         """
         return wiki.util.git._git(cmd, cwd=self._root, check=False)
 
-    def _warn_unconfigured_merge_driver(self: Wiki) -> None:
-        """Note a ``merge=wiki`` attribute with no configured driver.
+    def _warn_merge_wiring(self: Wiki) -> None:
+        """Note a ``merge=wiki`` index mapping with no configured driver, or no page mapping.
 
         ``wiki init``/``wiki config`` wire two halves: the
         ``.gitattributes`` map (committed, it travels with the
@@ -980,14 +1281,41 @@ class Wiki:
         back to a plain text merge of ``_index.md`` files and pages --
         silently, at the clone's first merge -- so lint notes the gap
         while it is one ``wiki config`` away from wired.
+
+        The map has two lines of its own, one for index files and one
+        for the wiki's pages, and a wiki may hold the first alone (the
+        wiki root's file skipped for its uncommitted changes, a map
+        written by hand): its pages then merge as plain text. One
+        ``check-attr`` call answers for both, the root index and a page
+        name in the root (``_PAGE_PROBE``). A wiki with no mapping at
+        all is unwired by choice, and one the repository ignores merges
+        nothing, so neither draws a note. The repository's own rules
+        decide what is ignored, as for the fence, so the note reads the
+        same on every clone.
         """
-        cmd = ['--no-optional-locks', 'check-attr', 'merge', '--', WIKI_INDEX]
-        attribute = self._git_read(cmd)
-        if (attribute is None) or not attribute.endswith(': merge: wiki'):
+        cmd = [
+            '--no-optional-locks',
+            'check-attr',
+            'merge',
+            '--',
+            WIKI_INDEX,
+            _PAGE_PROBE,
+        ]
+        attributes = self._git_read(cmd)
+        if attributes is None:
             return
-        if self._git_read(['config', '--get', 'merge.wiki.driver']):
+        # git answers one '<path>: merge: <value>' line per path
+        lines = attributes.splitlines()
+        if f'{WIKI_INDEX}: merge: wiki' not in lines:
             return
-        self.on_merge_driver_unconfigured()
+        if not self._git_read(['config', '--get', 'merge.wiki.driver']):
+            self.on_merge_driver_unconfigured()
+        # NOTE: the ignored-wiki test reads the fence's batch probe, which
+        #   lint's walk runs for the first entry it weighs against the fence,
+        #   so the note costs a git call of its own only where the walk
+        #   weighs none (a wiki that holds nothing but its root index)
+        if (f'{_PAGE_PROBE}: merge: wiki' not in lines) and not self._gitignored_wiki:
+            self.on_page_merge_unmapped()
 
     def _warn_missing_link_folders(self: Wiki) -> None:
         """Note each ``links.external`` entry that names no folder on disk.
@@ -996,8 +1324,6 @@ class Wiki:
         or an entry may name a file: the links into it are neither live
         nor stale, so lint names the entry once (soft) and the link scan
         passes over targets under it rather than noting every one.
-        Reading the policy here also validates the block on every run,
-        links or none.
         """
         for folder, joined in self._links_policy:
             if not os.path.isdir(joined):
@@ -1211,6 +1537,8 @@ class Wiki:
         _is_offline()
         # TODO: remove back-compat in future version
         self._refuse_legacy_layout()
+        # a settings file git still holds is never swept past on defaults
+        self._refuse_lost_settings()
         # resolve the settings seed and prime the _settings cache with it, so
         # the accesses below (_name_violation, _utc_now) read this wiki's real
         # policy rather than caching {} from the not-yet-written file
@@ -1226,19 +1554,12 @@ class Wiki:
         # validate the seeded policies BEFORE any filesystem write: a rejected
         # seed must fail cleanly rather than strand a wiki whose settings.json
         # every later command (and re-init, which never overwrites it) rejects
+        self._validate_settings()
+        self._refuse_aliased_link_folders()
         name = name or self._root.name
         violation = self._name_violation(name)
         if violation is not None:
             raise ValueError(f'Invalid wiki name {name!r}: {violation}')
-        # the titles, map, exclude, links, and lint policies are read lazily
-        # (first inside the plan, the map render, the walk, lint's folder
-        # check, and lint's link scan), so touch them here to reject
-        # a bad seed early
-        self._titles_required  # noqa: B018
-        self._map_policy  # noqa: B018
-        self._exclude_policy  # noqa: B018
-        self._links_policy  # noqa: B018
-        self._lint_strict  # noqa: B018
         # alias current timestamp
         now = self._utc_now()
         # initialize wiki root
@@ -1248,6 +1569,8 @@ class Wiki:
             settings_path.parent.mkdir(parents=True, exist_ok=True)
             content = json.dumps(seed, indent=2)
             wiki.util.fs.write_atomic(settings_path, content + '\n')
+        # the settings file stands now, so its warnings name a file on disk
+        self._warn_settings()
         # seed .wiki/obsidian from stock template
         _obsidian.seed_template(self._root)
         # create root index
@@ -1294,7 +1617,8 @@ class Wiki:
         ``.wiki/obsidian/`` is seeded from the stock template first, so
         an adopted tree gets the full setup. Also guarantees the
         declared-root marker: a missing ``.wiki/settings.json`` is
-        restored as ``{}`` with a notice.
+        restored as ``{}`` with a notice, unless git still holds it
+        (:meth:`_refuse_lost_settings`).
 
         Returns:
             List of warning messages (e.g. when a plugin download
@@ -1409,14 +1733,20 @@ class Wiki:
         # create or merge each top-level json file
         for source in sorted(config_dir.glob('*.json')):
             target = obsidian_dir / source.name
+            # a staged file that is not UTF-8 is named, as a vault file is
+            try:
+                text = source.read_text(encoding='utf-8')
+            except UnicodeDecodeError as e:
+                name = f'{WIKI_DIR}/obsidian/{source.name}'
+                raise _malformed_json_error(name, e) from e
             # create from source when the target is absent (atomically, so a
             # crash mid-create never leaves a torn file the merge rejects)
             if not target.exists():
-                wiki.util.fs.write_atomic(target, source.read_text(encoding='utf-8'))
+                wiki.util.fs.write_atomic(target, text)
                 continue
             # load source and target for merge; the target is user-editable, so
             # name the file on bad JSON instead of a bare, undiagnosable error
-            source_data = json.loads(source.read_text(encoding='utf-8'))
+            source_data = json.loads(text)
             target_data = _read_vault_json(target)
             # merge per the install policy (arrays union, dicts deep)
             merged = _obsidian.merge_settings(
@@ -1540,7 +1870,11 @@ class Wiki:
         marker -- is restored as ``{}`` (all defaults; policy is never
         invented) with a notice; a dry run leaves it untouched,
         neither restoring nor reporting it (the CLI's resolver
-        names it instead).
+        names it instead). A missing one git still holds is never
+        restored: the write and the dry run refuse alike
+        (:meth:`_refuse_lost_settings`). A setting the file holds to no
+        effect is warned about ahead of every other notice
+        (:meth:`_warn_settings`).
 
         Args:
             name: Restrict scope to named subtree (relative
@@ -1562,6 +1896,9 @@ class Wiki:
                 would read the markers as authored content and bake
                 them into the rewrite, so the write and the dry run
                 refuse alike, naming every marked file.
+            ValueError: If ``.wiki/settings.json`` is missing while git
+                still holds it -- the sweep would run on defaults, so
+                the write and the dry run refuse alike.
 
         Note:
             A scoped update (``name`` set) does not refresh the parent
@@ -1569,6 +1906,10 @@ class Wiki:
             the parent folder is outside the scope.
 
         """
+        # check every settings block before anything else, then say what
+        # the file holds to no effect
+        self._validate_settings()
+        self._warn_settings()
         # resolve the scope first, so a bad entry fails before the write
         # sweeps below mutate anything
         if name:
@@ -1581,6 +1922,8 @@ class Wiki:
         self._refuse_enclosing_wiki(folder)
         # TODO: remove back-compat in future version
         self._refuse_legacy_layout()
+        # a settings file git still holds is never swept past on defaults
+        self._refuse_lost_settings()
         # one walk of the scope: the untrackable-row note, the nested-root
         # scan, and the plan read the same folders and pages; nothing the run
         # itself does between the walk and the plan touches the walked tree
@@ -1700,10 +2043,15 @@ class Wiki:
                 indexed folder, or named against the naming policy.
             ValueError: If the wiring sweep would refuse -- merge
                 conflict markers in the authored input or the parent
-                scope, or a nested declared wiki within it -- each
-                checked before the write, with nothing created.
+                scope, a nested declared wiki within it, or a missing
+                ``.wiki/settings.json`` git still holds -- each checked
+                before the write, with nothing created.
 
         """
+        # check every settings block before anything else, then say what
+        # the file holds to no effect
+        self._validate_settings()
+        self._warn_settings()
         # the authored inputs are the point: refuse placeholders outright,
         # never stub them
         desc = desc.strip()
@@ -1813,6 +2161,8 @@ class Wiki:
             scope = parent.relative_to(self._root).as_posix()
         # TODO: remove back-compat in future version
         self._refuse_legacy_layout()
+        # a settings file git still holds is never swept past on defaults
+        self._refuse_lost_settings()
         # one walk of the parent scope for the nested-root scan and the dry
         # plan; nothing between them touches the walked tree
         walk = self._walk(parent)
@@ -1828,8 +2178,13 @@ class Wiki:
         folder.mkdir(exist_ok=True)
         wiki.util.fs.write_atomic(index_path, text)
         # the scoped sweep adds the folder's own rows and the parent's new
-        # row, propagating the desc, so the adoption lands converged
-        self.update(name=scope)
+        # row, propagating the desc, so the adoption lands converged; the
+        # settings warnings are out already
+        self._settings_warned = True
+        try:
+            self.update(name=scope)
+        finally:
+            self._settings_warned = False
         return str(index_path.relative_to(self._root))
 
     @format.run_scoped
@@ -1862,7 +2217,11 @@ class Wiki:
           or a list marker mid-sentence or directly under a
           paragraph), missing trailing periods, unparseable
           ``created:``/``updated:`` stamps (the fields are
-          tool-owned, so a parseable value is never judged), broken
+          tool-owned, so a parseable value is never judged), a control
+          character in a double-quoted ``name``, ``title``, ``desc``, or
+          ``category`` (a backslash escape decoded where LaTeX was
+          typed), a ``name``, ``title``, ``desc``, or ``category`` whose
+          value is a YAML mapping or list, broken
           index links (targets that no longer exist; ``update`` prunes
           these, so the row is also part of the file's pending diff --
           a target still on disk as a symlinked file is named as such,
@@ -1894,9 +2253,9 @@ class Wiki:
         A ``<!-- start: no-lint -->`` ... ``<!-- end: no-lint -->`` region
         suppresses the positional rules (conflict markers, escaped
         wikilinks, wrap mangles, stale, outside, directory, relative, and
-        absolute links) for the lines it wraps; file-level checks ignore
-        regions, and a nested or dangling region marker is itself a hard
-        issue.
+        absolute links, control characters in content) for the lines it
+        wraps; file-level checks ignore regions, and a nested or dangling
+        region marker is itself a hard issue.
 
         Placeholder and oversized descriptions, empty content sections,
         stale links in user content (index bodies and pages -- the
@@ -1904,10 +2263,13 @@ class Wiki:
         target outside the root resolves only under a folder
         ``links.external`` allowlists), a ``links.external`` entry
         naming no folder on this machine (noted once per run; links into
-        it go unchecked), and CRLF line endings (which the next
-        ``update`` normalizes) are soft notes (stderr)
+        it go unchecked), CRLF line endings (which the next
+        ``update`` normalizes), and control characters in authored
+        content (a page's body bar its H1, an index's text below the
+        delimiter; a tab and a line break are text) are soft notes (stderr)
         and do not count as issues; ``lint.strict`` makes the stale links
-        issues.
+        issues. A setting the file holds to no effect is a soft note too,
+        ahead of the others (:meth:`_warn_settings`).
 
         Args:
             name: Restrict scope to named subtree (relative
@@ -1919,6 +2281,12 @@ class Wiki:
             ``kind`` and per-kind payload ``fields``.
 
         """
+        # check every settings block before anything else, say what the
+        # file holds to no effect, then check the one links.external rule
+        # that follows a path on disk
+        self._validate_settings()
+        self._warn_settings()
+        self._refuse_aliased_link_folders()
         # resolve folder
         if name:
             folder = self._resolve_folder(name)
@@ -1930,24 +2298,23 @@ class Wiki:
         self._refuse_enclosing_wiki(folder)
         # TODO: remove back-compat in future version
         self._refuse_legacy_layout()
-        # a merge=wiki attributes map without its config half means git
-        # text-merges indexes silently: note the gap (soft) before the
-        # clone's first merge pays for it
-        self._warn_unconfigured_merge_driver()
+        # a settings file git still holds is never swept past on defaults
+        self._refuse_lost_settings()
+        # a merge=wiki attributes map without its config half, or without
+        # its page line, means git text-merges silently: note each gap
+        # (soft) before a merge pays for it
+        self._warn_merge_wiring()
         # inside a repository the untrackable-row note walks the scope and the
         # plan reads that walk (nothing between the walk and the plan touches
         # the walked tree); outside one there is no note, and the plan walks
-        # for itself once the links policy below is read
+        # for itself
         walk = None
         if self._in_repository():
             walk = self._walk(folder)
             self._warn_untrackable_rows(walk)
         # a links.external entry naming no folder on this machine is one note
-        # per run, not one per link; reading the policy here also fails a
-        # malformed block before the plan, links or none
+        # per run, not one per link
         self._warn_missing_link_folders()
-        # a malformed lint block fails here too, stale links or none
-        self._lint_strict  # noqa: B018
         # compute what update would write (the source of truth for drift); the
         # blocks the planners keep as written come back as notices, keyed here
         # by path like the overlay, so lint names the refusals update applies
@@ -2135,6 +2502,8 @@ class Wiki:
                     result.extend(self._lint_title(index_path, frontmatter))
                     result.extend(self._lint_timestamps(index_path, frontmatter))
                     result.extend(self._lint_frontmatter_yaml(index_path, frontmatter))
+                    result.extend(self._lint_field_controls(index_path, frontmatter))
+                    result.extend(self._lint_field_types(index_path, frontmatter))
                     # the root display name has no enclosing dir to validate it
                     if folder == self._root:
                         root_name = format.read_frontmatter_name(frontmatter)
@@ -2263,6 +2632,13 @@ class Wiki:
                     result.extend(self._lint_stale_links(index_path, user_content))
                     if not user_content.strip():
                         self.on_content_empty(path=str(index_relpath))
+                    # a control character in the authored text is a soft note
+                    self._lint_content_controls(
+                        path=index_path,
+                        text=text,
+                        frontmatter=frontmatter,
+                        suppressed=suppressed,
+                    )
             # check pages (always, even when the index is missing)
             for page in pages:
                 page_relpath = page.relative_to(self._root)
@@ -2361,6 +2737,8 @@ class Wiki:
                     result.extend(self._lint_title(page, frontmatter))
                     result.extend(self._lint_timestamps(page, frontmatter))
                     result.extend(self._lint_frontmatter_yaml(page, frontmatter))
+                    result.extend(self._lint_field_controls(page, frontmatter))
+                    result.extend(self._lint_field_types(page, frontmatter))
                 # hand-wrap artifacts in the content and raw desc lines
                 # are hard issues
                 result.extend(
@@ -2369,6 +2747,8 @@ class Wiki:
                 # stale links in page content are soft notes; directory
                 # links in page content are hard issues
                 result.extend(self._lint_stale_links(page, content))
+                # a control character in the authored body is a soft note
+                self._lint_content_controls(page, text, frontmatter, suppressed)
         return result
 
     @format.run_scoped
@@ -2445,6 +2825,8 @@ class Wiki:
             then by path among equal scores.
 
         """
+        # check every settings block before anything else
+        self._validate_settings()
         # resolve folder
         if name:
             folder = self._resolve_folder(name)
@@ -2485,7 +2867,9 @@ class Wiki:
         By default matches body content of wiki-tracked
         markdown files. Use ``field`` to match specific
         frontmatter fields instead. Use ``all_files`` to
-        include non-markdown files.
+        include non-markdown files. A page that is not valid
+        UTF-8 is skipped with a read-skip notice; any other
+        file that is not is skipped in silence.
 
         Args:
             pattern: Regex pattern to match.
@@ -2506,10 +2890,20 @@ class Wiki:
             List of ``(relative_path, line_number, line_text)``
             tuples. Line numbers are 1-based.
 
+        Raises:
+            ValueError: If ``pattern`` is not a valid regex.
+
         """
+        # check every settings block before anything else
+        self._validate_settings()
         # compile pattern
         flags = re.IGNORECASE if ignore_case else 0
-        regex = re.compile(pattern, flags)
+        # NOTE: the parser refuses a repeat count past its limit and a nesting
+        #   past the interpreter's stack with errors of their own
+        try:
+            regex = wiki.util.re.quiet_compile(pattern, flags)
+        except (re.error, OverflowError, RecursionError) as e:
+            raise ValueError(f'Invalid regex {pattern!r}: {e}') from e
         # resolve folder scope
         if name:
             folder = self._resolve_folder(name)
@@ -2525,16 +2919,22 @@ class Wiki:
         # search each file
         result = []
         for path in files:
+            relpath = str(path.relative_to(self._root))
             # skip binary / non-utf-8 files (e.g. an image under --all) rather
             # than aborting the whole search on one undecodable file; a file
             # vanishing between the walk and the read (a concurrent delete)
             # matches as absent from the walk
             try:
                 text = path.read_text(encoding='utf-8')
-            except (UnicodeDecodeError, FileNotFoundError):
+            except FileNotFoundError:
                 continue
-            relpath = str(path.relative_to(self._root))
-            lines = text.split('\n')
+            except UnicodeDecodeError:
+                # a page may hold the pattern, so its skip is narrated: silence
+                # would read as no match (a binary file under --all is expected)
+                if path.suffix == '.md':
+                    self.on_read_skip(path=relpath)
+                continue
+            lines = wiki.util.str.split_lines(text)
             # frontmatter is a markdown concept -- read slices non-md files
             # whole, so a non-md file's leading '---' pair is body content
             # here too, not a frontmatter block to lift off
@@ -2624,6 +3024,8 @@ class Wiki:
             Indented tree string.
 
         """
+        # check every settings block before anything else
+        self._validate_settings()
         if isinstance(category, str):
             category = [category]
         # resolve the desc limit (argument > map.desc_limit setting,
@@ -2958,6 +3360,26 @@ class Wiki:
             event = MergeDriverUnconfiguredEvent(message, **kwargs)
         return self.on_notice(event, logging_level=logging_level)
 
+    def on_page_merge_unmapped(
+        self: Wiki,
+        message: Optional[str] = None,
+        *,
+        logging_level: int = logging.WARNING,
+        event: Optional[PageMergeUnmappedEvent] = None,
+        **kwargs: Any,
+    ) -> Event:
+        """Handle an unmapped-page-merge notice event.
+
+        Constructs a ``PageMergeUnmappedEvent`` from ``message`` and the
+        payload kwargs unless a pre-built ``event`` is passed through,
+        then delegates to ``on_notice``. Override in subclasses to
+        intercept this notice kind alone; override ``on_notice`` to
+        intercept every notice.
+        """
+        if event is None:
+            event = PageMergeUnmappedEvent(message, **kwargs)
+        return self.on_notice(event, logging_level=logging_level)
+
     def on_write_skip(
         self: Wiki,
         message: Optional[str] = None,
@@ -3078,6 +3500,26 @@ class Wiki:
             event = SettingsRestoreEvent(message, **kwargs)
         return self.on_notice(event, logging_level=logging_level)
 
+    def on_settings_warning(
+        self: Wiki,
+        message: Optional[str] = None,
+        *,
+        logging_level: int = logging.WARNING,
+        event: Optional[SettingsWarningEvent] = None,
+        **kwargs: Any,
+    ) -> Event:
+        """Handle a settings-warning notice event.
+
+        Constructs a ``SettingsWarningEvent`` from ``message`` and the
+        payload kwargs (the settings file, the dotted key and the reason)
+        unless a pre-built ``event`` is passed through, then delegates to
+        ``on_notice``. Override in subclasses to intercept this notice
+        kind alone; override ``on_notice`` to intercept every notice.
+        """
+        if event is None:
+            event = SettingsWarningEvent(message, **kwargs)
+        return self.on_notice(event, logging_level=logging_level)
+
     def on_cache_restore(
         self: Wiki,
         message: Optional[str] = None,
@@ -3179,6 +3621,27 @@ class Wiki:
             event = CrlfNoticeEvent(message, **kwargs)
         return self.on_notice(event, logging_level=logging_level)
 
+    def on_content_control_character(
+        self: Wiki,
+        message: Optional[str] = None,
+        *,
+        logging_level: int = logging.INFO,
+        event: Optional[ContentControlCharacterEvent] = None,
+        **kwargs: Any,
+    ) -> Event:
+        """Handle a control-character-in-content notice event.
+
+        Constructs a ``ContentControlCharacterEvent`` from ``message``
+        and the payload kwargs (the live-site path, the first line and
+        character, and the count) unless a pre-built ``event`` is passed
+        through, then delegates to ``on_notice``. Override in subclasses
+        to intercept this notice kind alone; override ``on_notice`` to
+        intercept every notice.
+        """
+        if event is None:
+            event = ContentControlCharacterEvent(message, **kwargs)
+        return self.on_notice(event, logging_level=logging_level)
+
     def on_link_stale(
         self: Wiki,
         message: Optional[str] = None,
@@ -3246,9 +3709,10 @@ class Wiki:
         """Materialize a missing ``.wiki/settings.json`` as ``{}``.
 
         The settings file is the declared-root marker: ``init`` writes it
-        and every mutating command restores a lost one, so the declaration
-        guarantee is enforced rather than assumed. The materialized file
-        is an empty object -- all defaults; policy is never invented.
+        and every mutating command restores a missing one git does not
+        hold, so the declaration guarantee is enforced rather than
+        assumed. The materialized file is an empty object -- all
+        defaults; policy is never invented.
 
         Returns:
             Notice events describing the restoration (empty when present).
@@ -3256,17 +3720,28 @@ class Wiki:
         Raises:
             ValueError: If a root ``_config/settings.json`` exists -- the
                 legacy config namespace is never read, so its policy must
-                migrate before any policy-reading write proceeds.
+                migrate before any policy-reading write proceeds -- if
+                git still holds the missing file
+                (:meth:`_refuse_lost_settings`), or if the filesystem
+                cannot reach the settings path.
 
         """
         # TODO: remove back-compat in future version
         self._refuse_legacy_layout()
+        # a settings file git still holds is never swept past on defaults
+        self._refuse_lost_settings()
         path = self._root / WIKI_SETTINGS
-        if path.exists():
-            return []
-        path.parent.mkdir(parents=True, exist_ok=True)
-        wiki.util.fs.write_atomic(path, '{}\n')
-        return [SettingsRestoreEvent(path=WIKI_SETTINGS)]
+        # NOTE: only an absent file is restored -- a write through a path the
+        #   filesystem cannot reach fails without naming the settings file
+        try:
+            os.stat(path)
+        except FileNotFoundError:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            wiki.util.fs.write_atomic(path, '{}\n')
+            return [SettingsRestoreEvent(path=WIKI_SETTINGS)]
+        except OSError as e:
+            raise _unreadable_settings_error(e.strerror) from e
+        return []
 
     def _refuse_legacy_layout(self: Wiki) -> None:
         """Refuse to plan a sweep on a legacy-layout wiki.
@@ -3295,6 +3770,37 @@ class Wiki:
                 '\n  (2) run `wiki config`'
                 '\n  (3) run `wiki update`'
             )
+
+    def _refuse_lost_settings(self: Wiki) -> None:
+        """Refuse to plan a sweep without a settings file git still holds.
+
+        A ``.wiki/settings.json`` missing from the working tree while
+        HEAD or the index holds it was lost, not left out: a sweep
+        without it runs on defaults and adopts every page its
+        ``exclude.patterns`` kept out, and a dry run would preview that
+        same sweep. Every path the legacy-layout guard covers refuses
+        alike, and the read paths (``read``, ``search``, ``match``,
+        ``map``) stay tolerant. A missing file git does not hold has
+        no copy to come back from: it is restored as ``{}``
+        (:meth:`_ensure_settings`).
+
+        Raises:
+            ValueError: If the settings file is missing and git holds it.
+
+        """
+        # NOTE: only a path that holds nothing is a missing file, and git is
+        #   asked about nothing else
+        try:
+            os.stat(self._root / WIKI_SETTINGS)
+        except FileNotFoundError:
+            if self._settings_in_git:
+                raise ValueError(
+                    f'{WIKI_SETTINGS} is missing, but git still holds it. Restore'
+                    ' it from git and rerun: the file is recreated with default'
+                    ' settings only when git does not hold it.'
+                ) from None
+        except OSError:
+            pass
 
     def _index_missing_marker(
         self: Wiki,
@@ -3571,7 +4077,64 @@ class Wiki:
                 if self._is_excluded_dir(ancestor):
                     raise ValueError(f'Path is inside an excluded directory: {path!r}')
             return resolved
-        raise FileNotFoundError(f'Wiki folder not found: {path!r}')
+        hint = self._suggest_scope(path)
+        raise self._folder_not_found(path, hint)
+
+    def _suggest_scope(self: Wiki, path: str) -> Optional[str]:
+        """Suggest the fix for a scope name that reaches no folder.
+
+        Two misses have a fix the tree can name. A name that reaches a
+        page (``core/store`` for ``core/store.md``) is a read key, and a
+        scope is a folder: the hint says so and names the page's folder.
+        A name that leads with the root's own folder name (``wiki/core``
+        in the wiki at ``wiki``) carries one component too many: the hint
+        is the rest. A hint names only a folder that resolves as a scope;
+        any other miss returns ``None``.
+        """
+        requested = pathlib.PurePosixPath(path)
+        if requested.is_absolute():
+            return None
+        # a page: the name as typed, or with the .md suffix read appends
+        page = self._root / requested
+        if page.suffix != '.md':
+            page = self._root / f'{requested}.md'
+        page = page.resolve()
+        if page.is_relative_to(self._root) and page.is_file():
+            if len(requested.parts) == 1:
+                return 'a scope is a folder and this is a page in the wiki root'
+            folder = str(requested.parent)
+            if self._is_scope(folder):
+                return f'a scope is a folder and this is a page; did you mean {folder}?'
+            return None
+        # the root's own folder name, then a folder below the root
+        if (len(requested.parts) > 1) and (requested.parts[0] == self._root.name):
+            rest = str(pathlib.PurePosixPath(*requested.parts[1:]))
+            if self._is_scope(rest):
+                return f'did you mean {rest}?'
+        return None
+
+    def _is_scope(self: Wiki, path: str) -> bool:
+        """Return ``True`` if ``path`` resolves as a folder scope."""
+        # a miss is answered here: resolving it would look for a hint of
+        # its own, one level deeper for each leading root name
+        if not (self._root / path).resolve().is_dir():
+            return False
+        try:
+            self._resolve_folder(path)
+        except ValueError:
+            return False
+        return True
+
+    def _folder_not_found(
+        self: Wiki,
+        path: str,
+        hint: Optional[str] = None,
+    ) -> FileNotFoundError:
+        """Build the folder not-found error, carrying any hint in parentheses."""
+        message = f'Wiki folder not found: {path!r}'
+        if hint is not None:
+            message += f' ({hint})'
+        return FileNotFoundError(message)
 
     def _true_case(self: Wiki, resolved: pathlib.Path) -> pathlib.Path:
         """Return ``resolved`` with every component in its on-disk casing.
@@ -3933,10 +4496,8 @@ class Wiki:
             raise ValueError(f'links.external wiki {relpath!r}: {e}') from e
         except OSError as e:
             relpath = os.path.relpath(folder, self._root)
-            raise ValueError(
-                f'links.external wiki {relpath!r}: cannot read {WIKI_SETTINGS}'
-                f' ({e.strerror})'
-            ) from e
+            error = _unreadable_settings_error(e.strerror)
+            raise ValueError(f'links.external wiki {relpath!r}: {error}') from e
         return guest
 
     def _external_index_target(
@@ -4238,19 +4799,16 @@ class Wiki:
 
         A bare ``UnicodeDecodeError`` carries only a byte offset --
         unactionable on a tree of thousands of files -- so the re-raise
-        appends the offending file's relative path to the reason.
+        leads with the offending file's relative path.
         """
         try:
             return path.read_text(encoding='utf-8')
         except UnicodeDecodeError as e:
-            relpath = path.relative_to(self._root)
-            raise UnicodeDecodeError(
-                e.encoding,
-                e.object,
-                e.start,
-                e.end,
-                f'{e.reason} (in {relpath})',
-            ) from e
+            # the base class's own arguments, with the path bound after: an
+            # error built this way pickles, so it crosses a process boundary
+            error = PageDecodeError(e.encoding, e.object, e.start, e.end, e.reason)
+            error.path = str(path.relative_to(self._root))
+            raise error from e
 
     def _has_crlf(self: Wiki, path: pathlib.Path) -> bool:
         r"""Return ``True`` if ``path``'s bytes carry CR line endings.
@@ -4497,7 +5055,7 @@ class Wiki:
         body = body.strip()
         # slice the body
         if on == 'lines':
-            lines = body.splitlines()
+            lines = wiki.util.str.split_lines(body)
             result = '\n'.join(lines[start:stop])
         elif on == 'words':
             # words: keep the original span from the first to the last word
@@ -5242,11 +5800,18 @@ class Wiki:
                 # announce a genuine overwrite (a hand-edit would otherwise vanish
                 # silently); first-time propagation onto the placeholder stays quiet
                 if link_desc not in ('', '...'):
+                    # the page's file is the target as written when the
+                    # target carries its suffix (a page beside a file of its
+                    # stripped name), else the target plus the .md it strips
+                    page = target
+                    if child_path != self._root / target:
+                        page = f'{target}.md'
                     notices.append(
                         DescOverwriteEvent(
                             path=str(relpath),
                             target=target,
                             label=label,
+                            page=page,
                         )
                     )
                 propagated.append((target, label, child_desc))
@@ -5687,15 +6252,15 @@ class Wiki:
         relpath = str(path.relative_to(self._root))
         # drop difflib's '---'/'+++' header lines; the path header replaces them
         diff = difflib.unified_diff(
-            current.splitlines(),
-            corrected.splitlines(),
+            wiki.util.str.split_lines(current),
+            wiki.util.str.split_lines(corrected),
             lineterm='',
         )
         body = list(diff)[2:]
         # a byte difference with no line-level delta is a final-newline change
-        # (splitlines cannot see one; CRLF drift reads clean through universal
-        # newlines and never reaches here); still report it so the flag never
-        # desyncs from update's byte compare
+        # (the line split cannot see one; CRLF drift reads clean through
+        # universal newlines and never reaches here); still report it so the
+        # flag never desyncs from update's byte compare
         if not body:
             return Issue(
                 f'{relpath}: Requires update (final newline differs)',
@@ -5923,7 +6488,9 @@ class Wiki:
         fences stay outside the parse -- they are the wiki's grammar, and
         document markers to YAML -- and update never rewrites an authored
         value, so the fix is the author's: quote the value, drop the
-        duplicate, or write ``key: value`` pairs.
+        duplicate, or write ``key: value`` pairs. A backslash escape a
+        double-quoted value cannot decode (LaTeX typed there) draws the
+        quoting remedy instead: the value is quoted already.
         """
         # initialize issues
         result = []
@@ -5950,6 +6517,145 @@ class Wiki:
                 )
             )
         return result
+
+    def _lint_field_controls(
+        self: Wiki,
+        path: pathlib.Path,
+        frontmatter: str,
+    ) -> list[Issue]:
+        r"""Check no double-quoted text field holds a control character.
+
+        A double-quoted scalar reads a backslash as an escape, so LaTeX
+        typed there decodes to controls -- ``\theta`` to a tab, ``\nu`` to
+        a line break, ``\frac`` to a form feed -- which update copies into
+        the H1 and the parent's row. The generated copies are never
+        scanned, so the finding stands once, on the file that caused it.
+        An escape that decodes to text (``\u00e9``, ``\"``) is the
+        author's spelling and is not judged.
+        """
+        # initialize issues
+        result = []
+        for field in _TEXT_FIELDS:
+            controls = format.quoted_controls(frontmatter, field)
+            if not controls:
+                continue
+            # a key line the line grammar cannot place (an indented
+            # mapping) is the unaddressable check's finding, not this one
+            line = format.field_line(frontmatter, field)
+            if line is None:
+                continue
+            # alias relative path
+            relpath = path.relative_to(self._root)
+            # name each character by its code point, with the escape that
+            # spells it where one letter does
+            named = ', '.join(
+                f'{code} ({escape})' if escape else code for code, escape in controls
+            )
+            result.append(
+                Issue(
+                    f'{relpath}: Control character in {field} (line {line}):'
+                    f' {named}; {_ESCAPE_ADVICE}',
+                    kind='control_character',
+                    path=str(relpath),
+                    field=field,
+                    line=line,
+                    characters=[code for code, _ in controls],
+                )
+            )
+        return result
+
+    def _lint_field_types(
+        self: Wiki,
+        path: pathlib.Path,
+        frontmatter: str,
+    ) -> list[Issue]:
+        """Check each text field holds text, not a YAML mapping or list.
+
+        An indented ``Key: value`` line under a bare ``desc:`` nests a
+        mapping, and ``title: [a, b]`` is a list: update writes the
+        field's source lines, joined, into the H1 and the parent's row,
+        while every strict reader hands its caller a collection. The
+        block is valid YAML, so no other check names it.
+        """
+        # initialize issues
+        result = []
+        for field in _TEXT_FIELDS:
+            if not format.is_collection_field(frontmatter, field):
+                continue
+            # a key line the line grammar cannot place (an indented
+            # mapping) is the unaddressable check's finding, not this one
+            line = format.field_line(frontmatter, field)
+            if line is None:
+                continue
+            # alias relative path
+            relpath = path.relative_to(self._root)
+            result.append(
+                Issue(
+                    f'{relpath}: Mapping or list in {field} (line {line}): a'
+                    ' strict reader finds no text there, so quote the value or'
+                    ' write it as a >- block',
+                    kind='nonscalar_field',
+                    path=str(relpath),
+                    field=field,
+                    line=line,
+                )
+            )
+        return result
+
+    def _lint_content_controls(
+        self: Wiki,
+        path: pathlib.Path,
+        text: str,
+        frontmatter: str,
+        suppressed: set[int],
+    ) -> None:
+        """Note the control characters in a file's authored content.
+
+        Authored content is a page's body and an index's text below the
+        delimiter. The H1 and the link rows are generated from
+        frontmatter fields, so a control character there is the field's
+        finding (``_lint_field_controls``), on the file that holds the
+        field. One note names the first line and character and counts the
+        rest; a ``no-lint`` region suppresses its lines.
+        """
+        found = format.control_characters(text)
+        if not found:
+            return
+        # bound the authored lines: below an index's delimiter, or below a
+        # page's frontmatter bar its H1
+        lines = text.split('\n')
+        start = len(frontmatter.split('\n')) if frontmatter else 0
+        generated = None
+        if path.name == WIKI_INDEX:
+            start = next(
+                (
+                    index + 1
+                    for index in range(start, len(lines))
+                    if lines[index].rstrip() == self.index_delimiter
+                ),
+                len(lines),
+            )
+        else:
+            heading = wiki.util.markdown.find_heading('\n'.join(lines[start:]))
+            if heading is not None:
+                heading_index, _ = heading
+                generated = start + heading_index + 1
+        found = [
+            (lineno, code)
+            for lineno, code in found
+            if (lineno > start) and (lineno != generated) and (lineno not in suppressed)
+        ]
+        if not found:
+            return
+        # alias relative path
+        relpath = path.relative_to(self._root)
+        line, character = found[0]
+        self.on_content_control_character(
+            path=str(relpath),
+            line=line,
+            character=character,
+            count=len(found),
+        )
 
     def _lint_link_desc(
         self: Wiki,
@@ -6427,6 +7133,25 @@ class Issue(str):
         return result
 
 
+# ------ errors
+
+
+class PageDecodeError(UnicodeDecodeError):
+    """A file of the wiki holds bytes that are not valid UTF-8.
+
+    Reads as the file's path, the offset of its first invalid byte and
+    the remedy, where the base class reads as the codec's own sentence.
+    It stays a ``UnicodeDecodeError``, so a handler for one catches it.
+    """
+
+    #: the file's path, relative to the wiki root
+    path: str
+
+    def __str__(self: PageDecodeError) -> str:
+        """Return the error line: the path, the byte and the remedy."""
+        return f'{self.path}: {_invalid_utf8(self)}; re-save the file as UTF-8'
+
+
 # ------ events
 
 
@@ -6499,13 +7224,17 @@ class DescOverwriteEvent(Event):
     path: str
     target: str
     label: str
+    page: Optional[str] = None
 
     @property
     def description(self: DescOverwriteEvent) -> str:
         """Return the overwritten-desc notice line."""
+        # an event built without its page names the target plus the .md it
+        # strips
+        page = self.page or f'{self.target}.md'
         return (
             f'Overwrote desc: [[{self.target}|{self.label}]] in {self.path}'
-            f' (the page frontmatter desc wins; edit it in {self.target}.md)'
+            f' (the page frontmatter desc wins; edit it in {page})'
         )
 
 
@@ -6616,6 +7345,19 @@ class MergeDriverUnconfiguredEvent(Event):
         )
 
 
+class PageMergeUnmappedEvent(Event):
+    """Emitted when ``merge=wiki`` is mapped for index files but not for pages."""
+
+    @property
+    def description(self: PageMergeUnmappedEvent) -> str:
+        """Return the unmapped-page-merge notice line."""
+        return (
+            '.gitattributes maps _index.md files to merge=wiki but not the'
+            " wiki's pages; run `wiki config` to map them (pages merge as"
+            ' plain text, and conflict on their updated: lines, until then)'
+        )
+
+
 class WriteSkipEvent(Event):
     """Emitted when apply skips a file edited concurrently with the plan."""
 
@@ -6628,14 +7370,14 @@ class WriteSkipEvent(Event):
 
 
 class ReadSkipEvent(Event):
-    """Emitted when the search refresh skips an unreadable page."""
+    """Emitted when search or match skips a page it cannot read."""
 
     path: str
 
     @property
     def description(self: ReadSkipEvent) -> str:
         """Return the unreadable-page skip notice line."""
-        return f'Skipping {self.path}: unreadable during search refresh'
+        return f'Skipping {self.path}: unreadable, or not valid UTF-8'
 
 
 class FrontmatterMalformedEvent(Event):
@@ -6684,6 +7426,19 @@ class SettingsRestoreEvent(Event):
     def description(self: SettingsRestoreEvent) -> str:
         """Return the restored-settings notice line."""
         return f'Restored missing {self.path} ({{}} -- all defaults)'
+
+
+class SettingsWarningEvent(Event):
+    """Emitted for a setting that is accepted and does nothing as written."""
+
+    path: str
+    key: str
+    reason: str
+
+    @property
+    def description(self: SettingsWarningEvent) -> str:
+        """Return the settings-warning notice line."""
+        return f'{self.path}: {self.reason}'
 
 
 class CacheRestoreEvent(Event):
@@ -6745,6 +7500,26 @@ class CrlfNoticeEvent(Event):
         return f'{self.path}: CRLF line endings; update will normalize'
 
 
+class ContentControlCharacterEvent(Event):
+    """Emitted when lint notes control characters in authored content."""
+
+    path: str
+    line: int
+    character: str
+    count: int
+
+    @property
+    def description(self: ContentControlCharacterEvent) -> str:
+        """Return the control-character note line."""
+        result = (
+            f'{self.path}: Control character in content (line {self.line}):'
+            f' {self.character}'
+        )
+        if self.count > 1:
+            result += f', the first of {self.count}'
+        return result
+
+
 class LinkStaleEvent(Event):
     """Emitted when lint notes a stale wikilink in user content."""
 
@@ -6776,8 +7551,8 @@ class LinkFolderMissingEvent(Event):
 
 
 # plan-phase dispatch: event class -> per-kind hook name (kept in lockstep
-# with the events above; the CLI's _UPDATE_CATEGORIES and
-# _LINT_NOTE_CATEGORIES key on the same classes)
+# with the events above; the CLI's _UPDATE_CATEGORIES,
+# _UPDATE_NOTE_CATEGORIES and _LINT_NOTE_CATEGORIES key on the same classes)
 _NOTICE_HOOKS = {
     IndexCreateEvent: 'on_index_create',
     PageAdoptEvent: 'on_page_adopt',
@@ -6792,17 +7567,20 @@ _NOTICE_HOOKS = {
     GitFenceUnavailableEvent: 'on_git_fence_unavailable',
     PathUntrackableEvent: 'on_path_untrackable',
     MergeDriverUnconfiguredEvent: 'on_merge_driver_unconfigured',
+    PageMergeUnmappedEvent: 'on_page_merge_unmapped',
     WriteSkipEvent: 'on_write_skip',
     ReadSkipEvent: 'on_read_skip',
     FrontmatterMalformedEvent: 'on_frontmatter_malformed',
     IndexTruncatedEvent: 'on_index_truncated',
     IndexMarkerlessEvent: 'on_index_markerless',
     SettingsRestoreEvent: 'on_settings_restore',
+    SettingsWarningEvent: 'on_settings_warning',
     CacheRestoreEvent: 'on_cache_restore',
     DescMissingEvent: 'on_desc_missing',
     DescLongEvent: 'on_desc_long',
     ContentEmptyEvent: 'on_content_empty',
     CrlfNoticeEvent: 'on_crlf_notice',
+    ContentControlCharacterEvent: 'on_content_control_character',
     LinkStaleEvent: 'on_link_stale',
     LinkFolderMissingEvent: 'on_link_folder_missing',
 }
@@ -6961,9 +7739,33 @@ def _encloses_wiki_error(nested: pathlib.Path) -> ValueError:
     )
 
 
+def _invalid_utf8(e: UnicodeDecodeError) -> str:
+    """Return the phrase for undecodable bytes, giving the first invalid byte."""
+    return f'not valid UTF-8 at byte {e.start}'
+
+
 def _malformed_json_error(name: str, e: Exception) -> ValueError:
     """Build the malformed-JSON error, naming the user-editable file."""
-    return ValueError(f'Malformed JSON in {name}: {e}')
+    # undecodable bytes read as the package's phrase, not the codec's sentence
+    reason = _invalid_utf8(e) if isinstance(e, UnicodeDecodeError) else e
+    return ValueError(f'Malformed JSON in {name}: {reason}')
+
+
+def _unreadable_settings_error(reason: str) -> ValueError:
+    """Build the unreadable-settings error, naming the file and the cause."""
+    return ValueError(f'Cannot read {WIKI_SETTINGS} ({reason}).')
+
+
+def _as_json(value: Any) -> str:
+    """Return a wrong settings value as the JSON a settings error prints.
+
+    The value reads in the settings file's own notation (``null``,
+    ``true``), and a long one is cut so the error stays one legible line.
+    """
+    text = json.dumps(value)
+    if len(text) > _VALUE_CHARS:
+        return text[:_VALUE_CHARS] + '...'
+    return text
 
 
 def _read_vault_json(target: pathlib.Path) -> Any:

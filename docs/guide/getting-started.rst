@@ -109,8 +109,10 @@ The command sets up:
    * - ``--settings``
      - Initial ``.wiki/settings.json`` contents as a JSON object, e.g.
        ``--settings '{"naming": {"validate": ["ascii"]}}'`` (default: the
-       naming-defaults seed). Validated before anything is written; ignored
-       when the settings file already exists.
+       naming-defaults seed). Held to strict JSON, as the settings file is,
+       and validated before anything is written; ignored when the settings
+       file already exists, with a stderr line when the file holds something
+       else.
    * - ``--quiet``
      - Suppress the Obsidian hint and other non-error output (default: off).
 
@@ -239,7 +241,8 @@ Lint distinguishes **issues** from **notes**. Issues are hard problems — files
 that drifted from the generated form (shown as a diff), invalid names, broken
 index links, malformed frontmatter — and any issue makes lint exit 1. Notes
 are advisory (placeholder or oversized descriptions, empty index content,
-stale prose links unless the wiki sets ``lint.strict``, CRLF endings), print
+stale prose links unless the wiki sets ``lint.strict``, CRLF endings, control
+characters in a page body), print
 on stderr, and never affect the exit code.
 
 Now author the descriptions. A page's ``desc:`` frontmatter is the source of
@@ -288,8 +291,8 @@ rhythm of working with a wiki: add or move markdown files, run
      - Print every narration line instead of per-category counts
        (default: off).
    * - ``--count``
-     - Print one count line per narration category — the default; mutually
-       exclusive with ``--full``.
+     - Print one line per narration category, its count or a lone skip — the
+       default; mutually exclusive with ``--full``.
 
 ``wiki lint`` options:
 

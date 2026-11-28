@@ -49,7 +49,8 @@ To start with a stricter naming policy, seed settings at creation:
 see :doc:`/configuration` for every key. ``--quiet`` suppresses non-error
 output. Re-running ``wiki init`` on an existing wiki prints ``Wiki already
 initialized at: <path>`` and changes nothing — in particular, ``--settings`` is
-ignored once ``.wiki/settings.json`` exists.
+ignored once ``.wiki/settings.json`` exists, and a stderr line says so when
+the file holds something else (``--settings was not applied: ...``).
 
 Without network access, run ``OFFLINE_MODE=true wiki init``: the Obsidian
 plugin download is skipped with a warning, and ``wiki config`` finishes the
@@ -149,7 +150,8 @@ outside the wiki keeps git's own merge:
 
 ``wiki config`` writes both files in the working tree only — you stage and
 commit them yourself — and skips a file entirely while it has uncommitted
-changes (its lines land on the next run with the file clean).
+changes. A stderr line names each file it skips and the mapping line it did
+not add; commit the file and run ``wiki config`` again.
 
 Once per clone
 ~~~~~~~~~~~~~~
@@ -387,21 +389,27 @@ this wiki, or in another wiki a ``links.external`` folder admits), prose
 wikilinks written with ``./`` or ``../`` that land inside the wiki (the
 prefix-free form is the fix) or outside every ``links.external`` folder (the
 entry to add is named), unparseable ``created:``/``updated:`` stamps, a
+control character in a double-quoted ``name:``, ``title:``, ``desc:``, or
+``category:`` (LaTeX whose backslashes YAML read as escapes), one of those
+fields holding a YAML mapping or list, a
 nested ``.wiki/settings.json`` declaring a foreign wiki root, dangling or
 nested region markers, a missing or unfilled ``title:`` under
 ``titles.required``, and stale ``[[wikilinks]]`` in prose under
 ``lint.strict``.
 
 Notes flag soft hygiene: placeholder (``...``) and oversized descriptions,
-empty index content sections, CRLF line endings, and stale ``[[wikilinks]]``
+empty index content sections, CRLF line endings, control characters in a
+page body, and stale ``[[wikilinks]]``
 in prose (issues instead under ``lint.strict``). Every target is read from
 the wiki root, so a stale note suggests the root-relative form the author
 likely meant when one resolves: ``(use [[canonical]])`` for a prefix-free
 slip, or the root-relative spelling of an allowlisted file for a prefixed or
 absolute one.
-Five environment notes ride along and count in the closing summary: a
+Six environment notes ride along and count in the closing summary: a
 ``.gitattributes`` ``merge=wiki`` mapping with no ``merge.wiki.driver``
-configured in the clone (the fresh-clone state — run ``wiki config``); an
+configured in the clone (the fresh-clone state — run ``wiki config``); index
+files mapped to ``merge=wiki`` while the wiki's pages are not (the pages merge
+as plain text — run ``wiki config`` and commit the file it writes); an
 indexed path this machine's personal ``core.excludesFile`` ignores (its
 generated row ships where the file cannot, so every other clone reds on a
 broken link); a ``git check-ignore`` probe that fails inside the enclosing

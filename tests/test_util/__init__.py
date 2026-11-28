@@ -5,4 +5,5 @@ from .test_filesystem import *
 from .test_git import *
 from .test_glob import *
 from .test_markdown import *
+from .test_re import *
 from .test_str import *
