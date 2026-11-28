@@ -8,6 +8,9 @@ use std::path::PathBuf;
 pub(crate) struct Config {
     /// The user's home directory, when `HOME` names one.
     pub(crate) home: Option<PathBuf>,
+    /// The file the identity record is appended to, when `WIKI_TRACE` names
+    /// one.
+    pub(crate) trace: Option<PathBuf>,
 }
 
 impl Config {
@@ -20,6 +23,9 @@ impl Config {
         Self {
             home: env::var_os("HOME")
                 .filter(|home| !home.is_empty())
+                .map(PathBuf::from),
+            trace: env::var_os("WIKI_TRACE")
+                .filter(|trace| !trace.is_empty())
                 .map(PathBuf::from),
         }
     }

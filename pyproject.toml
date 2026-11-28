@@ -63,6 +63,7 @@ cache-keys = [
     { file = "crates/**/*.rs" },
     { file = "wiki/skills/**/*" },
     { file = "wiki/_assets/**/*" },
+    { git = { commit = true } },
 ]
 
 [tool.ruff]

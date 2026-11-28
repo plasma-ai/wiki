@@ -10,6 +10,9 @@ use std::process::Stdio;
 
 use tempfile::TempDir;
 
+mod build_script;
+mod git;
+
 /// The result a fallible test returns.
 pub(crate) type TestResult<T = ()> = anyhow::Result<T>;
 

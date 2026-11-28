@@ -424,9 +424,13 @@ The side's own variables are applied last. stdin is the null device.
   appends one line of JSON to the file: `engine`, `version` and `build`. For a
   v1 side the launcher writes it, with the engine `python`, the package's
   version and the commit its checkout's `HEAD` holds, and takes the variable out
-  of the command's environment. A command that leaves anything but the expected
-  record, once, is an `identity` difference: the side is not the engine it
-  names.
+  of the command's environment. The Rust binary writes it itself, before it
+  reads its arguments, with the engine `rust`, the workspace's version and the
+  commit of the checkout it was built in, which its build script reads from
+  git's files; a binary built outside a checkout writes an empty `build`. It
+  writes the record only once its bundled SQLite has answered a query. A command
+  that leaves anything but the expected record, once, is an `identity`
+  difference: the side is not the engine it names.
 
 ## Snapshots
 

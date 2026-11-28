@@ -20,6 +20,7 @@ mod cli;
 mod command;
 mod config;
 mod output;
+mod trace;
 
 /// Where a bug in the program is reported.
 const ISSUES_URL: &str = "https://github.com/plasma-ai/wiki/issues";
@@ -32,8 +33,13 @@ const ISSUES_URL: &str = "https://github.com/plasma-ai/wiki/issues";
 /// received SIGINT or SIGTERM ends by that signal. A panic exits 101.
 pub fn main() -> ExitCode {
     install_panic_hook();
-    let cli = Cli::parse_or_version();
     let config = Config::from_env();
+    // The record is owed on every run, and clap ends a run itself on a usage
+    // error or a request for help, so the record comes before the parse.
+    if let Some(path) = &config.trace {
+        trace::append(path);
+    }
+    let cli = Cli::parse_or_version();
     let (color, quiet) = cli.as_ref().map_or((ColorChoice::Auto, false), |cli| {
         (cli.global.color, cli.global.quiet)
     });
