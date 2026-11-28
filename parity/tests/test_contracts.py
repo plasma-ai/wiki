@@ -4,8 +4,8 @@ The checks run on real wheels in the ``contracts`` job, which builds them
 first. This module carries what that job cannot show: that a check reports
 the wheel that breaks its contract. The wheel here is a stand-in that holds
 a script where the real one holds a binary, and it is installed by the real
-installer into real venvs. The ``upgrade`` and ``lock`` checks fetch v1's
-packages and a Rust toolchain, so only that job runs them.
+installer into real venvs. The ``pipx``, ``upgrade`` and ``lock`` checks fetch
+pipx, v1's packages and a Rust toolchain, so only that job runs them.
 """
 
 from __future__ import annotations
@@ -32,8 +32,24 @@ __all__ = [
 pytestmark = _needs_git
 
 # the checks that install a built file and nothing else: the others fetch
-# v1's packages or a Rust toolchain
-_CHECKS = ('name', 'version', 'native', 'venv', 'symlink', 'space', 'sdist')
+# pipx, v1's packages or a Rust toolchain
+_CHECKS = (
+    'name',
+    'version',
+    'native',
+    'venv',
+    'symlink',
+    'space',
+    'pip',
+    'user',
+    'target',
+    'tool',
+    'run',
+    'sdist',
+)
+# the checks among them that hold the wheel's ``wiki`` to be a working one,
+# each where another installer puts it
+_WORKING = {'venv', 'symlink', 'space', 'pip', 'user', 'target', 'tool', 'run'}
 # the one finding of a stand-in that keeps every contract it can
 _SCRIPT = contracts.Finding(
     'native',
@@ -79,8 +95,10 @@ def test_wheel_that_keeps_the_contracts_shows_only_that_its_wiki_is_a_script(
     The stand-in is found under the distribution name, prints the
     manifest's version in Cargo's spelling, proves the commit of the
     checkout on every command, and writes the skills the commit holds: in a
-    venv, through a link in another folder, and in a venv whose path holds
-    a space. The stand-in for a build of the sdist does the same with no
+    venv, through a link in another folder, in a venv whose path holds a
+    space, and where pip, an install for the user, an install into a
+    folder, ``uv tool install`` and ``uv run --with`` each put it. The
+    stand-in for a build of the sdist does the same with no
     build id. So every check passes but the one that holds the installed
     ``wiki`` to be a binary, and the report names each check that ran. A
     settings file of uv's above the work folder, which no uv satisfies,
@@ -97,8 +115,10 @@ def test_wheel_that_keeps_the_contracts_shows_only_that_its_wiki_is_a_script(
         package.commit,
         VERSION,
     )
-    # every check installs into a venv of its own, and keeps what was printed
-    assert sorted(result.logs) == sorted(f'{name}/install.txt' for name in _CHECKS)
+    # every check installs into a place of its own, and keeps what was
+    # printed: `uv run` installs as it runs, and `pip` makes its venv first
+    logs = {f'{name}/install.txt' for name in _CHECKS if name != 'run'}
+    assert sorted(result.logs) == sorted(logs | {'pip/venv.txt'})
 
 
 @pytest.mark.parametrize(
@@ -111,7 +131,7 @@ def test_wheel_that_keeps_the_contracts_shows_only_that_its_wiki_is_a_script(
         ),
         (
             {'prints': '2.0.0.dev1'},
-            {'version', 'venv', 'symlink', 'space'},
+            {'version'} | _WORKING,
             f'not the bare {VERSION!r}',
         ),
         (
@@ -121,17 +141,17 @@ def test_wheel_that_keeps_the_contracts_shows_only_that_its_wiki_is_a_script(
         ),
         (
             {'build': '0' * 40},
-            {'venv', 'symlink', 'space'},
+            _WORKING,
             'left no identity record',
         ),
         (
             {'skills': {'wiki/SKILL.md': 'Another skill.\n'}},
-            {'venv', 'symlink', 'space'},
+            _WORKING,
             "unlike wiki/skills at 'wiki/SKILL.md'",
         ),
         (
             {'skills': {'wiki/SKILL.md': 'The skill.\n', 'wiki/more.md': 'More.\n'}},
-            {'venv', 'symlink', 'space'},
+            _WORKING,
             "unlike wiki/skills at 'wiki/more.md'",
         ),
         (
@@ -174,15 +194,25 @@ def test_wheel_that_holds_no_wiki_is_reported_by_each_check_that_runs_it(
 
     The check of the binary reports that the wheel holds none, and each
     check that runs the installed ``wiki`` reports that it does not start.
+    ``uv tool install`` refuses a wheel that holds no command, which is
+    that check's finding, and ``uv run --with`` finds no ``wiki`` to run.
     The checks after them still run: the distribution is found by its name,
     and the stand-in for the sdist works.
     """
     package = _package(tmp_path, engine, wiki=False)
     result = contracts.run(package, work=tmp_path / 'work', checks=_CHECKS)
-    found = {finding.check: finding.detail for finding in result.findings}
-    assert found.pop('native') == 'the wheel holds no wiki among its scripts'
-    assert set(found) == {'version', 'venv', 'symlink', 'space'}
-    assert all(detail.startswith('wiki does not start: ') for detail in found.values())
+    found: dict[str, list[str]] = {}
+    for finding in result.findings:
+        found.setdefault(finding.check, []).append(finding.detail)
+    assert found.pop('native') == ['the wheel holds no wiki among its scripts']
+    assert found.pop('tool')[0].startswith('install failed')
+    assert f'not the bare {VERSION!r}' in found.pop('run')[0]
+    assert set(found) == {'version'} | _WORKING - {'tool', 'run'}
+    assert all(
+        detail.startswith('wiki does not start: ')
+        for details in found.values()
+        for detail in details
+    )
     assert [row['name'] for row in result.report['checks']] == list(_CHECKS)
 
 

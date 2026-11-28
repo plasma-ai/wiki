@@ -14,6 +14,7 @@ import json
 import os
 import pathlib
 import shutil
+import stat
 import subprocess
 import sys
 import zipfile
@@ -222,7 +223,8 @@ def _wheel(
     with zipfile.ZipFile(wheel, 'w') as archive:
         for path, text in files.items():
             item = zipfile.ZipInfo(path)
-            item.external_attr = 0o755 << 16
+            # a regular file that anyone may run: pip takes the mode whole
+            item.external_attr = (stat.S_IFREG | 0o755) << 16
             archive.writestr(item, text)
     return wheel
 

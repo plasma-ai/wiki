@@ -1,0 +1,8 @@
+# Every package of the venv pipx runs from (SPEC.md, Contracts).
+argcomplete==3.8.0
+click==8.5.1
+filelock==4.3.2
+packaging==26.4
+pipx==1.19.2
+platformdirs==4.14.9
+userpath==1.9.2

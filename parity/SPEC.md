@@ -2086,19 +2086,22 @@ files must be.
 - **Scratch host.** Every installer and every `wiki` of a run sees one
   environment and inherits nothing else: a new home below the work folder;
   `PYTHONUSERBASE`, `PYENV_ROOT`, `PIPX_HOME`, `PIPX_BIN_DIR`, `CARGO_HOME`,
-  `RUSTUP_HOME` and `UV_CACHE_DIR` below that home; an empty global git config;
-  `UV_NO_CONFIG`, so uv reads no settings file, neither of a folder above the
-  one it runs in nor of the system; and a `PATH` of the system's folders and one
-  folder that holds links to the caller's uv and git and nothing else. So no
-  install reaches an interpreter, a cache or a toolchain of the user's.
+  `RUSTUP_HOME`, `UV_CACHE_DIR`, `UV_TOOL_DIR` and `UV_TOOL_BIN_DIR` below that
+  home; an empty global git config; `UV_NO_CONFIG`, so uv reads no settings
+  file, neither of a folder above the one it runs in nor of the system; and a
+  `PATH` of the system's folders and one folder that holds links to the caller's
+  uv and git and nothing else. So no install reaches an interpreter, a cache or
+  a toolchain of the user's.
 - **No Rust.** The scratch host holds no `cargo`, and a run is refused when a
   system folder holds one. A build there is the build of a host with no Rust:
   the build backend fetches the toolchain the checkout pins, so it needs the
   network. A build with a `cargo` at hand would prove nothing of such a host.
-- **Venvs.** A check installs into venvs of its own, below a folder of the work
-  folder that carries its name, so each check stands alone. Every venv is made
-  from the interpreter version of the `oracle` side, which uv fetches into the
-  scratch home.
+- **Venvs.** A check installs into venvs and folders of its own, below a folder
+  of the work folder that carries its name, or into the folder of the scratch
+  home that its installer keeps for a user, which no other check installs into.
+  So each check stands alone. Every venv is made from the interpreter version of
+  the `oracle` side, which uv fetches into the scratch home, and a check that
+  installs into no venv runs the pip of that interpreter.
 - **Working `wiki`.** A check that installs a `wiki` holds it to three things.
   `wiki --version` prints the version and a newline on stdout and nothing on
   stderr, and exits 0. `wiki install --project`, run in a new folder, exits 0
@@ -2122,6 +2125,12 @@ files must be.
 | `venv`    | The `wiki` of a venv that holds the wheel is a working one, with the commit as its build id.                                                                                                                                                                                                                                                                                                    |
 | `symlink` | So is that `wiki`, run through a symbolic link in another folder.                                                                                                                                                                                                                                                                                                                               |
 | `space`   | So is the `wiki` of a venv whose path holds a space.                                                                                                                                                                                                                                                                                                                                            |
+| `pip`     | So is the `wiki` of a venv that Python's own `venv` module makes, installed by the pip of that venv.                                                                                                                                                                                                                                                                                            |
+| `user`    | So is the `wiki` that `pip install --user` puts below the user's base folder, for the interpreter outside every venv.                                                                                                                                                                                                                                                                           |
+| `target`  | So is the `wiki` that `pip install --target` puts below a folder that is no environment.                                                                                                                                                                                                                                                                                                        |
+| `pipx`    | So is the `wiki` that pipx links into its folder of commands. pipx runs from a venv that holds exactly the packages `constraints/pipx.txt` pins.                                                                                                                                                                                                                                                |
+| `tool`    | So is the `wiki` that `uv tool install` links into its folder of commands.                                                                                                                                                                                                                                                                                                                      |
+| `run`     | So is the `wiki` that `uv run --with` runs by its name, from an environment uv keeps for the one command. The check runs uv over the interpreter outside every venv, because over an environment that holds a `wiki` of its own uv runs that one and not the wheel's.                                                                                                                           |
 | `sdist`   | An install of the sdist builds a working `wiki` whose build id is empty: the build runs outside every checkout.                                                                                                                                                                                                                                                                                 |
 | `upgrade` | Once with uv and once with the venv's own pip: v1's wheel is installed, then the wheel over it, then v1's wheel over that. After the first and the third install `wiki --version` prints v1's version and exits 0, and after the second the `wiki` is a working one. v1's wheel is built from the oracle commit as git holds it, and installed under the constraints file of the `oracle` side. |
 | `lock`    | A project names `plasma-wiki` as its one dependency, from the repository of the checkout at the commit. `uv lock` records that commit as the source, `uv sync --locked` builds it, and the `wiki` of the project's venv is a working one with the commit as its build id.                                                                                                                       |
