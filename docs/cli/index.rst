@@ -165,12 +165,13 @@ object in another key order or spacing prints nothing, and a caller that
 passes its seed on every run stays silent. A settings file that is missing or
 cannot be read counts as different. The wiki name is not compared.
 
-``init`` refuses to scaffold inside an enclosing wiki, refuses an invalid wiki
-name (naming the violated rule) before any write, refuses a re-init sweep over
-merge conflict markers, and fails on an invalid ``OFFLINE_MODE`` value before
-touching the filesystem (``OFFLINE_MODE=true`` skips the Front Matter Title
-download with a warning; the bundled plugin needs no network; see
-:doc:`/configuration`).
+``init`` refuses to scaffold inside an enclosing wiki, refuses to scaffold
+while ``.wiki/settings.json`` is missing and git still holds it (see
+:doc:`/configuration`), refuses an invalid wiki name (naming the violated
+rule) before any write, refuses a re-init sweep over merge conflict markers,
+and fails on an invalid ``OFFLINE_MODE`` value before touching the filesystem
+(``OFFLINE_MODE=true`` skips the Front Matter Title download with a warning;
+the bundled plugin needs no network; see :doc:`/configuration`).
 
 .. list-table::
    :header-rows: 1
@@ -648,9 +649,10 @@ exist yet: under ``*``, ``!*/`` and ``!*.md`` the new folder is admitted. A
 repository that ignores ``_index.md`` files refuses every new folder, since
 that index could never be committed.
 The wiring sweep's own refusals (merge conflict markers or a nested wiki in the
-parent scope) are checked before the index is written — marker-shaped lines in
-the authored inputs are refused the same way — so a refused adoption leaves
-nothing on disk.
+parent scope, or a missing ``.wiki/settings.json`` that git still holds, see
+:doc:`/configuration`) are checked before the index is written — marker-shaped
+lines in the authored inputs are refused the same way — so a refused adoption
+leaves nothing on disk.
 
 .. list-table::
    :header-rows: 1
