@@ -11,6 +11,8 @@ disallowed-methods = [
     { path = "str::trim", reason = "Python strips another set of characters: use wiki-pytext" },
     { path = "str::trim_start", reason = "Python strips another set of characters: use wiki-pytext" },
     { path = "str::trim_end", reason = "Python strips another set of characters: use wiki-pytext" },
+    { path = "str::trim_left", reason = "Python strips another set of characters: use wiki-pytext" },
+    { path = "str::trim_right", reason = "Python strips another set of characters: use wiki-pytext" },
     { path = "str::trim_ascii", reason = "Python strips another set of characters: use wiki-pytext" },
     { path = "str::trim_ascii_start", reason = "Python strips another set of characters: use wiki-pytext" },
     { path = "str::trim_ascii_end", reason = "Python strips another set of characters: use wiki-pytext" },
