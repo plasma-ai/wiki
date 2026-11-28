@@ -34,6 +34,26 @@ port of v1, the Python tool at the commit `parity/oracle.toml` names. v1's
 commands arrive one at a time, and `parity/ported.toml` lists the ones the
 binary has; beside them it holds `install` and `completion`.
 
+The workspace has five crates, each the home of one piece of the port.
+Dependencies point one way, up the list below: the first two crates know nothing
+about wikis, and each of the three others depends only on crates listed before
+it, so no crate depends on `wiki-cli`.
+
+- `wiki-yaml` reads YAML as libyaml 0.2.5 does, the parser under v1's
+  frontmatter loader. It is the one crate that may hold `unsafe`.
+- `wiki-pytext` is Python's text behavior as the oracle's interpreter has it:
+  the character tables, the rules of `str` and `re`, `repr`, JSON and float
+  text, `difflib`, paths and timestamps.
+- `wiki-format` is the on-disk page format, v1's `wiki.core.format` and
+  `wiki.util.markdown`: frontmatter, index rows and page text. It touches no
+  file, starts no thread and prints nothing.
+- `wiki-core` is the engine, v1's `wiki.core.wiki` with its search index, its
+  exclusion and git helpers and its merge driver, and it embeds the files the
+  binary writes. It never prints, reads the command line or ends the process: an
+  operation returns what it did and what it noticed as data.
+- `wiki-cli` is the binary `wiki`, v1's `wiki.cli`: arguments, output, exit
+  codes, and the switches only tests use. It holds no engine logic.
+
 `parity/` at the repository root is the parity harness, a development tool that
 runs two engines on clones of one tree and reports every difference between them
 (`parity/SPEC.md`). It is not part of the wheel or the sdist. Its tests are in
@@ -55,6 +75,9 @@ integration.
 # install the pinned Rust toolchain (reads rust-toolchain.toml)
 rustup toolchain install
 
+# install the cargo tools, at the versions the workflows' tool: lines name
+cargo install --locked cargo-nextest@<version> cargo-deny@<version> cargo-shear@<version>
+
 # install dev dependencies and the binary (creates a .venv if none is active)
 ./install.sh --groups=lint,docs,parity,type
 
@@ -70,10 +93,16 @@ cargo nextest run
 cargo test --doc
 
 # run the YAML reader's tests under Miri, on the nightly tests.yaml names
+rustup toolchain install <RUST_NIGHTLY> --component miri,rust-src
 cargo +<RUST_NIGHTLY> miri nextest run -p wiki-yaml --locked
 
-# run the parity harness's tests (they run v1 from the oracle checkout)
+# build the oracle checkout (v1 at the commit parity/oracle.toml names), and
+# check that the file is level with v1
+git fetch origin
 uv run --no-sync python -m parity oracle ensure
+uv run --no-sync python -m parity oracle check
+
+# run the parity harness's tests (they run v1 from the oracle checkout)
 uv run --no-sync pytest parity
 
 # run v1's CLI tests through the harness (a new work folder outside any repo)
@@ -446,6 +475,100 @@ See `Cargo.toml` for the lint table, `clippy.toml` for the linter config, and
 the `cargo-fmt` hook in `.pre-commit-config.yaml` for the formatter config.
 `pyproject.toml` holds the formatter and linter config of `parity/`.
 
+### Rust Workspace
+
+Rust code follows the org's Rust conventions, part of the pattern reference that
+the `AGENTS.md` of the parent directory locates: read the ones that cover a
+surface before writing code for it. This section holds only what is this
+repository's own, where it adds to a convention and where it departs from one on
+purpose.
+
+The Rust tool template owns the tool configuration, the hooks, the four
+workflows and the lint table and profiles of the root manifest. It renders
+`pyproject.toml` and the rest of the root manifest, which are then the
+repository's to change, and it seeds two crates, `wiki-core` and `wiki-cli`.
+`.cruft.json` pins it and there is no skip list, so a template change to a line
+this repository has changed comes back as a `.rej` to resolve by hand. Its own
+additions therefore sit beside the rendered content: the integration branches in
+the trigger lists of the workflows; `schedule` and `workflow_dispatch` under
+`on:`, the `RUST_NIGHTLY` variable and the jobs `parity`, `perturbation`,
+`suite`, `miri`, `nightly` and `issue` in `tests.yaml`; `contracts` and the
+build-id step of the `wheels` job in `build.yaml`; one block of entries after
+the template's in `clippy.toml`; its hooks in `.pre-commit-config.yaml`; and its
+entries in `pyproject.toml` and `.gitattributes`. These changes replace a
+rendered line and do not sit beside one: the `needs` line of the `publish` job
+in `build.yaml`, which names `contracts`; the `mdformat-wiki` swap in
+`.pre-commit-config.yaml`; and the stylesheet and icon-link settings of
+`docs/conf.py`. In `tests.yaml` each of the added jobs that runs on a pull
+request carries a guard that keeps it off the schedule and a dispatch, and the
+`nightly` job carries the opposite guard; no added job carries a YAML comment.
+The three other crates are the repository's own files. A seed file takes a
+change only where no file of the repository's own can hold it, such as a `mod`
+line, an `#[expect]` or a field of the configuration. `cruft update` and
+`cruft diff` render the template, whose hooks call `cargo fmt`, so they need
+`cargo` on `PATH`; `cruft check` does not.
+
+`crates/wiki-cli/build.rs` records the commit of the checkout as the build id.
+It reads git's files and never runs git, which refuses a checkout that another
+user owns; a build outside a checkout, such as one from the sdist, has no id.
+Under `WIKI_TRACE=<path>` the binary appends its identity record to the file,
+one line that holds the engine's name, its version and its build id, which is
+how the harness knows which binary it ran. The record is written before the
+arguments are parsed, because clap ends a run itself on a usage error or a
+request for help, and only once the bundled SQLite has matched a row of a
+full-text table, so a binary whose C code does not work leaves none.
+
+- **Look-alike calls are disallowed in every crate.** The block of entries in
+  `clippy.toml` disallows the calls whose results differ from Python's:
+  trimming, whitespace splitting and tests, `lines`, the Unicode property and
+  case methods, `canonicalize`, and the constructors of `regex` and
+  `fancy_regex`. An entry is in force before its helper is written, so that no
+  look-alike call is written first, and until then its reason names the crate
+  that holds Python's form, `wiki-pytext`. A change that writes a helper also
+  changes the reason of each entry the helper replaces, so that the reason names
+  the helper. The function of `wiki-pytext` that is the home of such a call
+  carries `#[expect(clippy::disallowed_methods, reason = "...")]`, and so does a
+  seed or test function that makes the call on text or a path no rule of a wiki
+  covers. No entry catches a regex built through a trait (`str::parse`,
+  `FromStr::from_str`, `TryFrom::try_from`): build every pattern through the
+  regex gateway of `wiki-pytext`.
+- **Ported code takes Rust's shapes.** No integer sentinel, no kind carried as a
+  string, no unnamed tuple of three or more fields and no collected `Vec<char>`.
+  A function ported from v1 keeps the order of v1's steps, so the two read side
+  by side; where it is long and does not split well, a short sentence labels
+  each logical block, the one case in which a Rust comment labels a block.
+- **A build script is tested as a program.** Cargo runs no test inside a build
+  script, and a test target on `build.rs` would put one file into two targets.
+  The tests of the build script (`crates/wiki-cli/tests/it/build_script.rs`)
+  compile it with the `rustc` beside the cargo that built them, once per content
+  of the script, run it as cargo does on repositories that git makes in the
+  test's own root, and read the `cargo::` lines it prints. Their helpers are
+  child modules of the CLI test harness (`tests/it/support/build_script.rs` and
+  `tests/it/support/git.rs`), so those two build a `Command` beside the helper
+  that runs the binary.
+- **A build script reads the variables cargo sets.** The binary reads its
+  environment in the configuration module alone. The build script reads
+  `CARGO_MANIFEST_DIR` when it runs, under an `#[expect]`, because its tests
+  point it at other roots through that variable.
+- **The manifests carry the license.** The template renders no license key.
+  `pyproject.toml` holds `license` and `license-files`, `[workspace.package]`
+  holds `license`, and every member inherits it with `license.workspace = true`,
+  the two seed crates included, so a new crate's manifest carries the line.
+- **v1's CLI suite is the conformance check.**
+  `python -m parity suite --engine rust` runs v1's CLI tests, unedited, from the
+  oracle checkout, with every call of a command that `parity/ported.toml` lists
+  sent to the binary, in the `suite` job of every pull request. It stays until
+  the Rust CLI tests hold the same contract.
+- **The Miri job names the components of its toolchain.** Every other
+  `rustup toolchain install` step takes no argument and reads
+  `rust-toolchain.toml`. The `miri` job installs the dated nightly that
+  `RUST_NIGHTLY` names in `tests.yaml` with `miri` and `rust-src`, which the
+  minimal profile lacks.
+- **`rusqlite` is taken without its default features.** The engine uses the
+  bundled SQLite and nothing else of the crate, so the dependency graph holds no
+  license beyond the template's three; a feature that brings one adds it to the
+  `allow` list of `deny.toml` in the same change.
+
 ### Parity Harness
 
 `parity/` compares two sides: each is an argv prefix that the harness runs under
@@ -477,19 +600,28 @@ wiki.
 
 The oracle is v1 at the commit `parity/oracle.toml` names, the merge base of
 this branch and `dev`. `python -m parity oracle ensure` builds its checkout, a
-detached worktree at `worktrees/wiki-oracle-<sha7>`, with one venv per v1 side:
-`oracle`, which defines parity; `alt`, the same commit under a second
-interpreter that v1 supports, with its own package versions; and `crossed`, the
-alt side's interpreter under the oracle side's packages. Each side's constraints
-file in `parity/constraints/` pins every package of its venv. A v1 side runs
-through `parity/launcher.py` and proves on every command that it is the oracle
-commit. Never edit the oracle checkout, and never sync or install into its venvs
-by hand: the harness refuses a checkout or a venv that is not what the file
-names. `python -m parity oracle check` holds the file level with v1; run it
-after `git fetch origin` when a work session starts. The five scripts the
-harness runs inside a side's interpreter, `launcher.py`, `facts.py`, `judge.py`,
-`tap.py` and `points.py`, import nothing from `parity`, and neither do the
-modules in `parity/plugins/`, which are loaded there by names of their own.
+detached worktree beside the main checkout, at `worktrees/wiki-oracle-<sha7>`,
+with one venv per v1 side: `oracle`, which defines parity; `alt`, the same
+commit under a second interpreter that v1 supports, with its own package
+versions; and `crossed`, the alt side's interpreter under the oracle side's
+packages. Each side's constraints file in `parity/constraints/` pins every
+package of its venv. A v1 side runs through `parity/launcher.py` and proves on
+every command that it is the oracle commit. Never edit the oracle checkout, and
+never sync or install into its venvs by hand: the harness refuses a checkout or
+a venv that is not what the file names. This tree holds none of v1's Python,
+neither its engine nor its command line nor its tests (`parity/removed.txt`
+lists the paths, and `oracle check` fails when one is tracked again), so the
+oracle checkout is also where v1 is read: port from its `wiki/` folder, the code
+every comparison runs, and not from another branch or an installed package.
+`python -m parity oracle check` holds the file level with v1; run it after
+`git fetch origin` when a work session starts. When its `level` check fails, v1
+has gained a commit, and a sync brings this branch level: it merges `dev`, keeps
+the listed paths removed and this branch's version, moves `commit` and `version`
+of the file to the new merge base, and carries the port of each change to a
+command the binary has. The five scripts the harness runs inside a side's
+interpreter, `launcher.py`, `facts.py`, `judge.py`, `tap.py` and `points.py`,
+import nothing from `parity`, and neither do the modules in `parity/plugins/`,
+which are loaded there by names of their own.
 
 `python -m parity suite` runs v1's CLI tests (`tests/test_cli` of the oracle
 checkout, unedited) and a short table of commands on a pseudo-terminal
