@@ -10,6 +10,7 @@ driver runs. Each verb's behavior has its own suite (``test_update``,
 
 from __future__ import annotations
 
+import functools
 import json
 import pathlib
 import re
@@ -36,6 +37,7 @@ __all__ = [
     'test_settings_blocks_are_validated_in_the_documented_order',
     'test_settings_error_spells_the_wrong_value_as_json',
     'test_settings_warnings_name_only_keys_nothing_reads',
+    'test_settings_warnings_come_from_every_operation',
     'test_leading_digits_warns_without_the_identifier_rule',
     'test_timestamp_format_configurable',
     'test_timestamp_timezone_configurable',
@@ -538,6 +540,41 @@ def test_settings_warnings_name_only_keys_nothing_reads(
         ".wiki/settings.json: unknown key 'review.cadence' (ignored)",
         ".wiki/settings.json: unknown key 'labels' (ignored)",
     ]
+
+
+def test_settings_warnings_come_from_every_operation(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Each operation on one instance says the settings warnings, once.
+
+    A host that runs several operations on one instance gets the warnings
+    from every one of them, ahead of its other notices. ``new`` runs an
+    update inside and still says each line once.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    path = tmp_path / '.wiki' / 'settings.json'
+    settings = {'labels': ['draft'], 'exclude': {'pattern': ['drafts/']}}
+    path.write_text(json.dumps(settings), encoding='utf-8')
+    warnings = [
+        ".wiki/settings.json: unknown key 'labels' (ignored)",
+        ".wiki/settings.json: unknown key 'exclude.pattern' (ignored)",
+    ]
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+    operations = [
+        wiki.lint,
+        wiki.lint,
+        functools.partial(wiki.update, check=True),
+        wiki.lint,
+        functools.partial(wiki.new, 'tools', desc='The tools.', content='Overview.'),
+        wiki.lint,
+    ]
+    for operation in operations:
+        notices.clear()
+        operation()
+        lines = [event.description for event in notices]
+        assert lines[: len(warnings)] == warnings
+        assert not set(warnings).intersection(lines[len(warnings) :])
 
 
 @pytest.mark.parametrize(

@@ -212,8 +212,8 @@ class Wiki:
         # the verdict on each folder the link scan has climbed through: the
         # wiki rooted there, or None for a plain folder, judged once per instance
         self._link_wikis: dict[pathlib.Path, Optional[Wiki]] = {}
-        # whether the settings warnings are out: they describe the settings
-        # the instance caches, so an operation another one runs repeats none
+        # whether an enclosing operation has said the settings warnings, so
+        # the operation it runs inside repeats none
         self._settings_warned = False
 
     @functools.cached_property
@@ -783,15 +783,15 @@ class Wiki:
     def _warn_settings(self: Wiki) -> None:
         """Warn of each setting the file holds that does nothing as written.
 
-        The warnings follow the keys in file order, and the instance says
-        them once. Only ``init``, ``update``, ``new`` and ``lint`` call
-        this, each ahead of its other notices: a warning from the settings
-        loader would reach every reader, the merge driver's engines and a
-        linked wiki's among them.
+        The warnings follow the keys in file order, and each operation
+        says them once: the sweep ``new`` runs inside repeats none. Only
+        ``init``, ``update``, ``new`` and ``lint`` call this, each ahead of
+        its other notices: a warning from the settings loader would reach
+        every reader, the merge driver's engines and a linked wiki's among
+        them.
         """
         if self._settings_warned:
             return
-        self._settings_warned = True
         # collect each warning as (dotted key, reason)
         warnings = []
         for key, block in self._settings.items():
@@ -2059,8 +2059,13 @@ class Wiki:
         folder.mkdir(exist_ok=True)
         wiki.util.fs.write_atomic(index_path, text)
         # the scoped sweep adds the folder's own rows and the parent's new
-        # row, propagating the desc, so the adoption lands converged
-        self.update(name=scope)
+        # row, propagating the desc, so the adoption lands converged; the
+        # settings warnings are out already
+        self._settings_warned = True
+        try:
+            self.update(name=scope)
+        finally:
+            self._settings_warned = False
         return str(index_path.relative_to(self._root))
 
     @format.run_scoped
