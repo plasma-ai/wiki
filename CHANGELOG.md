@@ -126,6 +126,13 @@ may include breaking changes, each listed under a Breaking heading.
 - `wiki map` says `No entries match.` when a name, `--category` or
   `--markdown`/`--no-markdown` left nothing to show. Before, it said
   `Wiki is empty.` of a wiki that holds pages.
+- A scope that is not found suggests the fix after
+  `Wiki folder not found: '<name>'`. A name that leads with the root's own
+  folder name, such as `wiki lint wiki/core --path wiki`, gets
+  `(did you mean core?)`, and a page name gets
+  `(a scope is a folder and this is a page; did you mean core?)`. `Wiki.update`,
+  `lint`, `map`, `search` and `match` raise the same `FileNotFoundError` with
+  the longer message.
 
 ## [1.10.0] - 2026-11-27
 

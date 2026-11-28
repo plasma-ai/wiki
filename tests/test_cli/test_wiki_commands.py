@@ -75,6 +75,7 @@ __all__ = [
     'test_update_cli_refuses_nested_wiki',
     'test_update_refuses_a_scope_inside_a_nested_wiki',
     'test_update_refuses_an_excluded_dot_directory_scope',
+    'test_scope_that_is_not_found_suggests_the_fix',
     'test_exclude_patterns_end_to_end',
     'test_links_external_end_to_end',
     'test_update_cli_refuses_conflict_markers',
@@ -1715,6 +1716,49 @@ def test_update_refuses_an_excluded_dot_directory_scope(
     assert 'excluded directory' in combined
     # nothing scaffolded inside the tool directory
     assert not (root / '.wiki' / '_index.md').exists()
+
+
+def test_scope_that_is_not_found_suggests_the_fix(tmp_path: pathlib.Path) -> None:
+    """A scope that reaches no folder names the fix the tree offers.
+
+    Two misses are common and each has one fix: the name carries the
+    root's own folder name (``wiki/core`` in the wiki at ``wiki``), or it
+    is the read key of a page, and a scope is a folder. Any other miss,
+    and every other refusal of a scope, keeps its line.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'core' / 'design.md', _page('Design', 'A design.', 'Body.'))
+    _write(root / 'note.md', _page('Note', 'A note.', 'Body.'))
+    assert _wiki(root, 'update').returncode == 0
+    page_hint = 'a scope is a folder and this is a page'
+    lines = {
+        # the root's own folder name leads a name whose rest is a folder
+        'wiki/core': "Wiki folder not found: 'wiki/core' (did you mean core?)",
+        # a page, by its read key and by its file name
+        'core/design': (
+            f"Wiki folder not found: 'core/design' ({page_hint}; did you mean core?)"
+        ),
+        'core/design.md': (
+            f"Wiki folder not found: 'core/design.md' ({page_hint}; did you mean core?)"
+        ),
+        'note': f"Wiki folder not found: 'note' ({page_hint} in the wiki root)",
+        # a name the tree has no fix for
+        'nowhere': "Wiki folder not found: 'nowhere'",
+        'wiki/nowhere': "Wiki folder not found: 'wiki/nowhere'",
+        # the other refusals of a scope
+        '.wiki': "Path is inside an excluded directory: '.wiki'",
+        '..': "Path is outside wiki root: '..'",
+    }
+    for name, line in lines.items():
+        result = _wiki(tmp_path, 'lint', name, '--path', 'wiki')
+        assert result.returncode == 2, name
+        assert result.stderr == f'Error: {line}\n'
+    # every command that takes a scope resolves it the same way
+    for command in (('update', '--check'), ('map',), ('search', 'x'), ('match', 'x')):
+        result = _wiki(tmp_path, *command, 'core/design', '--path', 'wiki')
+        assert result.returncode == 2, command
+        assert result.stderr == f'Error: {lines["core/design"]}\n'
 
 
 def test_exclude_patterns_end_to_end(tmp_path: pathlib.Path) -> None:
