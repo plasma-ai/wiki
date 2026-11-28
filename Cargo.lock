@@ -367,6 +367,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "wiki-format"
+version = "2.0.0-dev.1"
+
+[[package]]
+name = "wiki-pytext"
+version = "2.0.0-dev.1"
+
+[[package]]
+name = "wiki-yaml"
+version = "2.0.0-dev.1"
+
+[[package]]
 name = "windows-link"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
