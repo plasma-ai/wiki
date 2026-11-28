@@ -441,9 +441,9 @@ A pattern that does not compile fails with ``Invalid regex '<pattern>':
 <reason>``. In a regex an unescaped ``[[`` opens a character class, so a
 pattern such as ``[[topics/example`` does not look for a wikilink: the command
 says so in one line on stderr and names the form that does, ``\[\[``. A
-doubled ``--``, ``&&``, ``~~`` or ``||`` inside a character class matches as
-plain characters and draws a line of its own. Neither line changes the matches
-or the exit code.
+doubled ``--``, ``&&``, ``~~`` or ``||`` inside a character class is not a set
+operation in a Python regex and draws a line of its own. Neither line changes
+the matches or the exit code.
 
 A page that is not valid UTF-8 cannot be matched. It is skipped and named on
 stderr (``Skipping <path>: unreadable, or not valid UTF-8``, the line
