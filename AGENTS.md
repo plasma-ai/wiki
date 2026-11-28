@@ -104,6 +104,11 @@ uv run --no-sync python -m parity gate full --corpora <file> --cache <dir> --wor
 # run a command in the Linux container, on a clone of HEAD (needs Docker)
 uv run --no-sync python -m parity container -- <command>
 
+# check what a wheel and an sdist built at HEAD keep for whoever installs them
+uvx maturin@1.16.0 sdist --out <dist>
+uvx maturin@1.16.0 build --release --locked --out <dist>
+uv run --no-sync python -m parity contracts --wheel <wheel> --sdist <sdist> --work <dir> --out <dir>
+
 # run pre-commit
 uv run --no-sync pre-commit run [--all-files]
 
@@ -623,6 +628,20 @@ on a host that does nothing else, and with the same `--work` every time: the
 cache of the merge history is keyed on the path, and the gate hands every step
 that replays merges the folder `<work>/at`. A new harness command that a gate
 should hold gets its layer in `layers` and its row in the spec's table.
+
+`python -m parity contracts` holds a built wheel and sdist to what the package
+keeps for whoever installs it (`parity/contracts.py`): the distribution name,
+the bare version, a `wiki` that is the wheel's binary and works where an
+installer puts it, an upgrade from v1's wheel and back, and a project that pins
+the commit and builds it. It compares no two engines. What the files must be is
+read from the checkout, the version in `Cargo.toml` and the commit of `HEAD`, so
+build the wheel and the sdist at the commit they are checked at. Every install
+runs on a scratch host below the work folder, which inherits nothing and holds
+no `cargo`: the sdist and the pin are built as on a host with no Rust, which
+fetches the pinned toolchain and needs the network. A new contract of the
+package gets its check in `CHECKS` and its row in the spec's table. A check that
+no wheel can fail proves nothing, so `parity/tests/test_contracts.py` doctors a
+stand-in wheel in the one thing each check holds.
 
 `python -m parity container` runs one command in the Linux container
 (`parity/container.py`, `parity/Dockerfile`): the Ubuntu release of the CI

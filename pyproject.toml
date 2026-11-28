@@ -45,6 +45,7 @@ lint = [
     "pre-commit",
 ]
 parity = [
+    "packaging",
     "pytest-xdist",
 ]
 type = [

@@ -62,6 +62,9 @@ python -m parity gate {full,daily} [--engine NAME] [--sides SIDES] --corpora COR
 
 # run a command in the Linux container
 python -m parity container [--commit COMMIT] [--out DIR] COMMAND [ARG ...]
+
+# hold a built wheel and sdist to what the package keeps for whoever installs it
+python -m parity contracts --wheel FILE --sdist FILE [--check NAME] --work DIR --out DIR
 ```
 
 A side name is `oracle`, `alt` or `crossed`, the three v1 sides that
@@ -280,11 +283,26 @@ with that command's exit code. It exits 2 with a message when it is given no
 command, when `--commit` names no commit, and when Docker is not installed or
 its daemon does not answer.
 
+`contracts` takes no corpus and no side: it checks the wheel and the sdist that
+a build of this checkout made (Contracts, below). It exits 0 when every check
+holds, and 1 otherwise. It exits 2 with a message, before it installs anything:
+on a wheel or an sdist that is no file, on a check named twice, on a work folder
+that exists, lies inside a repository or lies below a folder that holds
+`.wiki/settings.json`, on a `PATH` that holds no uv or no git, and on a system
+folder that holds a `cargo`. `--check NAME` (repeatable) picks checks; the
+default is every check. It makes `<work>/contracts`, which must not exist
+beforehand, and removes it when the run passed. It writes
+`<out>/contracts.json`: the host with its git and its uv, the paths that differ
+from the commit among those a build reads (`dirty`), the two files, the version,
+the commit, the interpreter, v1's commit and version, and each check with its
+findings and its seconds. What each command of an installer printed is saved
+under `<out>/contracts/<check>/`.
+
 The sections below are the rules of the harness, one part each: the oracle,
 sides, snapshots, comparison, caches, the matrix, the fixture families, the
 perturbation, the merge history, the interpreters run, the registry, the
 self-check, the CLI suite, the replay, with the account a whole replay gives of
-v1's tests and kinds, the gates, and the container.
+v1's tests and kinds, the gates, the container, and the contracts.
 
 ## Oracle
 
@@ -2050,3 +2068,55 @@ one command in a fresh container.
 - **Kept.** One volume, `wiki-parity-cache`, holds what uv downloads, so a
   second container starts fast. `--out DIR` gives the container a folder of the
   host as `/out`. Everything else is gone when the command ends.
+
+## Contracts
+
+The tool reaches a host as a package: by a pin of a release or of a commit of
+the repository, under a distribution name that is looked up, with a version that
+`wiki --version` prints, and as the `wiki` an installer puts beside the
+interpreter. `python -m parity contracts` holds a built wheel and sdist to that.
+It compares no two engines: the checkout the harness lies in states what the
+files must be.
+
+- **Package.** The wheel and the sdist are the files a build of this checkout
+  made, the wheel for this host. The checkout states the version, in
+  `Cargo.toml` and in Cargo's spelling, and the commit, which is `HEAD`. A wheel
+  built over an edit that is not committed carries the commit all the same, so
+  the run prints and records the paths that differ from `HEAD` among those a
+  build reads (Sides, Uncommitted edits).
+- **Scratch host.** Every installer and every `wiki` of a run sees one
+  environment and inherits nothing else: a new home below the work folder;
+  `PYTHONUSERBASE`, `PYENV_ROOT`, `PIPX_HOME`, `PIPX_BIN_DIR`, `CARGO_HOME`,
+  `RUSTUP_HOME` and `UV_CACHE_DIR` below that home; an empty global git config;
+  and a `PATH` of the system's folders and one folder that holds links to the
+  caller's uv and git and nothing else. So no install reaches an interpreter, a
+  cache or a toolchain of the user's.
+- **No Rust.** The scratch host holds no `cargo`, and a run is refused when a
+  system folder holds one. A build there is the build of a host with no Rust:
+  the build backend fetches the toolchain the checkout pins, so it needs the
+  network. A build with a `cargo` at hand would prove nothing of such a host.
+- **Interpreter.** Every venv is made from the interpreter version of the
+  `oracle` side, which uv fetches into the scratch home.
+- **Working `wiki`.** A check that installs a `wiki` holds it to three things.
+  `wiki --version` prints the version and a newline on stdout and nothing on
+  stderr, and exits 0. `wiki install --project`, run in a new folder, exits 0
+  and leaves in `.claude/skills` and in `.agents/skills` the files that
+  `wiki/skills` holds at the commit, each byte for byte, and no other file. And
+  both commands leave the identity record the check expects (Sides, Rust side):
+  the engine, the version, and the build id the check names.
+- **Findings.** A check that does not hold is a finding, one line for each thing
+  it found. An installer that fails inside a check is that check's finding, with
+  the end of what it printed. A step that is no part of a check, a venv or the
+  build of v1's wheel, ends the run with an error when it fails.
+
+| Check     | Holds                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`    | The wheel's metadata names the distribution `plasma-wiki`, and the interpreter of a venv that holds the wheel finds `plasma-wiki` at the version the wheel states.                                                                                                                                                                                                                              |
+| `version` | `wiki --version` prints the bare version. Read as a Python version, that text is the version the wheel states: the binary prints Cargo's spelling (`2.0.0-dev.1`, `2.0.0-rc.1`), and an installer records the one Python normalizes it to (`2.0.0.dev1`, `2.0.0rc1`).                                                                                                                           |
+| `native`  | The wheel holds `wiki` among its scripts, the `wiki` of a venv is that file byte for byte, and the file is no script: it does not start with `#!`.                                                                                                                                                                                                                                              |
+| `venv`    | The `wiki` of a venv that holds the wheel is a working one, with the commit as its build id.                                                                                                                                                                                                                                                                                                    |
+| `symlink` | So is that `wiki`, run through a symbolic link in another folder.                                                                                                                                                                                                                                                                                                                               |
+| `space`   | So is the `wiki` of a venv whose path holds a space.                                                                                                                                                                                                                                                                                                                                            |
+| `sdist`   | An install of the sdist builds a working `wiki` whose build id is empty: the build runs outside every checkout.                                                                                                                                                                                                                                                                                 |
+| `upgrade` | Once with uv and once with the venv's own pip: v1's wheel is installed, then the wheel over it, then v1's wheel over that. After the first and the third install `wiki --version` prints v1's version and exits 0, and after the second the `wiki` is a working one. v1's wheel is built from the oracle commit as git holds it, and installed under the constraints file of the `oracle` side. |
+| `lock`    | A project names `plasma-wiki` as its one dependency, from the repository of the checkout at the commit. `uv lock` records that commit as the source, `uv sync --locked` builds it, and the `wiki` of the project's venv is a working one with the commit as its build id.                                                                                                                       |
