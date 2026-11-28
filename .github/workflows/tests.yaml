@@ -11,9 +11,13 @@ on:
       - main
       - dev
       - v2
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
 
 env:
   CARGO_BUILD_WARNINGS: deny
+  RUST_NIGHTLY: nightly-2026-11-20
 
 jobs:
   tests:
@@ -49,6 +53,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
   parity:
     name: parity
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -90,6 +95,7 @@ jobs:
           if-no-files-found: ignore
   perturbation:
     name: perturbation
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -114,3 +120,59 @@ jobs:
           name: perturbation-out
           path: ${{ runner.temp }}/perturb-out
           if-no-files-found: ignore
+  miri:
+    name: miri
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust nightly toolchain
+        run: rustup toolchain install "$RUST_NIGHTLY" --profile minimal --component miri,rust-src
+      - name: Install cargo tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.152
+      - name: Run the YAML reader's tests under Miri
+        run: cargo +"$RUST_NIGHTLY" miri nextest run -p wiki-yaml --locked
+  nightly:
+    name: nightly
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
+      - name: Install harness test dependencies
+        run: uv sync --only-group parity
+      - name: Build the oracle checkout
+        run: uv run --no-sync python -m parity oracle ensure --side oracle
+      - name: Run the perturbation loop on fresh seeds
+        run: >-
+          uv run --no-sync python -m parity perturb loop --every --fresh 250
+          --work "$RUNNER_TEMP/perturb-work" --out "$RUNNER_TEMP/perturb-out"
+      - name: Keep the output of a failed run of the harness
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-out-${{ matrix.shard }}
+          path: ${{ runner.temp }}/perturb-out
+          if-no-files-found: ignore
+      - name: Open an issue for a failed run
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh issue create
+          --title "The nightly job failed (shard ${{ matrix.shard }})"
+          --body "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
