@@ -597,7 +597,8 @@ def _check_lock(host: _Host) -> list[str]:
     repository of the checkout at the checkout's commit. ``uv lock`` must
     record that commit as the source, and ``uv sync --locked`` must build
     it on the scratch host, whose binary then carries the commit as its
-    build id.
+    build id: run from the project's venv, and through a link in another
+    folder.
     """
     package = host.package
     project = host.work / host.check / 'pinned'
@@ -618,8 +619,13 @@ def _check_lock(host: _Host) -> list[str]:
             f' {package.commit}'
         )
     _tool(host, 'sync', [host.uv, 'sync', '--locked', *python], cwd=project)
-    wiki = _wiki(host, project / '.venv' / 'bin' / 'wiki', build=package.commit)
-    return problems + _works(host, wiki, 'project')
+    built = project / '.venv' / 'bin' / 'wiki'
+    problems += _works(host, _wiki(host, built, build=package.commit), 'project')
+    link = host.work / host.check / 'elsewhere' / 'wiki'
+    link.parent.mkdir()
+    link.symlink_to(built)
+    linked = _works(host, _wiki(host, link, build=package.commit), 'linked')
+    return problems + [f'through a link: {problem}' for problem in linked]
 
 
 def _works(host: _Host, wiki: Side, label: str) -> list[str]:
