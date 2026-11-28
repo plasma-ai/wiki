@@ -694,7 +694,9 @@ cannot``, the count line ``wiki lint`` prints for them.
 
 ``wiki new`` narrates its sweep the same way. It takes no ``--full``, so its
 pointer names a dry run: ``Run `wiki update --check --full` to list each
-line.``
+line.`` A dry run writes nothing, so it never skips a file edited during a
+run: that count line alone draws no pointer from ``wiki new``, and the line
+itself says to re-run ``wiki update``.
 
 Under ``--check`` the pending-action categories read ``Would create ...``,
 ``Would add ...``, ``Would prune ...``, and so on; the skips keep their

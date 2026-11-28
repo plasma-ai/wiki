@@ -905,9 +905,11 @@ def new(
             created = wiki.new(name, desc=desc, content=content)
         finally:
             # new takes no --full, and its sweep is done: a dry run of
-            # update lists the same skips without writing
+            # update lists each skip without writing, save a file edited
+            # during a run, which only a write meets and whose count line
+            # names its own remedy
             pointer = 'Run `wiki update --check --full` to list each line.'
-            for line in _condense(notices, False, pointer):
+            for line in _condense(notices, False, pointer, unlisted=(WriteSkipEvent,)):
                 typer.echo(line, err=True)
         typer.echo(f'Created {created}.')
 
@@ -1326,7 +1328,12 @@ def _lint_document(issues: list[Issue], notices: list[Event]) -> dict:
     }
 
 
-def _condense(notices: list[Event], check: bool, pointer: str) -> list[str]:
+def _condense(
+    notices: list[Event],
+    check: bool,
+    pointer: str,
+    unlisted: tuple[type[Event], ...] = (),
+) -> list[str]:
     """Collapse captured update events to one line per category.
 
     Each change category (see ``_UPDATE_CATEGORIES``) aggregates into a
@@ -1342,6 +1349,8 @@ def _condense(notices: list[Event], check: bool, pointer: str) -> list[str]:
         check: Whether the run is a ``--check`` dry run.
         pointer: The line that says how to list what a count line of
             ``_UPDATE_NOTE_CATEGORIES`` stands for.
+        unlisted: The kinds of ``_UPDATE_NOTE_CATEGORIES`` the pointer's
+            command never lists; a count line of one draws no pointer.
 
     Returns:
         Condensed narration lines, in first-occurrence order.
@@ -1375,7 +1384,8 @@ def _condense(notices: list[Event], check: bool, pointer: str) -> list[str]:
             line = notes[event_class].format(n=n)
         lines.append((position, line))
     # say how to list what the note count lines stand for
-    if any(counts[event_class] > 1 for event_class in counts if event_class in notes):
+    listed = [event_class for event_class in notes if event_class not in unlisted]
+    if any(counts.get(event_class, 0) > 1 for event_class in listed):
         lines.append((len(notices), pointer))
     return [line for _position, line in sorted(lines)]
 

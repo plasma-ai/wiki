@@ -1606,13 +1606,18 @@ def test_update_names_a_lone_skip_and_counts_a_repeated_kind(
         assert path.format(n=n) in full.stderr
     assert pointer not in full.stderr
 
-    # new sweeps as update does and takes no --full, so it points to a dry run
+    # new sweeps as update does and takes no --full, so it points to a dry
+    # run, which lists every skip but the one only a write can meet
     args = ['new', 'fresh', '--desc', 'A desc.', '--content', 'Body.']
     new = _wiki(root, *args, '--path', str(root))
     assert new.returncode == 0, new.stdout + new.stderr
     lines = new.stderr.splitlines()
     assert many in lines
-    assert lines[-1] == 'Run `wiki update --check --full` to list each line.'
+    pointer = 'Run `wiki update --check --full` to list each line.'
+    if racing:
+        assert pointer not in lines
+    else:
+        assert lines[-1] == pointer
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
