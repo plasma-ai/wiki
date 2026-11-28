@@ -31,6 +31,7 @@ from .conftest import GIT, WIKI, _env, _git, _git_repo, _wiki
 
 __all__ = [
     'test_command_errors_exit_two',
+    'test_empty_path_is_a_usage_error',
     'test_untrusted_hook_refusal_exits_two',
     'test_update_check_separates_pending_from_error',
     'test_page_that_is_not_utf8_stops_a_command_naming_the_byte',
@@ -374,6 +375,57 @@ def test_command_errors_exit_two(tmp_path: pathlib.Path, args: tuple[str, ...]) 
     result = _wiki(tmp_path, *args, '--path', str(tmp_path / 'nowhere'))
     assert result.returncode == 2, result.stdout + result.stderr
     assert 'Error:' in result.stderr
+
+
+@pytest.mark.parametrize(
+    argnames='args',
+    argvalues=[
+        ('init',),
+        ('config',),
+        ('trust',),
+        ('read', 'core/design'),
+        ('search', 'design'),
+        ('match', 'design'),
+        ('update',),
+        ('update', '--check'),
+        ('new', 'notes', '--desc', 'Notes.', '--content', 'Body.'),
+        ('lint',),
+        ('map',),
+    ],
+    ids=[
+        'init',
+        'config',
+        'trust',
+        'read',
+        'search',
+        'match',
+        'update',
+        'update-check',
+        'new',
+        'lint',
+        'map',
+    ],
+)
+def test_empty_path_is_a_usage_error(
+    tmp_path: pathlib.Path,
+    args: tuple[str, ...],
+) -> None:
+    """``--path ""`` is a usage error in every command that takes ``--path``.
+
+    A script with an unset variable (``--path "$WIKI"``) passes the empty
+    value. Read as no ``--path``, it would send the command to the wiki
+    the current folder resolves to, which is not the one the script named.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # a page no index lists yet, so the default wiki has work pending
+    _write(root / 'core' / 'design.md', _page('Design', 'A design.', 'Body.'))
+    before = _tree(tmp_path)
+    result = _wiki(tmp_path, *args, '--path', '')
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stdout == ''
+    assert result.stderr.endswith('Error: Invalid value: --path must not be empty.\n')
+    assert _tree(tmp_path) == before
 
 
 def test_untrusted_hook_refusal_exits_two(tmp_path: pathlib.Path) -> None:

@@ -48,6 +48,10 @@ may include breaking changes, each listed under a Breaking heading.
   read a page it meant to slice. `wiki read` also checks its slice before it
   looks for the wiki, so a malformed slice is reported as one whatever `--path`
   names.
+- `--path ""` is a usage error, `--path must not be empty.`, in every command
+  that takes `--path`. Before, an empty value meant the wiki the current folder
+  resolves to, so a script with an unset variable ran on the wrong wiki and
+  exited 0.
 
 ### Fixed
 

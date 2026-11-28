@@ -25,6 +25,7 @@ from wiki.cli.utils import (
     parse_settings,
     parse_slice,
     pattern_hints,
+    refuse_empty_path,
     refuse_nested_init,
     require_utf8,
     resolve_wiki,
@@ -330,6 +331,8 @@ def init(app: typer.Typer) -> typer.Typer:
         .wiki/settings.json, which --settings seeds at creation. The wiki is
         created at {cwd}/wiki/ when no --path is given.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         # resolve wiki root and display name
         if path:
             path = resolve_wiki_root(path)
@@ -404,6 +407,8 @@ def config(
         stderr warnings (re-run online to finish setup), never the exit
         code.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         # merge Obsidian config, streaming notices (the restored-marker
         # line the help text documents) to stderr
         wiki = resolve(path)
@@ -448,6 +453,8 @@ def trust(app: typer.Typer) -> typer.Typer:
         future-proofing a hook added later). Only trust a wiki whose
         contents you have vetted.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         # resolve the root without loading the hook (resolve_wiki_root
         # never execs .wiki/wiki.py), then record it as trusted
         root = resolve_wiki_root(path)
@@ -508,6 +515,8 @@ def read(
         normalize CRLF); a slice keeps the frontmatter and appends a
         trailing newline.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         # validate arguments: the slice units are pairwise exclusive
         if (lines is not None) and (words is not None):
             raise typer.BadParameter('--lines and --words are mutually exclusive.')
@@ -597,6 +606,8 @@ def search(
         resolvable wiki) exits 2, so scripts should branch on the exit
         code rather than parse the output.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         if prefix and raw:
             raise typer.BadParameter('--prefix and --raw are mutually exclusive.')
         if (limit is not None) and (limit < 1):
@@ -685,6 +696,8 @@ def match(
         resolvable wiki) exits 2, so scripts should branch on the exit
         code rather than parse the output.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         if lines and lineno:
             raise typer.BadParameter('--lines and --lineno are mutually exclusive.')
         # every failure here -- a bad pattern, an unresolvable wiki or
@@ -768,6 +781,8 @@ def update(
         pending, and a command error exits 2 -- so a gate reading
         --check's 1 as pending drift never reads a failed run as one.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         if full and count:
             raise typer.BadParameter('--full and --count are mutually exclusive.')
         wiki = resolve(path)
@@ -859,6 +874,8 @@ def new(
         folder), so pending maintenance in that scope -- adoptions,
         prunes -- lands in the same run.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         # the inputs land in frontmatter and prose, which every writer encodes
         # as UTF-8: an argv byte no UTF-8 decodes is refused at the boundary
         for option, value in (('NAME', name), ('--desc', desc), ('--content', content)):
@@ -935,6 +952,8 @@ def lint(
         finding typed, with an explicit severity and kind), never parse
         the prose streams.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         if full and count:
             raise typer.BadParameter('--full and --count are mutually exclusive.')
         if as_json and (full or count):
@@ -1079,6 +1098,8 @@ def map(
         --stat sizes the dump instead of printing it -- the cheap probe
         before dumping a large wiki.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         # validate numeric bounds
         if (depth is not None) and (depth < 0):
             raise typer.BadParameter('--depth must be >= 0.')

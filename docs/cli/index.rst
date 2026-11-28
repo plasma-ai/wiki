@@ -33,6 +33,11 @@ existing wiki and accepts ``--path <dir>`` to name its root directly. Without
    tree, so resolution declines to climb from it.
 3. ``{cwd}/wiki/``, when that directory is declared or indexed.
 
+An empty ``--path`` value is a usage error (``--path must not be empty.``,
+exit 2) in every command that takes the option, ``wiki init`` included. It is
+never read as no ``--path``, so a script that passes an unset variable does not
+run on the wiki the current directory resolves to.
+
 When none of these produce a wiki, the command fails with ``Could not locate
 .wiki/settings.json, _index.md, or wiki/_index.md from the current directory.``
 A path inside an existing wiki resolves upward to the enclosing root with a
