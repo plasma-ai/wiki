@@ -388,7 +388,8 @@ wikilinks written with ``./`` or ``../`` that land inside the wiki (the
 prefix-free form is the fix) or outside every ``links.external`` folder (the
 entry to add is named), unparseable ``created:``/``updated:`` stamps, a
 control character in a double-quoted ``name:``, ``title:``, ``desc:``, or
-``category:`` (LaTeX whose backslashes YAML read as escapes), a
+``category:`` (LaTeX whose backslashes YAML read as escapes), one of those
+fields holding a YAML mapping or list, a
 nested ``.wiki/settings.json`` declaring a foreign wiki root, dangling or
 nested region markers, a missing or unfilled ``title:`` under
 ``titles.required``, and stale ``[[wikilinks]]`` in prose under

@@ -68,6 +68,7 @@ __all__ = [
     'test_lint_flags_a_control_character_in_a_double_quoted_field',
     'test_lint_keeps_a_quoted_field_that_decodes_to_text',
     'test_lint_judges_every_text_field_for_control_characters',
+    'test_lint_flags_a_text_field_that_is_a_mapping_or_list',
     'test_lint_invalid_yaml_yields_to_merge_states',
     'test_lint_names_a_comment_truncated_desc',
     'test_valueless_desc_draws_only_its_repair_diff',
@@ -295,13 +296,13 @@ def test_lint_issues_are_typed(tmp_path: pathlib.Path) -> None:
         '---\nname: malformed\ndesc: A page.\n\n# malformed\n\nBody.\n',
         encoding='utf-8',
     )
-    # an escape decoded to a control character, a period-less desc, an
-    # unparseable stamp, both wrap mangles, a directory link, a relative link,
-    # an absolute link, an outside link, and a dangling region marker on one
-    # messy page
+    # an escape decoded to a control character, a period-less desc, a list
+    # for a category, an unparseable stamp, both wrap mangles, a directory
+    # link, a relative link, an absolute link, an outside link, and a dangling
+    # region marker on one messy page
     (tmp_path / 'data' / 'messy.md').write_text(
         '---\nname: messy\ntitle: "A \\tau"\ndesc: No trailing period\n'
-        'created: not-a-stamp\n---\n\n# messy\n\n'
+        'category: [a, b]\ncreated: not-a-stamp\n---\n\n# messy\n\n'
         'a twenty-\nclass system, that\n+ wraps into a marker.\n\n'
         f'See [[core]], [[./keep]], [[{tmp_path}/keep]], and [[../gone]] for more.\n\n'
         '<!-- start: no-lint -->\n',
@@ -370,6 +371,7 @@ def test_lint_issues_are_typed(tmp_path: pathlib.Path) -> None:
         'missing_period',
         'missing_title',
         'nested_wiki_root',
+        'nonscalar_field',
         'outside_link',
         'region_marker',
         'relative_link',
@@ -1400,6 +1402,48 @@ def test_lint_judges_every_text_field_for_control_characters(
             'characters': ['U+0008'],
         },
     ]
+
+
+@pytest.mark.parametrize(
+    argnames=('field', 'key', 'line'),
+    argvalues=[
+        ('desc:\n  Theorem: every x is y.', 'desc', 3),
+        ('title:\n- One\n- Two\ndesc: A page.', 'title', 3),
+        ('desc: A page.\ncategory: [math, draft]', 'category', 4),
+        ('desc: A page.\ncategory: {}', 'category', 4),
+    ],
+    ids=['nested-mapping', 'block-list', 'flow-list', 'empty-flow-mapping'],
+)
+@pytest.mark.usefixtures('_vary_loader')
+def test_lint_flags_a_text_field_that_is_a_mapping_or_list(
+    tmp_path: pathlib.Path,
+    field: str,
+    key: str,
+    line: int,
+) -> None:
+    """A ``title``, ``desc``, or ``category`` that YAML reads as a mapping or a list is one issue.
+
+    The block is valid YAML, so no other check names it: update writes
+    the field's source lines into the H1 and the parent's row while a
+    strict reader hands other tools a collection. Lint names the field
+    and its line, with the remedy; a field that is a list by design
+    (``tags``) stays clean.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        f'---\nname: core/design\n{field}\ntags: [a, b]\n---\n\n# core/design\n\nBody.\n',
+        encoding='utf-8',
+    )
+    wiki.update()
+
+    issues = Wiki(tmp_path).lint()
+    assert issues == [
+        f'core/design.md: Mapping or list in {key} (line {line}): a strict reader'
+        ' finds no text there, so quote the value or write it as a >- block'
+    ]
+    assert issues[0].kind == 'nonscalar_field'
+    assert issues[0].fields == {'path': 'core/design.md', 'field': key, 'line': line}
 
 
 def test_lint_invalid_yaml_yields_to_merge_states(tmp_path: pathlib.Path) -> None:

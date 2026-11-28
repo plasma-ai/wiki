@@ -711,7 +711,8 @@ nested wiki roots, formatter-damage signatures (escaped wikilinks, a missing
 delimiter), hand-wrap mangles, authored descriptions missing their trailing
 period, unparseable ``created:``/``updated:`` stamps, a control character in a
 double-quoted ``name:``, ``title:``, ``desc:``, or ``category:`` (a backslash
-escape decoded where LaTeX was typed), broken links in the
+escape decoded where LaTeX was typed), a ``name:``, ``title:``, ``desc:``, or
+``category:`` whose value is a YAML mapping or list, broken links in the
 generated index block, prose wikilinks naming a folder rather than its
 ``_index`` page (in this wiki, or in another wiki a ``links.external``
 folder admits, judged by that wiki's own settings), prose wikilinks written

@@ -2028,7 +2028,8 @@ class Wiki:
           tool-owned, so a parseable value is never judged), a control
           character in a double-quoted ``name``, ``title``, ``desc``, or
           ``category`` (a backslash escape decoded where LaTeX was
-          typed), broken
+          typed), a ``name``, ``title``, ``desc``, or ``category`` whose
+          value is a YAML mapping or list, broken
           index links (targets that no longer exist; ``update`` prunes
           these, so the row is also part of the file's pending diff --
           a target still on disk as a symlinked file is named as such,
@@ -2305,6 +2306,7 @@ class Wiki:
                     result.extend(self._lint_timestamps(index_path, frontmatter))
                     result.extend(self._lint_frontmatter_yaml(index_path, frontmatter))
                     result.extend(self._lint_field_controls(index_path, frontmatter))
+                    result.extend(self._lint_field_types(index_path, frontmatter))
                     # the root display name has no enclosing dir to validate it
                     if folder == self._root:
                         root_name = format.read_frontmatter_name(frontmatter)
@@ -2539,6 +2541,7 @@ class Wiki:
                     result.extend(self._lint_timestamps(page, frontmatter))
                     result.extend(self._lint_frontmatter_yaml(page, frontmatter))
                     result.extend(self._lint_field_controls(page, frontmatter))
+                    result.extend(self._lint_field_types(page, frontmatter))
                 # hand-wrap artifacts in the content and raw desc lines
                 # are hard issues
                 result.extend(
@@ -6282,6 +6285,44 @@ class Wiki:
                     field=field,
                     line=line,
                     characters=[code for code, _ in controls],
+                )
+            )
+        return result
+
+    def _lint_field_types(
+        self: Wiki,
+        path: pathlib.Path,
+        frontmatter: str,
+    ) -> list[Issue]:
+        """Check each text field holds text, not a YAML mapping or list.
+
+        An indented ``Key: value`` line under a bare ``desc:`` nests a
+        mapping, and ``title: [a, b]`` is a list: update writes the
+        field's source lines, joined, into the H1 and the parent's row,
+        while every strict reader hands its caller a collection. The
+        block is valid YAML, so no other check names it.
+        """
+        # initialize issues
+        result = []
+        for field in _TEXT_FIELDS:
+            if not format.is_collection_field(frontmatter, field):
+                continue
+            # a key line the line grammar cannot place (an indented
+            # mapping) is the unaddressable check's finding, not this one
+            line = format.field_line(frontmatter, field)
+            if line is None:
+                continue
+            # alias relative path
+            relpath = path.relative_to(self._root)
+            result.append(
+                Issue(
+                    f'{relpath}: Mapping or list in {field} (line {line}): a'
+                    ' strict reader finds no text there, so quote the value or'
+                    ' write it as a >- block',
+                    kind='nonscalar_field',
+                    path=str(relpath),
+                    field=field,
+                    line=line,
                 )
             )
         return result

@@ -247,12 +247,13 @@ rather than authoring or auditing page by page yourself:
   `: ` or ` #` must be YAML-quoted — a strict reader rejects the unquoted colon
   on a one-line desc or on a continuation line of one (`wiki lint` reports it as
   `invalid_yaml`; under a bare `desc:` key an indented `Key: value` line nests a
-  mapping instead, which no strict reader shows as text and lint does not
-  report) and reads ` #` as a comment (lint names it as the likely cause only
-  when the cut-short desc loses its period); surrounding quotes are stripped
-  when the value is read. Never hand-wrap a desc mid-word or onto a list-marker
-  start — let the block scalar carry the breaks; lint fails the wrap artifacts
-  (a hyphen dangle, a phantom list item).
+  mapping instead, which no strict reader shows as text and lint reports as
+  `nonscalar_field`, as it does a `title` or `category` that is a list) and
+  reads ` #` as a comment (lint names it as the likely cause only when the
+  cut-short desc loses its period); surrounding quotes are stripped when the
+  value is read. Never hand-wrap a desc mid-word or onto a list-marker start —
+  let the block scalar carry the breaks; lint fails the wrap artifacts (a hyphen
+  dangle, a phantom list item).
 - **Fill in auto-created index descs.** `wiki update` creates a missing
   `_index.md` for every new directory with a `desc: ...` placeholder and
   announces the batch in its condensed summary

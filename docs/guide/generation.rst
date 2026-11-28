@@ -405,6 +405,18 @@ its meaning:
    ``control_character`` in ``--json``, with ``path``, ``field``, ``line``, and
    ``characters`` (the code points) fields.
 
+``Mapping or list in <field> (line N): a strict reader finds no text there, so quote the value or write it as a >- block``
+   A ``name:``, ``title:``, ``desc:``, or ``category:`` whose value YAML reads
+   as a mapping or a list: an indented ``Key: value`` line under a bare
+   ``desc:``, a ``title: [Draft]``, a ``category:`` over ``- item`` lines.
+   The block is valid YAML, so it is not an ``Invalid YAML frontmatter``
+   issue; update writes the field's source lines, joined, into the H1 and the
+   parent index's row, while Obsidian and any YAML library read a collection.
+   N is the field's key line. Quote the value, or write it as a block scalar.
+   A field that is a list by design (``tags:``, ``sources:``) is not judged.
+   Typed ``nonscalar_field`` in ``--json``, with ``path``, ``field``, and
+   ``line`` fields.
+
 ``Empty or truncated index (no frontmatter); restore it from git or delete it to rebuild``
    An emptied or truncated ``_index.md``; update keeps it as-is. Restore or
    delete it.

@@ -46,7 +46,9 @@ backslash starts an escape, so LaTeX there decodes to control characters
 (``"$\frac12$"`` holds a form feed): write it in single quotes or a block
 scalar, or double each backslash. ``wiki lint`` reports a double-quoted
 ``name``, ``title``, ``desc``, or ``category`` that holds a control character
-as a ``control_character`` issue. Fresh frontmatter —
+as a ``control_character`` issue, and one of those fields whose value is a
+YAML mapping or list (an indented ``Key: value`` line under a bare ``desc:``)
+as a ``nonscalar_field`` issue. Fresh frontmatter —
 written when a bare page is adopted or when ``wiki init`` or ``wiki update``
 creates an index — contains exactly ``name``, a ``desc: ...`` placeholder,
 ``tags: []``, ``sources: []``, ``created``, and ``updated``, plus a ``title:``
