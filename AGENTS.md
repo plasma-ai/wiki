@@ -493,9 +493,10 @@ and `docs/conf.py`. In `tests.yaml` each of those jobs that runs on a pull
 request carries a guard that keeps it off the schedule and a dispatch, and the
 `nightly` job carries the opposite guard; no added job carries a YAML comment.
 The three other crates are the repository's own files. A seed file takes a
-change only where no file of the repository's own can hold it: a `mod` line, an
-`#[expect]`, a field of the configuration. Every `cruft` command runs the
-template's hook, which calls `cargo fmt`, so `cargo` must be on `PATH`.
+change only where no file of the repository's own can hold it, such as a `mod`
+line, an `#[expect]` or a field of the configuration. `cruft update` and
+`cruft diff` render the template, whose hooks call `cargo fmt`, so they need
+`cargo` on `PATH`; `cruft check` does not.
 
 `crates/wiki-cli/build.rs` records the commit of the checkout as the build id.
 It reads git's files and never runs git, which refuses a checkout that another
