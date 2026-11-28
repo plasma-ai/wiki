@@ -174,9 +174,6 @@ jobs:
     name: nightly
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      issues: write
     strategy:
       fail-fast: false
       matrix:
@@ -194,6 +191,7 @@ jobs:
       - name: Build the oracle checkout
         run: uv run --no-sync python -m parity oracle ensure --side oracle
       - name: Run the perturbation loop on fresh seeds
+        timeout-minutes: 330
         run: >-
           uv run --no-sync python -m parity perturb loop --every --fresh 250
           --work "$RUNNER_TEMP/perturb-work" --out "$RUNNER_TEMP/perturb-out"
@@ -204,11 +202,27 @@ jobs:
           name: nightly-out-${{ matrix.shard }}
           path: ${{ runner.temp }}/perturb-out
           if-no-files-found: ignore
-      - name: Open an issue for a failed run
-        if: failure()
+  issue:
+    name: issue
+    if: failure()
+    needs: nightly
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Add a failed run of the nightly job to its issue
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh issue create
-          --title "The nightly job failed (shard ${{ matrix.shard }})"
-          --body "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          GH_REPO: ${{ github.repository }}
+          TITLE: The nightly job failed
+        run: |
+          run="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          number=$(
+            gh issue list --state open --search "in:title \"$TITLE\"" --json number,title \
+              --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty"
+          )
+          if [[ -n "$number" ]]; then
+            gh issue comment "$number" --body "$run"
+          else
+            gh issue create --title "$TITLE" --body "$run"
+          fi
