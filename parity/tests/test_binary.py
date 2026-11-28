@@ -43,9 +43,9 @@ def test_rust_side_holds_the_binary_to_the_checkout(tmp_path: pathlib.Path) -> N
 
     The side's identity comes from the checkout: the version its manifest
     states and the commit it is at. A binary built there proves it on a
-    command. After one more commit, or a change of the manifest's version,
-    the same binary is a build of something else, and its command no longer
-    proves the side.
+    command. After one more commit, or under another version in the
+    manifest, the same binary is a build of something else, and its command
+    does not prove the side.
     """
     repo = _checkout(tmp_path)
     commit = _git(repo, 'rev-parse', 'HEAD')
