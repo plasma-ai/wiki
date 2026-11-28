@@ -530,9 +530,9 @@ def _check_run(host: _Host) -> list[str]:
     and finds ``wiki`` there by its name.
     """
     package = host.package
-    # NOTE: uv puts the commands of the environment it runs over ahead of the
-    # wheel's, so the interpreter is the one outside every venv, which holds
-    # no ``wiki`` of its own
+    # NOTE: over an environment in which a plasma-wiki 1.x is installed, uv
+    # copies the ``wiki`` script of that distribution ahead of the wheel's, so
+    # the interpreter is the one outside every venv, which holds none
     through = [host.uv, 'run', '--quiet', '--no-project']
     through += ['--python', _interpreter(host), '--with', f'{package.wheel}']
     wiki = _wiki(host, pathlib.Path('wiki'), build=package.commit, through=through)
