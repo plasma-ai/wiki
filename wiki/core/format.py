@@ -138,6 +138,10 @@ _SHORT_ESCAPES = {
 # escape decodes to where LaTeX was typed (\theta, \nu, \frac)
 _FIELD_CONTROLS = re.compile(r'[\x00-\x1f\x7f\x85\u2028\u2029]')
 
+# the characters authored content holds only as damage: the C0 controls but
+# the tab and the line break, and the DEL
+_CONTENT_CONTROLS = re.compile(r'[\x00-\x08\x0b-\x1f\x7f]')
+
 # lone surrogates: text no UTF-8 writer can emit
 _SURROGATES = re.compile(r'[\ud800-\udfff]')
 
@@ -1628,6 +1632,25 @@ def wrapped_marker_lines(masked: str, text: str) -> list[int]:
                 result.append(lineno)
         if marker:
             open_items.append(indent)
+    return result
+
+
+def control_characters(text: str) -> list[tuple[int, str]]:
+    r"""Return the control characters in ``text`` as ``(line, code point)`` pairs, in order.
+
+    A tab and a line break are text; any other C0 control, or the DEL, is
+    what a decoded backslash escape leaves where LaTeX stood (a form
+    feed for the ``\f`` of ``\frac``). Lines are 1-based and end at a
+    line break alone, so a form feed never opens one. The raw text is
+    scanned, code included: an escape decodes there as it does in prose.
+    """
+    # a text holding none is the common case: one search settles it
+    if _CONTENT_CONTROLS.search(text) is None:
+        return []
+    result = []
+    for lineno, line in enumerate(text.split('\n'), 1):
+        for char in _CONTENT_CONTROLS.findall(line):
+            result.append((lineno, f'U+{ord(char):04X}'))
     return result
 
 

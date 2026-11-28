@@ -240,7 +240,8 @@ Lint distinguishes **issues** from **notes**. Issues are hard problems — files
 that drifted from the generated form (shown as a diff), invalid names, broken
 index links, malformed frontmatter — and any issue makes lint exit 1. Notes
 are advisory (placeholder or oversized descriptions, empty index content,
-stale prose links unless the wiki sets ``lint.strict``, CRLF endings), print
+stale prose links unless the wiki sets ``lint.strict``, CRLF endings, control
+characters in a page body), print
 on stderr, and never affect the exit code.
 
 Now author the descriptions. A page's ``desc:`` frontmatter is the source of

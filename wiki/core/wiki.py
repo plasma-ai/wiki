@@ -2060,9 +2060,9 @@ class Wiki:
         A ``<!-- start: no-lint -->`` ... ``<!-- end: no-lint -->`` region
         suppresses the positional rules (conflict markers, escaped
         wikilinks, wrap mangles, stale, outside, directory, relative, and
-        absolute links) for the lines it wraps; file-level checks ignore
-        regions, and a nested or dangling region marker is itself a hard
-        issue.
+        absolute links, control characters in content) for the lines it
+        wraps; file-level checks ignore regions, and a nested or dangling
+        region marker is itself a hard issue.
 
         Placeholder and oversized descriptions, empty content sections,
         stale links in user content (index bodies and pages -- the
@@ -2070,8 +2070,10 @@ class Wiki:
         target outside the root resolves only under a folder
         ``links.external`` allowlists), a ``links.external`` entry
         naming no folder on this machine (noted once per run; links into
-        it go unchecked), and CRLF line endings (which the next
-        ``update`` normalizes) are soft notes (stderr)
+        it go unchecked), CRLF line endings (which the next
+        ``update`` normalizes), and control characters in authored
+        content (a page's body bar its H1, an index's text below the
+        delimiter; a tab and a line break are text) are soft notes (stderr)
         and do not count as issues; ``lint.strict`` makes the stale links
         issues.
 
@@ -2431,6 +2433,13 @@ class Wiki:
                     result.extend(self._lint_stale_links(index_path, user_content))
                     if not user_content.strip():
                         self.on_content_empty(path=str(index_relpath))
+                    # a control character in the authored text is a soft note
+                    self._lint_content_controls(
+                        path=index_path,
+                        text=text,
+                        frontmatter=frontmatter,
+                        suppressed=suppressed,
+                    )
             # check pages (always, even when the index is missing)
             for page in pages:
                 page_relpath = page.relative_to(self._root)
@@ -2538,6 +2547,8 @@ class Wiki:
                 # stale links in page content are soft notes; directory
                 # links in page content are hard issues
                 result.extend(self._lint_stale_links(page, content))
+                # a control character in the authored body is a soft note
+                self._lint_content_controls(page, text, frontmatter, suppressed)
         return result
 
     @format.run_scoped
@@ -3368,6 +3379,27 @@ class Wiki:
         """
         if event is None:
             event = CrlfNoticeEvent(message, **kwargs)
+        return self.on_notice(event, logging_level=logging_level)
+
+    def on_content_control_character(
+        self: Wiki,
+        message: Optional[str] = None,
+        *,
+        logging_level: int = logging.INFO,
+        event: Optional[ContentControlCharacterEvent] = None,
+        **kwargs: Any,
+    ) -> Event:
+        """Handle a control-character-in-content notice event.
+
+        Constructs a ``ContentControlCharacterEvent`` from ``message``
+        and the payload kwargs (the live-site path, the first line and
+        character, and the count) unless a pre-built ``event`` is passed
+        through, then delegates to ``on_notice``. Override in subclasses
+        to intercept this notice kind alone; override ``on_notice`` to
+        intercept every notice.
+        """
+        if event is None:
+            event = ContentControlCharacterEvent(message, **kwargs)
         return self.on_notice(event, logging_level=logging_level)
 
     def on_link_stale(
@@ -6254,6 +6286,61 @@ class Wiki:
             )
         return result
 
+    def _lint_content_controls(
+        self: Wiki,
+        path: pathlib.Path,
+        text: str,
+        frontmatter: str,
+        suppressed: set[int],
+    ) -> None:
+        """Note the control characters in a file's authored content.
+
+        Authored content is a page's body and an index's text below the
+        delimiter. The H1 and the link rows are generated from
+        frontmatter fields, so a control character there is the field's
+        finding (``_lint_field_controls``), on the file that holds the
+        field. One note names the first line and character and counts the
+        rest; a ``no-lint`` region suppresses its lines.
+        """
+        found = format.control_characters(text)
+        if not found:
+            return
+        # bound the authored lines: below an index's delimiter, or below a
+        # page's frontmatter bar its H1
+        lines = text.split('\n')
+        start = len(frontmatter.split('\n')) if frontmatter else 0
+        generated = None
+        if path.name == WIKI_INDEX:
+            start = next(
+                (
+                    index + 1
+                    for index in range(start, len(lines))
+                    if lines[index].rstrip() == self.index_delimiter
+                ),
+                len(lines),
+            )
+        else:
+            heading = wiki.util.markdown.find_heading('\n'.join(lines[start:]))
+            if heading is not None:
+                heading_index, _ = heading
+                generated = start + heading_index + 1
+        found = [
+            (lineno, code)
+            for lineno, code in found
+            if (lineno > start) and (lineno != generated) and (lineno not in suppressed)
+        ]
+        if not found:
+            return
+        # alias relative path
+        relpath = path.relative_to(self._root)
+        line, character = found[0]
+        self.on_content_control_character(
+            path=str(relpath),
+            line=line,
+            character=character,
+            count=len(found),
+        )
+
     def _lint_link_desc(
         self: Wiki,
         path: pathlib.Path,
@@ -7071,6 +7158,26 @@ class CrlfNoticeEvent(Event):
         return f'{self.path}: CRLF line endings; update will normalize'
 
 
+class ContentControlCharacterEvent(Event):
+    """Emitted when lint notes control characters in authored content."""
+
+    path: str
+    line: int
+    character: str
+    count: int
+
+    @property
+    def description(self: ContentControlCharacterEvent) -> str:
+        """Return the control-character note line."""
+        result = (
+            f'{self.path}: Control character in content (line {self.line}):'
+            f' {self.character}'
+        )
+        if self.count > 1:
+            result += f', the first of {self.count}'
+        return result
+
+
 class LinkStaleEvent(Event):
     """Emitted when lint notes a stale wikilink in user content."""
 
@@ -7129,6 +7236,7 @@ _NOTICE_HOOKS = {
     DescLongEvent: 'on_desc_long',
     ContentEmptyEvent: 'on_content_empty',
     CrlfNoticeEvent: 'on_crlf_notice',
+    ContentControlCharacterEvent: 'on_content_control_character',
     LinkStaleEvent: 'on_link_stale',
     LinkFolderMissingEvent: 'on_link_folder_missing',
 }

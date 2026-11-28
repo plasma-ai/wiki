@@ -41,6 +41,7 @@ from wiki.constants import (
 )
 from wiki.core.event import Event
 from wiki.core.wiki import (
+    ContentControlCharacterEvent,
     ContentEmptyEvent,
     CrlfNoticeEvent,
     DescLongEvent,
@@ -179,6 +180,7 @@ _LINT_NOTE_CATEGORIES = [
     (DescLongEvent, '{n} long descs'),
     (ContentEmptyEvent, '{n} indexes have empty content'),
     (CrlfNoticeEvent, '{n} files have CRLF line endings; update will normalize'),
+    (ContentControlCharacterEvent, '{n} files have control characters in content'),
     (LinkStaleEvent, '{n} stale links'),
     (
         LinkFolderMissingEvent,

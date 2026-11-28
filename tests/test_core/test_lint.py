@@ -90,6 +90,8 @@ __all__ = [
     'test_lint_survives_index_deleted_mid_check',
     'test_quoted_placeholder_desc_is_soft',
     'test_long_desc_is_note_only',
+    'test_lint_notes_a_control_character_in_authored_content',
+    'test_lint_scans_no_generated_text_for_control_characters',
     'test_lint_relative_prefix_inside_wiki_is_issue',
     'test_lint_absolute_link_inside_wiki_is_issue',
     'test_lint_relative_root_link_names_the_index_page',
@@ -2123,6 +2125,83 @@ def test_long_desc_is_note_only(tmp_path: pathlib.Path) -> None:
     assert 'keep descs under' in err
     assert 'design.md' in err
     assert issues == []
+
+
+@page_index
+@pytest.mark.parametrize('strict', [False, True], ids=['default', 'strict'])
+def test_lint_notes_a_control_character_in_authored_content(
+    tmp_path: pathlib.Path,
+    kind: str,
+    strict: bool,
+) -> None:
+    r"""Control characters in a page body, or below an index's ``***``, draw one note per file.
+
+    A form feed where ``\frac`` stood is what a decoded escape leaves in
+    prose and in code alike. The note names the first line and character
+    and counts the rest; a tab is text, a ``no-lint`` region is skipped,
+    and the wiki stays clean, under ``lint.strict`` too.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    if strict:
+        settings = tmp_path / '.wiki' / 'settings.json'
+        data = json.loads(settings.read_text(encoding='utf-8'))
+        data['lint'] = {'strict': True}
+        settings.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
+    name = 'design.md' if kind == 'page' else '_index.md'
+    path = tmp_path / 'core' / name
+    authored = (
+        '\nA\ttabbed line.\n\nThe bound $\x0crac12$ and $\x0crac13$.\n\n'
+        '```\ncode \x01 sample\n```\n\n'
+        '<!-- start: no-lint -->\nA sampled \x0c byte.\n<!-- end: no-lint -->\n'
+    )
+    text = path.read_text(encoding='utf-8') + authored
+    path.write_text(text, encoding='utf-8')
+    first_line = text.split('\n').index('The bound $\x0crac12$ and $\x0crac13$.') + 1
+
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+    assert wiki.lint() == []
+    notes = [
+        event.description
+        for event in notices
+        if 'Control character' in event.description
+    ]
+    assert notes == [
+        f'core/{name}: Control character in content (line {first_line}): U+000C,'
+        ' the first of 3'
+    ]
+
+
+def test_lint_scans_no_generated_text_for_control_characters(
+    tmp_path: pathlib.Path,
+) -> None:
+    r"""A control character update copied into an H1 or a link row draws no finding of its own.
+
+    The page's double-quoted title and desc decode ``\frac`` to a form
+    feed, and update writes both into the page's H1 and the parent's
+    row. The two fields are the findings; the generated copies, in the
+    page body and in the index, draw no note.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        '---\nname: core/design\ntitle: "On $\\frac12$"\ndesc: "Half, $\\frac12$."\n'
+        '---\n\n# core/design\n\nBody.\n',
+        encoding='utf-8',
+    )
+    wiki.update()
+    assert '# On $\x0crac12$\n' in page.read_text(encoding='utf-8')
+    index = (tmp_path / 'core' / '_index.md').read_text(encoding='utf-8')
+    assert '[[core/design|design]]: Half, $\x0crac12$.' in index
+
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+    issues = wiki.lint()
+    assert [(issue.kind, issue.fields['field']) for issue in issues] == [
+        ('control_character', 'title'),
+        ('control_character', 'desc'),
+    ]
+    assert not any('Control character' in event.description for event in notices)
 
 
 # ------ body links and structure

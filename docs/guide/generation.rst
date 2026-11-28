@@ -553,6 +553,20 @@ notes is clean — lint exits 0.
      - An index's user-content section below ``***`` is empty.
    * - ``<path>: CRLF line endings; update will normalize``
      - The next writing update rewrites the file to LF.
+   * - ``<path>: Control character in content (line N): <character>``
+     - Authored content — a page's body, or an index's text below ``***`` —
+       holds a C0 control character other than a tab or a line break, or
+       DEL: typically what is left of LaTeX once a tool decoded a backslash
+       escape (a form feed where the ``\f`` of ``\frac`` stood). One note per
+       file names the first line and its character by code point
+       (``U+000C``); when the file holds more, the line ends ``, the first
+       of M``. Code samples are scanned too. Generated text — a page's H1,
+       an index's link rows — is not: a control character there is copied
+       from a frontmatter field and reported on the file that holds the
+       field (``Control character in <field>``, above). It stays a note
+       under ``lint.strict``. Typed ``content_control_character`` in
+       ``--json``, with ``path``, ``line``, ``character``, and ``count``
+       fields.
    * - ``<path>: Stale link [[target]]``
      - A ``[[wikilink]]`` in authored prose points at nothing — inside the
        wiki for a prefix-free target, or under a ``links.external`` folder
@@ -624,9 +638,11 @@ wrapped lines:
 
 Each marker stands alone on its line. The region suppresses the positional
 rules — conflict markers, escaped wikilinks, wrap mangles, stale-link notes,
-outside-link, directory-link, relative-link and absolute-link issues — for the
-wrapped lines only; file-level checks are unaffected. Content inside fenced or
-inline code is already masked, so those code samples need no region. The link
+control-character notes, outside-link, directory-link, relative-link and
+absolute-link issues — for the wrapped lines only; file-level checks are
+unaffected. Content inside fenced or inline code is already masked, so those
+code samples need no region — except for the control-character note, which
+scans code too. The link
 rules — the stale-link notes, the outside-link, directory-link, relative-link
 and absolute-link issues — also skip a wikilink inside an HTML comment or an
 indented code block, so a link sample in either needs no wrapping; the

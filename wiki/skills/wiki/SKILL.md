@@ -155,7 +155,10 @@ rather than authoring or auditing page by page yourself:
   `"$\frac12$"` a form feed, and `wiki update` copies them into the H1 and the
   parent's row. Write the value in single quotes or as a block scalar (`>-`), or
   double each backslash. `wiki lint` fails a double-quoted `name`, `title`,
-  `desc`, or `category` that holds a control character (`control_character`).
+  `desc`, or `category` that holds a control character (`control_character`). A
+  control character in a page body or below an index's `***` (a form feed where
+  the `\f` of `\frac` was decoded on the way in) draws a soft note with its
+  first line; retype the text there.
 - **Wikilinks stay inside the wiki unless a folder is allowlisted.** Every
   wikilink (`[[...]]`) target is read from the wiki root, one rule per spelling:
   a prefix-free target (`[[core/design]]`) must name something inside the wiki;

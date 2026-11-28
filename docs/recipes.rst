@@ -395,7 +395,8 @@ nested region markers, a missing or unfilled ``title:`` under
 ``lint.strict``.
 
 Notes flag soft hygiene: placeholder (``...``) and oversized descriptions,
-empty index content sections, CRLF line endings, and stale ``[[wikilinks]]``
+empty index content sections, CRLF line endings, control characters in a
+page body, and stale ``[[wikilinks]]``
 in prose (issues instead under ``lint.strict``). Every target is read from
 the wiki root, so a stale note suggests the root-relative form the author
 likely meant when one resolves: ``(use [[canonical]])`` for a prefix-free

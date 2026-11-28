@@ -37,6 +37,12 @@ may include breaking changes, each listed under a Breaking heading.
   parent index. The issue names the field, its line and each character, such as
   `U+000C (\f)`, and says to write LaTeX in single quotes or a block scalar, or
   to double each backslash. In `--json` its kind is `control_character`.
+- `wiki lint` notes a control character in a page body, or in an index's text
+  below `***`: a C0 control other than a tab or a line break, or DEL, such as
+  the form feed a tool leaves where `\frac` stood. There is one note for each
+  file, with the first line and the count, and a `no-lint` region is skipped. It
+  is a note under `lint.strict` too. In `--json` its kind is
+  `content_control_character`.
 
 ### Changed
 

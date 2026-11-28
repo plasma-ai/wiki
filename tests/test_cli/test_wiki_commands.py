@@ -90,6 +90,7 @@ __all__ = [
     'test_lint_condenses_repeated_notes',
     'test_lint_json_reports_typed_findings',
     'test_lint_fails_on_latex_in_a_double_quoted_desc',
+    'test_lint_notes_a_form_feed_in_a_page_body',
     'test_lint_types_resolver_diagnostics',
     'test_lint_error_exits_two',
     'test_lint_error_keeps_the_notes_before_it',
@@ -2547,6 +2548,45 @@ def test_lint_fails_on_latex_in_a_double_quoted_desc(tmp_path: pathlib.Path) -> 
             'text': prose.stdout.splitlines()[0],
         }
     ]
+
+
+def test_lint_notes_a_form_feed_in_a_page_body(tmp_path: pathlib.Path) -> None:
+    r"""A form feed in a page body is a note: lint exits 0, and ``--json`` types it.
+
+    The byte is what is left of ``\frac`` once a tool decoded ``\f``. One
+    page prints its own line on stderr; a second page condenses the kind
+    to a count line.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'half.md', _page('half', 'A half.', 'The value $\x0crac12$.'))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+
+    prose = _wiki(root, 'lint', '--path', str(root))
+    assert prose.returncode == 0, prose.stdout + prose.stderr
+    line = 'half.md: Control character in content (line 10): U+000C'
+    assert line in prose.stderr.splitlines()
+    as_json = _wiki(root, 'lint', '--path', str(root), '--json')
+    assert as_json.returncode == 0
+    notes = json.loads(as_json.stdout)['notes']
+    assert [note for note in notes if note['kind'] == 'content_control_character'] == [
+        {
+            'severity': 'note',
+            'kind': 'content_control_character',
+            'path': 'half.md',
+            'line': 10,
+            'character': 'U+000C',
+            'count': 1,
+            'text': line,
+        }
+    ]
+
+    # a second page with the damage condenses the kind to one count line
+    _write(root / 'third.md', _page('third', 'A third.', 'The value $\x0crac13$.'))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    condensed = _wiki(root, 'lint', '--path', str(root))
+    assert condensed.returncode == 0
+    assert '2 files have control characters in content' in condensed.stderr.splitlines()
 
 
 def test_lint_types_resolver_diagnostics(tmp_path: pathlib.Path) -> None:

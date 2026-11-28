@@ -311,8 +311,9 @@ Any page or index may wrap lines in an HTML-comment region:
 
 Each marker sits alone on its line. The ``no-lint`` directive suppresses
 ``wiki lint``'s positional rules — conflict markers and leftover merge repair
-hints, escaped wikilinks, wrap mangles, stale-link notes, outside-link,
-directory-link, relative-link and absolute-link issues — for the wrapped
+hints, escaped wikilinks, wrap mangles, stale-link notes, control-character
+notes, outside-link, directory-link, relative-link and absolute-link issues —
+for the wrapped
 lines, so a page can display sample conflict markers or stale-link examples
 without failing lint. A nested or dangling marker is itself a hard lint issue,
 and a malformed pair suppresses nothing. Markers inside fenced or inline code
