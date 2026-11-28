@@ -129,8 +129,8 @@ stdout; all narration prints to stderr. Update exits 0 after a successful run
      - Print every narration line individually, in emission order.
    * - ``--count``
      - on (the effective default)
-     - Print one count line per narration category. Mutually exclusive with
-       ``--full``.
+     - Print one line per narration category: its count, or a lone skip.
+       Mutually exclusive with ``--full``.
 
 One caveat on scoped runs: a category change on the page or index at the
 scope's root cannot refresh its label in the *parent* index, because the
@@ -176,12 +176,13 @@ Like a formatter's check mode, it **exits 1 when changes are pending** and 0
 (``Nothing to update.``) when the wiki is clean — a nonzero exit is not an
 error, and a real error (an unresolvable wiki, a bad subtree) exits 2, so a
 gate reading 1 as pending drift never mistakes a typo'd path for one.
-Pending-action narration (create, adopt, add, prune, overwrite) uses
-``Would ...`` wording; the state-report categories — skipped names and files,
-malformed frontmatter, truncated indexes — keep their normal wording. A dry
-run performs no housekeeping either: it neither restores a missing
-``.wiki/settings.json`` nor reports it (the resolver's stderr diagnostic
-covers the gap).
+Pending-action narration (create, adopt, restamp, add, prune, overwrite) uses
+``Would ...`` wording, in the count lines and in the lines ``--full`` prints
+(``Would adopt bare page: topics/sample.md``); the state-report categories —
+skipped names and files, malformed frontmatter, truncated indexes — keep
+their normal wording. A dry run performs no housekeeping either: it neither
+restores a missing ``.wiki/settings.json`` nor reports it (the resolver's
+stderr diagnostic covers the gap).
 
 What update leaves alone
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -641,7 +642,7 @@ sanctions them.
 Update narration reference
 --------------------------
 
-Update's narration streams to stderr. By default each category of event
+Update's narration streams to stderr. By default each category of change
 condenses to one count line; ``--full`` prints every event individually, in
 emission order (e.g. ``New link: [[topics/example|example]] in
 topics/_index.md``). The condensed lines and what they mean:
@@ -671,23 +672,80 @@ topics/_index.md``). The condensed lines and what they mean:
    * - ``Overwrote N link descs (page frontmatter descs win)``
      - Diverged index-side descriptions were replaced by the child pages'
        ``desc:`` values; edit the page, not the index.
-   * - ``Skipped N invalid names``
+
+A skip changes no file, so its line is the only record of what was skipped.
+One skip of a kind prints its own line, which names the file. Two or more
+print the kind's count line, and the narration then ends with ``Run with
+--full to list each line.``
+
+.. list-table::
+   :header-rows: 1
+   :widths: 36 30 34
+
+   * - One skip
+     - Two or more
+     - What happened
+   * - ``Skipping <path>: invalid name (<rule>)``
+     - ``Skipped N invalid names``
      - Entries violating the naming policy were left unlinked.
-   * - ``Skipped N concurrently-edited files (re-run `wiki update`)``
+   * - ``Skipping <path>: changed during update; re-run `wiki update```
+     - ``Skipped N concurrently-edited files (re-run `wiki update`)``
      - Files changed while update was planning; re-run to converge.
-   * - ``N files with malformed frontmatter``
-     - Left untouched; the per-file notice names the reason — close an
-       unclosed block by hand, rewrite a body that is not ``key: value``
-       pairs or a flow or indented mapping as column-0 ``key: value`` lines,
-       or remove the alias the repair would break.
-   * - ``N empty or truncated indexes (restore from git or delete to rebuild)``
+   * - ``Malformed frontmatter (<reason>) in <path>``
+     - ``N files with malformed frontmatter``
+     - Left untouched; the reason says what to fix — close an unclosed block
+       by hand, rewrite a body that is not ``key: value`` pairs or a flow or
+       indented mapping as column-0 ``key: value`` lines, or remove the alias
+       the repair would break.
+   * - ``Empty or truncated index (no frontmatter) in <path>; restore it from
+       git or delete it to rebuild``
+     - ``N empty or truncated indexes (restore from git or delete to rebuild)``
      - Left untouched; restore or delete.
 
+The note for an indexed path this machine's git ignores condenses the same
+way. One path prints its line (``<path>: indexed, but this machine's git
+ignores it (<source>:<line> '<pattern>'); its generated row ships where the
+file cannot, so every other clone reds on a broken link``). Two or more print
+``N indexed paths this machine's git ignores; their rows ship where the files
+cannot``, the count line ``wiki lint`` prints for them.
+
+``wiki new`` narrates its sweep the same way. It takes no ``--full``, so its
+pointer names a dry run: ``Run `wiki update --check --full` to list each
+line.`` A dry run writes nothing, so it never skips a file edited during a
+run: that count line alone draws no pointer from ``wiki new``, and the line
+itself says to re-run ``wiki update``.
+
 Under ``--check`` the pending-action categories read ``Would create ...``,
-``Would add ...``, ``Would prune ...``, and so on; the state-report categories
-(skipped names and files, malformed frontmatter, truncated indexes) keep
-their normal wording. A few notices have no category and always print
-verbatim, even in condensed mode:
+``Would add ...``, ``Would prune ...``, and so on; the skips keep their
+wording. The lines ``--full`` prints for a change follow the run the same
+way:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 50 50
+
+   * - ``--full`` line
+     - Under ``--check``
+   * - ``New index: <path> (fill in its desc)``
+     - ``Would create index: <path>``
+   * - ``Adopted bare page: <path> (frontmatter added)``
+     - ``Would adopt bare page: <path>``
+   * - ``Adopted bare page: <path> (frontmatter added; title: seeded from its
+       H1)``
+     - ``Would adopt bare page: <path> (would seed title: from its H1)``
+   * - ``Restamped <path>: edited since its updated: stamp``
+     - ``Would restamp <path>: edited since its updated: stamp``
+   * - ``New link: [[target|label]] in <path>``
+     - ``Would add link: [[target|label]] in <path>``
+   * - ``Pruned link: [[target|label]] from <path>``
+     - ``Would prune link: [[target|label]] from <path>``
+   * - ``Overwrote desc: [[target|label]] in <path> (the page frontmatter
+       desc wins; edit it in <page>)``
+     - ``Would overwrite desc: [[target|label]] in <path> (the page
+       frontmatter desc wins; edit it in <page>)``
+
+A few notices have no category and always print verbatim, even in condensed
+mode:
 
 - ``Link targets a symlink: [[target|label]] in <path> (symlinked files are
   not indexed)`` — likewise the excluded-path and gitignored-path cause
@@ -699,9 +757,6 @@ verbatim, even in condensed mode:
   :doc:`/configuration`)
 - ``Restored missing .wiki/settings.json ({} -- all defaults)``
 - ``Recreated .wiki/cache/ (derived counts cache)``
-- ``<path>: indexed, but this machine's git ignores it (<source>:<line>
-  '<pattern>'); its generated row ships where the file cannot, so every other
-  clone reds on a broken link``
 - ``Gitignore fence unavailable: `git check-ignore` failed inside the
   enclosing repository (is git installed?); indexing proceeds unfenced, so
   paths the repository ignores are adopted``

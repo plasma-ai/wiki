@@ -167,6 +167,35 @@ may include breaking changes, each listed under a Breaking heading.
   `(a scope is a folder and this is a page in the wiki root)`. `Wiki.update`,
   `lint`, `map`, `search` and `match` raise the same `FileNotFoundError` with
   the longer message.
+- The condensed output of `wiki update` names a file it skipped. A skip changes
+  no file, so its line is the only record of it: one invalid name, one file
+  edited during the run, one file with malformed frontmatter or one empty or
+  truncated index prints its own line, such as
+  `Skipping notes/a|b.md: invalid name (contains a denied character)`. Before,
+  it printed `Skipped 1 invalid name` with no path. When a kind repeats, its
+  count line (`Skipped 3 invalid names`) stays and the narration ends with
+  `Run with --full to list each line.` `wiki new` prints the same lines for the
+  sweep it runs, and its pointer names `wiki update --check --full`. A dry run
+  cannot list files edited during a run, so that count line alone draws no
+  pointer from `wiki new`.
+- `wiki update` prints one count line for indexed paths this machine's git
+  ignores when there are two or more, as `wiki lint` does:
+  `N indexed paths this machine's git ignores; their rows ship where the files cannot`.
+  Before, it printed a line for each path, so a personal ignore rule that
+  matched many pages filled the condensed output. One path still prints its own
+  line, and `--full` lists each.
+- `wiki update --check --full` says what would change:
+  `Would adopt bare page: notes/draft.md`, `Would add link: ...`,
+  `Would prune link: ...`, `Would create index: ...`, `Would restamp ...` and
+  `Would overwrite desc: ...`. Before, it printed the lines of a writing run,
+  such as `Adopted bare page: notes/draft.md (frontmatter added)`, while the
+  file was untouched. A run without `--check` prints the same lines as before.
+- The `wiki update` line about an overwritten desc names the page's real file
+  when the page sits beside a file of the same name. For `tools/Makefile.md`
+  beside `tools/Makefile` it says `edit it in tools/Makefile.md`. Before, it
+  said `tools/Makefile.md.md`, a file that does not exist. `DescOverwriteEvent`
+  carries the file in a new optional `page` field; an event built without it
+  names the target plus `.md`.
 
 ## [1.10.0] - 2026-11-27
 

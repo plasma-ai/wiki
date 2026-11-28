@@ -61,6 +61,8 @@ __all__ = [
     'test_update_generates_child_links',
     'test_update_prunes_broken_link',
     'test_update_check_reports_changes_without_writing',
+    'test_update_check_full_words_each_change_as_pending',
+    'test_update_names_the_page_of_an_overwrite_a_hook_announces',
     'test_update_noop_reports_nothing_to_update',
     'test_update_failed_entry_mutates_nothing',
     'test_update_narrations_condense_by_default',
@@ -68,6 +70,8 @@ __all__ = [
     'test_new_requires_authored_desc_and_content',
     'test_new_refuses_an_argument_that_is_not_utf8',
     'test_update_counts_files_with_malformed_frontmatter',
+    'test_update_names_a_lone_skip_and_counts_a_repeated_kind',
+    'test_update_counts_paths_git_ignores_as_lint_does',
     'test_new_refuses_interior_path',
     'test_read_only_commands_are_deterministic',
     'test_path_inside_wiki_resolves_upward',
@@ -235,6 +239,31 @@ _NOTING_HOOK = (
     "        self.on_desc_missing(path='a.md')\n"
     "        self.on_desc_missing(path='b.md')\n"
     "        raise RuntimeError('boom')\n"
+)
+
+# a hook whose update announces an overwritten desc of its own, by entry and
+# index alone
+_ANNOUNCING_HOOK = (
+    'from wiki.core.wiki import Wiki\n\n'
+    "__all__ = ['Announcing']\n\n\n"
+    'class Announcing(Wiki):\n'
+    '    def update(self, name=None, *, check=False):\n'
+    "        entry = {'target': 'core/keep', 'label': 'keep'}\n"
+    "        self.on_desc_overwrite(path='core/_index.md', **entry)\n"
+    '        return super().update(name, check=check)\n'
+)
+
+# a hook whose plan is followed by another writer's edit to each core/page*.md
+_RACING_HOOK = (
+    'from wiki.core.wiki import Wiki\n\n'
+    "__all__ = ['Racing']\n\n\n"
+    'class Racing(Wiki):\n'
+    '    def _plan(self, folder, **kwargs):\n'
+    '        result = super()._plan(folder, **kwargs)\n'
+    "        for page in self._root.glob('core/page*.md'):\n"
+    "            with page.open('a', encoding='utf-8') as file:\n"
+    "                file.write('Edited.\\n')\n"
+    '        return result\n'
 )
 
 # the line a command opens stderr with while WIKI_FREEZE_TIME fixes the clock
@@ -1423,6 +1452,100 @@ def test_update_check_reports_changes_without_writing(tmp_path: pathlib.Path) ->
     assert 'Nothing to update.' in clean.stdout
 
 
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_update_check_full_words_each_change_as_pending(tmp_path: pathlib.Path) -> None:
+    """``update --check --full`` says what would change, never that it did.
+
+    A dry run writes nothing, so each change line reads ``Would ...``;
+    the applied run narrates the same plan as done work.
+    """
+    root = tmp_path / 'wiki'
+    _git_repo(tmp_path)
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'core' / '_index.md', _index('core', 'Core concepts.', 'Text.'))
+    _write(root / 'core' / 'keep.md', _page('keep', 'Stays.', 'Body.'))
+    _write(root / 'core' / 'gone.md', _page('gone', 'Removed soon.', 'Body.'))
+    _write(root / 'core' / 'edited.md', _page('edited', 'Edited later.', 'Body.'))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    _git(tmp_path, 'add', '-A')
+    assert _git(tmp_path, 'commit', '-q', '-m', 'base').returncode == 0
+
+    # one pending change of each kind: a bare page to adopt, a folder with no
+    # index, a row whose page is gone, a row desc edited away from its page,
+    # and a committed page edited by hand well after its stamp
+    _write(root / 'core' / 'bare.md', '# Bare\n\nBody.\n')
+    _write(root / 'guides' / 'setup.md', _page('setup', 'A guide.', 'Body.'))
+    (root / 'core' / 'gone.md').unlink()
+    index = root / 'core' / '_index.md'
+    text = index.read_text(encoding='utf-8')
+    index.write_text(text.replace('Stays.', 'Edited in the index.'), encoding='utf-8')
+    edited = root / 'core' / 'edited.md'
+    edited.write_text(edited.read_text(encoding='utf-8') + 'More.\n', encoding='utf-8')
+    later = edited.stat().st_mtime + 300
+    os.utime(edited, (later, later))
+    before = _tree(root)
+
+    # the dry run words every change as pending and writes nothing
+    check = _wiki(root, 'update', '--check', '--full', '--path', str(root))
+    assert check.returncode == 1, check.stdout + check.stderr
+    assert sorted(check.stderr.splitlines()) == sorted(
+        [
+            'Would adopt bare page: core/bare.md (would seed title: from its H1)',
+            'Would create index: guides/_index.md',
+            'Would add link: [[core/bare|bare]] in core/_index.md',
+            'Would add link: [[guides/setup|setup]] in guides/_index.md',
+            'Would add link: [[guides/_index|guides/]] in _index.md',
+            'Would prune link: [[core/gone|gone]] from core/_index.md',
+            'Would overwrite desc: [[core/keep|keep]] in core/_index.md (the page'
+            ' frontmatter desc wins; edit it in core/keep.md)',
+            'Would restamp core/edited.md: edited since its updated: stamp',
+        ]
+    )
+    assert _tree(root) == before
+
+    # the applied run narrates the same changes as done
+    applied = _wiki(root, 'update', '--full', '--path', str(root))
+    assert applied.returncode == 0, applied.stdout + applied.stderr
+    assert sorted(applied.stderr.splitlines()) == sorted(
+        [
+            'Adopted bare page: core/bare.md (frontmatter added; title: seeded'
+            ' from its H1)',
+            'New index: guides/_index.md (fill in its desc)',
+            'New link: [[core/bare|bare]] in core/_index.md',
+            'New link: [[guides/setup|setup]] in guides/_index.md',
+            'New link: [[guides/_index|guides/]] in _index.md',
+            'Pruned link: [[core/gone|gone]] from core/_index.md',
+            'Overwrote desc: [[core/keep|keep]] in core/_index.md (the page'
+            ' frontmatter desc wins; edit it in core/keep.md)',
+            'Restamped core/edited.md: edited since its updated: stamp',
+        ]
+    )
+
+
+def test_update_names_the_page_of_an_overwrite_a_hook_announces(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An overwritten-desc notice built without its page still names the file to edit.
+
+    A hook that announces an overwrite itself passes the entry and its
+    index. The line names the target plus ``.md``, in a writing run and in
+    a dry run.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / '.wiki' / 'wiki.py', _ANNOUNCING_HOOK)
+    assert _wiki(tmp_path, 'trust', '--path', str(root)).returncode == 0
+    entry = '[[core/keep|keep]] in core/_index.md'
+    place = '(the page frontmatter desc wins; edit it in core/keep.md)'
+
+    # the dry run words the hook's notice as pending, the writing run as done
+    check = _wiki(root, 'update', '--check', '--full', '--path', str(root))
+    assert f'Would overwrite desc: {entry} {place}' in check.stderr.splitlines()
+    applied = _wiki(root, 'update', '--full', '--path', str(root))
+    assert applied.returncode == 0, applied.stdout + applied.stderr
+    assert f'Overwrote desc: {entry} {place}' in applied.stderr.splitlines()
+
+
 def test_update_noop_reports_nothing_to_update(tmp_path: pathlib.Path) -> None:
     """A second update on an up-to-date tree writes nothing and says so."""
     root = tmp_path / 'wiki'
@@ -1678,6 +1801,150 @@ def test_update_counts_files_with_malformed_frontmatter(tmp_path: pathlib.Path) 
         'Malformed frontmatter (not a key: value mapping) in core/listed.md'
         in full.stderr
     )
+
+
+@pytest.mark.parametrize(
+    argnames=('path', 'text', 'racing', 'lone', 'many'),
+    argvalues=[
+        (
+            'core/bad|{n}.md',
+            '---\nname: x\ndesc: A page.\n---\n\n# x\n\nBody.\n',
+            False,
+            'Skipping core/bad|1.md: invalid name (contains a denied character)',
+            'Skipped 3 invalid names',
+        ),
+        (
+            'core/page{n}.md',
+            'A bare page, edited while update runs.\n',
+            True,
+            'Skipping core/page1.md: changed during update; re-run `wiki update`',
+            'Skipped 3 concurrently-edited files (re-run `wiki update`)',
+        ),
+        (
+            'core/page{n}.md',
+            '---\nname: x\ndesc: Never closes.\n\nBody.\n',
+            False,
+            'Malformed frontmatter (no closing ---) in core/page1.md',
+            '3 files with malformed frontmatter',
+        ),
+        (
+            'core{n}/_index.md',
+            '',
+            False,
+            'Empty or truncated index (no frontmatter) in core1/_index.md;'
+            ' restore it from git or delete it to rebuild',
+            '3 empty or truncated indexes (restore from git or delete to rebuild)',
+        ),
+    ],
+    ids=['invalid_name', 'concurrent_edit', 'malformed_frontmatter', 'empty_index'],
+)
+def test_update_names_a_lone_skip_and_counts_a_repeated_kind(
+    tmp_path: pathlib.Path,
+    path: str,
+    text: str,
+    racing: bool,
+    lone: str,
+    many: str,
+) -> None:
+    """A lone skip keeps its line; a kind that repeats gets a count and a pointer.
+
+    A skip leaves no diff, so its line is the only record of the file: the
+    condensed default names a kind's one skipped file, and from two up it
+    prints the kind's count line and says that ``--full`` lists each.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'core' / '_index.md', _index('core', 'Core concepts.', 'Text.'))
+    # a trusted hook edits each page between update's plan and its writes
+    if racing:
+        _write(root / '.wiki' / 'wiki.py', _RACING_HOOK)
+        assert _wiki(tmp_path, 'trust', '--path', str(root)).returncode == 0
+    pointer = 'Run with --full to list each line.'
+
+    # one skip: its own line names the file, and nothing points to --full
+    _write(root / path.format(n=1), text)
+    one = _wiki(root, 'update', '--path', str(root))
+    assert one.returncode == 0, one.stdout + one.stderr
+    assert lone in one.stderr.splitlines()
+    assert pointer not in one.stderr
+
+    # three: the count line stands for them and the narration ends on the pointer
+    _write(root / path.format(n=2), text)
+    _write(root / path.format(n=3), text)
+    # (a dry run reports the same, short of the skip only a write can meet)
+    runs = [[]] if racing else [[], ['--check']]
+    for args in runs:
+        three = _wiki(root, 'update', *args, '--path', str(root))
+        lines = three.stderr.splitlines()
+        assert many in lines
+        assert lone not in lines
+        assert lines[-1] == pointer
+
+    # --full lists each file and needs no pointer
+    full = _wiki(root, 'update', '--full', '--path', str(root))
+    assert full.returncode == 0, full.stdout + full.stderr
+    for n in (1, 2, 3):
+        assert path.format(n=n) in full.stderr
+    assert pointer not in full.stderr
+
+    # new sweeps as update does and takes no --full, so it points to a dry
+    # run, which lists every skip but the one only a write can meet
+    args = ['new', 'fresh', '--desc', 'A desc.', '--content', 'Body.']
+    new = _wiki(root, *args, '--path', str(root))
+    assert new.returncode == 0, new.stdout + new.stderr
+    lines = new.stderr.splitlines()
+    assert many in lines
+    pointer = 'Run `wiki update --check --full` to list each line.'
+    if racing:
+        assert pointer not in lines
+    else:
+        assert lines[-1] == pointer
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_update_counts_paths_git_ignores_as_lint_does(tmp_path: pathlib.Path) -> None:
+    """Indexed paths this machine's git ignores condense in update as in lint.
+
+    The note names a row that ships where its file cannot. One such path
+    keeps its line; from two up, update prints the count line lint prints,
+    and ``--full`` lists each path.
+    """
+    root = tmp_path / 'wiki'
+    _git_repo(tmp_path)
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # a personal ignore file, in force for this repository on this machine only
+    excludes = tmp_path / 'personal_ignore'
+    excludes.write_text('*.draft.md\n', encoding='utf-8')
+    _git(tmp_path, 'config', 'core.excludesFile', str(excludes))
+    count = (
+        "2 indexed paths this machine's git ignores; their rows ship where the"
+        ' files cannot'
+    )
+
+    # one ignored path: the note's own line names it
+    _write(root / 'one.draft.md', _page('one', 'A draft.', 'Body.'))
+    one = _wiki(root, 'update', '--path', str(root))
+    assert one.returncode == 0, one.stdout + one.stderr
+    note = f"one.draft.md: indexed, but this machine's git ignores it ({excludes}:1"
+    assert note in one.stderr
+    assert '--full' not in one.stderr
+
+    # two: update prints lint's count line, and each command its own pointer
+    _write(root / 'two.draft.md', _page('two', 'A draft.', 'Body.'))
+    update = _wiki(root, 'update', '--path', str(root))
+    assert update.returncode == 0, update.stdout + update.stderr
+    lines = update.stderr.splitlines()
+    assert lines[0] == count
+    assert lines[-1] == 'Run with --full to list each line.'
+    lint = _wiki(root, 'lint', '--path', str(root))
+    assert count in lint.stderr.splitlines()
+
+    # --full lists each path in place of the count line
+    full = _wiki(root, 'update', '--full', '--path', str(root))
+    assert full.returncode == 0, full.stdout + full.stderr
+    assert count not in full.stderr
+    for name in ('one.draft.md', 'two.draft.md'):
+        assert f"{name}: indexed, but this machine's git ignores it" in full.stderr
 
 
 def test_new_refuses_interior_path(tmp_path: pathlib.Path) -> None:
