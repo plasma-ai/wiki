@@ -1296,8 +1296,18 @@ def test_lint_reports_an_escape_naming_no_character(
         ('desc: "Uses $\\xi$."', 'hexadecimal number'),
         ('desc: "Uses $\\upsilon$."', 'hexadecimal number'),
         ('desc: "Uses \\uD800."', 'found invalid Unicode character escape code'),
+        (
+            'desc: "Uses \\U00110000."',
+            'found invalid Unicode character escape code',
+        ),
     ],
-    ids=['unknown-escape', 'bad-x-number', 'bad-u-number', 'no-such-character'],
+    ids=[
+        'unknown-escape',
+        'bad-x-number',
+        'bad-u-number',
+        'no-such-character',
+        'past-unicode',
+    ],
 )
 @pytest.mark.usefixtures('_vary_loader')
 def test_lint_gives_the_quoting_remedy_for_a_bad_escape(

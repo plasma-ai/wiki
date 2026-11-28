@@ -2294,10 +2294,19 @@ def _parse_issue(error: Exception, body: str, offset: int) -> _Issue:
     first line. A problem worded as a fragment ("but found another
     document") keeps the context it continues. A backslash escape a
     double-quoted scalar cannot decode is the ``'escape'`` cause; every
-    other error is ``'parse'``.
+    other error is ``'parse'``. An escape past U+10FFFF, on which the
+    pure loader raises a bare ``ValueError``, is worded and located as
+    the C loader's finding.
     """
     import yaml
 
+    # the pure loader's chr() raises on an escape past U+10FFFF with no mark
+    # and no problem: the C loader's finding, on the line the scanner stopped
+    if type(error) is ValueError:
+        stopped = _escape_past_unicode(body)
+        if stopped is not None:
+            line = body.count('\n', 0, stopped) + offset + 1
+            return line, 'found invalid Unicode character escape code', 'escape'
     mark = getattr(error, 'problem_mark', None)
     context = getattr(error, 'context', None)
     context_mark = getattr(error, 'context_mark', None)
@@ -2365,6 +2374,28 @@ def _parse_issue(error: Exception, body: str, offset: int) -> _Issue:
     # libyaml misspells the word in its problem for a bad \x or \u number
     reason = str(reason).replace('hexdecimal', 'hexadecimal')
     return line, reason, cause
+
+
+def _escape_past_unicode(body: str) -> Optional[int]:
+    r"""Return where the pure scanner stops on a ``\U`` escape past U+10FFFF, else ``None``.
+
+    The scanner raises ``ValueError`` from ``chr`` with its reader on the
+    escape's number, and the error carries no position, so the body is
+    scanned again for it. A ``ValueError`` raised anywhere else (a
+    directive's version number too long for ``int``) is not this finding.
+    """
+    import yaml
+
+    scanner = yaml.SafeLoader(body)
+    try:
+        while scanner.check_token():
+            scanner.get_token()
+    except ValueError:
+        index = scanner.get_mark().index
+        return index if body[index - 2 : index] == '\\U' else None
+    finally:
+        scanner.dispose()
+    return None
 
 
 def _continues_a_scalar(line: str) -> bool:
