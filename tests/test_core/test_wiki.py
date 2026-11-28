@@ -39,6 +39,11 @@ __all__ = [
     'test_timestamp_timezone_configurable',
     'test_timestamp_zone_swaps_default_z_for_offset',
     'test_timestamp_format_rejects_blank_or_multiline',
+    'test_timestamp_format_rejects_a_nul_character',
+    'test_timestamp_format_stamps_parse_back',
+    'test_timestamp_format_rejects_an_unsupported_directive',
+    'test_timestamp_format_rejects_a_digit_after_the_offset',
+    'test_timestamp_format_must_read_back_its_stamp',
     'test_wiki_freeze_time_fixes_the_clock_in_process',
     'test_init_refuses_legacy_layout_before_writing',
     'test_canonicalize_index_puts_the_h1_and_rows_in_form',
@@ -225,6 +230,8 @@ def test_init_seeds_custom_settings(tmp_path: pathlib.Path) -> None:
     argvalues=[
         {'naming': {'validate': ['bogus']}},
         {'timestamp': {'timezone': 'Mars/Olympus'}},
+        {'timestamp': {'format': '%d %b %Y'}},
+        {'timestamp': {'format': '%Y %Y'}},
         {'titles': {'required': 'yes'}},
         {'map': {'desc_limit': 'wide'}},
         {'exclude': {'patterns': ['!vendor']}},
@@ -235,6 +242,8 @@ def test_init_seeds_custom_settings(tmp_path: pathlib.Path) -> None:
     ids=[
         'bad-naming',
         'bad-timestamp',
+        'bad-timestamp-directive',
+        'bad-timestamp-read-back',
         'bad-titles',
         'bad-map',
         'bad-exclude',
@@ -539,8 +548,8 @@ def test_timestamp_zone_swaps_default_z_for_offset(
 
 @pytest.mark.parametrize(
     argnames='format',
-    argvalues=['', '%Y%n%H'],
-    ids=['empty', 'embedded-newline'],
+    argvalues=['', ' \t', '%Y\n%H'],
+    ids=['empty', 'whitespace', 'embedded-newline'],
 )
 def test_timestamp_format_rejects_blank_or_multiline(
     tmp_path: pathlib.Path,
@@ -561,6 +570,232 @@ def test_timestamp_format_rejects_blank_or_multiline(
     # the bad format fails loudly when update resolves the timestamp policy
     with pytest.raises(ValueError, match='single non-empty line'):
         Wiki(tmp_path).update()
+
+
+@pytest.mark.parametrize(
+    argnames='format',
+    argvalues=['\0%Y', '%Y\0%m', '%Y\0'],
+    ids=['first', 'inside', 'last'],
+)
+def test_timestamp_format_rejects_a_nul_character(
+    tmp_path: pathlib.Path,
+    format: str,
+) -> None:
+    """A ``timestamp.format`` that holds a NUL character is a settings error.
+
+    Interpreters disagree on the stamp such a format renders, and none
+    reads it back from frontmatter, so the format is refused wherever
+    the NUL sits. Nothing is stamped under it, and lint refuses it alike
+    rather than fail on every stamp.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    (tmp_path / 'page.md').write_text('Body.\n', encoding='utf-8')
+    path = tmp_path / '.wiki' / 'settings.json'
+    path.write_text(json.dumps({'timestamp': {'format': format}}), encoding='utf-8')
+    message = (
+        f'timestamp.format must not hold a NUL character, got {json.dumps(format)}'
+        ' in .wiki/settings.json.'
+    )
+
+    for operation in (Wiki(tmp_path).update, Wiki(tmp_path).lint):
+        with pytest.raises(ValueError) as excinfo:
+            operation()
+        assert str(excinfo.value) == message
+    assert (tmp_path / 'page.md').read_text(encoding='utf-8') == 'Body.\n'
+
+
+@pytest.mark.parametrize(
+    argnames=('timestamp', 'stamp'),
+    argvalues=[
+        ({'format': '%Y-%m-%dT%H:%M:%SZ'}, '2026-01-02T03:04:05Z'),
+        (
+            {'format': '%Y-%m-%dT%H:%M:%S%z', 'timezone': 'America/New_York'},
+            '2026-01-01T22:04:05-0500',
+        ),
+        ({'format': '%Y'}, '2026'),
+        ({'format': '%z'}, '+0000'),
+        ({'format': '%Y-%m-%d'}, '2026-01-02'),
+        ({'format': '%d.%m.%Y %H:%M'}, '02.01.2026 03:04'),
+        ({'format': '%Y%m%d%H%M%S'}, '20260102030405'),
+        ({'format': '%z:%H:%M'}, '+0000:03:04'),
+        ({'format': '%Y%%n%m'}, '2026%n01'),
+        ({'format': '%H%%z5'}, '03%z5'),
+    ],
+    ids=[
+        'utc-default',
+        'zone-default',
+        'year',
+        'offset',
+        'date',
+        'dotted-date',
+        'unseparated',
+        'offset-then-colon',
+        'percent-sign',
+        'percent-sign-then-z',
+    ],
+)
+def test_timestamp_format_stamps_parse_back(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    timestamp: dict,
+    stamp: str,
+) -> None:
+    """A format of the supported directives stamps pages lint parses back.
+
+    The set is ``%Y``, ``%m``, ``%d``, ``%H``, ``%M``, ``%S``, ``%z``,
+    ``%%`` and literal text. A date-only format is one of them: a stamp
+    reads back as text, not as the instant it was taken at. A separator
+    after ``%z`` keeps the offset apart from the digits behind it, a
+    colon included, and ``%%`` is a percent sign whatever letter follows
+    it: before a ``z`` it opens no offset, so a digit may come next.
+    """
+    monkeypatch.setenv(WIKI_FREEZE_TIME, '2026-01-02T03:04:05Z')
+    wiki = Wiki(tmp_path)
+    wiki.init(name='root', settings={'timestamp': timestamp})
+    (tmp_path / 'page.md').write_text('Body.\n', encoding='utf-8')
+    wiki.update()
+    text = (tmp_path / 'page.md').read_text(encoding='utf-8')
+    assert re.findall(r'^(?:created|updated): (.*)$', text, re.M) == [stamp] * 2
+    assert not any('Unparseable' in issue for issue in wiki.lint())
+
+
+@pytest.mark.parametrize(
+    argnames=('format', 'directive'),
+    argvalues=[
+        ('%d %b %Y', '%b'),
+        ('%Y-%j', '%j'),
+        ('%H:%M:%S.%f', '%f'),
+        ('%H:%M %Z', '%Z'),
+        ('%s', '%s'),
+        ('%Y-%m-%d %Ez', '%E'),
+        ('%G-W%V', '%G'),
+        ('%Y%n%H', '%n'),
+        ('100%', '%'),
+    ],
+    ids=[
+        'month-name',
+        'day-of-year',
+        'microsecond',
+        'zone-name',
+        'epoch-seconds',
+        'modified-offset',
+        'iso-week',
+        'newline',
+        'trailing-percent',
+    ],
+)
+def test_timestamp_format_rejects_an_unsupported_directive(
+    tmp_path: pathlib.Path,
+    format: str,
+    directive: str,
+) -> None:
+    """A ``%`` sequence outside the supported set is a settings error naming it.
+
+    The first one at fault is named by its ``%`` and the character after
+    it, a ``%`` that ends the format by itself, and the message lists the
+    set. Nothing is stamped under the format first.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    (tmp_path / 'page.md').write_text('Body.\n', encoding='utf-8')
+    path = tmp_path / '.wiki' / 'settings.json'
+    path.write_text(json.dumps({'timestamp': {'format': format}}), encoding='utf-8')
+
+    with pytest.raises(ValueError) as excinfo:
+        Wiki(tmp_path).update()
+    assert str(excinfo.value) == (
+        f'Unsupported timestamp.format directive {directive!r} (must be one of'
+        f' %Y, %m, %d, %H, %M, %S, %z, %%), got {json.dumps(format)} in'
+        ' .wiki/settings.json.'
+    )
+    assert (tmp_path / 'page.md').read_text(encoding='utf-8') == 'Body.\n'
+
+
+@pytest.mark.parametrize(
+    argnames=('format', 'pair'),
+    argvalues=[
+        ('%z%H', '%z%H'),
+        ('%z%H%M', '%z%H'),
+        ('%Y%z%d%H', '%z%d'),
+        ('%H:%M%z%Y', '%z%Y'),
+        ('%z3%H%M', '%z3'),
+        ('%Y-%m-%d%z0', '%z0'),
+    ],
+    ids=[
+        'hour',
+        'hour-and-minute',
+        'day',
+        'year',
+        'literal-digit',
+        'literal-digit-last',
+    ],
+)
+def test_timestamp_format_rejects_a_digit_after_the_offset(
+    tmp_path: pathlib.Path,
+    format: str,
+    pair: str,
+) -> None:
+    """A format with a digit straight after ``%z`` is a settings error.
+
+    A parser takes two digits after the offset for its seconds wherever
+    the rest of the stamp still parses, so such a format reads some
+    stamps back as another instant. The rule covers a directive that
+    renders digits and a literal digit alike, whether or not any stamp
+    of that one format would misread, and the error names the pair.
+    Nothing is stamped under the format, and lint refuses it alike.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    (tmp_path / 'page.md').write_text('Body.\n', encoding='utf-8')
+    path = tmp_path / '.wiki' / 'settings.json'
+    path.write_text(json.dumps({'timestamp': {'format': format}}), encoding='utf-8')
+    message = (
+        f'timestamp.format must not follow %z with a digit ({pair!r} does), got'
+        f' {json.dumps(format)} in .wiki/settings.json.'
+    )
+
+    for operation in (Wiki(tmp_path).update, Wiki(tmp_path).lint):
+        with pytest.raises(ValueError) as excinfo:
+            operation()
+        assert str(excinfo.value) == message
+    assert (tmp_path / 'page.md').read_text(encoding='utf-8') == 'Body.\n'
+
+
+@pytest.mark.parametrize(
+    argnames=('timestamp', 'stamp'),
+    argvalues=[
+        ({'format': '%Y %Y'}, '2023 2023'),
+        ({'format': '%H:%M %H', 'timezone': 'Asia/Kolkata'}, '03:44 03'),
+        ({'format': '%z %z', 'timezone': 'America/St_Johns'}, '-0330 -0330'),
+    ],
+    ids=['year-twice', 'hour-twice-in-a-zone', 'offset-twice-in-a-zone'],
+)
+def test_timestamp_format_must_read_back_its_stamp(
+    tmp_path: pathlib.Path,
+    timestamp: dict,
+    stamp: str,
+) -> None:
+    """A format that does not parse back the stamp it renders is refused.
+
+    Two fixed instants are rendered in the wiki's zone, parsed under the
+    format and rendered again, and the error shows the first stamp that
+    fails to parse or comes back as other text. A directive named twice
+    never parses. Nothing is stamped under the format, and lint refuses
+    it alike rather than fail on every stamp.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    (tmp_path / 'page.md').write_text('Body.\n', encoding='utf-8')
+    path = tmp_path / '.wiki' / 'settings.json'
+    path.write_text(json.dumps({'timestamp': timestamp}), encoding='utf-8')
+    format = json.dumps(timestamp['format'])
+    message = (
+        f'timestamp.format must read back the stamp it writes ({stamp!r} does'
+        f' not), got {format} in .wiki/settings.json.'
+    )
+
+    for operation in (Wiki(tmp_path).update, Wiki(tmp_path).lint):
+        with pytest.raises(ValueError) as excinfo:
+            operation()
+        assert str(excinfo.value) == message
+    assert (tmp_path / 'page.md').read_text(encoding='utf-8') == 'Body.\n'
 
 
 def test_wiki_freeze_time_fixes_the_clock_in_process(

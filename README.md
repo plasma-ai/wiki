@@ -100,7 +100,8 @@ prefix. The allowlist is a lint rule alone — `wiki lint` checks such links in
 place, while `wiki read` and every other command stay confined to the wiki root.
 
 Frontmatter timestamps default to UTC in ISO-8601. To change them, set a
-timezone (any IANA name) and format (a strftime string) under `timestamp` in
+timezone (any IANA name) and format (a strftime string of `%Y`, `%m`, `%d`,
+`%H`, `%M`, `%S`, `%z`, `%%` and literal text) under `timestamp` in
 `.wiki/settings.json`. The stamps are tool-owned: `created:` is written when a
 file gains frontmatter and kept from then on, and `updated:` is rewritten on
 every write that changes content (a write that only normalizes CRLF line endings
