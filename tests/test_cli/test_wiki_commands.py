@@ -1041,6 +1041,11 @@ def test_lost_settings_file_that_git_holds_stops_every_sweep(
     assert not settings.exists()
     # a bare page awaiting adoption, so a sweep that ran would show
     _write(root / 'core' / 'draft.md', 'A draft.\n')
+    # config wires the merge driver into the repository's own git config,
+    # outside the wiki root: with the wiring removed, a run that reached it
+    # would show there
+    assert _git(tmp_path, 'config', '--remove-section', 'merge.wiki').returncode == 0
+    wiring = _git(tmp_path, 'config', '--local', '--list').stdout
     before = _tree(root)
 
     # each command that plans a sweep refuses, and the tree stays as it was:
@@ -1060,6 +1065,7 @@ def test_lost_settings_file_that_git_holds_stops_every_sweep(
         assert _tree(root) == before, args
     assert not settings.exists()
     assert not (root / 'secret' / '_index.md').exists()
+    assert _git(tmp_path, 'config', '--local', '--list').stdout == wiring
     # init leaves a wiki whose root index stands as it is
     result = _wiki(tmp_path, 'init', '--path', str(root))
     assert result.returncode == 0, result.stdout + result.stderr
@@ -1098,6 +1104,7 @@ def test_lost_settings_file_that_git_holds_stops_every_sweep(
         'no-repository',
         'never-committed',
         'removal-committed',
+        'dangling-symlink',
         'unreadable-repository',
     ],
 )
@@ -1110,8 +1117,9 @@ def test_missing_settings_file_that_git_does_not_hold_is_recreated(
     Nothing can be restored from git here, so a writing ``update`` writes
     the file with default settings and says so, and a dry run leaves it
     missing. Committing the file's removal is how a wiki gives up its
-    settings for the defaults. A repository git cannot read holds nothing
-    it can answer for.
+    settings for the defaults. A symlink to nothing that git does not
+    track is a missing file too, and a repository git cannot read holds
+    nothing it can answer for.
     """
     if state != 'no-repository':
         _git_repo(tmp_path)
@@ -1120,7 +1128,7 @@ def test_missing_settings_file_that_git_does_not_hold_is_recreated(
     _write(root / 'core' / 'design.md', _page('design', 'A design.', 'Body.'))
     assert _wiki(tmp_path, 'update', '--path', str(root)).returncode == 0
     settings = root / '.wiki' / 'settings.json'
-    if state == 'never-committed':
+    if state in ('never-committed', 'dangling-symlink'):
         assert _git(tmp_path, 'add', '--', str(root / 'core')).returncode == 0
         assert _git(tmp_path, 'commit', '-q', '-m', 'pages').returncode == 0
     elif state in ('removal-committed', 'unreadable-repository'):
@@ -1132,6 +1140,8 @@ def test_missing_settings_file_that_git_does_not_hold_is_recreated(
     elif state == 'unreadable-repository':
         _write(tmp_path / '.git' / 'HEAD', 'not a ref\n')
     settings.unlink(missing_ok=True)
+    if state == 'dangling-symlink':
+        settings.symlink_to('nowhere.json')
 
     # a dry run names the missing file and leaves it missing
     notice = _MISSING_SETTINGS_NOTICE.format(root=root)
