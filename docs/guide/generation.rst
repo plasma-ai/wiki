@@ -85,7 +85,9 @@ rewrites only the files that differ. It owns:
 **Tool housekeeping.**
    A missing ``.wiki/settings.json`` (the declared-root marker) is restored as
    ``{}`` — all defaults; custom settings are never reinvented — and a deleted
-   ``.wiki/cache/`` directory is recreated, each with a notice.
+   ``.wiki/cache/`` directory is recreated, each with a notice. A missing
+   settings file that git still holds is not restored: update refuses to run
+   (below).
 
 ``wiki init`` runs the same sweep over any existing tree when it scaffolds a
 wiki, and running ``wiki update`` after a git merge regenerates the merged
@@ -239,6 +241,12 @@ the error code, never ``--check``'s pending-changes 1):
   :doc:`/configuration`).
 - **A legacy** ``_config/settings.json`` **layout**, refused with a migration
   message.
+- **A lost settings file**: ``.wiki/settings.json`` is missing from the
+  working tree while git still holds it, in the ``HEAD`` commit or in the
+  index. The sweep would run on default settings and adopt every page the
+  file's ``exclude.patterns`` kept out, so the error says to restore the
+  file from git. ``wiki new``, ``wiki lint``, ``wiki config`` and a
+  ``wiki init`` that scaffolds refuse alike; see :doc:`/configuration`.
 
 What ``wiki lint`` checks
 -------------------------
@@ -666,7 +674,8 @@ notes is clean — lint exits 0.
        absolute root rather than a root-relative path: an upward resolution
        into an enclosing root (``<path>: inside the wiki at <root>; using
        that root``), a missing settings marker (``.wiki/settings.json
-       missing; `wiki update` will restore it``), a declared root missing
+       missing; restore it from git, or run `wiki update` to recreate it
+       with default settings``), a declared root missing
        its ``_index.md`` (``restore it from git or run `wiki update` to
        rebuild it``), or an ``_index.md`` extending above the declared root.
        They stream to stderr as resolution runs and join the note count and
@@ -871,6 +880,6 @@ Both commands are safe to run at any time, as often as you like:
   freely: update recreates the directory and its counts (with a notice), and
   the next ``wiki search`` rebuilds the index.
 - **A restored** ``.wiki/settings.json`` **is empty.** Update restores the
-  missing marker as ``{}`` — all defaults. If the file held custom settings,
-  restore it from version control instead of relying on the marker restore;
-  see :doc:`/configuration`.
+  missing marker as ``{}`` — all defaults — only when git holds no copy of
+  the file. While git still holds it, update refuses to run until the file
+  is restored from git; see :doc:`/configuration`.

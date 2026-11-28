@@ -1015,6 +1015,49 @@ class Wiki:
                 return True
         return False
 
+    @functools.cached_property
+    def _settings_in_git(self: Wiki) -> bool:
+        """Return ``True`` if git holds a settings file the working tree lacks.
+
+        Read only once ``.wiki/settings.json`` is known to be missing, and
+        cached, so a wiki with its file pays nothing and one run asks git
+        once. The question is whether HEAD's tree or the index names the
+        path, never what ``git status`` shows: an entry a sparse checkout
+        leaves out, or one marked skip-worktree or assume-unchanged, is
+        held like any other, as is one a merge left unmerged. ``False``
+        outside a repository and when git gives no answer.
+        """
+        if not self._in_repository():
+            return False
+        # git runs in a folder that exists: the root, or the nearest
+        # ancestor of a root the working tree lacks too
+        folder = self._root
+        while not folder.is_dir():
+            folder = folder.parent
+        relative = (self._root / WIKI_SETTINGS).relative_to(folder).as_posix()
+        # the listing is the index with HEAD's tree laid over it, so one
+        # read names a path either holds, at any merge stage, and opens no
+        # blob (a partial clone would fetch one it lacks); the path goes as
+        # a literal ./<path>, so no character of a folder's name reads as
+        # pathspec magic or as a glob that matches a sibling
+        cmd = [
+            '--literal-pathspecs',
+            'ls-files',
+            '-z',
+            '--with-tree=HEAD',
+            '--',
+            f'./{relative}',
+        ]
+        result = wiki.util.git._git(cmd, cwd=folder, raw=True)
+        # a repository without a commit has no tree to lay over the index,
+        # and git refuses the listing: the index answers alone
+        if (result is not None) and (result.returncode != 0):
+            cmd.remove('--with-tree=HEAD')
+            result = wiki.util.git._git(cmd, cwd=folder, raw=True)
+        if (result is None) or (result.returncode != 0):
+            return False
+        return bool(result.stdout)
+
     def _warn_untrackable_rows(self: Wiki, walk: Iterable[_WalkStep]) -> None:
         """Note indexed paths the caller's full ignore stack excludes.
 
@@ -1490,6 +1533,8 @@ class Wiki:
         _is_offline()
         # TODO: remove back-compat in future version
         self._refuse_legacy_layout()
+        # a settings file git still holds is never swept past on defaults
+        self._refuse_lost_settings()
         # resolve the settings seed and prime the _settings cache with it, so
         # the accesses below (_name_violation, _utc_now) read this wiki's real
         # policy rather than caching {} from the not-yet-written file
@@ -1568,7 +1613,8 @@ class Wiki:
         ``.wiki/obsidian/`` is seeded from the stock template first, so
         an adopted tree gets the full setup. Also guarantees the
         declared-root marker: a missing ``.wiki/settings.json`` is
-        restored as ``{}`` with a notice.
+        restored as ``{}`` with a notice, unless git still holds it
+        (:meth:`_refuse_lost_settings`).
 
         Returns:
             List of warning messages (e.g. when a plugin download
@@ -1820,8 +1866,10 @@ class Wiki:
         marker -- is restored as ``{}`` (all defaults; policy is never
         invented) with a notice; a dry run leaves it untouched,
         neither restoring nor reporting it (the CLI's resolver
-        names it instead). A setting the file holds to no effect is
-        warned about ahead of every other notice
+        names it instead). A missing one git still holds is never
+        restored: the write and the dry run refuse alike
+        (:meth:`_refuse_lost_settings`). A setting the file holds to no
+        effect is warned about ahead of every other notice
         (:meth:`_warn_settings`).
 
         Args:
@@ -1844,6 +1892,9 @@ class Wiki:
                 would read the markers as authored content and bake
                 them into the rewrite, so the write and the dry run
                 refuse alike, naming every marked file.
+            ValueError: If ``.wiki/settings.json`` is missing while git
+                still holds it -- the sweep would run on defaults, so
+                the write and the dry run refuse alike.
 
         Note:
             A scoped update (``name`` set) does not refresh the parent
@@ -1867,6 +1918,8 @@ class Wiki:
         self._refuse_enclosing_wiki(folder)
         # TODO: remove back-compat in future version
         self._refuse_legacy_layout()
+        # a settings file git still holds is never swept past on defaults
+        self._refuse_lost_settings()
         # one walk of the scope: the untrackable-row note, the nested-root
         # scan, and the plan read the same folders and pages; nothing the run
         # itself does between the walk and the plan touches the walked tree
@@ -1986,8 +2039,9 @@ class Wiki:
                 indexed folder, or named against the naming policy.
             ValueError: If the wiring sweep would refuse -- merge
                 conflict markers in the authored input or the parent
-                scope, or a nested declared wiki within it -- each
-                checked before the write, with nothing created.
+                scope, a nested declared wiki within it, or a missing
+                ``.wiki/settings.json`` git still holds -- each checked
+                before the write, with nothing created.
 
         """
         # check every settings block before anything else, then say what
@@ -2103,6 +2157,8 @@ class Wiki:
             scope = parent.relative_to(self._root).as_posix()
         # TODO: remove back-compat in future version
         self._refuse_legacy_layout()
+        # a settings file git still holds is never swept past on defaults
+        self._refuse_lost_settings()
         # one walk of the parent scope for the nested-root scan and the dry
         # plan; nothing between them touches the walked tree
         walk = self._walk(parent)
@@ -2238,6 +2294,8 @@ class Wiki:
         self._refuse_enclosing_wiki(folder)
         # TODO: remove back-compat in future version
         self._refuse_legacy_layout()
+        # a settings file git still holds is never swept past on defaults
+        self._refuse_lost_settings()
         # a merge=wiki attributes map without its config half, or without
         # its page line, means git text-merges silently: note each gap
         # (soft) before a merge pays for it
@@ -3647,9 +3705,10 @@ class Wiki:
         """Materialize a missing ``.wiki/settings.json`` as ``{}``.
 
         The settings file is the declared-root marker: ``init`` writes it
-        and every mutating command restores a lost one, so the declaration
-        guarantee is enforced rather than assumed. The materialized file
-        is an empty object -- all defaults; policy is never invented.
+        and every mutating command restores a missing one git does not
+        hold, so the declaration guarantee is enforced rather than
+        assumed. The materialized file is an empty object -- all
+        defaults; policy is never invented.
 
         Returns:
             Notice events describing the restoration (empty when present).
@@ -3657,12 +3716,16 @@ class Wiki:
         Raises:
             ValueError: If a root ``_config/settings.json`` exists -- the
                 legacy config namespace is never read, so its policy must
-                migrate before any policy-reading write proceeds -- or
-                the filesystem cannot reach the settings path.
+                migrate before any policy-reading write proceeds -- if
+                git still holds the missing file
+                (:meth:`_refuse_lost_settings`), or if the filesystem
+                cannot reach the settings path.
 
         """
         # TODO: remove back-compat in future version
         self._refuse_legacy_layout()
+        # a settings file git still holds is never swept past on defaults
+        self._refuse_lost_settings()
         path = self._root / WIKI_SETTINGS
         # NOTE: only an absent file is restored -- a write through a path the
         #   filesystem cannot reach fails without naming the settings file
@@ -3703,6 +3766,37 @@ class Wiki:
                 '\n  (2) run `wiki config`'
                 '\n  (3) run `wiki update`'
             )
+
+    def _refuse_lost_settings(self: Wiki) -> None:
+        """Refuse to plan a sweep without a settings file git still holds.
+
+        A ``.wiki/settings.json`` missing from the working tree while
+        HEAD or the index holds it was lost, not left out: a sweep
+        without it runs on defaults and adopts every page its
+        ``exclude.patterns`` kept out, and a dry run would preview that
+        same sweep. Every path the legacy-layout guard covers refuses
+        alike, and the read paths (``read``, ``search``, ``match``,
+        ``map``) stay tolerant. A missing file git does not hold has
+        no copy to come back from: it is restored as ``{}``
+        (:meth:`_ensure_settings`).
+
+        Raises:
+            ValueError: If the settings file is missing and git holds it.
+
+        """
+        # NOTE: only a path that holds nothing is a missing file, and git is
+        #   asked about nothing else
+        try:
+            os.stat(self._root / WIKI_SETTINGS)
+        except FileNotFoundError:
+            if self._settings_in_git:
+                raise ValueError(
+                    f'{WIKI_SETTINGS} is missing, but git still holds it. Restore'
+                    ' it from git and rerun: the file is recreated with default'
+                    ' settings only when git does not hold it.'
+                ) from None
+        except OSError:
+            pass
 
     def _index_missing_marker(
         self: Wiki,

@@ -40,7 +40,9 @@ The ``wiki config`` command
    staged file, staged side winning — see the merge rules below).
 4. **Restores the settings marker.** A missing ``.wiki/settings.json`` is
    restored as ``{}`` (all defaults) with a notice on stderr — the file
-   declares the wiki root; see :doc:`/configuration`.
+   declares the wiki root. When git still holds the missing file, the
+   command exits 2 instead and says to restore it from git; see
+   :doc:`/configuration`.
 5. **Wires the git merge driver.** The ``merge.wiki`` driver is registered in
    the enclosing repository's local git config, the ``**/_index.md`` glob is
    written to the repository root's ``.gitattributes``, and ``*.md`` to a

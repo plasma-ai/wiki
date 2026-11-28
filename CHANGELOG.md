@@ -109,6 +109,21 @@ may include breaking changes, each listed under a Breaking heading.
   exited 0. When another argument is bad too, the empty `--path` is the error
   reported, ahead of a malformed slice of `wiki read`. Only a value the option
   parser refuses, such as a `--limit` that is not an integer, comes first.
+- When `.wiki/settings.json` is missing but git still holds it, in the `HEAD`
+  commit or in the index, `wiki update` (and `--check`), `wiki new`, `wiki lint`
+  and `wiki config` stop with exit code 2, write nothing and say to restore the
+  file from git. So does `wiki init` on a wiki whose root `_index.md` is missing
+  too. Before, `wiki update` recreated the file as `{}` and swept the wiki on
+  default settings in the same run, adopting every page the lost
+  `exclude.patterns` had kept out. `wiki read`, `search`, `match` and `map`
+  still run. A file that `git status` does not list counts as held too, so these
+  commands stop in a sparse checkout that leaves `.wiki/` out, and for a file
+  marked skip-worktree or assume-unchanged. A wiki whose settings file git does
+  not hold is restored as before: outside a repository, with a file never
+  committed, or once the file's removal is committed.
+- The stderr line that names a missing `.wiki/settings.json` says to restore the
+  file from git, or to run `wiki update` to recreate it with default settings.
+  Before, it said only that `wiki update` will restore the file.
 
 ### Fixed
 
