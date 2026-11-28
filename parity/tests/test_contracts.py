@@ -24,6 +24,7 @@ from .conftest import VERSION, _git, _needs_git, _wheel, _workspace
 __all__ = [
     'test_wheel_that_keeps_the_contracts_shows_only_that_its_wiki_is_a_script',
     'test_wheel_that_breaks_a_contract_is_reported_by_its_checks',
+    'test_wheel_that_holds_no_wiki_is_reported_by_each_check_that_runs_it',
     'test_run_that_would_check_nothing_is_refused',
     'test_contracts_command_holds_a_wheel_to_the_checkout',
 ]
@@ -158,6 +159,26 @@ def test_wheel_that_breaks_a_contract_is_reported_by_its_checks(
     found = set(result.findings) - {_SCRIPT}
     assert {finding.check for finding in found} == checks
     assert {finding.check for finding in found if detail in finding.detail} == checks
+
+
+def test_wheel_that_holds_no_wiki_is_reported_by_each_check_that_runs_it(
+    tmp_path: pathlib.Path,
+    engine: side.Side,
+) -> None:
+    """A wheel that installs no ``wiki`` is a finding, and the run goes on.
+
+    The check of the binary reports that the wheel holds none, and each
+    check that runs the installed ``wiki`` reports that it does not start.
+    The checks after them still run: the distribution is found by its name,
+    and the stand-in for the sdist works.
+    """
+    package = _package(tmp_path, engine, wiki=False)
+    result = contracts.run(package, work=tmp_path / 'work', checks=_CHECKS)
+    found = {finding.check: finding.detail for finding in result.findings}
+    assert found.pop('native') == 'the wheel holds no wiki among its scripts'
+    assert set(found) == {'version', 'venv', 'symlink', 'space'}
+    assert all(detail.startswith('wiki does not start: ') for detail in found.values())
+    assert [row['name'] for row in result.report['checks']] == list(_CHECKS)
 
 
 @pytest.mark.parametrize(

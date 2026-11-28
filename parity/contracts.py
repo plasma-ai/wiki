@@ -383,7 +383,10 @@ def _check_version(host: _Host) -> list[str]:
     text.
     """
     wiki = _wiki(host, _installed(host) / 'bin' / 'wiki', build=host.package.commit)
-    shown = side.run(wiki, ['--version'], cwd=host.work, env=host.env, notice=False)
+    try:
+        shown = side.run(wiki, ['--version'], cwd=host.work, env=host.env, notice=False)
+    except OSError as e:
+        return [f'wiki does not start: {e}']
     problems = _bare(host, shown)
     text = shown.stdout.decode('utf-8', 'replace').removesuffix('\n')
     recorded = _metadata(host.package.wheel)['Version']
@@ -471,13 +474,17 @@ def _check_upgrade(host: _Host) -> list[str]:
                 continue
             constraints = package.v1_constraints
             _install(host, label, venv, previous, pip=pip, constraints=constraints)
-            shown = side.run(
-                v1,
-                ['--version'],
-                cwd=host.work,
-                env=host.env,
-                notice=False,
-            )
+            try:
+                shown = side.run(
+                    v1,
+                    ['--version'],
+                    cwd=host.work,
+                    env=host.env,
+                    notice=False,
+                )
+            except OSError as e:
+                found.append(f'after {step}, wiki does not start: {e}')
+                continue
             expected = (f'{package.v1_version}\n'.encode(), 0)
             if (shown.stdout, shown.code) != expected:
                 found.append(

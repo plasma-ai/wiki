@@ -171,6 +171,7 @@ def _wheel(
     prints: str = VERSION,
     build: Optional[str] = None,
     skills: Optional[dict[str, str]] = None,
+    wiki: bool = True,
 ) -> pathlib.Path:
     """Write a stand-in for the wheel of the checkout ``repo`` and return it.
 
@@ -179,7 +180,8 @@ def _wheel(
     script that an interpreter runs. Each argument doctors one thing: the
     distribution name, the version the wheel states, the text ``--version``
     prints, the build id of the identity record (the commit of ``repo`` when
-    none is given), and the skills ``install --project`` writes.
+    none is given), the skills ``install --project`` writes, and whether the
+    wheel holds a ``wiki`` at all.
     """
     record = {
         'engine': 'rust',
@@ -205,6 +207,8 @@ def _wheel(
             'Tag: py3-none-any\n'
         ),
     }
+    if not wiki:
+        del files[f'{stem}.data/scripts/wiki']
     # the list an installer holds every file of the wheel to
     rows = []
     for path, text in files.items():

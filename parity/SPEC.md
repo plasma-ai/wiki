@@ -2107,7 +2107,8 @@ files must be.
   the engine, the version, and the build id the check names.
 - **Findings.** A check that does not hold is a finding, one line for each thing
   it found. An installer that fails inside a check is that check's finding, with
-  the end of what it printed. A step that is no part of a check, a venv or the
+  the end of what it printed, and so is a `wiki` that does not start: the run
+  goes on to the next check. A step that is no part of a check, a venv or the
   build of v1's wheel, ends the run with an error when it fails. What each
   command of an installer printed is written to `<work>/contracts/logs/` as the
   command ends, so a run that ends in an error leaves it there.
