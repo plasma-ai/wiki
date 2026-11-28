@@ -615,8 +615,13 @@ has five stages:
   sample may name folders as refused: such a folder holds no index, and its name
   is one the wiki takes no folder below. Where the first sampled folder is one
   of them, `read` of it and `new` below it are built to fail too, and that `new`
-  may write nothing. The draw names none; a perturbation names the folders it
-  adds that way (Perturbation, Names).
+  may write nothing. Only the first sampled folder counts: `read` and `new` name
+  no other, so a folder named as refused later in the sample changes no case.
+  Such a run compares less than the matrix names: it has no `read` of a folder
+  that holds an index and no `new` that writes below a sampled folder, and its
+  scoped `map`, `match` and `search` run on a folder with no index. The sample
+  in the result file names the folder under `refused`. The draw names none; a
+  perturbation names the folders it adds that way (Perturbation, Names).
 
 ## Fixture Families
 
