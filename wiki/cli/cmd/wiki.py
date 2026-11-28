@@ -137,10 +137,19 @@ _UPDATE_CATEGORIES = [
     ),
 ]
 
+# the count row update and lint share for indexed paths this machine's git
+# ignores
+_PATH_UNTRACKABLE_CATEGORY = (
+    PathUntrackableEvent,
+    "{n} indexed paths this machine's git ignores; their rows ship where the"
+    ' files cannot',
+)
+
 # update notice kinds that change no file, as (event class, many): the
 # notice is the only record of what it names, so a lone one prints verbatim
 # and two or more collapse into the kind's count line
 _UPDATE_NOTE_CATEGORIES = [
+    _PATH_UNTRACKABLE_CATEGORY,
     (NameSkipEvent, 'Skipped {n} invalid names'),
     (
         WriteSkipEvent,
@@ -167,11 +176,7 @@ _LINT_NOTE_CATEGORIES = [
         '{n} links.external entries name no folder on this machine; links into'
         ' them are not checked',
     ),
-    (
-        PathUntrackableEvent,
-        "{n} indexed paths this machine's git ignores; their rows ship where"
-        ' the files cannot',
-    ),
+    _PATH_UNTRACKABLE_CATEGORY,
 ]
 
 

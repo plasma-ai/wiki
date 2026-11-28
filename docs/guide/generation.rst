@@ -684,6 +684,13 @@ print the kind's count line, and the narration then ends with ``Run with
      - ``N empty or truncated indexes (restore from git or delete to rebuild)``
      - Left untouched; restore or delete.
 
+The note for an indexed path this machine's git ignores condenses the same
+way. One path prints its line (``<path>: indexed, but this machine's git
+ignores it (<source>:<line> '<pattern>'); its generated row ships where the
+file cannot, so every other clone reds on a broken link``). Two or more print
+``N indexed paths this machine's git ignores; their rows ship where the files
+cannot``, the count line ``wiki lint`` prints for them.
+
 ``wiki new`` narrates its sweep the same way. It takes no ``--full``, so its
 pointer names a dry run: ``Run `wiki update --check --full` to list each
 line.``
@@ -698,9 +705,6 @@ condensed mode:
   lines beside a prune
 - ``Restored missing .wiki/settings.json ({} -- all defaults)``
 - ``Recreated .wiki/cache/ (derived counts cache)``
-- ``<path>: indexed, but this machine's git ignores it (<source>:<line>
-  '<pattern>'); its generated row ships where the file cannot, so every other
-  clone reds on a broken link``
 - ``Gitignore fence unavailable: `git check-ignore` failed inside the
   enclosing repository (is git installed?); indexing proceeds unfenced, so
   paths the repository ignores are adopted``

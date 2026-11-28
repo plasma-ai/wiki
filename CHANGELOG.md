@@ -155,6 +155,12 @@ may include breaking changes, each listed under a Breaking heading.
   count line (`Skipped 3 invalid names`) stays and the narration ends with
   `Run with --full to list each line.` `wiki new` prints the same lines for the
   sweep it runs, and its pointer names `wiki update --check --full`.
+- `wiki update` prints one count line for indexed paths this machine's git
+  ignores when there are two or more, as `wiki lint` does:
+  `N indexed paths this machine's git ignores; their rows ship where the files cannot`.
+  Before, it printed a line for each path, so a personal ignore rule that
+  matched many pages filled the condensed output. One path still prints its own
+  line, and `--full` lists each.
 
 ## [1.10.0] - 2026-11-27
 

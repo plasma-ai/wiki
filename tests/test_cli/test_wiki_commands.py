@@ -65,6 +65,7 @@ __all__ = [
     'test_new_refuses_an_argument_that_is_not_utf8',
     'test_update_counts_files_with_malformed_frontmatter',
     'test_update_names_a_lone_skip_and_counts_a_repeated_kind',
+    'test_update_counts_paths_git_ignores_as_lint_does',
     'test_new_refuses_interior_path',
     'test_read_only_commands_are_deterministic',
     'test_path_inside_wiki_resolves_upward',
@@ -1541,6 +1542,52 @@ def test_update_names_a_lone_skip_and_counts_a_repeated_kind(
     lines = new.stderr.splitlines()
     assert many in lines
     assert lines[-1] == 'Run `wiki update --check --full` to list each line.'
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_update_counts_paths_git_ignores_as_lint_does(tmp_path: pathlib.Path) -> None:
+    """Indexed paths this machine's git ignores condense in update as in lint.
+
+    The note names a row that ships where its file cannot. One such path
+    keeps its line; from two up, update prints the count line lint prints,
+    and ``--full`` lists each path.
+    """
+    root = tmp_path / 'wiki'
+    _git_repo(tmp_path)
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # a personal ignore file, in force for this repository on this machine only
+    excludes = tmp_path / 'personal_ignore'
+    excludes.write_text('*.draft.md\n', encoding='utf-8')
+    _git(tmp_path, 'config', 'core.excludesFile', str(excludes))
+    count = (
+        "2 indexed paths this machine's git ignores; their rows ship where the"
+        ' files cannot'
+    )
+
+    # one ignored path: the note's own line names it
+    _write(root / 'one.draft.md', _page('one', 'A draft.', 'Body.'))
+    one = _wiki(root, 'update', '--path', str(root))
+    assert one.returncode == 0, one.stdout + one.stderr
+    note = f"one.draft.md: indexed, but this machine's git ignores it ({excludes}:1"
+    assert note in one.stderr
+    assert '--full' not in one.stderr
+
+    # two: update prints lint's count line, and each command its own pointer
+    _write(root / 'two.draft.md', _page('two', 'A draft.', 'Body.'))
+    update = _wiki(root, 'update', '--path', str(root))
+    assert update.returncode == 0, update.stdout + update.stderr
+    lines = update.stderr.splitlines()
+    assert lines[0] == count
+    assert lines[-1] == 'Run with --full to list each line.'
+    lint = _wiki(root, 'lint', '--path', str(root))
+    assert count in lint.stderr.splitlines()
+
+    # --full lists each path in place of the count line
+    full = _wiki(root, 'update', '--full', '--path', str(root))
+    assert full.returncode == 0, full.stdout + full.stderr
+    assert count not in full.stderr
+    for name in ('one.draft.md', 'two.draft.md'):
+        assert f"{name}: indexed, but this machine's git ignores it" in full.stderr
 
 
 def test_new_refuses_interior_path(tmp_path: pathlib.Path) -> None:
