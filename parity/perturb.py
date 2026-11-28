@@ -147,6 +147,10 @@ class Perturbation:
             Python engine reads such an edit as the write that stamped the
             page, and must not restamp it.
         tagged: A body word and a tag of one page the perturbation tagged.
+        denied: The folders the perturbation added under a name no naming
+            policy takes, each with a page and no index. Until ``update``
+            runs, ``read`` finds no entry there, and ``new`` takes no
+            folder below such a name at any time.
         conflicts: The files :func:`conflict` plants its markers in.
 
     """
@@ -158,6 +162,7 @@ class Perturbation:
     page: str
     kept: tuple[str, ...]
     tagged: tuple[str, ...]
+    denied: tuple[str, ...]
     conflicts: tuple[str, ...]
 
 
@@ -309,6 +314,7 @@ def apply(
         page=tree.edited,
         kept=tuple(tree.kept),
         tagged=tree.tagged,
+        denied=tuple(tree.denied),
         conflicts=conflicts,
     )
 
@@ -325,9 +331,13 @@ def prepare(
     The stages of the plan are those of the matrix, on the tree the
     perturbation leaves, and then the perturbation's own (:func:`stages`).
     The matrix searches by the perturbation's tag: a wiki may hold tags of
-    its own, and the sample would draw one of those. In a loop the short
-    stage of the perturbation stands in for the matrix. A stage of the
-    corpus's own names pages the perturbation may have moved, so none runs.
+    its own, and the sample would draw one of those. Where the sample drew
+    a folder the perturbation added under a name no naming policy takes,
+    the matrix expects ``read`` of it and ``new`` below it to fail, as the
+    Python engine has them, and searches below it for the word its page
+    holds. In a loop the short stage of the perturbation stands in for the
+    matrix. A stage of the corpus's own names pages the perturbation may
+    have moved, so none runs.
 
     Args:
         corpus: The wiki to perturb.
@@ -357,9 +367,20 @@ def prepare(
     plan = runner.prepare(bare, work=work, seed=seed, change=change)
     (perturbation,) = done
     held = plan.stages
-    # the matrix searches by the perturbation's tag, not by one the sample drew
+    # the matrix searches by the perturbation's tag, not by one the sample drew,
+    # and expects the refusals on a folder the perturbation added under a
+    # denied name
     if not loop:
-        sample = dataclasses.replace(plan.sample, tagged=perturbation.tagged)
+        scopes = plan.sample.scopes
+        refused = tuple(scope for scope in scopes if scope in perturbation.denied)
+        sample = dataclasses.replace(
+            plan.sample,
+            tagged=perturbation.tagged,
+            refused=refused,
+        )
+        # the page of such a folder has no name, so the sample drew no word of it
+        if refused and (refused[0] == scopes[0]):
+            sample = dataclasses.replace(sample, scoped=WORD)
         plan = dataclasses.replace(plan, sample=sample)
         held = matrix.stages(sample)
     own = stages(perturbation, root=corpus.root, loop=loop)
@@ -892,11 +913,12 @@ class _Tree:
         self.operator = ''
         self.applied: dict[str, list[str]] = {}
         self.expected: dict[str, set[str]] = {family: set() for family in FAMILIES}
-        # what the stages of a run name, and the pages an edit left at a time
-        # their stamp covers
+        # what the stages of a run name, the pages an edit left at a time
+        # their stamp covers, and the folders under a name no policy takes
         self.edited = ''
         self.tagged: tuple[str, ...] = ()
         self.kept: list[str] = []
+        self.denied: list[str] = []
         # how many names the perturbation has made, what it made, the folders
         # it renamed (the new path and the old), and the time each file keeps
         # that was given one
@@ -1497,6 +1519,7 @@ def _invalid_folder(tree: _Tree, generator: random.Random) -> None:
     folder = posixpath.join(tree.folder(generator), f'{tree.name()}{_DENIED}')
     relpath = posixpath.join(folder, f'{tree.name()}.md')
     tree.write(relpath, f'# A page\n\n{_body("page")}\n', generator=generator)
+    tree.denied.append(folder)
     tree.expect(notices=['name_skip'], issues=['invalid_folder_name'])
 
 

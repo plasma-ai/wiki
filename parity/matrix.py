@@ -133,6 +133,10 @@ class Sample:
         desc: A word of one page's ``desc`` field.
         label: A word of one page's ``name`` or ``tags`` field.
         tagged: A body word and a tag of one page that has tags.
+        refused: The scopes that hold no index, under a name the wiki takes
+            no folder below: ``read`` and ``new`` end in an error there,
+            and their cases allow nothing else. The draw names none:
+            whoever puts such a folder into the tree does.
 
     """
 
@@ -143,6 +147,7 @@ class Sample:
     desc: Optional[str] = None
     label: Optional[str] = None
     tagged: tuple[str, ...] = ()
+    refused: tuple[str, ...] = ()
 
 
 def sample(root: pathlib.Path, *, seed: int) -> Sample:
@@ -220,7 +225,8 @@ def stages(sample: Sample) -> tuple[Stage, ...]:
     Mutating commands run on a tree with no caches (``write``) and on the
     snapshot (``full``). ``cross`` then runs each side on the tree and
     caches each side left after ``write``. Where the sample lacks a kind
-    of word, its command takes a body word and may find nothing.
+    of word, its command takes a body word and may find nothing. On a scope
+    the sample names as refused, ``read`` and ``new`` are built to fail.
     """
     term = sample.terms[0] if sample.terms else _ABSENT
     other = sample.terms[-1] if sample.terms else _ABSENT
@@ -229,6 +235,7 @@ def stages(sample: Sample) -> tuple[Stage, ...]:
     desc = sample.desc or term
     label = sample.label or term
     scoped = sample.scoped or term
+    refusal = _FAILS if scope in sample.refused else None
     # build the read-only commands, from a neutral folder and inside the wiki
     pristine = [
         _case(['lint']),
@@ -283,7 +290,7 @@ def stages(sample: Sample) -> tuple[Stage, ...]:
         query.append(_case(['map', scope]))
         query.append(_case(['search', scoped, scope, '--json']))
         query.append(_case(['match', r'^#+ \S', scope, '--lineno']))
-        query.append(_case(['read', scope]))
+        query.append(_case(['read', scope], codes=refusal))
     for page in sample.pages:
         query.append(_case(['read', page]))
     for page in sample.pages[:1]:
@@ -301,7 +308,8 @@ def stages(sample: Sample) -> tuple[Stage, ...]:
         _case(['new', _NEW, *new], writes=True),
     ]
     if scope is not None:
-        write.append(_case(['new', f'{scope}/{_NEW}', *new], writes=True))
+        below = ['new', f'{scope}/{_NEW}', *new]
+        write.append(_case(below, codes=refusal, writes=refusal is None))
     write.extend(_case(args) for args in (['update', '--check'], ['lint'], ['map']))
     write.append(_case(['search', term]))
     full = [

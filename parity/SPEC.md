@@ -611,7 +611,17 @@ has five stages:
   invalid match pattern and a page that does not exist. A sampled folder or page
   the wiki refuses on both sides (a name its policy rejects, a folder its
   settings exclude) compares only the refusal, so it is an `unexpected`
-  difference and the run does not pass; another `--seed` draws another sample.
+  difference and the run does not pass; another `--seed` draws another sample. A
+  sample may name folders as refused: such a folder holds no index, and its name
+  is one the wiki takes no folder below. Where the first sampled folder is one
+  of them, `read` of it and `new` below it are built to fail too, and that `new`
+  may write nothing. Only the first sampled folder counts: `read` and `new` name
+  no other, so a folder named as refused later in the sample changes no case.
+  Such a run compares less than the matrix names: it has no `read` of a folder
+  that holds an index and no `new` that writes below a sampled folder, and its
+  scoped `map`, `match` and `search` run on a folder with no index. The sample
+  in the result file names the folder under `refused`. The draw names none; a
+  perturbation names the folders it adds that way (Perturbation, Names).
 
 ## Fixture Families
 
@@ -727,6 +737,13 @@ edits is what the run compares.
 - **Names.** A name the perturbation makes is `perturbed` and a number, which
   the default naming policy and one that asks for identifiers both take. The two
   invalid names end in `[`, which is link grammar and so denied by every policy.
+  v1 reads a page under such a name like any other page. The folder comes with a
+  page and no index: `lint`, `update --check`, `map`, `search` and `match` run
+  when they are scoped to it, and `read` of it finds no entry and exits 2.
+  `update` gives the folder an index and its page a block, and gives the folder
+  no row in the index above. `new` refuses a folder below such a name with exit
+  2, before `update` and after it. A perturbation lists these folders, and a
+  test holds v1 to the two refusals.
 - **Order.** A folder is renamed first, before anything else is drawn. An index
   is cut short next, and no later operator adds to its folder: an index that was
   cut takes no row, so a file added beside it would show less than its operator
@@ -753,8 +770,12 @@ edits is what the run compares.
   and runs the stages of the matrix (Matrix) on the edited tree, then the stages
   `unindexed` and `conflicted`. The matrix's search by tag names the
   perturbation's tag, where its own sample could have drawn a tag the wiki held
-  before. It runs once for each corpus, under a fresh seed that the result file
-  records, or under the seed `--seed` names.
+  before. A folder under an invalid name that the sample draws is named as
+  refused (Matrix, Refusals); where it is the first sampled folder, the scoped
+  search takes the word every page of the perturbation's own holds, since the
+  sample draws no word from a page without a `name`. It runs once for each
+  corpus, under a fresh seed that the result file records, or under the seed
+  `--seed` names.
 - **Loop mode.** `perturb loop` runs many seeds on small trees, each seed on
   each tree, several at once. In place of the matrix it runs the short stage
   `edited`, then `unindexed` and `conflicted`. With no `--corpora` the trees are

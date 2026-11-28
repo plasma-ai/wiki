@@ -4,8 +4,8 @@ The runs of a perturbation are covered through the command line; this module
 carries what a perturbation owes a run: the same tree every time for one
 seed, every operator on every tree, no write out of its checkout, the kinds
 its changes name, the edits v1 restamps and the ones it leaves, a page its
-tag finds, the three trees its stages run on, and the small trees and the
-seeds of a loop.
+tag finds, the two commands v1 refuses on a folder under a denied name, the
+three trees its stages run on, and the small trees and the seeds of a loop.
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ __all__ = [
     'test_time_a_stamp_covers_outlasts_later_writes',
     'test_page_stamped_since_its_commit_names_no_restamp',
     'test_search_by_the_tag_that_finds_nothing_is_a_finding',
+    'test_matrix_expects_what_v1_does_with_a_denied_name',
     'test_stages_of_a_perturbation_run_on_its_three_trees',
     'test_kind_list_that_disagrees_with_the_operators_is_refused',
     'test_kind_that_no_tree_shows_is_a_finding',
@@ -451,6 +452,56 @@ def test_search_by_the_tag_that_finds_nothing_is_a_finding(
             detail='no side finds a page',
         )
     ]
+
+
+@_needs_git
+def test_matrix_expects_what_v1_does_with_a_denied_name(
+    tmp_path: pathlib.Path,
+    engine: side.Side,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The matrix on a perturbed wiki expects what v1 does with a denied name.
+
+    v1 reads a page whose name holds a denied character like any other. A
+    folder under such a name comes with a page and no index: until
+    ``update`` runs, ``read`` finds no entry there, and ``new`` takes no
+    folder below such a name at any time. Both exit 2, and the ``new``
+    writes nothing, while every other scoped command runs. Here the two
+    operators that make such names apply to the example wiki, which has no
+    folder of its own, so the sample draws the folder first and every page
+    for ``read``. The matrix names the folder as refused, and its search
+    below the folder names the word the folder's page holds. v1 ends every
+    case as the case is built to end, and that search finds the page.
+    """
+    denied = ('invalid-page', 'invalid-folder')
+    alone = tuple(
+        operator
+        for operator in perturb.operators()
+        if (operator.name in (*denied, 'add-tags')) or operator.stage
+    )
+    monkeypatch.setattr(perturb, 'operators', lambda: alone)
+    (example,), _ = perturb.trees(tmp_path / 'trees', names=[perturb.EXAMPLE])
+    plan, done = perturb.prepare(example, work=tmp_path / 'work', seed=5, loop=False)
+    scope, *_ = plan.sample.scopes
+    assert done.denied
+    assert set(plan.sample.refused) == set(plan.sample.scopes) == set(done.denied)
+    (query,) = [stage for stage in plan.stages if stage.name == 'query']
+    searches = [case.args for case in query.cases]
+    assert ('search', perturb.WORD, scope, '--json') in searches
+    pages = done.applied['invalid-page']
+    assert set(pages) <= set(plan.sample.pages)
+    result = runner.run(plan, [engine], now=NOW, only=['query', 'write'])
+    assert result.differences == ()
+    assert [stage['no_hit'] for stage in result.report['stages']] == [[], []]
+    # v1 refuses the two commands on the folder, and reads each page
+    exits = {
+        case['name']: case['runs'][engine.name]['exit']
+        for stage in result.report['stages']
+        for case in stage['cases']
+    }
+    (new,) = [name for name in exits if name.startswith(f'new {scope}/')]
+    assert (exits[f'read {scope}'], exits[new]) == (2, 2)
+    assert [exits[f'read {page}'] for page in pages] == [0] * len(pages)
 
 
 @_needs_git
