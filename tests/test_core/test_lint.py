@@ -1457,9 +1457,11 @@ def test_lint_judges_every_text_field_for_control_characters(
     ],
     ids=['nested-mapping', 'block-list', 'flow-list', 'empty-flow-mapping'],
 )
+@page_index
 @pytest.mark.usefixtures('_vary_loader')
 def test_lint_flags_a_text_field_that_is_a_mapping_or_list(
     tmp_path: pathlib.Path,
+    kind: str,
     field: str,
     key: str,
     line: int,
@@ -1469,24 +1471,25 @@ def test_lint_flags_a_text_field_that_is_a_mapping_or_list(
     The block is valid YAML, so no other check names it: update writes
     the field's source lines into the H1 and the parent's row while a
     strict reader hands other tools a collection. Lint names the field
-    and its line, with the remedy; a field that is a list by design
-    (``tags``) stays clean.
+    and its line, with the remedy, in a page and in an index; a field
+    that is a list by design (``tags``) stays clean.
     """
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
-    page = tmp_path / 'core' / 'design.md'
-    page.write_text(
-        f'---\nname: core/design\n{field}\ntags: [a, b]\n---\n\n# core/design\n\nBody.\n',
+    name = 'design.md' if kind == 'page' else '_index.md'
+    named = 'core/design' if kind == 'page' else 'core'
+    (tmp_path / 'core' / name).write_text(
+        f'---\nname: {named}\n{field}\ntags: [a, b]\n---\n\n# {named}\n\nBody.\n',
         encoding='utf-8',
     )
     wiki.update()
 
     issues = Wiki(tmp_path).lint()
     assert issues == [
-        f'core/design.md: Mapping or list in {key} (line {line}): a strict reader'
+        f'core/{name}: Mapping or list in {key} (line {line}): a strict reader'
         ' finds no text there, so quote the value or write it as a >- block'
     ]
     assert issues[0].kind == 'nonscalar_field'
-    assert issues[0].fields == {'path': 'core/design.md', 'field': key, 'line': line}
+    assert issues[0].fields == {'path': f'core/{name}', 'field': key, 'line': line}
 
 
 def test_lint_invalid_yaml_yields_to_merge_states(tmp_path: pathlib.Path) -> None:
