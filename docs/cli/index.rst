@@ -554,8 +554,12 @@ during the run (re-run to converge).
 
 Narration goes to stderr — condensed to one count line per category by
 default (e.g. ``Created 1 new index (fill in its desc)``, ``Added 2 new
-links``); ``--full`` prints every line instead. The stdout summary is
-``Updated N file(s).`` or ``Nothing to update.``
+links``); ``--full`` prints every line instead. A skip changes no file, so
+one skip of a kind keeps its own line, which names the file (``Skipping
+<path>: invalid name (<rule>)``); two or more print a count line (``Skipped 3
+invalid names``), and the narration then ends with ``Run with --full to list
+each line.`` The stdout summary is ``Updated N file(s).`` or ``Nothing to
+update.``
 
 The sweep refuses (exit 2, dry run included) when the scope crosses a nested
 declared wiki or when any in-scope file carries git merge conflict markers
@@ -578,15 +582,17 @@ outside a ``no-lint`` region — resolve the conflicts and re-run.
      - off
      - Dry run: writes nothing, lists ``Would update: <path>`` lines, and
        exits 1 when changes are pending, 0 when clean. A nonzero exit is not
-       an error — it is a formatter-style check result. ``--check`` never
-       restores a missing ``.wiki/settings.json``; only a writing run does.
+       an error — it is a formatter-style check result. Narration words each
+       change as pending (``Would add 2 new links``; with ``--full``, ``Would
+       add link: ...``). ``--check`` never restores a missing
+       ``.wiki/settings.json``; only a writing run does.
    * - ``--full``
      - off
      - Print every narration line in emission order.
    * - ``--count``
      - on (the default behavior)
-     - Print one count line per narration category (mutually exclusive with
-       ``--full``).
+     - Print one line per narration category: its count, or a lone skip
+       (mutually exclusive with ``--full``).
 
 .. code-block:: console
 

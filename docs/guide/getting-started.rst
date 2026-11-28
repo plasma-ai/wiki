@@ -289,8 +289,8 @@ rhythm of working with a wiki: add or move markdown files, run
      - Print every narration line instead of per-category counts
        (default: off).
    * - ``--count``
-     - Print one count line per narration category — the default; mutually
-       exclusive with ``--full``.
+     - Print one line per narration category, its count or a lone skip — the
+       default; mutually exclusive with ``--full``.
 
 ``wiki lint`` options:
 
