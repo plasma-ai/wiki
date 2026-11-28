@@ -7,6 +7,7 @@ import difflib
 import functools
 import hashlib
 import http.client
+import itertools
 import json
 import logging
 import operator
@@ -66,6 +67,23 @@ _PINNED_INSTANT = re.compile(
 # instant by under a day, so every rendering stays within the years 1000 to
 # 9999, where the calendar holds it and %Y is four digits on every platform
 _PINNED_YEARS = (1001, 9998)
+
+# the timestamp.format directives: each renders a fixed-width number, the
+# offset or a percent sign, alike on every platform
+_STAMP_DIRECTIVES = ('%Y', '%m', '%d', '%H', '%M', '%S', '%z', '%%')
+
+# what opens on a digit: a parser takes two digits straight after %z for the
+# offset's seconds wherever the rest still parses, so none of these follows it
+_STAMP_DIGITS = ('%Y', '%m', '%d', '%H', '%M', '%S', *'0123456789')
+
+# the instants an authored timestamp.format must read back. A misread
+# regroups digits, which %m and %d allow only on nonzero ones: so the month,
+# day, minute and second hold two nonzero digits in every zone, and the
+# hours sit twelve apart, so one of the two opens on a nonzero digit
+_STAMP_PROBES = (
+    dt.datetime(2023, 11, 25, 22, 14, 56, tzinfo=dt.UTC),
+    dt.datetime(2023, 12, 13, 10, 12, 34, tzinfo=dt.UTC),
+)
 
 # soft ceiling for a folded frontmatter desc: past it lint notes the page,
 # since every map row and parent index link reproduces the whole desc
@@ -366,7 +384,11 @@ class Wiki:
 
         Validates the per-wiki ``timestamp`` block (``timezone`` / ``format``) so
         a bad value fails loudly with a file+key message rather than leaking a raw
-        exception from :meth:`_utc_now` (settings.json is user input).
+        exception from :meth:`_utc_now` (settings.json is user input). A
+        format holds only the directives that render alike on every
+        platform, puts no digit straight after ``%z``, and reads back the
+        stamp it writes: the verdict comes from fixed instants, never from
+        the clock.
         """
         # overlay the settings.json timestamp block onto the defaults
         override = self._settings.get('timestamp', {})
@@ -374,7 +396,8 @@ class Wiki:
             raise ValueError(
                 f'The timestamp block must be a JSON object in {WIKI_SETTINGS}.'
             )
-        # format is a strftime string; timezone is an IANA name or null (UTC)
+        # format is a strftime string of the directives _STAMP_DIRECTIVES
+        # lists; timezone is an IANA name or null (UTC)
         # -- the default format's literal 'Z' asserts UTC, so a configured
         # zone swaps it for %z to keep the rendered offset honest, while an
         # authored format always passes through untouched (author's choice)
@@ -390,14 +413,40 @@ class Wiki:
                 f' {_as_json(format)} in {WIKI_SETTINGS}.'
             )
         # a blank or multi-line value would corrupt the YAML frontmatter -- reject
-        # an empty/whitespace format, strftime's %n/%t newline/tab directives, and
-        # literal line breaks, the only ways the rendered value splits or empties
-        breakers = ('%n', '%t', '\n', '\r')
+        # an empty/whitespace format and literal line breaks, the only ways
+        # the rendered value splits or empties
+        breakers = ('\n', '\r')
         if not format.strip() or any(token in format for token in breakers):
             raise ValueError(
                 f'timestamp.format must render a single non-empty line, got'
                 f' {_as_json(format)} in {WIKI_SETTINGS}.'
             )
+        # a NUL cuts the format short where strftime takes a C string, and a
+        # stamp that holds one never reads back from frontmatter
+        if '\0' in format:
+            raise ValueError(
+                f'timestamp.format must not hold a NUL character, got'
+                f' {_as_json(format)} in {WIKI_SETTINGS}.'
+            )
+        # every % opens a listed directive, so a % that ends the format opens none
+        for directive in re.findall(r'%.?', format, re.DOTALL):
+            if directive not in _STAMP_DIRECTIVES:
+                options = ', '.join(_STAMP_DIRECTIVES)
+                raise ValueError(
+                    f'Unsupported timestamp.format directive {directive!r} (must'
+                    f' be one of {options}), got {_as_json(format)} in'
+                    f' {WIKI_SETTINGS}.'
+                )
+        # no digit straight after %z: the rule holds for every stamp, where
+        # the read-back below samples two
+        tokens = re.findall(r'%.|[^%]', format, re.DOTALL)
+        for directive, follower in itertools.pairwise(tokens):
+            if (directive == '%z') and (follower in _STAMP_DIGITS):
+                raise ValueError(
+                    f'timestamp.format must not follow %z with a digit'
+                    f' ({directive + follower!r} does), got {_as_json(format)}'
+                    f' in {WIKI_SETTINGS}.'
+                )
         timezone = override.get('timezone')
         if (timezone is not None) and not isinstance(timezone, str):
             raise ValueError(
@@ -413,6 +462,23 @@ class Wiki:
                 ) from e
         else:
             timezone = dt.UTC
+        # an authored format reads back the stamp it writes, or lint fails
+        # every stamp the wiki holds; the defaults read back in every zone,
+        # and skip a parse whose first call costs milliseconds
+        if 'format' in override:
+            for probe in _STAMP_PROBES:
+                stamp = probe.astimezone(timezone).strftime(format)
+                # a directive named twice is a pattern strptime cannot compile
+                try:
+                    reread = dt.datetime.strptime(stamp, format).strftime(format)
+                except (ValueError, re.error):
+                    reread = None
+                if reread != stamp:
+                    raise ValueError(
+                        f'timestamp.format must read back the stamp it writes'
+                        f' ({stamp!r} does not), got {_as_json(format)} in'
+                        f' {WIKI_SETTINGS}.'
+                    )
         return {'format': format, 'zone': timezone}
 
     @functools.cached_property

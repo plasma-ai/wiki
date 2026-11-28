@@ -235,9 +235,35 @@ are rendered (see :doc:`/guide/generation` for when they are written).
    ``%Y-%m-%dT%H:%M:%S%z`` — the stock default's literal ``Z`` asserts UTC,
    so the swap keeps the rendered offset honest. An authored format always
    passes through untouched (a literal ``Z`` alongside a non-UTC zone is the
-   author's own claim). The format must render a single non-empty line:
-   empty or whitespace-only values, ``%n``, ``%t``, and literal line breaks
-   are rejected.
+   author's own claim). Four rules are checked when the policy loads:
+
+   - The format renders a single non-empty line: empty or whitespace-only
+     values and literal line breaks are rejected. A NUL character is
+     rejected too: a stamp that holds one never reads back.
+   - The format holds only the directives ``%Y``, ``%m``, ``%d``, ``%H``,
+     ``%M``, ``%S``, ``%z`` and ``%%`` (a percent sign), with literal text
+     around them. Each renders the same text on every machine. Any other
+     ``%`` sequence is rejected by name, a ``%`` that ends the format
+     included: ``Unsupported timestamp.format directive '%b' (must be one of
+     %Y, %m, %d, %H, %M, %S, %z, %%), got "%d %b %Y" in .wiki/settings.json.``
+   - No digit comes straight after ``%z``: not ``%Y``, ``%m``, ``%d``,
+     ``%H``, ``%M`` or ``%S``, and not a literal digit. A parser can read two
+     digits after the offset as the offset's seconds, so some stamps of such
+     a format would read back as another instant. Put ``%z`` last or follow
+     it with a separator: ``timestamp.format must not follow %z with a digit
+     ('%z%H' does), got "%z%H%M" in .wiki/settings.json.``
+   - The format reads back the stamp it writes. Two fixed instants are
+     rendered in the wiki's zone, parsed under the format and rendered again;
+     a format whose stamp fails to parse or comes back as other text is
+     rejected with that stamp: ``timestamp.format must read back the stamp it
+     writes ('2023 2023' does not), got "%Y %Y" in .wiki/settings.json.`` A
+     directive named twice never parses. A date-only format passes: the
+     comparison is of text, not of instants. The check reads neither the
+     clock nor ``WIKI_FREEZE_TIME``, so a format gets the same verdict on
+     every run. Two instants are a sample, and one case passes them: a
+     format with ``%m`` and ``%d`` but no ``%Y`` reads its date in the year
+     1900, which has no 29 February, so ``wiki lint`` fails each stamp
+     written on a leap day. Name the year in a format that names the day.
 
 Changing ``timestamp.format`` on an existing wiki requires rewriting the
 existing stamps by hand — ``wiki lint`` flags each stamp that no longer
