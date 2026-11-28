@@ -95,7 +95,7 @@ __all__ = [
     'test_match_explains_an_unescaped_wikilink',
     'test_match_hints_follow_the_pattern',
     'test_match_reports_no_line_past_the_end',
-    'test_naming_pattern_prints_no_python_warning',
+    'test_naming_pattern_prints_no_line_for_a_risky_regex',
     'test_match_resolution_failure_exits_two',
     'test_match_all_skips_undecodable_files',
     'test_match_names_a_page_it_cannot_decode',
@@ -2290,30 +2290,37 @@ def test_match_reports_no_line_past_the_end(wiki: pathlib.Path) -> None:
     assert f'core/design.md:{line_count + 1}' not in hits
 
 
-def test_naming_pattern_prints_no_python_warning(tmp_path: pathlib.Path) -> None:
+def test_naming_pattern_prints_no_line_for_a_risky_regex(
+    tmp_path: pathlib.Path,
+) -> None:
     """A ``naming.pattern`` Python warns about loads without a word.
 
     The pattern is settings, not a command argument, so the warning's
-    source line would say nothing to whoever ran the command.
+    source line would say nothing to whoever ran the command, and no
+    line of the command's own stands in for it: each run prints what it
+    prints under a pattern that draws no warning.
     """
-    root = tmp_path / 'wiki'
-    settings = json.dumps({'naming': {'pattern': '[[a-z]+'}})
-    result = _wiki(
-        tmp_path,
-        'init',
-        'notes',
-        '--path',
-        str(root),
-        '--settings',
-        settings,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert 'Warning' not in result.stderr
-    # the policy loads again in every run that checks a name
-    _write(root / 'p.md', _page(name='p', desc='A page.', body='Text.'))
-    result = _wiki(root, 'update', '--path', str(root))
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert 'Warning' not in result.stderr
+    stderr = {}
+    for label, pattern in (('risky', '[[a-z&&]+'), ('plain', '[a-z]+')):
+        root = tmp_path / label / 'wiki'
+        settings = json.dumps({'naming': {'pattern': pattern}})
+        result = _wiki(
+            tmp_path,
+            'init',
+            'notes',
+            '--path',
+            str(root),
+            '--settings',
+            settings,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        stderr[label] = [result.stderr]
+        # the policy loads again in every run that checks a name
+        _write(root / 'p.md', _page(name='p', desc='A page.', body='Text.'))
+        result = _wiki(root, 'update', '--path', str(root))
+        assert result.returncode == 0, result.stdout + result.stderr
+        stderr[label].append(result.stderr)
+    assert stderr['risky'] == stderr['plain']
 
 
 def test_match_resolution_failure_exits_two(
