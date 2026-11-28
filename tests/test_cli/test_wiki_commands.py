@@ -2366,12 +2366,19 @@ def test_map_filters_by_category(tmp_path: pathlib.Path) -> None:
 
 
 def test_map_empty_wiki_reports_empty(tmp_path: pathlib.Path) -> None:
-    """A map of a wiki with no folders reports emptiness, not a crash."""
+    """A map of a wiki with no folders reports emptiness, not a crash.
+
+    The line follows the arguments alone: a run that a filter narrowed
+    says that no entries match, on a wiki that holds nothing too.
+    """
     root = tmp_path / 'wiki'
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     result = _wiki(root, 'map', '--path', str(root))
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout == 'Wiki is empty.\n'
+    result = _wiki(root, 'map', '--path', str(root), '--category', 'nosuch')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == 'No entries match.\n'
 
 
 def test_map_says_no_entries_match_when_narrowed_to_nothing(
