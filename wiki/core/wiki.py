@@ -3713,13 +3713,13 @@ class Wiki:
         if page.is_relative_to(self._root) and page.is_file():
             if len(requested.parts) == 1:
                 return 'a scope is a folder and this is a page in the wiki root'
-            folder = f'{requested.parent}'
+            folder = str(requested.parent)
             if self._is_scope(folder):
                 return f'a scope is a folder and this is a page; did you mean {folder}?'
             return None
         # the root's own folder name, then a folder below the root
         if (len(requested.parts) > 1) and (requested.parts[0] == self._root.name):
-            rest = f'{pathlib.PurePosixPath(*requested.parts[1:])}'
+            rest = str(pathlib.PurePosixPath(*requested.parts[1:]))
             if self._is_scope(rest):
                 return f'did you mean {rest}?'
         return None
