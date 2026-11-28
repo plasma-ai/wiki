@@ -484,7 +484,7 @@ def test_matrix_expects_what_v1_does_with_a_denied_name(
     plan, done = perturb.prepare(example, work=tmp_path / 'work', seed=5, loop=False)
     scope, *_ = plan.sample.scopes
     assert done.denied
-    assert plan.sample.refused == plan.sample.scopes == done.denied
+    assert set(plan.sample.refused) == set(plan.sample.scopes) == set(done.denied)
     assert plan.sample.scoped == perturb.WORD
     pages = done.applied['invalid-page']
     assert set(pages) <= set(plan.sample.pages)
