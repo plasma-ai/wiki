@@ -43,6 +43,11 @@ may include breaking changes, each listed under a Breaking heading.
   it, so it leaves `drafts/` indexed.
 - The same warning names `naming.leading_digits: false` set without the
   `identifier` rule in `naming.validate`, where the flag has no effect.
+- `wiki init --settings` says on stderr when the settings were not applied
+  because the wiki already exists:
+  `--settings was not applied: the wiki at <path> already exists, and init leaves its settings as they are.`
+  It still exits 0, and `--quiet` does not hide the line. The same object in
+  another key order or spacing prints nothing.
 
 ### Changed
 

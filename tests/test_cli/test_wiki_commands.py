@@ -38,6 +38,7 @@ __all__ = [
     'test_init_creates_root_index',
     'test_init_guards_existing_wiki',
     'test_init_seeds_settings',
+    'test_init_says_when_settings_are_not_applied',
     'test_init_refuses_nested_wiki',
     'test_home_directory_is_never_a_wiki',
     'test_init_quiet_suppresses_chatter',
@@ -282,6 +283,12 @@ _NESTED_SET_HINT = (
 _SET_OPERATOR_HINT = (
     "A doubled '--', '&&', '~~' or '||' inside a character class is not a set"
     ' operation; escape each character to match it as written.'
+)
+
+# the line a scaffolding init prints offline, where the suite runs it
+_OFFLINE_SKIP = (
+    'Skipped obsidian-front-matter-title-plugin download (OFFLINE_MODE). Re-run'
+    ' `wiki config` online to finish setup.\n'
 )
 
 # one run of each command that reads policy, each with something to do in
@@ -535,6 +542,68 @@ def test_init_seeds_settings(tmp_path: pathlib.Path) -> None:
     settings = root / '.wiki' / 'settings.json'
     data = json.loads(settings.read_text(encoding='utf-8'))
     assert data == {'naming': {'validate': ['ascii', 'identifier']}}
+
+
+def test_init_says_when_settings_are_not_applied(tmp_path: pathlib.Path) -> None:
+    """``init --settings`` on an existing wiki says so when it changes nothing.
+
+    ``init`` never changes the settings of an existing wiki and exits 0, so
+    one stderr line, printed under ``--quiet`` too, tells a caller that the
+    policy it passed is not in force. The same object draws nothing, in
+    any key order and spacing and under another wiki name, so a caller
+    that sends its seed again on every run stays silent. A settings file
+    that is missing or cannot be read holds something else.
+    """
+    root = tmp_path / 'wiki'
+    seed = '{"naming":{"validate":["ascii"],"allow":"-"},"lint":{"strict":true}}'
+    line = (
+        f'--settings was not applied: the wiki at {root} already exists, and'
+        ' init leaves its settings as they are.\n'
+    )
+    init = _wiki(tmp_path, 'init', '--path', str(root), '--quiet', '--settings', seed)
+    assert init.returncode == 0, init.stdout + init.stderr
+    assert line not in init.stderr
+    settings = root / '.wiki' / 'settings.json'
+    written = settings.read_bytes()
+
+    def reinit(*args: str) -> str:
+        """Run ``init --quiet`` on the wiki again and return its stderr."""
+        result = _wiki(tmp_path, 'init', '--path', str(root), '--quiet', *args)
+        assert result.returncode == 0, (args, result.stdout + result.stderr)
+        assert result.stdout == '', args
+        return result.stderr
+
+    # the same object, however it is spelled, is in force
+    reordered = (
+        '{ "lint": {"strict": true},\n'
+        '  "naming": {"allow": "-", "validate": ["ascii"]} }'
+    )
+    assert reinit('--settings', seed) == ''
+    assert reinit('--settings', reordered) == ''
+    assert reinit('Other Name', '--settings', seed) == ''
+    assert reinit() == ''
+    # another object is not, and the file stays as it was
+    assert reinit('--settings', '{}') == line
+    assert reinit('--settings', '{"lint": {"strict": 1}}') == line
+    assert settings.read_bytes() == written
+    loud = _wiki(tmp_path, 'init', '--path', str(root), '--settings', '{}')
+    assert loud.returncode == 0, loud.stdout + loud.stderr
+    assert loud.stdout == f'Wiki already initialized at: {root}\n'
+    assert loud.stderr == line
+
+    # a wiki that lost its root index is rebuilt around the settings it has
+    (root / '_index.md').unlink()
+    assert reinit('--settings', seed) == _OFFLINE_SKIP
+    (root / '_index.md').unlink()
+    assert reinit('--settings', '{}') == line + _OFFLINE_SKIP
+    assert settings.read_bytes() == written
+
+    # a file that cannot be read, or is missing, holds something else
+    _write(settings, '{"lint": {"strict": NaN}}')
+    assert reinit('--settings', seed) == line
+    settings.unlink()
+    assert reinit('--settings', '{}') == line
+    assert not settings.exists()
 
 
 def test_init_refuses_nested_wiki(tmp_path: pathlib.Path) -> None:

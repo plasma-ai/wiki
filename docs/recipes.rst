@@ -49,7 +49,8 @@ To start with a stricter naming policy, seed settings at creation:
 see :doc:`/configuration` for every key. ``--quiet`` suppresses non-error
 output. Re-running ``wiki init`` on an existing wiki prints ``Wiki already
 initialized at: <path>`` and changes nothing — in particular, ``--settings`` is
-ignored once ``.wiki/settings.json`` exists.
+ignored once ``.wiki/settings.json`` exists, and a stderr line says so when
+the file holds something else (``--settings was not applied: ...``).
 
 Without network access, run ``OFFLINE_MODE=true wiki init``: the Obsidian
 plugin download is skipped with a warning, and ``wiki config`` finishes the

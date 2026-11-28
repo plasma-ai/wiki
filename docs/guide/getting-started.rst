@@ -111,7 +111,8 @@ The command sets up:
        ``--settings '{"naming": {"validate": ["ascii"]}}'`` (default: the
        naming-defaults seed). Held to strict JSON, as the settings file is,
        and validated before anything is written; ignored when the settings
-       file already exists.
+       file already exists, with a stderr line when the file holds something
+       else.
    * - ``--quiet``
      - Suppress the Obsidian hint and other non-error output (default: off).
 

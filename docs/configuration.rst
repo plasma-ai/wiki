@@ -150,7 +150,8 @@ Seeding and restoration are asymmetric:
   below) so the knobs are discoverable, or with the object passed via
   ``--settings '<json>'``. The seed is held to the same strict JSON and
   validated before anything is written, and re-init never overwrites an
-  existing settings file.
+  existing settings file: when ``--settings`` names something else than the
+  file holds, ``init`` says so on stderr and exits 0 (see :doc:`/cli/index`).
 - ``wiki update`` and ``wiki config`` restore a *missing* file as ``{}`` —
   all defaults; custom policy is never re-invented. Deleting the file
   therefore silently drops any authored policy once the next mutating run

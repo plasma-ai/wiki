@@ -79,7 +79,9 @@ rather than authoring or auditing page by page yourself:
   `settings.json` that wiki does not know is ignored, so a misspelled key leaves
   its policy off: `wiki init`, `update`, `new` and `lint` name each one on
   stderr (`.wiki/settings.json: unknown key 'exclude.pattern' (ignored)`) and
-  exit as they would without it.
+  exit as they would without it. `wiki init --settings` seeds the file at
+  creation only: on an existing wiki it changes nothing, exits 0, and prints
+  `--settings was not applied: ...` on stderr when the wiki's settings differ.
 - **Exclusions are configurable.** Beyond the built-ins (dot-paths, symlinks,
   `_index.md`), gitignore-style globs in `exclude.patterns` in
   `.wiki/settings.json` exclude whole subtrees from indexing — never walked,
