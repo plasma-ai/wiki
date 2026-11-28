@@ -64,6 +64,7 @@ __all__ = [
     'test_new_requires_authored_desc_and_content',
     'test_new_refuses_an_argument_that_is_not_utf8',
     'test_update_counts_files_with_malformed_frontmatter',
+    'test_update_names_a_lone_skip_and_counts_a_repeated_kind',
     'test_new_refuses_interior_path',
     'test_read_only_commands_are_deterministic',
     'test_path_inside_wiki_resolves_upward',
@@ -231,6 +232,19 @@ _NOTING_HOOK = (
     "        self.on_desc_missing(path='a.md')\n"
     "        self.on_desc_missing(path='b.md')\n"
     "        raise RuntimeError('boom')\n"
+)
+
+# a hook whose plan is followed by another writer's edit to each core/page*.md
+_RACING_HOOK = (
+    'from wiki.core.wiki import Wiki\n\n'
+    "__all__ = ['Racing']\n\n\n"
+    'class Racing(Wiki):\n'
+    '    def _plan(self, folder, **kwargs):\n'
+    '        result = super()._plan(folder, **kwargs)\n'
+    "        for page in self._root.glob('core/page*.md'):\n"
+    "            with page.open('a', encoding='utf-8') as file:\n"
+    "                file.write('Edited.\\n')\n"
+    '        return result\n'
 )
 
 # the line a command opens stderr with while WIKI_FREEZE_TIME fixes the clock
@@ -1434,6 +1448,99 @@ def test_update_counts_files_with_malformed_frontmatter(tmp_path: pathlib.Path) 
         'Malformed frontmatter (not a key: value mapping) in core/listed.md'
         in full.stderr
     )
+
+
+@pytest.mark.parametrize(
+    argnames=('path', 'text', 'racing', 'lone', 'many'),
+    argvalues=[
+        (
+            'core/bad|{n}.md',
+            '---\nname: x\ndesc: A page.\n---\n\n# x\n\nBody.\n',
+            False,
+            'Skipping core/bad|1.md: invalid name (contains a denied character)',
+            'Skipped 3 invalid names',
+        ),
+        (
+            'core/page{n}.md',
+            'A bare page, edited while update runs.\n',
+            True,
+            'Skipping core/page1.md: changed during update; re-run `wiki update`',
+            'Skipped 3 concurrently-edited files (re-run `wiki update`)',
+        ),
+        (
+            'core/page{n}.md',
+            '---\nname: x\ndesc: Never closes.\n\nBody.\n',
+            False,
+            'Malformed frontmatter (no closing ---) in core/page1.md',
+            '3 files with malformed frontmatter',
+        ),
+        (
+            'core{n}/_index.md',
+            '',
+            False,
+            'Empty or truncated index (no frontmatter) in core1/_index.md;'
+            ' restore it from git or delete it to rebuild',
+            '3 empty or truncated indexes (restore from git or delete to rebuild)',
+        ),
+    ],
+    ids=['invalid_name', 'concurrent_edit', 'malformed_frontmatter', 'empty_index'],
+)
+def test_update_names_a_lone_skip_and_counts_a_repeated_kind(
+    tmp_path: pathlib.Path,
+    path: str,
+    text: str,
+    racing: bool,
+    lone: str,
+    many: str,
+) -> None:
+    """A lone skip keeps its line; a kind that repeats gets a count and a pointer.
+
+    A skip leaves no diff, so its line is the only record of the file: the
+    condensed default names a kind's one skipped file, and from two up it
+    prints the kind's count line and says that ``--full`` lists each.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'core' / '_index.md', _index('core', 'Core concepts.', 'Text.'))
+    # a trusted hook edits each page between update's plan and its writes
+    if racing:
+        _write(root / '.wiki' / 'wiki.py', _RACING_HOOK)
+        assert _wiki(tmp_path, 'trust', '--path', str(root)).returncode == 0
+    pointer = 'Run with --full to list each line.'
+
+    # one skip: its own line names the file, and nothing points to --full
+    _write(root / path.format(n=1), text)
+    one = _wiki(root, 'update', '--path', str(root))
+    assert one.returncode == 0, one.stdout + one.stderr
+    assert lone in one.stderr.splitlines()
+    assert pointer not in one.stderr
+
+    # three: the count line stands for them and the narration ends on the pointer
+    _write(root / path.format(n=2), text)
+    _write(root / path.format(n=3), text)
+    # (a dry run reports the same, short of the skip only a write can meet)
+    runs = [[]] if racing else [[], ['--check']]
+    for args in runs:
+        three = _wiki(root, 'update', *args, '--path', str(root))
+        lines = three.stderr.splitlines()
+        assert many in lines
+        assert lone not in lines
+        assert lines[-1] == pointer
+
+    # --full lists each file and needs no pointer
+    full = _wiki(root, 'update', '--full', '--path', str(root))
+    assert full.returncode == 0, full.stdout + full.stderr
+    for n in (1, 2, 3):
+        assert path.format(n=n) in full.stderr
+    assert pointer not in full.stderr
+
+    # new sweeps as update does and takes no --full, so it points to a dry run
+    args = ['new', 'fresh', '--desc', 'A desc.', '--content', 'Body.']
+    new = _wiki(root, *args, '--path', str(root))
+    assert new.returncode == 0, new.stdout + new.stderr
+    lines = new.stderr.splitlines()
+    assert many in lines
+    assert lines[-1] == 'Run `wiki update --check --full` to list each line.'
 
 
 def test_new_refuses_interior_path(tmp_path: pathlib.Path) -> None:

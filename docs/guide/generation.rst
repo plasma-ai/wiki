@@ -129,8 +129,8 @@ stdout; all narration prints to stderr. Update exits 0 after a successful run
      - Print every narration line individually, in emission order.
    * - ``--count``
      - on (the effective default)
-     - Print one count line per narration category. Mutually exclusive with
-       ``--full``.
+     - Print one line per narration category: its count, or a lone skip.
+       Mutually exclusive with ``--full``.
 
 One caveat on scoped runs: a category change on the page or index at the
 scope's root cannot refresh its label in the *parent* index, because the
@@ -624,7 +624,7 @@ sanctions them.
 Update narration reference
 --------------------------
 
-Update's narration streams to stderr. By default each category of event
+Update's narration streams to stderr. By default each category of change
 condenses to one count line; ``--full`` prints every event individually, in
 emission order (e.g. ``New link: [[topics/example|example]] in
 topics/_index.md``). The condensed lines and what they mean:
@@ -654,23 +654,44 @@ topics/_index.md``). The condensed lines and what they mean:
    * - ``Overwrote N link descs (page frontmatter descs win)``
      - Diverged index-side descriptions were replaced by the child pages'
        ``desc:`` values; edit the page, not the index.
-   * - ``Skipped N invalid names``
+
+A skip changes no file, so its line is the only record of what was skipped.
+One skip of a kind prints its own line, which names the file. Two or more
+print the kind's count line, and the narration then ends with ``Run with
+--full to list each line.``
+
+.. list-table::
+   :header-rows: 1
+   :widths: 36 30 34
+
+   * - One skip
+     - Two or more
+     - What happened
+   * - ``Skipping <path>: invalid name (<rule>)``
+     - ``Skipped N invalid names``
      - Entries violating the naming policy were left unlinked.
-   * - ``Skipped N concurrently-edited files (re-run `wiki update`)``
+   * - ``Skipping <path>: changed during update; re-run `wiki update```
+     - ``Skipped N concurrently-edited files (re-run `wiki update`)``
      - Files changed while update was planning; re-run to converge.
-   * - ``N files with malformed frontmatter``
-     - Left untouched; the per-file notice names the reason — close an
-       unclosed block by hand, rewrite a body that is not ``key: value``
-       pairs or a flow or indented mapping as column-0 ``key: value`` lines,
-       or remove the alias the repair would break.
-   * - ``N empty or truncated indexes (restore from git or delete to rebuild)``
+   * - ``Malformed frontmatter (<reason>) in <path>``
+     - ``N files with malformed frontmatter``
+     - Left untouched; the reason says what to fix — close an unclosed block
+       by hand, rewrite a body that is not ``key: value`` pairs or a flow or
+       indented mapping as column-0 ``key: value`` lines, or remove the alias
+       the repair would break.
+   * - ``Empty or truncated index (no frontmatter) in <path>; restore it from
+       git or delete it to rebuild``
+     - ``N empty or truncated indexes (restore from git or delete to rebuild)``
      - Left untouched; restore or delete.
 
+``wiki new`` narrates its sweep the same way. It takes no ``--full``, so its
+pointer names a dry run: ``Run `wiki update --check --full` to list each
+line.``
+
 Under ``--check`` the pending-action categories read ``Would create ...``,
-``Would add ...``, ``Would prune ...``, and so on; the state-report categories
-(skipped names and files, malformed frontmatter, truncated indexes) keep
-their normal wording. A few notices have no category and always print
-verbatim, even in condensed mode:
+``Would add ...``, ``Would prune ...``, and so on; the skips keep their
+wording. A few notices have no category and always print verbatim, even in
+condensed mode:
 
 - ``Link targets a symlink: [[target|label]] in <path> (symlinked files are
   not indexed)`` — likewise the excluded-path and gitignored-path cause

@@ -146,6 +146,15 @@ may include breaking changes, each listed under a Breaking heading.
   `(a scope is a folder and this is a page in the wiki root)`. `Wiki.update`,
   `lint`, `map`, `search` and `match` raise the same `FileNotFoundError` with
   the longer message.
+- The condensed output of `wiki update` names a file it skipped. A skip changes
+  no file, so its line is the only record of it: one invalid name, one file
+  edited during the run, one file with malformed frontmatter or one empty or
+  truncated index prints its own line, such as
+  `Skipping notes/a|b.md: invalid name (contains a denied character)`. Before,
+  it printed `Skipped 1 invalid name` with no path. When a kind repeats, its
+  count line (`Skipped 3 invalid names`) stays and the narration ends with
+  `Run with --full to list each line.` `wiki new` prints the same lines for the
+  sweep it runs, and its pointer names `wiki update --check --full`.
 
 ## [1.10.0] - 2026-11-27
 

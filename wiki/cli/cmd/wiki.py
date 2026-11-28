@@ -89,7 +89,7 @@ _OBSIDIAN_SETUP_HINT = (
     ' Mode, then enable Front Matter Title and Wiki Root Links if needed.'
 )
 
-# condensed-mode narration categories, as (event class, one, many, check_one,
+# condensed-mode change categories, as (event class, one, many, check_one,
 # check_many): a notice of the class collapses into the category's count
 # line, worded for apply and --check runs
 _UPDATE_CATEGORIES = [
@@ -135,32 +135,20 @@ _UPDATE_CATEGORIES = [
         'Would overwrite 1 link desc (page frontmatter descs win)',
         'Would overwrite {n} link descs (page frontmatter descs win)',
     ),
-    (
-        NameSkipEvent,
-        'Skipped 1 invalid name',
-        'Skipped {n} invalid names',
-        'Skipped 1 invalid name',
-        'Skipped {n} invalid names',
-    ),
+]
+
+# update notice kinds that change no file, as (event class, many): the
+# notice is the only record of what it names, so a lone one prints verbatim
+# and two or more collapse into the kind's count line
+_UPDATE_NOTE_CATEGORIES = [
+    (NameSkipEvent, 'Skipped {n} invalid names'),
     (
         WriteSkipEvent,
-        'Skipped 1 concurrently-edited file (re-run `wiki update`)',
-        'Skipped {n} concurrently-edited files (re-run `wiki update`)',
-        'Skipped 1 concurrently-edited file (re-run `wiki update`)',
         'Skipped {n} concurrently-edited files (re-run `wiki update`)',
     ),
-    (
-        FrontmatterMalformedEvent,
-        '1 file with malformed frontmatter',
-        '{n} files with malformed frontmatter',
-        '1 file with malformed frontmatter',
-        '{n} files with malformed frontmatter',
-    ),
+    (FrontmatterMalformedEvent, '{n} files with malformed frontmatter'),
     (
         IndexTruncatedEvent,
-        '1 empty or truncated index (restore from git or delete to rebuild)',
-        '{n} empty or truncated indexes (restore from git or delete to rebuild)',
-        '1 empty or truncated index (restore from git or delete to rebuild)',
         '{n} empty or truncated indexes (restore from git or delete to rebuild)',
     ),
 ]
@@ -761,7 +749,10 @@ def update(
     full_help = 'Print every narration line instead of per-category counts.'
     full = typer.Option(False, '--full', help=full_help)
     # count flag
-    count_help = 'Print one count line per narration category (the default).'
+    count_help = (
+        'Print one line per narration category: its count, or a lone skip'
+        ' (the default).'
+    )
     count = typer.Option(False, '--count', help=count_help)
 
     @command(app, 'update')
@@ -778,8 +769,9 @@ def update(
         frontmatter fields, and CRLF line endings. Restores a missing
         .wiki/settings.json ({}) and prunes broken links, announcing
         each removal. Narrations condense to one count line per category
-        by default; --full prints every line. Exits 0 after a successful
-        run; with --check, writes nothing and exits 1 when changes are
+        by default, a lone skip keeping its own line, which names the
+        file; --full prints every line. Exits 0 after a successful run;
+        with --check, writes nothing and exits 1 when changes are
         pending, and a command error exits 2 -- so a gate reading
         --check's 1 as pending drift never reads a failed run as one.
         """
@@ -807,7 +799,8 @@ def update(
             updated = wiki.update(name=name, check=check)
         finally:
             if not full:
-                for line in _condense(notices, check):
+                pointer = 'Run with --full to list each line.'
+                for line in _condense(notices, check, pointer):
                     typer.echo(line, err=True)
         file_count = len(updated)
         s = 's' if file_count != 1 else ''
@@ -883,7 +876,7 @@ def new(
         for option, value in (('NAME', name), ('--desc', desc), ('--content', content)):
             require_utf8(option, value)
         wiki = resolve(path)
-        # the scoped sweep narrates like update: condensed count lines
+        # the scoped sweep narrates like update's condensed default
         notices: list[Event] = []
 
         def _capture(event: Event, **kwargs: Any) -> Event:
@@ -895,7 +888,10 @@ def new(
         try:
             created = wiki.new(name, desc=desc, content=content)
         finally:
-            for line in _condense(notices, False):
+            # new takes no --full, and its sweep is done: a dry run of
+            # update lists the same skips without writing
+            pointer = 'Run `wiki update --check --full` to list each line.'
+            for line in _condense(notices, False, pointer):
                 typer.echo(line, err=True)
         typer.echo(f'Created {created}.')
 
@@ -1314,42 +1310,57 @@ def _lint_document(issues: list[Issue], notices: list[Event]) -> dict:
     }
 
 
-def _condense(notices: list[Event], check: bool) -> list[str]:
-    """Collapse captured update events to one count line per category.
+def _condense(notices: list[Event], check: bool, pointer: str) -> list[str]:
+    """Collapse captured update events to one line per category.
 
-    Each known category (see ``_UPDATE_CATEGORIES``) aggregates into a
+    Each change category (see ``_UPDATE_CATEGORIES``) aggregates into a
     single count line standing at its first occurrence, worded for an
-    apply or ``--check`` run; events with no category row (one-time
-    restore lines) pass through as their description verbatim in place.
+    apply or ``--check`` run. A kind that changes no file (see
+    ``_UPDATE_NOTE_CATEGORIES``) aggregates the same way from two
+    notices up, and a closing ``pointer`` line then says how to list
+    them; its lone notice, and every event with no row (one-time restore
+    lines), passes through as its description verbatim in place.
 
     Args:
         notices: Captured update events, in emission order.
         check: Whether the run is a ``--check`` dry run.
+        pointer: The line that says how to list what a count line of
+            ``_UPDATE_NOTE_CATEGORIES`` stands for.
 
     Returns:
         Condensed narration lines, in first-occurrence order.
 
     """
-    # tally each category, remembering where it first appeared
-    counts: dict[int, int] = {}
-    first_seen: dict[int, int] = {}
+    changes = {event_class: row for event_class, *row in _UPDATE_CATEGORIES}
+    notes = dict(_UPDATE_NOTE_CATEGORIES)
+    # tally each category, remembering its first event and where it appeared
+    counts: dict[type[Event], int] = {}
+    first_seen: dict[type[Event], tuple[int, Event]] = {}
     lines: list[tuple[int, str]] = []
     for position, event in enumerate(notices):
-        for index, (event_class, *_rest) in enumerate(_UPDATE_CATEGORIES):
-            if type(event) is event_class:
-                counts[index] = counts.get(index, 0) + 1
-                first_seen.setdefault(index, position)
-                break
+        event_class = type(event)
+        if (event_class in changes) or (event_class in notes):
+            counts[event_class] = counts.get(event_class, 0) + 1
+            first_seen.setdefault(event_class, (position, event))
         else:
             lines.append((position, event.description))
-    # render one count line per category at its first-seen position
-    for index, position in first_seen.items():
-        _event_class, one, many, check_one, check_many = _UPDATE_CATEGORIES[index]
-        if check:
-            one, many = check_one, check_many
-        n = counts[index]
-        line = one if n == 1 else many.format(n=n)
+    # render one line per category at its first-seen position: a change
+    # category is always a count line, a lone note keeps its own
+    for event_class, (position, event) in first_seen.items():
+        n = counts[event_class]
+        if event_class in changes:
+            one, many, check_one, check_many = changes[event_class]
+            if check:
+                one, many = check_one, check_many
+            line = one if n == 1 else many.format(n=n)
+        elif n == 1:
+            line = event.description
+        else:
+            line = notes[event_class].format(n=n)
         lines.append((position, line))
+    # say how to list what the note count lines stand for
+    if any(counts[event_class] > 1 for event_class in counts if event_class in notes):
+        lines.append((len(notices), pointer))
     return [line for _position, line in sorted(lines)]
 
 
