@@ -2545,9 +2545,11 @@ class Wiki:
         """
         # compile pattern
         flags = re.IGNORECASE if ignore_case else 0
+        # NOTE: the parser refuses a repeat count past its limit and a nesting
+        #   past the interpreter's stack with errors of their own
         try:
             regex = wiki.util.re.quiet_compile(pattern, flags)
-        except re.error as e:
+        except (re.error, OverflowError, RecursionError) as e:
             raise ValueError(f'Invalid regex {pattern!r}: {e}') from e
         # resolve folder scope
         if name:

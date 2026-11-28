@@ -7,6 +7,7 @@ with ``read`` slicing and the word counts.
 from __future__ import annotations
 
 import pathlib
+import re
 import warnings
 from typing import Optional
 
@@ -262,11 +263,24 @@ def test_match_names_a_page_it_cannot_decode(
     assert lines == ['Skipping core/legacy.md: unreadable, or not valid UTF-8']
 
 
-def test_match_refuses_a_pattern_that_does_not_compile(tmp_path: pathlib.Path) -> None:
-    """A pattern that is not a regex is refused by name, as a regex."""
+@pytest.mark.parametrize(
+    argnames='pattern',
+    argvalues=['[[a/p', 'a{4294967296}', '(' * 3000 + 'a' + ')' * 3000],
+    ids=['syntax', 'repeat-count', 'nesting'],
+)
+def test_match_refuses_a_pattern_that_does_not_compile(
+    tmp_path: pathlib.Path,
+    pattern: str,
+) -> None:
+    """A pattern that is not a regex is refused by name, as a regex.
+
+    The parser refuses a repeat count past its limit and a nesting past
+    the interpreter's stack with errors of their own; each is the same
+    refusal to a host.
+    """
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
-    with pytest.raises(ValueError, match=r"Invalid regex '\[\[a/p': "):
-        wiki.match('[[a/p')
+    with pytest.raises(ValueError, match=re.escape(f'Invalid regex {pattern!r}: ')):
+        wiki.match(pattern)
 
 
 def test_match_raises_no_python_warning(tmp_path: pathlib.Path) -> None:

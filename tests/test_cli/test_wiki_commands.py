@@ -2193,17 +2193,24 @@ def test_match_line_flags_are_mutually_exclusive(wiki: pathlib.Path) -> None:
     assert 'mutually exclusive' in (result.stdout + result.stderr).lower()
 
 
-def test_match_invalid_regex_reports_error(wiki: pathlib.Path) -> None:
+@pytest.mark.parametrize(
+    argnames='pattern',
+    argvalues=['[', 'a{4294967296}', '(' * 3000 + 'a' + ')' * 3000],
+    ids=['syntax', 'repeat-count', 'nesting'],
+)
+def test_match_invalid_regex_reports_error(wiki: pathlib.Path, pattern: str) -> None:
     """A malformed regex is an error (exit 2), distinct from a clean no-match.
 
     Grep reserves exit 2 for errors so a script following the documented
     branch-on-exit-code contract never reads a failed match (bad regex, no
-    wiki) as an absent term (exit 1).
+    wiki) as an absent term (exit 1). A repeat count past the parser's
+    limit and a nesting past the interpreter's stack are refused in the
+    same words as a syntax error.
     """
-    result = _wiki(wiki, 'match', '[', '--path', str(wiki))
+    result = _wiki(wiki, 'match', pattern, '--path', str(wiki))
     assert result.returncode == 2
     # one line names the pattern as a regex, ahead of the parser's reason
-    assert result.stderr.startswith("Error: Invalid regex '[': ")
+    assert result.stderr.startswith(f'Error: Invalid regex {pattern!r}: ')
     assert result.stderr.count('\n') == 1
     assert result.stdout == ''
 

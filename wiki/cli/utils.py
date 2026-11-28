@@ -242,7 +242,7 @@ def pattern_hints(pattern: str) -> list[str]:
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter('always', FutureWarning)
         # refusing a pattern that does not compile is the engine's job
-        with contextlib.suppress(re.error):
+        with contextlib.suppress(re.error, OverflowError, RecursionError):
             re.compile(pattern)
     messages = [
         str(warning.message)
