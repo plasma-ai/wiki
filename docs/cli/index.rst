@@ -165,12 +165,13 @@ object in another key order or spacing prints nothing, and a caller that
 passes its seed on every run stays silent. A settings file that is missing or
 cannot be read counts as different. The wiki name is not compared.
 
-``init`` refuses to scaffold inside an enclosing wiki, refuses an invalid wiki
-name (naming the violated rule) before any write, refuses a re-init sweep over
-merge conflict markers, and fails on an invalid ``OFFLINE_MODE`` value before
-touching the filesystem (``OFFLINE_MODE=true`` skips the Front Matter Title
-download with a warning; the bundled plugin needs no network; see
-:doc:`/configuration`).
+``init`` refuses to scaffold inside an enclosing wiki, refuses to scaffold
+while ``.wiki/settings.json`` is missing and git still holds it (see
+:doc:`/configuration`), refuses an invalid wiki name (naming the violated
+rule) before any write, refuses a re-init sweep over merge conflict markers,
+and fails on an invalid ``OFFLINE_MODE`` value before touching the filesystem
+(``OFFLINE_MODE=true`` skips the Front Matter Title download with a warning;
+the bundled plugin needs no network; see :doc:`/configuration`).
 
 .. list-table::
    :header-rows: 1
@@ -215,7 +216,8 @@ Wiki Root Links plugin is copied from the package and enabled, Obsidian's
 new-link format is seeded when the vault has none, and top-level
 ``.json`` files are created when absent or merged when present (arrays
 union-merged, dicts deep-merged with the source winning). It restores a missing
-``.wiki/settings.json`` as ``{}``, registers the ``merge.wiki`` driver in the
+``.wiki/settings.json`` as ``{}`` (or exits 2 when git still holds the file,
+see :doc:`/configuration`), registers the ``merge.wiki`` driver in the
 repository's local git config, and maps the driver in ``.gitattributes`` —
 ``**/_index.md merge=wiki`` in the repository root's file and
 ``*.md merge=wiki`` in the wiki root's own — skipping a file that has
@@ -547,8 +549,8 @@ keeps the tool-owned surfaces in sync with the filesystem (see
 - **Normalizes CRLF endings** to LF, without re-stamping ``updated:``.
 - **Repairs formatter-mangled indexes** (an escaped link block or a rewritten
   ``***`` delimiter) in place.
-- **Restores a missing** ``.wiki/settings.json`` as ``{}`` and recreates a
-  deleted ``.wiki/cache/``.
+- **Restores a missing** ``.wiki/settings.json`` as ``{}``, when git holds no
+  copy of it, and recreates a deleted ``.wiki/cache/``.
 
 ``updated:`` is re-stamped only on files whose content actually changed —
 and, inside a git repository, on a tracked file edited since its last commit
@@ -572,7 +574,9 @@ update.``
 
 The sweep refuses (exit 2, dry run included) when the scope crosses a nested
 declared wiki or when any in-scope file carries git merge conflict markers
-outside a ``no-lint`` region — resolve the conflicts and re-run.
+outside a ``no-lint`` region — resolve the conflicts and re-run. It refuses
+the same way when ``.wiki/settings.json`` is missing while git still holds
+it — restore the file from git and re-run (see :doc:`/configuration`).
 
 .. list-table::
    :header-rows: 1
@@ -594,7 +598,8 @@ outside a ``no-lint`` region — resolve the conflicts and re-run.
        an error — it is a formatter-style check result. Narration words each
        change as pending (``Would add 2 new links``; with ``--full``, ``Would
        add link: ...``). ``--check`` never restores a missing
-       ``.wiki/settings.json``; only a writing run does.
+       ``.wiki/settings.json``; only a writing run does, and only when git
+       holds no copy of the file.
    * - ``--full``
      - off
      - Print every narration line in emission order.
@@ -644,9 +649,10 @@ exist yet: under ``*``, ``!*/`` and ``!*.md`` the new folder is admitted. A
 repository that ignores ``_index.md`` files refuses every new folder, since
 that index could never be committed.
 The wiring sweep's own refusals (merge conflict markers or a nested wiki in the
-parent scope) are checked before the index is written — marker-shaped lines in
-the authored inputs are refused the same way — so a refused adoption leaves
-nothing on disk.
+parent scope, or a missing ``.wiki/settings.json`` that git still holds, see
+:doc:`/configuration`) are checked before the index is written — marker-shaped
+lines in the authored inputs are refused the same way — so a refused adoption
+leaves nothing on disk.
 
 .. list-table::
    :header-rows: 1

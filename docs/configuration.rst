@@ -36,8 +36,7 @@ order:
    ``--path .`` does. One exception: a raw current directory that itself
    holds an indexed directory below it is a project directory, not a folder
    of the outer tree, and the climb declines. The result is an *undeclared*
-   wiki, tolerated with a stderr notice that ``wiki update`` will restore
-   the marker.
+   wiki, tolerated with a stderr notice that the settings file is missing.
 3. ``{cwd}/wiki/``, when that directory is declared or at least indexed.
 4. Otherwise the command fails: ``Could not locate .wiki/settings.json,
    _index.md, or wiki/_index.md from the current directory.``
@@ -144,9 +143,10 @@ A file that cannot be read fails the same commands with
 (``Permission denied``, ``Too many levels of symbolic links``), ``not a regular
 file`` for a folder or anything else at the path that is not a file, or ``it
 starts with a byte-order mark; remove the mark``. Only a path that holds
-nothing is a missing settings file, which ``wiki update`` restores. The one
-message that names a path holding something as missing is ``No wiki at: ...``,
-for a folder with neither a settings file nor a root ``_index.md``.
+nothing is a missing settings file, which ``wiki update`` restores unless git
+still holds it (below). The one message that names a path holding something as
+missing is ``No wiki at: ...``, for a folder with neither a settings file nor a
+root ``_index.md``.
 
 Seeding and restoration are asymmetric:
 
@@ -157,10 +157,36 @@ Seeding and restoration are asymmetric:
   existing settings file: when ``--settings`` names something else than the
   file holds, ``init`` says so on stderr and exits 0 (see :doc:`/cli/index`).
 - ``wiki update`` and ``wiki config`` restore a *missing* file as ``{}`` —
-  all defaults; custom policy is never re-invented. Deleting the file
-  therefore silently drops any authored policy once the next mutating run
-  restores the bare marker. (``wiki update --check`` is a dry run and does
-  not restore it.)
+  all defaults; custom policy is never re-invented — when git holds no copy
+  of it: outside a repository, or in one whose ``HEAD`` commit and index both
+  lack the file. A repository that git cannot read, or one on a machine
+  without git, counts as holding none. (``wiki update --check`` is a dry run
+  and does not restore it.)
+- A missing file that git still holds, in the ``HEAD`` commit or in the
+  index, is never replaced. That includes a file ``git status`` does not
+  list: one a sparse checkout leaves out, or one marked skip-worktree or
+  assume-unchanged. A run without it would sweep the wiki on default
+  settings and adopt every page its ``exclude.patterns`` kept out, so
+  ``wiki update`` (and ``--check``), ``wiki new``, ``wiki lint`` and
+  ``wiki config`` exit 2 and write nothing, as does ``wiki init`` on a wiki
+  whose root ``_index.md`` is missing too:
+
+  .. code-block:: text
+
+     Error: .wiki/settings.json is missing, but git still holds it. Restore it from git and rerun: the file is recreated with default settings only when git does not hold it.
+
+  From the wiki root, restore the file with
+  ``git restore .wiki/settings.json``, or with
+  ``git restore --staged --worktree .wiki/settings.json`` after a ``git rm``.
+  A file that a sparse checkout leaves out, or that is marked skip-worktree,
+  takes ``git restore --ignore-skip-worktree-bits .wiki/settings.json``; a
+  sparse checkout can also be widened to include ``.wiki/``.
+  To give up its settings for the defaults, commit the file's removal first.
+  Until that commit lands, ``HEAD`` still holds the file, so a commit hook
+  that runs ``wiki lint`` or ``wiki update --check`` refuses and blocks it:
+  such a wiki writes ``{}`` to the file and commits that, or commits the
+  removal with the hook skipped.
+  ``wiki read``, ``wiki search``, ``wiki match`` and ``wiki map`` still run.
 
 The init-seeded file:
 

@@ -141,8 +141,8 @@ The wiki root
 
 The root of a wiki is **declared** by the presence of ``.wiki/settings.json``.
 ``wiki init`` writes it, and every mutating command restores a missing one (as
-``{}``, meaning all defaults) — the file is load-bearing even when empty,
-because it marks where the wiki begins.
+``{}``, meaning all defaults) unless git still holds it — the file is
+load-bearing even when empty, because it marks where the wiki begins.
 
 Every command except ``install`` and ``init`` resolves the wiki to operate on,
 in order:
@@ -153,10 +153,9 @@ in order:
 3. From the nearest directory in the chain holding ``_index.md`` (the current
    directory itself, or — for a raw, not-yet-indexed folder — its nearest
    indexed ancestor): the topmost ``_index.md`` in that chain. Such an
-   **undeclared** tree works, with a notice on stderr that ``wiki update``
-   will restore the marker. A raw directory that holds an indexed folder of
-   its own is a project directory, not part of an outer tree, and does not
-   climb.
+   **undeclared** tree works, with a notice on stderr that the settings file
+   is missing. A raw directory that holds an indexed folder of its own is a
+   project directory, not part of an outer tree, and does not climb.
 4. A ``wiki/`` folder under the current directory, when declared or indexed.
 
 If none match, the command fails, naming what it looked for. See
@@ -185,8 +184,10 @@ never author content there. Contents:
    The per-wiki settings file and the declared-root marker. All keys are
    optional and documented at :doc:`/configuration`. ``wiki init`` seeds it
    with the full ``naming`` defaults block so the knobs are discoverable;
-   a restored marker is bare ``{}`` — both mean the same defaults, so deleting
-   the file drops any custom policy for good.
+   a restored marker is bare ``{}`` — both mean the same defaults, so a
+   restored file holds no custom policy. A missing file that git still holds
+   is not replaced: the commands that sweep the wiki stop until it is
+   restored from git (see :doc:`/configuration`).
 
 ``cache/``
    Derived state: the word-counts cache and the ``wiki search`` index (see
