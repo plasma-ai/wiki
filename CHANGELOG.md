@@ -172,7 +172,9 @@ may include breaking changes, each listed under a Breaking heading.
 - The `wiki update` line about an overwritten desc names the page's real file
   when the page sits beside a file of the same name. For `tools/Makefile.md`
   beside `tools/Makefile` it says `edit it in tools/Makefile.md`. Before, it
-  said `tools/Makefile.md.md`, a file that does not exist.
+  said `tools/Makefile.md.md`, a file that does not exist. `DescOverwriteEvent`
+  carries the file in a new optional `page` field; an event built without it
+  names the target plus `.md`.
 
 ## [1.10.0] - 2026-11-27
 

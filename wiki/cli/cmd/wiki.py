@@ -1407,7 +1407,12 @@ def _check_line(event: Event) -> str:
     """
     for event_class, *_counts, check_line in _UPDATE_CATEGORIES:
         if type(event) is event_class:
-            result = check_line.format(**vars(event))
+            fields = dict(vars(event))
+            # an overwrite built without its page names the target plus the
+            # .md it strips, as its description does
+            if isinstance(event, DescOverwriteEvent):
+                fields['page'] = event.page or f'{event.target}.md'
+            result = check_line.format(**fields)
             # an adoption says when the page's H1 would seed its title, as
             # the applied line does
             if isinstance(event, PageAdoptEvent) and event.title:

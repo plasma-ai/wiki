@@ -6760,14 +6760,17 @@ class DescOverwriteEvent(Event):
     path: str
     target: str
     label: str
-    page: str
+    page: Optional[str] = None
 
     @property
     def description(self: DescOverwriteEvent) -> str:
         """Return the overwritten-desc notice line."""
+        # an event built without its page names the target plus the .md it
+        # strips
+        page = self.page or f'{self.target}.md'
         return (
             f'Overwrote desc: [[{self.target}|{self.label}]] in {self.path}'
-            f' (the page frontmatter desc wins; edit it in {self.page})'
+            f' (the page frontmatter desc wins; edit it in {page})'
         )
 
 

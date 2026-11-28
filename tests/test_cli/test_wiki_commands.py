@@ -58,6 +58,7 @@ __all__ = [
     'test_update_prunes_broken_link',
     'test_update_check_reports_changes_without_writing',
     'test_update_check_full_words_each_change_as_pending',
+    'test_update_names_the_page_of_an_overwrite_a_hook_announces',
     'test_update_noop_reports_nothing_to_update',
     'test_update_failed_entry_mutates_nothing',
     'test_update_narrations_condense_by_default',
@@ -234,6 +235,18 @@ _NOTING_HOOK = (
     "        self.on_desc_missing(path='a.md')\n"
     "        self.on_desc_missing(path='b.md')\n"
     "        raise RuntimeError('boom')\n"
+)
+
+# a hook whose update announces an overwritten desc of its own, by entry and
+# index alone
+_ANNOUNCING_HOOK = (
+    'from wiki.core.wiki import Wiki\n\n'
+    "__all__ = ['Announcing']\n\n\n"
+    'class Announcing(Wiki):\n'
+    '    def update(self, name=None, *, check=False):\n'
+    "        entry = {'target': 'core/keep', 'label': 'keep'}\n"
+    "        self.on_desc_overwrite(path='core/_index.md', **entry)\n"
+    '        return super().update(name, check=check)\n'
 )
 
 # a hook whose plan is followed by another writer's edit to each core/page*.md
@@ -1263,6 +1276,30 @@ def test_update_check_full_words_each_change_as_pending(tmp_path: pathlib.Path) 
             'Restamped core/edited.md: edited since its updated: stamp',
         ]
     )
+
+
+def test_update_names_the_page_of_an_overwrite_a_hook_announces(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An overwritten-desc notice built without its page still names the file to edit.
+
+    A hook that announces an overwrite itself passes the entry and its
+    index. The line names the target plus ``.md``, in a writing run and in
+    a dry run.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / '.wiki' / 'wiki.py', _ANNOUNCING_HOOK)
+    assert _wiki(tmp_path, 'trust', '--path', str(root)).returncode == 0
+    entry = '[[core/keep|keep]] in core/_index.md'
+    place = '(the page frontmatter desc wins; edit it in core/keep.md)'
+
+    # the dry run words the hook's notice as pending, the writing run as done
+    check = _wiki(root, 'update', '--check', '--full', '--path', str(root))
+    assert f'Would overwrite desc: {entry} {place}' in check.stderr.splitlines()
+    applied = _wiki(root, 'update', '--full', '--path', str(root))
+    assert applied.returncode == 0, applied.stdout + applied.stderr
+    assert f'Overwrote desc: {entry} {place}' in applied.stderr.splitlines()
 
 
 def test_update_noop_reports_nothing_to_update(tmp_path: pathlib.Path) -> None:
