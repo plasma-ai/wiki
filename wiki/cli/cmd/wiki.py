@@ -25,6 +25,7 @@ from wiki.cli.utils import (
     parse_settings,
     parse_slice,
     pattern_hints,
+    refuse_empty_path,
     refuse_nested_init,
     require_utf8,
     resolve_wiki,
@@ -32,6 +33,7 @@ from wiki.cli.utils import (
     trust_root,
 )
 from wiki.constants import (
+    DEFAULT_SEARCH_LIMIT,
     DEFAULT_WIKI_NAME,
     WIKI_DIR,
     WIKI_INDEX,
@@ -186,7 +188,7 @@ _LINT_NOTE_CATEGORIES = [
 
 
 def version(app: typer.Typer) -> typer.Typer:
-    """Register the ``--version`` flag on the root callback."""
+    """Register the root callback: ``--version``, and help for a run with no command."""
 
     def _version_callback(value: bool) -> None:
         """Print the running ``wiki`` package's version and exit."""
@@ -204,9 +206,20 @@ def version(app: typer.Typer) -> typer.Typer:
         help=version_help,
     )
 
-    @app.callback()
-    def _main(version: Optional[bool] = version) -> None:
+    # NOTE: the group runs with no command only to refuse the run, so its
+    #   usage line names the command as required, whatever click would
+    #   derive from invoke_without_command
+    @app.callback(
+        invoke_without_command=True,
+        subcommand_metavar='COMMAND [ARGS]...',
+    )
+    def _main(ctx: typer.Context, version: Optional[bool] = version) -> None:
         """Wiki command-line interface."""
+        # a run with no command is a usage error whose message is the help page
+        if ctx.invoked_subcommand is None:
+            usage = ctx.get_help()
+            typer.echo(usage, err=True)
+            raise typer.Exit(2)
 
     return app
 
@@ -320,6 +333,8 @@ def init(app: typer.Typer) -> typer.Typer:
         its settings: when --settings names something else, one stderr line
         says it was not applied, and the exit code stays 0.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         # resolve wiki root and display name
         if path:
             path = resolve_wiki_root(path)
@@ -397,6 +412,8 @@ def config(
         stderr warnings (re-run online to finish setup), never the exit
         code.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         # merge Obsidian config, streaming notices (the restored-marker
         # line the help text documents) to stderr
         wiki = resolve(path)
@@ -441,6 +458,8 @@ def trust(app: typer.Typer) -> typer.Typer:
         future-proofing a hook added later). Only trust a wiki whose
         contents you have vetted.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         # resolve the root without loading the hook (resolve_wiki_root
         # never execs .wiki/wiki.py), then record it as trusted
         root = resolve_wiki_root(path)
@@ -501,6 +520,8 @@ def read(
         normalize CRLF); a slice keeps the frontmatter and appends a
         trailing newline.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         # validate arguments: the slice units are pairwise exclusive
         if (lines is not None) and (words is not None):
             raise typer.BadParameter('--lines and --words are mutually exclusive.')
@@ -547,7 +568,10 @@ def search(
     )
     path = typer.Option(None, '--path', help=path_help)
     # result limit option
-    limit_help = 'Maximum number of ranked pages to return (at least 1).'
+    limit_help = (
+        'Maximum number of ranked pages to return (at least 1; defaults to'
+        f' {DEFAULT_SEARCH_LIMIT}).'
+    )
     limit = typer.Option(
         None,
         '--limit',
@@ -587,6 +611,8 @@ def search(
         resolvable wiki) exits 2, so scripts should branch on the exit
         code rather than parse the output.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         if prefix and raw:
             raise typer.BadParameter('--prefix and --raw are mutually exclusive.')
         if (limit is not None) and (limit < 1):
@@ -603,12 +629,9 @@ def search(
             prefix=prefix,
             raw=raw,
         )
-        # grep convention: no-match exits 1 with the notice on stderr, so
-        # scripts can distinguish no-match from match by exit code alone
-        if not matches:
-            typer.echo('No matches found.', err=True)
-            raise SystemExit(1)
-        elif as_json:
+        # --json: stdout carries one document whatever the outcome, so a
+        # consumer that parses it reads no match as an empty list
+        if as_json:
             results = [
                 {'path': relpath, 'snippet': snippet, 'score': score}
                 for relpath, snippet, score in matches
@@ -618,6 +641,11 @@ def search(
         else:
             for relpath, snippet, score in matches:
                 typer.echo(f'{score:>7.3f}  {relpath}\n         {snippet}')
+        # grep convention: no-match exits 1 with the notice on stderr, so
+        # scripts can distinguish no-match from match by exit code alone
+        if not matches:
+            typer.echo('No matches found.', err=True)
+            raise SystemExit(1)
 
     return app
 
@@ -675,6 +703,8 @@ def match(
         resolvable wiki) exits 2, so scripts should branch on the exit
         code rather than parse the output.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         if lines and lineno:
             raise typer.BadParameter('--lines and --lineno are mutually exclusive.')
         # every failure here -- a bad pattern, an unresolvable wiki or
@@ -758,6 +788,8 @@ def update(
         pending, and a command error exits 2 -- so a gate reading
         --check's 1 as pending drift never reads a failed run as one.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         if full and count:
             raise typer.BadParameter('--full and --count are mutually exclusive.')
         wiki = resolve(path)
@@ -821,12 +853,10 @@ def new(
     )
     path = typer.Option(None, '--path', help=path_help)
     # desc option
-    desc_help = 'Authored description for the index frontmatter (required).'
+    desc_help = 'Authored description for the index frontmatter.'
     desc = typer.Option(..., '--desc', help=desc_help)
     # content option
-    content_help = (
-        'Authored content for the section below the *** delimiter (required).'
-    )
+    content_help = 'Authored content for the section below the *** delimiter.'
     content = typer.Option(..., '--content', help=content_help)
 
     @command(app, 'new')
@@ -851,6 +881,8 @@ def new(
         folder), so pending maintenance in that scope -- adoptions,
         prunes -- lands in the same run.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         # the inputs land in frontmatter and prose, which every writer encodes
         # as UTF-8: an argv byte no UTF-8 decodes is refused at the boundary
         for option, value in (('NAME', name), ('--desc', desc), ('--content', content)):
@@ -927,6 +959,8 @@ def lint(
         finding typed, with an explicit severity and kind), never parse
         the prose streams.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         if full and count:
             raise typer.BadParameter('--full and --count are mutually exclusive.')
         if as_json and (full or count):
@@ -1071,6 +1105,8 @@ def map(
         --stat sizes the dump instead of printing it -- the cheap probe
         before dumping a large wiki.
         """
+        # an empty --path is a usage error, never the default root
+        refuse_empty_path(path)
         # validate numeric bounds
         if (depth is not None) and (depth < 0):
             raise typer.BadParameter('--depth must be >= 0.')
@@ -1113,7 +1149,12 @@ def map(
         # warned about the missing *** marker, so don't also claim emptiness
         folder = wiki._resolve_folder(name) if name else wiki._root
         if not wiki._index_missing_marker(folder):
-            typer.echo('Wiki is empty.')
+            # a scope or a filter narrowed the run: nothing shown is no sign
+            # that the wiki holds nothing
+            if name or (category is not None) or (markdown is not None):
+                typer.echo('No entries match.')
+            else:
+                typer.echo('Wiki is empty.')
 
     return app
 
@@ -1137,7 +1178,14 @@ def merge(app: typer.Typer) -> typer.Typer:
     pathname = typer.Argument(..., help=pathname_help)
 
     # a %P pathname may lead with a dash; never parse it as an option
-    @command(app, '_merge', context_settings={'ignore_unknown_options': True})
+    # NOTE: a help option is one too: -h.md read as a help flag would exit 0
+    #   with nothing merged, which git takes for a clean merge
+    @command(
+        app=app,
+        name='_merge',
+        context_settings={'ignore_unknown_options': True},
+        add_help_option=False,
+    )
     def _merge(
         base: str = base,
         ours: str = ours,

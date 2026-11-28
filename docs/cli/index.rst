@@ -7,9 +7,11 @@ package on PyPI; see :doc:`/guide/getting-started` for installation. This page
 is the complete reference for the public command surface; each command has a
 section below.
 
-``wiki --version`` prints the package version and exits. The ``typer``
-built-ins ``--install-completion`` and ``--show-completion`` manage shell
-completion.
+``wiki --version`` prints the package version and exits. ``-h`` and ``--help``
+print the help page of ``wiki`` or of a command and exit 0. ``wiki`` with no
+command is a usage error: it prints the same help page on stderr and exits 2.
+The ``typer`` built-ins ``--install-completion`` and ``--show-completion``
+manage shell completion.
 
 Conventions
 -----------
@@ -30,6 +32,11 @@ existing wiki and accepts ``--path <dir>`` to name its root directly. Without
    folder anywhere below it is a project directory, not a folder of an outer
    tree, so resolution declines to climb from it.
 3. ``{cwd}/wiki/``, when that directory is declared or indexed.
+
+An empty ``--path`` value is a usage error (``--path must not be empty.``,
+exit 2) in every command that takes the option, ``wiki init`` included. It is
+never read as no ``--path``, so a script that passes an unset variable does not
+run on the wiki the current directory resolves to.
 
 When none of these produce a wiki, the command fails with ``Could not locate
 .wiki/settings.json, _index.md, or wiki/_index.md from the current directory.``
@@ -54,8 +61,14 @@ Subtree scope
 
 ``map``, ``search``, ``match``, ``update``, and ``lint`` take an optional
 positional ``name`` argument restricting the operation to a subtree. The scope
-must resolve to a directory relative to the wiki root — a page name fails with
-``Wiki folder not found: '<name>'``. A scope outside the root is refused, as
+must resolve to a directory relative to the wiki root. A name that reaches
+none fails with ``Wiki folder not found: '<name>'``, followed by a hint in
+parentheses when the tree offers a fix: a page name is told that a scope is a
+folder and is given the page's folder (``did you mean core?``), a page in the
+wiki root is told only that it is one
+(``a scope is a folder and this is a page in the wiki root``), and a name that
+leads with the root's own folder name (``wiki/core`` in the wiki at ``wiki``)
+is given the rest. A scope outside the root is refused, as
 is one inside an excluded directory — dot-prefixed (``.wiki``, ``.git``,
 ``.obsidian``), matched by ``exclude.patterns`` (refused with a message
 naming the matching pattern), or fenced by the enclosing repo's gitignore.
@@ -282,6 +295,8 @@ future-proofing; the output notes it.
 
 Prints a named entry to stdout verbatim, with no appended newline — redirected
 output round-trips byte-for-byte for LF files (reads normalize CRLF endings).
+An escape sequence the page holds is printed as written, to a pipe or a file as
+to a terminal; ``match``, ``search`` and ``map`` print page text the same way.
 
 The name resolves relative to the wiki root: a directory reads its
 ``_index.md``; an existing file reads itself; otherwise ``.md`` is appended
@@ -371,7 +386,8 @@ carries the full float).
 
 The exit code follows the grep convention: matches exit 0; no match prints
 ``No matches found.`` on stderr and exits 1; an invalid FTS5 query, unavailable
-FTS5 support, or unresolved wiki exits 2.
+FTS5 support, or unresolved wiki exits 2. With ``--json``, no match still
+prints a document on stdout, the empty list ``[]``.
 
 .. list-table::
    :header-rows: 1
@@ -812,9 +828,10 @@ iterated in index order, so a file not yet linked (update pending) does not
 appear. An unindexed folder renders as ``name/ (unindexed)`` with no children;
 a row whose target is gone (pending prune) renders ``(broken)`` and is never
 recursed into. Each line has the shape ``[category] name[/] (count): desc``.
-An empty result prints ``Wiki is empty.``; an index missing its ``***``
-delimiter still maps via a best-effort recovery of its link block, with a
-stderr warning to run ``wiki update``.
+An empty result prints ``Wiki is empty.``, or ``No entries match.`` when a
+``name``, ``--category`` or ``--markdown``/``--no-markdown`` narrowed the run;
+an index missing its ``***`` delimiter still maps via a best-effort recovery of
+its link block, with a stderr warning to run ``wiki update``.
 
 .. list-table::
    :header-rows: 1

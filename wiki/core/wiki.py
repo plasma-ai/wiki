@@ -3855,7 +3855,64 @@ class Wiki:
                 if self._is_excluded_dir(ancestor):
                     raise ValueError(f'Path is inside an excluded directory: {path!r}')
             return resolved
-        raise FileNotFoundError(f'Wiki folder not found: {path!r}')
+        hint = self._suggest_scope(path)
+        raise self._folder_not_found(path, hint)
+
+    def _suggest_scope(self: Wiki, path: str) -> Optional[str]:
+        """Suggest the fix for a scope name that reaches no folder.
+
+        Two misses have a fix the tree can name. A name that reaches a
+        page (``core/store`` for ``core/store.md``) is a read key, and a
+        scope is a folder: the hint says so and names the page's folder.
+        A name that leads with the root's own folder name (``wiki/core``
+        in the wiki at ``wiki``) carries one component too many: the hint
+        is the rest. A hint names only a folder that resolves as a scope;
+        any other miss returns ``None``.
+        """
+        requested = pathlib.PurePosixPath(path)
+        if requested.is_absolute():
+            return None
+        # a page: the name as typed, or with the .md suffix read appends
+        page = self._root / requested
+        if page.suffix != '.md':
+            page = self._root / f'{requested}.md'
+        page = page.resolve()
+        if page.is_relative_to(self._root) and page.is_file():
+            if len(requested.parts) == 1:
+                return 'a scope is a folder and this is a page in the wiki root'
+            folder = str(requested.parent)
+            if self._is_scope(folder):
+                return f'a scope is a folder and this is a page; did you mean {folder}?'
+            return None
+        # the root's own folder name, then a folder below the root
+        if (len(requested.parts) > 1) and (requested.parts[0] == self._root.name):
+            rest = str(pathlib.PurePosixPath(*requested.parts[1:]))
+            if self._is_scope(rest):
+                return f'did you mean {rest}?'
+        return None
+
+    def _is_scope(self: Wiki, path: str) -> bool:
+        """Return ``True`` if ``path`` resolves as a folder scope."""
+        # a miss is answered here: resolving it would look for a hint of
+        # its own, one level deeper for each leading root name
+        if not (self._root / path).resolve().is_dir():
+            return False
+        try:
+            self._resolve_folder(path)
+        except ValueError:
+            return False
+        return True
+
+    def _folder_not_found(
+        self: Wiki,
+        path: str,
+        hint: Optional[str] = None,
+    ) -> FileNotFoundError:
+        """Build the folder not-found error, carrying any hint in parentheses."""
+        message = f'Wiki folder not found: {path!r}'
+        if hint is not None:
+            message += f' ({hint})'
+        return FileNotFoundError(message)
 
     def _true_case(self: Wiki, resolved: pathlib.Path) -> pathlib.Path:
         """Return ``resolved`` with every component in its on-disk casing.

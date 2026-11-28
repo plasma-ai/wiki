@@ -24,13 +24,15 @@ import pytest
 
 from wiki import __version__ as WIKI_VERSION
 from wiki.cli.utils import configure_git_merge_driver
-from wiki.constants import WIKI_CONFIG_DIR, WIKI_FREEZE_TIME
+from wiki.constants import DEFAULT_SEARCH_LIMIT, WIKI_CONFIG_DIR, WIKI_FREEZE_TIME
 
 from .._helpers import _needs_unprivileged
 from .conftest import GIT, WIKI, _env, _git, _git_repo, _wiki
 
 __all__ = [
     'test_command_errors_exit_two',
+    'test_empty_path_is_a_usage_error',
+    'test_empty_path_error_order',
     'test_untrusted_hook_refusal_exits_two',
     'test_update_check_separates_pending_from_error',
     'test_page_that_is_not_utf8_stops_a_command_naming_the_byte',
@@ -79,6 +81,7 @@ __all__ = [
     'test_update_cli_refuses_nested_wiki',
     'test_update_refuses_a_scope_inside_a_nested_wiki',
     'test_update_refuses_an_excluded_dot_directory_scope',
+    'test_scope_that_is_not_found_suggests_the_fix',
     'test_exclude_patterns_end_to_end',
     'test_links_external_end_to_end',
     'test_update_cli_refuses_conflict_markers',
@@ -93,6 +96,7 @@ __all__ = [
     'test_map_respects_view_options',
     'test_map_filters_by_category',
     'test_map_empty_wiki_reports_empty',
+    'test_map_says_no_entries_match_when_narrowed_to_nothing',
     'test_map_stat_and_desc_limit_bounds',
     'test_match_output_modes',
     'test_match_field_and_ignore_case',
@@ -109,6 +113,7 @@ __all__ = [
     'test_match_names_a_page_it_cannot_decode',
     'test_search_ranked_and_json_output',
     'test_search_no_match_exits_nonzero',
+    'test_search_json_prints_an_empty_list_for_no_match',
     'test_search_invalid_query_reports_error',
     'test_search_prefix_and_raw_are_mutually_exclusive',
     'test_search_limit_must_be_positive',
@@ -123,6 +128,8 @@ __all__ = [
     'test_read_slice_short_aliases',
     'test_colliding_short_flags_are_rejected',
     'test_read_outputs_bytes_verbatim',
+    'test_piped_output_keeps_a_pages_escape_sequences',
+    'test_help_and_errors_hold_no_escape_byte',
     'test_config_applies_obsidian',
     'test_config_downloads_plugin',
     'test_config_adopts_undeclared_tree',
@@ -153,6 +160,7 @@ __all__ = [
     'test_merge_reads_an_escaped_sides_rows',
     'test_merge_keeps_frontmatter_when_side_is_mangled',
     'test_merge_dispatches_on_pathname',
+    'test_merge_driver_takes_no_help_option',
     'test_merge_settles_the_stamps_of_a_managed_page',
     'test_merge_of_a_restamped_page_is_clean',
     'test_markdown_outside_the_wiki_keeps_its_own_merge',
@@ -161,6 +169,11 @@ __all__ = [
     'test_merge_conflicts_when_side_loses_separator',
     'test_merge_hints_add_add_body_conflicts',
     'test_version_flag_reports_a_version',
+    'test_short_help_flag_prints_the_help_page',
+    'test_usage_error_points_at_the_long_help_flag',
+    'test_wiki_with_no_command_prints_help_as_a_usage_error',
+    'test_help_marks_a_required_option_once',
+    'test_search_help_states_the_default_limit',
     'test_trust_gates_hook_execution',
     'test_trust_refuses_non_wiki_path',
     'test_trust_refuses_a_store_that_is_not_utf8_naming_the_byte',
@@ -377,6 +390,95 @@ def test_command_errors_exit_two(tmp_path: pathlib.Path, args: tuple[str, ...]) 
     result = _wiki(tmp_path, *args, '--path', str(tmp_path / 'nowhere'))
     assert result.returncode == 2, result.stdout + result.stderr
     assert 'Error:' in result.stderr
+
+
+@pytest.mark.parametrize(
+    argnames='args',
+    argvalues=[
+        ('init',),
+        ('config',),
+        ('trust',),
+        ('read', 'core/design'),
+        ('search', 'design'),
+        ('match', 'design'),
+        ('update',),
+        ('update', '--check'),
+        ('new', 'notes', '--desc', 'Notes.', '--content', 'Body.'),
+        ('lint',),
+        ('map',),
+    ],
+    ids=[
+        'init',
+        'config',
+        'trust',
+        'read',
+        'search',
+        'match',
+        'update',
+        'update-check',
+        'new',
+        'lint',
+        'map',
+    ],
+)
+def test_empty_path_is_a_usage_error(
+    tmp_path: pathlib.Path,
+    args: tuple[str, ...],
+) -> None:
+    """``--path ""`` is a usage error in every command that takes ``--path``.
+
+    A script with an unset variable (``--path "$WIKI"``) passes the empty
+    value. Read as no ``--path``, it would send the command to the wiki
+    the current folder resolves to, which is not the one the script named.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # a page no index lists yet, so the default wiki has work pending
+    _write(root / 'core' / 'design.md', _page('Design', 'A design.', 'Body.'))
+    before = _tree(tmp_path)
+    result = _wiki(tmp_path, *args, '--path', '')
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stdout == ''
+    assert result.stderr.endswith('Error: Invalid value: --path must not be empty.\n')
+    assert _tree(tmp_path) == before
+
+
+@pytest.mark.parametrize(
+    argnames=('args', 'error'),
+    argvalues=[
+        (
+            ('read', 'core/design', '--lines', 'x'),
+            'Invalid value: --path must not be empty.',
+        ),
+        (
+            ('read', 'core/design', '--lines', '1:2', '--words', '1:2'),
+            'Invalid value: --path must not be empty.',
+        ),
+        (
+            ('search', 'design', '--limit', 'x'),
+            "Invalid value for '--limit': 'x' is not a valid integer.",
+        ),
+    ],
+    ids=['bad-slice', 'exclusive-pair', 'bad-number'],
+)
+def test_empty_path_error_order(
+    tmp_path: pathlib.Path,
+    args: tuple[str, ...],
+    error: str,
+) -> None:
+    """An empty ``--path`` is the first error a command reports of its own.
+
+    A run with two bad arguments names one of them. The empty ``--path``
+    comes ahead of every check a command makes itself, the slice of
+    ``read`` included, and behind a value the option parser refuses,
+    which ends the run before the command starts.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    result = _wiki(tmp_path, *args, '--path', '')
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stdout == ''
+    assert result.stderr.endswith(f'Error: {error}\n')
 
 
 def test_untrusted_hook_refusal_exits_two(tmp_path: pathlib.Path) -> None:
@@ -1956,6 +2058,51 @@ def test_update_refuses_an_excluded_dot_directory_scope(
     assert not (root / '.wiki' / '_index.md').exists()
 
 
+def test_scope_that_is_not_found_suggests_the_fix(tmp_path: pathlib.Path) -> None:
+    """A scope that reaches no folder names the fix the tree offers.
+
+    Two misses are common and each has one fix: the name carries the
+    root's own folder name (``wiki/core`` in the wiki at ``wiki``), or it
+    is the read key of a page, and a scope is a folder. Any other miss,
+    and every other refusal of a scope, keeps its line.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'core' / 'design.md', _page('Design', 'A design.', 'Body.'))
+    _write(root / 'note.md', _page('Note', 'A note.', 'Body.'))
+    assert _wiki(root, 'update').returncode == 0
+    page_hint = 'a scope is a folder and this is a page'
+    lines = {
+        # the root's own folder name leads a name whose rest is a folder
+        'wiki/core': "Wiki folder not found: 'wiki/core' (did you mean core?)",
+        # a page, by its read key and by its file name
+        'core/design': (
+            f"Wiki folder not found: 'core/design' ({page_hint}; did you mean core?)"
+        ),
+        'core/design.md': (
+            f"Wiki folder not found: 'core/design.md' ({page_hint}; did you mean core?)"
+        ),
+        'note': f"Wiki folder not found: 'note' ({page_hint} in the wiki root)",
+        # a name the tree has no fix for
+        'nowhere': "Wiki folder not found: 'nowhere'",
+        'wiki/nowhere': "Wiki folder not found: 'wiki/nowhere'",
+        # the root's folder name twice: the rest is no folder
+        'wiki/wiki/core': "Wiki folder not found: 'wiki/wiki/core'",
+        # the other refusals of a scope
+        '.wiki': "Path is inside an excluded directory: '.wiki'",
+        '..': "Path is outside wiki root: '..'",
+    }
+    for name, line in lines.items():
+        result = _wiki(tmp_path, 'lint', name, '--path', 'wiki')
+        assert result.returncode == 2, name
+        assert result.stderr == f'Error: {line}\n'
+    # every command that takes a scope resolves it the same way
+    for command in (('update', '--check'), ('map',), ('search', 'x'), ('match', 'x')):
+        result = _wiki(tmp_path, *command, 'core/design', '--path', 'wiki')
+        assert result.returncode == 2, command
+        assert result.stderr == f'Error: {lines["core/design"]}\n'
+
+
 def test_exclude_patterns_end_to_end(tmp_path: pathlib.Path) -> None:
     """``exclude.patterns`` flows through init, update, and lint.
 
@@ -2520,12 +2667,42 @@ def test_map_filters_by_category(tmp_path: pathlib.Path) -> None:
 
 
 def test_map_empty_wiki_reports_empty(tmp_path: pathlib.Path) -> None:
-    """A map of a wiki with no folders reports emptiness, not a crash."""
+    """A map of a wiki with no folders reports emptiness, not a crash.
+
+    The line follows the arguments alone: a run that a filter narrowed
+    says that no entries match, on a wiki that holds nothing too.
+    """
     root = tmp_path / 'wiki'
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     result = _wiki(root, 'map', '--path', str(root))
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'empty' in result.stdout.lower()
+    assert result.stdout == 'Wiki is empty.\n'
+    result = _wiki(root, 'map', '--path', str(root), '--category', 'nosuch')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == 'No entries match.\n'
+
+
+def test_map_says_no_entries_match_when_narrowed_to_nothing(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A scope or a filter that shows nothing says so, not that the wiki is empty."""
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # a wiki that holds one page, at its root
+    _write(root / 'note.md', _page('Note', 'A note.', 'Body.'))
+    assert _wiki(root, 'update').returncode == 0
+    assert _wiki(root, 'map').stdout.startswith('note ')
+    # a filter: a category no entry has, then a kind the wiki lacks
+    for narrowing in (('--category', 'nosuch'), ('--no-markdown',)):
+        result = _wiki(root, 'map', *narrowing)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.stdout == 'No entries match.\n', narrowing
+    # a scope: a folder that holds nothing
+    args = ('new', 'empty', '--desc', 'Nothing yet.', '--content', 'Body.')
+    assert _wiki(root, *args).returncode == 0
+    result = _wiki(root, 'map', 'empty')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == 'No entries match.\n'
 
 
 def test_map_stat_and_desc_limit_bounds(wiki: pathlib.Path) -> None:
@@ -2902,6 +3079,20 @@ def test_search_no_match_exits_nonzero(wiki: pathlib.Path) -> None:
     assert result.stdout == ''
 
 
+def test_search_json_prints_an_empty_list_for_no_match(wiki: pathlib.Path) -> None:
+    """``search --json`` with no hits prints ``[]``, a document as any other.
+
+    A consumer parses stdout whatever the exit code, and empty output is
+    not JSON. The notice and exit 1 stand beside the document.
+    """
+    args = ('search', 'zzz_no_such_token', '--json', '--path', str(wiki))
+    result = _wiki(wiki, *args)
+    assert result.returncode == 1
+    assert result.stdout == '[]\n'
+    assert json.loads(result.stdout) == []
+    assert result.stderr == 'No matches found.\n'
+
+
 def test_search_invalid_query_reports_error(wiki: pathlib.Path) -> None:
     """Invalid raw FTS input is an error (exit 2), distinct from a clean no-match.
 
@@ -3262,6 +3453,68 @@ def test_read_outputs_bytes_verbatim(wiki: pathlib.Path) -> None:
     result = _wiki(wiki, 'read', 'core/design', '--path', str(wiki))
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout == page.read_text(encoding='utf-8')
+
+
+# ------ piped output
+
+
+def test_piped_output_keeps_a_pages_escape_sequences(tmp_path: pathlib.Path) -> None:
+    """Output through a pipe carries the escape sequences a page holds.
+
+    A script or an agent reads a command through a pipe or a file, where
+    it needs the page's own bytes: ``wiki read page > file`` must give the
+    page back, color sequences included.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # a page with a color sequence in its desc (YAML's \e) and in its body
+    desc = '"A \\e[31mred\\e[0m page."'
+    line = 'An \x1b[31malert\x1b[0m line.'
+    _write(root / 'alert.md', f'---\ndesc: {desc}\n---\n\n# alert\n\n{line}\n')
+    assert _wiki(root, 'update').returncode == 0
+    text = (root / 'alert.md').read_text(encoding='utf-8')
+    # read: the page as it is on disk
+    read = _wiki(root, 'read', 'alert')
+    assert read.returncode == 0, read.stdout + read.stderr
+    assert read.stdout == text
+    # match --lines: the matching line as written
+    number = text.split('\n').index(line) + 1
+    match = _wiki(root, 'match', 'alert', '--lines')
+    assert match.returncode == 0, match.stdout + match.stderr
+    assert f'alert.md:{number}: {line}\n' in match.stdout
+    # map: the desc as YAML decodes it
+    tree = _wiki(root, 'map')
+    assert tree.returncode == 0, tree.stdout + tree.stderr
+    assert 'A \x1b[31mred\x1b[0m page.' in tree.stdout
+    # search: the body snippet around the hit
+    search = _wiki(root, 'search', 'line')
+    assert search.returncode == 0, search.stdout + search.stderr
+    assert '\x1b[31malert\x1b[0m' in search.stdout
+
+
+@pytest.mark.parametrize(
+    argnames='args',
+    argvalues=[
+        ('--help',),
+        ('read', '--help'),
+        ('map', '--depth', 'deep'),
+        (),
+        ('--version',),
+    ],
+    ids=['help', 'command-help', 'usage-error', 'no-command', 'version'],
+)
+def test_help_and_errors_hold_no_escape_byte(
+    tmp_path: pathlib.Path,
+    args: tuple[str, ...],
+) -> None:
+    """Help, a usage error and the version print plain text through a pipe.
+
+    The command line styles nothing of its own, so the only escape
+    sequences a pipe ever carries are a page's.
+    """
+    result = _wiki(tmp_path, *args)
+    assert result.stdout + result.stderr
+    assert '\x1b' not in result.stdout + result.stderr
 
 
 # ------ config
@@ -5003,6 +5256,35 @@ def test_merge_dispatches_on_pathname(tmp_path: pathlib.Path) -> None:
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
 @pytest.mark.parametrize(
+    argnames='pathname',
+    argvalues=['-h.md', '-h', '--help.md', '--help'],
+)
+def test_merge_driver_takes_no_help_option(
+    tmp_path: pathlib.Path,
+    pathname: str,
+) -> None:
+    """A pathname that reads as a help flag is merged like any other.
+
+    git hands the driver the pathname of every mapped file. A help page
+    printed for one would exit 0 with the current branch's file as it was,
+    which git takes for a clean merge, so the other branch's edit would
+    be lost in silence.
+    """
+    base = tmp_path / 'base'
+    ours = tmp_path / 'ours'
+    theirs = tmp_path / 'theirs'
+    base.write_text('one\ntwo\nthree\n', encoding='utf-8')
+    ours.write_text('ONE\ntwo\nthree\n', encoding='utf-8')
+    theirs.write_text('one\ntwo\nTHREE\n', encoding='utf-8')
+    args = [str(base), str(ours), str(theirs), '7', pathname]
+    result = _wiki(tmp_path, '_merge', *args)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == ''
+    assert ours.read_text(encoding='utf-8') == 'ONE\ntwo\nTHREE\n'
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
     argnames=('pathname', 'later', 'hook', 'eol', 'settled'),
     argvalues=[
         ('wiki/core/notes.md', 'ours', None, '\n', True),
@@ -5405,6 +5687,79 @@ def test_version_flag_reports_a_version(tmp_path: pathlib.Path) -> None:
     result = _wiki(tmp_path, '--version')
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.strip() == WIKI_VERSION
+
+
+# ------ help
+
+
+@pytest.mark.parametrize(
+    argnames='command',
+    argvalues=[
+        (),
+        ('install',),
+        ('init',),
+        ('config',),
+        ('trust',),
+        ('read',),
+        ('search',),
+        ('match',),
+        ('update',),
+        ('new',),
+        ('lint',),
+        ('map',),
+    ],
+    ids=lambda command: command[0] if command else 'wiki',
+)
+def test_short_help_flag_prints_the_help_page(
+    tmp_path: pathlib.Path,
+    command: tuple[str, ...],
+) -> None:
+    """``-h`` prints what ``--help`` prints, on ``wiki`` and on every command."""
+    short = _wiki(tmp_path, *command, '-h')
+    assert short.returncode == 0, short.stdout + short.stderr
+    assert short.stdout.startswith('Usage: wiki')
+    assert '-h, --help' in short.stdout
+    long = _wiki(tmp_path, *command, '--help')
+    assert (short.stdout, short.stderr) == (long.stdout, long.stderr)
+
+
+def test_usage_error_points_at_the_long_help_flag(tmp_path: pathlib.Path) -> None:
+    """A usage error names ``--help`` as the way to the help page."""
+    result = _wiki(tmp_path, 'map', '--depth', 'deep')
+    assert result.returncode == 2
+    assert "Try 'wiki map --help' for help.\n" in result.stderr
+
+
+def test_wiki_with_no_command_prints_help_as_a_usage_error(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Bare ``wiki`` prints the help page on stderr and exits 2.
+
+    The page tells a person what to run next, and the stream and the exit
+    code tell a script that nothing ran.
+    """
+    result = _wiki(tmp_path)
+    assert result.returncode == 2
+    assert result.stdout == ''
+    assert result.stderr == _wiki(tmp_path, '--help').stdout
+    assert result.stderr.startswith('Usage: wiki [OPTIONS] COMMAND [ARGS]...\n')
+
+
+def test_help_marks_a_required_option_once(tmp_path: pathlib.Path) -> None:
+    """The help of ``wiki new`` says ``required`` once per required input."""
+    result = _wiki(tmp_path, 'new', '--help')
+    assert result.returncode == 0, result.stdout + result.stderr
+    # the name, --desc and --content each carry the one generated marker
+    assert result.stdout.count('[required]') == 3
+    assert result.stdout.count('required') == 3
+
+
+def test_search_help_states_the_default_limit(tmp_path: pathlib.Path) -> None:
+    """The help of ``wiki search --limit`` names the limit an unset one gets."""
+    result = _wiki(tmp_path, 'search', '--help')
+    assert result.returncode == 0, result.stdout + result.stderr
+    entry = result.stdout.partition('--limit INTEGER')[2].partition('--tag')[0]
+    assert f'defaults to {DEFAULT_SEARCH_LIMIT}' in ' '.join(entry.split())
 
 
 # ------ trust

@@ -48,6 +48,9 @@ may include breaking changes, each listed under a Breaking heading.
   `--settings was not applied: the wiki at <path> already exists, and init leaves its settings as they are.`
   It still exits 0, and `--quiet` does not hide the line. The same object in
   another key order or spacing prints nothing.
+- `-h` works as `--help`, on `wiki` and on every command.
+- `wiki` with no command prints the help page, on stderr, and exits 2. Before,
+  it printed a usage line and `Error: Missing command.`
 
 ### Changed
 
@@ -72,8 +75,14 @@ may include breaking changes, each listed under a Breaking heading.
 - An empty `--lines`, `--words` or `--chars` value of `wiki read` is an invalid
   slice. Before, it returned the whole page, so a script with an unset variable
   read a page it meant to slice. `wiki read` also checks its slice before it
-  looks for the wiki, so a malformed slice is reported as one whatever `--path`
-  names.
+  looks for the wiki, so a malformed slice is reported as one whatever a
+  non-empty `--path` names.
+- `--path ""` is a usage error, `--path must not be empty.`, in every command
+  that takes `--path`. Before, an empty value meant the wiki the current folder
+  resolves to, so a script with an unset variable ran on the wrong wiki and
+  exited 0. When another argument is bad too, the empty `--path` is the error
+  reported, ahead of a malformed slice of `wiki read`. Only a value the option
+  parser refuses, such as a `--limit` that is not an integer, comes first.
 
 ### Fixed
 
@@ -134,6 +143,29 @@ may include breaking changes, each listed under a Breaking heading.
   character Python reads as a line boundary, split the line in two and came back
   as a newline. The diff under a `Requires update` issue of `wiki lint` breaks
   lines the same way.
+- Output sent to a pipe or a file keeps the escape sequences a page holds, such
+  as color codes, so `wiki read page > file` gives the page's exact bytes, as
+  its help promises. Before, they were removed unless the output went to a
+  terminal. `wiki match`, `wiki search` and `wiki map` print page text the same
+  way.
+- The help of `wiki new` marks `--desc` and `--content` as required once, where
+  it said `(required). [required]`, and the help of `wiki search --limit` states
+  its default of 10.
+- `wiki search --json` prints `[]` on stdout when nothing matches, so its output
+  always parses as JSON. Before, it printed nothing. The `No matches found.`
+  line on stderr and exit 1 are unchanged.
+- `wiki map` says `No entries match.` when a name, `--category` or
+  `--markdown`/`--no-markdown` left nothing to show. Before, it said
+  `Wiki is empty.` of a wiki that holds pages.
+- A scope that is not found suggests the fix after
+  `Wiki folder not found: '<name>'`. A name that leads with the root's own
+  folder name, such as `wiki lint wiki/core --path wiki`, gets
+  `(did you mean core?)`, and a page name gets
+  `(a scope is a folder and this is a page; did you mean core?)`. A page in the
+  wiki root has no folder to name and gets
+  `(a scope is a folder and this is a page in the wiki root)`. `Wiki.update`,
+  `lint`, `map`, `search` and `match` raise the same `FileNotFoundError` with
+  the longer message.
 
 ## [1.10.0] - 2026-11-27
 

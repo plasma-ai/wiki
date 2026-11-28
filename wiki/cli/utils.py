@@ -46,6 +46,7 @@ __all__ = [
     'parse_slice',
     'parse_settings',
     'require_utf8',
+    'refuse_empty_path',
     'pattern_hints',
     'is_trusted',
     'trust_root',
@@ -226,6 +227,17 @@ def require_utf8(option: str, value: str) -> None:
         value.encode('utf-8')
     except UnicodeEncodeError:
         raise typer.BadParameter(f'{option} is not valid UTF-8.') from None
+
+
+def refuse_empty_path(path: Optional[str]) -> None:
+    """Refuse an empty ``--path`` value.
+
+    Read as no ``--path`` at all, an empty value would send a script with
+    an unset variable (``--path "$WIKI"``) to whichever wiki the current
+    folder resolves to, where the command would run and exit 0.
+    """
+    if path == '':
+        raise typer.BadParameter('--path must not be empty.')
 
 
 def pattern_hints(pattern: str) -> list[str]:

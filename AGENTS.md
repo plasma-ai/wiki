@@ -413,6 +413,13 @@ See `pyproject.toml` for formatter/linter config.
 - Use the `@command(app, 'name')` decorator (from `wiki.cli.utils`) — commands
   are error-wrapped, catching all but typer's `Exit`/`Abort`/`BadParameter`
 - Typer args/options as local variables before the inner function
+- A command that takes `--path` opens with `refuse_empty_path(path)` (from
+  `wiki.cli.utils`): an empty value is a usage error, never the default root
+- `-h`, `--help` and the color setting that keeps a page's escape sequences in
+  piped output come from the app's context settings in `cli/main.py`, so a
+  command sets none of them. `_merge` alone registers with
+  `add_help_option=False`: git hands it any pathname, and one read as a help
+  flag would exit 0 with nothing merged
 - Do not inline method calls in `typer.echo()` — assign to a variable first
 - When mixing positional and keyword args in multi-line calls, pass all as
   kwargs (unless the param is positional-only with `/`)

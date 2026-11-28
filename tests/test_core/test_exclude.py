@@ -46,6 +46,8 @@ __all__ = [
     'test_update_symlink_precedence',
     'test_exclude_lifts_nested_wiki_refusal',
     'test_scope_inside_excluded_dir_refused',
+    'test_scope_hint_never_names_an_excluded_folder',
+    'test_scope_led_by_the_root_name_many_times_is_a_plain_miss',
     'test_gitignored_residue_is_never_adopted',
     'test_fenced_directory_is_invisible_to_every_check',
     'test_gitignore_fence_is_pattern_pure',
@@ -831,6 +833,46 @@ def test_scope_inside_excluded_dir_refused(
     with pytest.raises(ValueError, match='excluded directory') as excinfo:
         calls[operation]()
     assert "exclude.patterns 'vendor'" in str(excinfo.value)
+
+
+def test_scope_hint_never_names_an_excluded_folder(tmp_path: pathlib.Path) -> None:
+    """A scope that is not found suggests only a folder that resolves as one.
+
+    The hint is a name to retry with, so a page under an excluded
+    directory, or the root's folder name before one, draws no hint: the
+    retry would be refused.
+    """
+    root = tmp_path / 'wiki'
+    root.mkdir()
+    _make_wiki(root, folders={'vendor/pkg': ['mod']})
+    names = ['vendor/pkg/mod', 'wiki/vendor/pkg']
+    # while the folder is indexed, each miss names it
+    for name in names:
+        with pytest.raises(FileNotFoundError, match=r'did you mean vendor/pkg\?'):
+            Wiki(root).lint(name)
+    _set_exclude_patterns(root, ['vendor'])
+    for name in names:
+        with pytest.raises(FileNotFoundError) as excinfo:
+            Wiki(root).lint(name)
+        assert str(excinfo.value) == f'Wiki folder not found: {name!r}'
+
+
+def test_scope_led_by_the_root_name_many_times_is_a_plain_miss(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A scope name led by the root's folder name many times over is one miss.
+
+    The hint drops one leading root name and no more, so the rest of such
+    a name is no folder and the line carries no hint, however long the
+    name is.
+    """
+    root = tmp_path / 'w'
+    root.mkdir()
+    _make_wiki(root, folders={'core': ['mod']})
+    name = '/'.join(['w'] * 350 + ['core'])
+    with pytest.raises(FileNotFoundError) as excinfo:
+        Wiki(root).lint(name)
+    assert str(excinfo.value) == f'Wiki folder not found: {name!r}'
 
 
 # ------ gitignore fences
