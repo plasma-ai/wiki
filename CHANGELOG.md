@@ -220,6 +220,14 @@ may include breaking changes, each listed under a Breaking heading.
   said `tools/Makefile.md.md`, a file that does not exist. `DescOverwriteEvent`
   carries the file in a new optional `page` field; an event built without it
   names the target plus `.md`.
+- `wiki init` and `wiki config` say when they skip a `.gitattributes` that has
+  uncommitted changes, and name the line they did not add:
+  `Skipping <path>: it has uncommitted changes, so wiki did not add '**/_index.md merge=wiki'`,
+  then the remedy: commit the file and run `wiki config`. There is one stderr
+  line for each skipped file, `--quiet` does not hide it, and the exit code
+  stays 0. Before, they skipped the file in silence, so the files it would map
+  kept merging as plain text. `configure_git_merge_driver` returns the lines,
+  where it returned `None`.
 
 ## [1.10.0] - 2026-11-27
 

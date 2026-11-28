@@ -165,6 +165,11 @@ object in another key order or spacing prints nothing, and a caller that
 passes its seed on every run stays silent. A settings file that is missing or
 cannot be read counts as different. The wiki name is not compared.
 
+``init`` leaves a ``.gitattributes`` that has uncommitted changes as it
+stands, as ``wiki config`` does. One stderr line names the file and the
+mapping line it lacks, under ``--quiet`` too, and the exit code stays 0; see
+:doc:`/guide/merge-driver`.
+
 ``init`` refuses to scaffold inside an enclosing wiki, refuses an invalid wiki
 name (naming the violated rule) before any write, refuses a re-init sweep over
 merge conflict markers, and fails on an invalid ``OFFLINE_MODE`` value before
@@ -219,8 +224,9 @@ union-merged, dicts deep-merged with the source winning). It restores a missing
 repository's local git config, and maps the driver in ``.gitattributes`` —
 ``**/_index.md merge=wiki`` in the repository root's file and
 ``*.md merge=wiki`` in the wiki root's own — skipping a file that has
-uncommitted changes; it never stages or commits. See :doc:`/guide/obsidian`
-and :doc:`/guide/merge-driver`.
+uncommitted changes, with one stderr line that names the file and the mapping
+line it lacks; it never stages or commits. See :doc:`/guide/obsidian` and
+:doc:`/guide/merge-driver`.
 
 Because the merge driver lives in each clone's local git config while
 ``.gitattributes`` only names it, every contributor runs ``wiki config`` once

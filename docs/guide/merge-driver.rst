@@ -45,8 +45,15 @@ stage and commit them yourself; the tool never touches the git index. Each
 block is appended once, after the file's last line and in the file's own
 line ending, when its mapping line is missing; existing lines are never
 rewritten. A file with uncommitted changes of your own — a new, untracked
-one included — is left alone (the driver config is still registered; the
-lines land on the next clean run).
+one included — is left alone, and one stderr line names the file and each
+mapping line it lacks:
+
+.. code-block:: text
+
+   Skipping /repo/.gitattributes: it has uncommitted changes, so wiki did not add '**/_index.md merge=wiki'; commit the file, then run `wiki config`
+
+The command still exits 0 and still registers the driver config. Until the
+line is added, the files it would map merge as plain text.
 
 **The driver is per-clone.** The committed ``.gitattributes`` only names the
 driver; its definition lives in each clone's local git config. Every

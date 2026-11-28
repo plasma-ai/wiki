@@ -143,6 +143,7 @@ __all__ = [
     'test_merge_driver_no_op_without_git',
     'test_init_writes_gitattributes_without_committing',
     'test_init_and_config_append_to_gitattributes_that_is_not_utf8',
+    'test_init_and_config_name_a_gitattributes_they_skip',
     'test_merge_driver_merges_authored_frontmatter',
     'test_merge_driver_moves_regenerated_keys_with_their_bodies',
     'test_merge_driver_takes_the_other_sides_row_edit',
@@ -4035,6 +4036,50 @@ def test_init_and_config_append_to_gitattributes_that_is_not_utf8(
     page_block = b'\n# Wiki page merge driver\n*.md merge=wiki\n'
     assert (root / '.gitattributes').read_bytes() == latin1 + page_block
     assert attributes.read_bytes() == latin1 + index_block
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_init_and_config_name_a_gitattributes_they_skip(
+    tmp_path: pathlib.Path,
+) -> None:
+    """``init`` and ``config`` say which mapping a skipped ``.gitattributes`` lacks.
+
+    A ``.gitattributes`` with uncommitted changes is left as it stands, so
+    the mapping it lacks is still missing after a run that exits 0. One
+    stderr line names the file and the line, ``--quiet`` or not; once the
+    file is committed, ``config`` adds the line and prints nothing about it.
+    """
+    # a repo whose root .gitattributes is new and not yet committed
+    _git_repo(tmp_path)
+    attributes = tmp_path / '.gitattributes'
+    attributes.write_bytes(b'*.png binary\n')
+    root = tmp_path / 'wiki'
+
+    # init leaves the file alone and names the index mapping it did not add
+    init = _wiki(tmp_path, 'init', '--path', str(root), '--quiet')
+    assert init.returncode == 0, init.stdout + init.stderr
+    assert attributes.read_bytes() == b'*.png binary\n'
+    skip = (
+        f'Skipping {attributes}: it has uncommitted changes, so wiki did not add'
+        " '**/_index.md merge=wiki'; commit the file, then run `wiki config`"
+    )
+    assert [line for line in init.stderr.splitlines() if '.gitattributes' in line] == [
+        skip
+    ]
+
+    # config repeats the line while the file stays uncommitted
+    config = _wiki(root, 'config', '--path', str(root))
+    assert config.returncode == 0, config.stdout + config.stderr
+    assert skip in config.stderr.splitlines()
+
+    # after a commit config adds the mapping and says nothing about the file
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'attributes')
+    config = _wiki(root, 'config', '--path', str(root))
+    assert config.returncode == 0, config.stdout + config.stderr
+    assert '.gitattributes' not in config.stdout + config.stderr
+    index_block = b'\n# Wiki index merge driver\n**/_index.md merge=wiki\n'
+    assert attributes.read_bytes() == b'*.png binary\n' + index_block
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')

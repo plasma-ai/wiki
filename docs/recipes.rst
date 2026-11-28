@@ -150,7 +150,8 @@ outside the wiki keeps git's own merge:
 
 ``wiki config`` writes both files in the working tree only — you stage and
 commit them yourself — and skips a file entirely while it has uncommitted
-changes (its lines land on the next run with the file clean).
+changes. A stderr line names each file it skips and the mapping line it did
+not add; commit the file and run ``wiki config`` again.
 
 Once per clone
 ~~~~~~~~~~~~~~
