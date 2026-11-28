@@ -173,10 +173,10 @@ by ``#`` (the start of a YAML comment), must be YAML-quoted: ``wiki lint``
 reports the unquoted colon on a one-line description, or on a continuation
 line of one, as invalid YAML — though under a bare ``desc:`` key an indented
 ``Key: value`` line nests a mapping instead, which no strict reader shows as
-text and lint does not report — and names the comment as the likely cause
-when a description it truncated fails the period check. Do not
-hand-wrap a description mid-word — let the YAML block scalar carry any line
-breaks.
+text and lint reports as a ``nonscalar_field`` issue — and names the comment
+as the likely cause when a description it truncated fails the period check.
+Do not hand-wrap a description mid-word — let the YAML block scalar carry any
+line breaks.
 
 Categories
 ~~~~~~~~~~
