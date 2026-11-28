@@ -16,6 +16,13 @@ may include breaking changes, each listed under a Breaking heading.
   `strftime` string: some blanked every stamp (`%Ez`), some made lint report
   every file (`%s`), and `%Y %Y` crashed lint. A wiki with such a format changes
   it and rewrites its stamps by hand, as any format change requires.
+- A number on the command line takes an optional sign and plain digits only, and
+  must fit a signed 64-bit integer. That covers the bounds of a `wiki read`
+  slice and the options `map --depth`, `map --desc-limit` and `search --limit`.
+  Forms that Python happened to read, such as `' 10'`, `1_0` and non-ASCII
+  digits, are usage errors: write the number in plain digits. The three options
+  are labeled `INTEGER` in help and refuse a value as
+  `'<value>' is not a valid integer.` whatever version of typer is installed.
 
 ### Changed
 
@@ -37,6 +44,11 @@ may include breaking changes, each listed under a Breaking heading.
 - An `exclude.patterns` entry that holds `[^` is refused, with a pointer to
   `[!...]`, the spelling that negates a class. Before, `[^a]` matched `a`, the
   opposite of gitignore.
+- An empty `--lines`, `--words` or `--chars` value of `wiki read` is an invalid
+  slice. Before, it returned the whole page, so a script with an unset variable
+  read a page it meant to slice. `wiki read` also checks its slice before it
+  looks for the wiki, so a malformed slice is reported as one whatever `--path`
+  names.
 
 ### Fixed
 
@@ -78,6 +90,25 @@ may include breaking changes, each listed under a Breaking heading.
   line replaces `Skipping <path>: unreadable during search refresh` in
   `wiki search`, which prints it for a page it cannot open or cannot decode, so
   both commands print the same words.
+- `wiki match` reports a pattern that does not compile as
+  `Invalid regex '<pattern>': <reason>`, which names the pattern and says it is
+  read as a regex. A pattern with an unescaped `[[` gets one line on stderr that
+  says `[[` opens a character class and that `\[\[` matches a wikilink, and a
+  doubled `--`, `&&`, `~~` or `||` inside a character class gets a line of its
+  own. Before, each printed a Python warning that showed an install path and a
+  line of wiki's source. The matches and the exit code are unchanged. A
+  `naming.pattern` that Python warns about no longer prints that warning either.
+  `Wiki.match` raises a `ValueError` for a pattern that does not compile, with
+  Python's error as its cause. Before, it raised `re.error`.
+- `wiki match` no longer reports a line past the end of a file that ends with a
+  newline: the final newline ends the last line and opens no empty one. Before,
+  `wiki match '^$' --lines` reported line 15 of a 14-line file, and a pattern
+  that can match an empty line hit every file.
+- `wiki read --lines` counts lines as `wiki match` numbers them: a line ends at
+  a newline and at nothing else. Before, a form feed inside a line, or another
+  character Python reads as a line boundary, split the line in two and came back
+  as a newline. The diff under a `Requires update` issue of `wiki lint` breaks
+  lines the same way.
 
 ## [1.10.0] - 2026-11-27
 

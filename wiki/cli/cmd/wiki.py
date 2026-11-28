@@ -21,8 +21,10 @@ from wiki.cli.utils import (
     command,
     configure_git_merge_driver,
     load_wiki_class,
+    parse_int,
     parse_settings,
     parse_slice,
+    pattern_hints,
     refuse_nested_init,
     require_utf8,
     resolve_wiki,
@@ -495,19 +497,21 @@ def read(
         trailing newline.
         """
         # validate arguments: the slice units are pairwise exclusive
-        if lines and words:
+        if (lines is not None) and (words is not None):
             raise typer.BadParameter('--lines and --words are mutually exclusive.')
-        if lines and chars:
+        if (lines is not None) and (chars is not None):
             raise typer.BadParameter('--lines and --chars are mutually exclusive.')
-        if words and chars:
+        if (words is not None) and (chars is not None):
             raise typer.BadParameter('--words and --chars are mutually exclusive.')
-        # resolve the one given slice unit, if any
+        # parse the one given slice unit, if any (an empty value is a
+        # malformed slice, not an absent one)
         ranges = {'lines': lines, 'words': words, 'chars': chars}
-        given = {on: spec for on, spec in ranges.items() if spec}
+        given = {
+            on: parse_slice(spec) for on, spec in ranges.items() if spec is not None
+        }
         wiki = resolve(path)
         if given:
-            on, spec = next(iter(given.items()))
-            start, stop = parse_slice(spec)
+            on, (start, stop) = next(iter(given.items()))
             content = wiki.read(name=name, start=start, stop=stop, on=on)
         else:
             content = wiki.read(name=name)
@@ -539,7 +543,13 @@ def search(
     path = typer.Option(None, '--path', help=path_help)
     # result limit option
     limit_help = 'Maximum number of ranked pages to return (at least 1).'
-    limit = typer.Option(None, '--limit', help=limit_help)
+    limit = typer.Option(
+        None,
+        '--limit',
+        help=limit_help,
+        parser=parse_int,
+        metavar='INTEGER',
+    )
     # tag filter option
     tag_help = 'Require a frontmatter tag token.'
     tag = typer.Option(None, '--tag', help=tag_help)
@@ -666,6 +676,10 @@ def match(
         # subtree, a refused or broken hook -- is the triple's error leg,
         # which the command wrapper renders and exits 2 on
         wiki = resolve(path)
+        # a risky construct draws its line before the pattern runs or is refused
+        hints = pattern_hints(pattern)
+        for hint in hints:
+            typer.echo(hint, err=True)
         matches = wiki.match(
             pattern=pattern,
             name=name,
@@ -993,7 +1007,13 @@ def map(
     path = typer.Option(None, '--path', help=path_help)
     # maximum depth option
     depth_help = 'Maximum tree depth (0 means top-level only).'
-    depth = typer.Option(None, '--depth', help=depth_help)
+    depth = typer.Option(
+        None,
+        '--depth',
+        help=depth_help,
+        parser=parse_int,
+        metavar='INTEGER',
+    )
     # description flag
     desc_help = 'Show descriptions from parent index.'
     desc = typer.Option(True, '--desc/--no-desc', help=desc_help)
@@ -1002,7 +1022,13 @@ def map(
         'Max characters per description (defaults to the map.desc_limit'
         ' setting, else untruncated); -1 disables truncation.'
     )
-    desc_limit = typer.Option(None, '--desc-limit', help=desc_limit_help)
+    desc_limit = typer.Option(
+        None,
+        '--desc-limit',
+        help=desc_limit_help,
+        parser=parse_int,
+        metavar='INTEGER',
+    )
     # category filter option
     category_help = 'Comma-separated categories (empty string for uncategorized only).'
     category = typer.Option(None, '--category', help=category_help)

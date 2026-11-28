@@ -7,6 +7,8 @@ with ``read`` slicing and the word counts.
 from __future__ import annotations
 
 import pathlib
+import re
+import warnings
 from typing import Optional
 
 import pytest
@@ -22,6 +24,9 @@ __all__ = [
     'test_match_skips_excluded_paths',
     'test_match_survives_page_deleted_mid_scan',
     'test_match_names_a_page_it_cannot_decode',
+    'test_match_refuses_a_pattern_that_does_not_compile',
+    'test_match_raises_no_python_warning',
+    'test_match_final_newline_ends_the_last_line',
 ]
 
 
@@ -256,3 +261,68 @@ def test_match_names_a_page_it_cannot_decode(
     assert wiki.match('design', field=field, all_files=True) == before
     lines = [event.description for event in notices]
     assert lines == ['Skipping core/legacy.md: unreadable, or not valid UTF-8']
+
+
+@pytest.mark.parametrize(
+    argnames='pattern',
+    argvalues=['[[a/p', 'a{4294967296}', '(' * 3000 + 'a' + ')' * 3000],
+    ids=['syntax', 'repeat-count', 'nesting'],
+)
+def test_match_refuses_a_pattern_that_does_not_compile(
+    tmp_path: pathlib.Path,
+    pattern: str,
+) -> None:
+    """A pattern that is not a regex is refused by name, as a regex.
+
+    The parser refuses a repeat count past its limit and a nesting past
+    the interpreter's stack with errors of their own; each is the same
+    refusal to a host.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    with pytest.raises(ValueError, match=re.escape(f'Invalid regex {pattern!r}: ')):
+        wiki.match(pattern)
+
+
+def test_match_raises_no_python_warning(tmp_path: pathlib.Path) -> None:
+    """A pattern Python warns about runs with no warning raised.
+
+    The warning names the engine's own source line, so a host that
+    turns warnings into errors would fail on a line it cannot fix.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    (tmp_path / 'core' / 'design.md').write_text(
+        '---\nname: design\ndesc: d\n---\n\n# design\n\ncar] park\n',
+        encoding='utf-8',
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        hits = wiki.match('[[foo|bar&&]]')
+    assert hits == [('core/design.md', 8, 'car] park')]
+
+
+@pytest.mark.parametrize(
+    argnames=('ending', 'blank'),
+    argvalues=[
+        ('', [5]),
+        ('\n', [5]),
+        ('\n\n', [5, 7]),
+    ],
+    ids=['no-final-newline', 'final-newline', 'blank-last-line'],
+)
+def test_match_final_newline_ends_the_last_line(
+    tmp_path: pathlib.Path,
+    ending: str,
+    blank: list[int],
+) -> None:
+    """A final newline ends the last line; it does not open an empty one.
+
+    A pattern that matches an empty line hits the blank lines the file
+    holds and no line past its end, so a page reads the same with and
+    without its final newline.
+    """
+    wiki = Wiki(tmp_path)
+    wiki.init(name='root')
+    text = '---\nname: p\ndesc: d\n---\n\nbody' + ending
+    (tmp_path / 'p.md').write_text(text, encoding='utf-8')
+    hits = wiki.match('^$')
+    assert [lineno for relpath, lineno, _ in hits if relpath == 'p.md'] == blank

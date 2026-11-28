@@ -55,6 +55,7 @@ __all__ = [
     'test_lint_flags_leftover_merge_hint',
     'test_lint_link_desc_period',
     'test_lint_scoped',
+    'test_lint_update_diff_keeps_a_form_feed_in_its_line',
     'test_lint_flags_blank_created',
     'test_lint_flags_unparseable_stamp',
     'test_lint_future_stamp_is_clean',
@@ -852,6 +853,27 @@ def test_lint_scoped(tmp_path: pathlib.Path) -> None:
     issues = wiki.lint(name='core')
     assert issues != []
     assert all('api' not in issue for issue in issues)
+
+
+def test_lint_update_diff_keeps_a_form_feed_in_its_line(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Lint's update diff shows a line holding a form feed as one line.
+
+    The diff breaks lines where the file does, on newlines alone, so a
+    context line reads as the page's own text rather than as two lines
+    with the form feed gone.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    text = page.read_text(encoding='utf-8')
+    # a drifted H1 directly above a line holding a form feed
+    text = text.replace('# core/design\n', '# Wrong\n\nbe\x0cta\n')
+    page.write_text(text, encoding='utf-8')
+    issues = wiki.lint()
+    (flagged,) = [issue for issue in issues if 'Requires update' in issue]
+    assert '+# core/design' in flagged
+    assert '     be\x0cta' in flagged.split('\n')
 
 
 def test_lint_flags_blank_created(tmp_path: pathlib.Path) -> None:

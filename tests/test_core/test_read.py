@@ -18,6 +18,7 @@ from ._helpers import _make_wiki, _set_exclude_patterns
 __all__ = [
     'test_read_resolution',
     'test_read_line_slicing',
+    'test_read_lines_break_on_newline_alone',
     'test_operations_refuse_paths_outside_root',
     'test_read_root_without_index_never_escapes',
     'test_read_slice_units',
@@ -67,6 +68,38 @@ def test_read_line_slicing(tmp_path: pathlib.Path) -> None:
     assert 'line one' in content
     assert 'line four' not in content
     assert 'name: long' in content
+
+
+@pytest.mark.parametrize(
+    argnames='char',
+    argvalues=['\x0c', '\x0b', '\x1c', '\x85', '\u2028'],
+    ids=['form-feed', 'vertical-tab', 'file-separator', 'next-line', 'line-separator'],
+)
+def test_read_lines_break_on_newline_alone(tmp_path: pathlib.Path, char: str) -> None:
+    """A line slice counts lines as match does and returns them unchanged.
+
+    A form feed, or any other character ``str.splitlines`` breaks on,
+    sits inside its line: the slice neither splits the line there nor
+    replaces the character, so the line after it keeps the index that
+    match's line numbers give it.
+    """
+    wiki = Wiki(tmp_path)
+    wiki.init()
+    marked = f'be{char}ta'
+    (tmp_path / 'p.md').write_text(
+        f'---\nname: p\ndesc: A page.\n---\n\n# p\n\nalpha\n{marked}\ngamma\n',
+        encoding='utf-8',
+    )
+    frontmatter = '---\nname: p\ndesc: A page.\n---'
+    # the slice's index 0 is the first body line, the H1
+    first = next(lineno for path, lineno, _ in wiki.match('^# p$') if path == 'p.md')
+    for pattern, line in (('^be', marked), ('^gamma$', 'gamma')):
+        lineno = next(
+            lineno for path, lineno, _ in wiki.match(pattern) if path == 'p.md'
+        )
+        index = lineno - first
+        content = wiki.read('p', start=index, stop=index + 1)
+        assert content == f'{frontmatter}\n\n{line}\n'
 
 
 @pytest.mark.parametrize(

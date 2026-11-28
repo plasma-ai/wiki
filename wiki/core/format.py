@@ -1202,7 +1202,7 @@ def field_line_ranges(
 
     Args:
         frontmatter: Parsed frontmatter string (including delimiters).
-        lines: Full file lines (from ``text.split('\n')``).
+        lines: Full file lines, split on ``\n``.
         fields: Field names to match.
 
     """
