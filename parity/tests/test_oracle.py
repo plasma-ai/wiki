@@ -169,7 +169,8 @@ def test_check_follows_the_oracle_from_the_pending_branch_to_a_sync(
     pending branch that the base branch does not hold yet; the base branch
     merges that branch and then gains a fix; the branch lists the new
     commits, then syncs with the base branch and moves the oracle to the
-    merged commit; and a path it has removed comes back.
+    merged commit; a path it has removed comes back; and a file is added
+    below a folder it has removed.
     """
     repo = tmp_path / 'repo'
     repo.mkdir()
@@ -241,4 +242,11 @@ def test_check_follows_the_oracle_from_the_pending_branch_to_a_sync(
     commit('removal.txt')
     assert verdicts() == passing
     commit('engine.py')
+    assert verdicts() == {**passing, 'removed': False}
+    # the list names a folder instead, which covers a file added below it
+    path.with_name('removed.txt').write_text('core\n', encoding='utf-8')
+    commit('removal.txt')
+    assert verdicts() == passing
+    (repo / 'core').mkdir()
+    commit('core/late.py')
     assert verdicts() == {**passing, 'removed': False}

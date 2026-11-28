@@ -366,6 +366,10 @@ so exit 1 always means that a check failed.
   base branch lacks, that branch holds v1: `base` takes the merge base with it,
   and `level` counts the unmerged commits of both branches. Once the base branch
   holds it, or the branch is gone, the base branch alone holds v1.
+- **Removed paths.** A line of `parity/removed.txt` names a file or a folder,
+  and a folder covers every file below it. A file that v1 adds to a removed
+  folder merges with no conflict at the next sync, and the folder's line is what
+  fails the check then.
 - **Where they run.** `base` and `removed` depend on the tree alone and run on
   every pull request. `level` changes when v1 gains a commit, so it runs where a
   person or an agent reads it: at the start of a work session and at each gate.
