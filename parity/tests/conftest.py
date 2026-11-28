@@ -8,6 +8,7 @@ and its venvs; the suite fails without them.
 
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import shutil
@@ -30,6 +31,17 @@ stderr = result.stderr.replace(b'unterminated subpattern', b'unclosed group')
 sys.stdout.buffer.write(result.stdout)
 sys.stderr.buffer.write(stderr)
 sys.exit(result.returncode)
+"""
+#: the version the manifest of a checkout from :func:`_workspace` states
+VERSION = '2.0.0-dev.1'
+# a binary that leaves the identity record of its build, which a file beside
+# it holds, and prints its version, as the Rust engine does
+_BINARY = f"""#!{sys.executable}
+import json, os, pathlib
+record = json.loads(pathlib.Path(__file__).with_name('build.json').read_text())
+with open(os.environ[{side.TRACE!r}], 'a') as handle:
+    handle.write(json.dumps(record) + chr(10))
+print(record['version'])
 """
 # gates the tests that need git: the oracle checkout and the committed corpus
 _needs_git = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
@@ -74,6 +86,54 @@ def _declare(folder: pathlib.Path, corpus: runner.Corpus) -> pathlib.Path:
     text = f'[{corpus.label}]\ncheckout = "{corpus.checkout}"\nroot = "{corpus.root}"\n'
     path.write_text(text, encoding='utf-8')
     return path
+
+
+def _workspace(folder: pathlib.Path) -> pathlib.Path:
+    """Make a committed checkout shaped like the Rust workspace and return it.
+
+    It holds a manifest that states :data:`VERSION`, one source file and one
+    test file of a crate, and one embedded file. Its folder's name holds a
+    space, which cargo escapes in the list of a binary's inputs.
+    """
+    repo = folder / 'a checkout'
+    files = {
+        'Cargo.toml': f'[workspace.package]\nversion = "{VERSION}"\n',
+        '.gitignore': '/target\n',
+        'crates/wiki-cli/src/lib.rs': '// the crate\n',
+        'crates/wiki-cli/tests/it/main.rs': '// its tests\n',
+        'wiki/skills/wiki/SKILL.md': 'The skill.\n',
+    }
+    for name, text in files.items():
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding='utf-8')
+    _git(repo, 'init', '-q', '-b', 'main')
+    _git(repo, 'add', '-A')
+    _git(repo, 'commit', '-q', '-m', 'workspace')
+    return repo
+
+
+def _build(repo: pathlib.Path) -> None:
+    """Write the release binary of ``repo`` as cargo builds it at ``HEAD``.
+
+    Beside the binary lies cargo's list of what it was built from: the
+    crate's source file and the folder of embedded files, and no test file.
+    """
+    path = repo / 'target' / 'release' / 'wiki'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        'engine': 'rust',
+        'version': VERSION,
+        'build': _git(repo, 'rev-parse', 'HEAD'),
+    }
+    path.with_name('build.json').write_text(json.dumps(record), encoding='utf-8')
+    inputs = [repo / 'crates' / 'wiki-cli' / 'src' / 'lib.rs', repo / 'wiki' / 'skills']
+    target, *listed = (f'{item}'.replace(' ', '\\ ') for item in (path, *inputs))
+    text = f'{target}: {" ".join(listed)}\n'
+    path.with_name('wiki.d').write_text(text, encoding='utf-8')
+    # NOTE: the binary is written last, so no input is newer than it
+    path.write_text(_BINARY, encoding='utf-8')
+    path.chmod(0o755)
 
 
 @pytest.fixture(scope='session')

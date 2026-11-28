@@ -35,7 +35,15 @@ from parity import (
     terminal,
 )
 
-from .conftest import NOW, REPO_ROOT, WORDED, _needs_bytes, _needs_git
+from .conftest import (
+    NOW,
+    REPO_ROOT,
+    WORDED,
+    _build,
+    _needs_bytes,
+    _needs_git,
+    _workspace,
+)
 
 __all__ = [
     'test_v1_sides_run_as_the_oracle_names_them',
@@ -51,6 +59,7 @@ __all__ = [
     'test_failed_suite_keeps_its_output_and_trees',
     'test_suite_whose_terminal_table_cannot_run_keeps_the_tests_result',
     'test_suite_that_would_prove_nothing_is_refused',
+    'test_run_of_the_rust_side_tells_an_edit_that_is_not_committed',
     'test_replay_command_records_and_replays_v1s_tests',
     'test_failed_replay_keeps_its_output_and_trees',
     'test_row_for_a_test_the_replay_holds_fails_the_replay',
@@ -124,6 +133,10 @@ sys.exit(result.returncode)
 
 # two of v1's CLI tests: they call `map`, `init` and `read`
 _TESTS = 'tests/test_cli/test_regressions.py'
+# the one of v1's CLI tests that calls `--version`
+_VERSION_TEST = (
+    'tests/test_cli/test_wiki_commands.py::test_version_flag_reports_a_version'
+)
 # one small file of v1's core tests, two of whose tests the routing table names
 _CORE_TESTS = 'tests/test_core/test_read.py'
 
@@ -854,6 +867,58 @@ def test_suite_that_would_prove_nothing_is_refused(
     assert raised.value.code == 2
     assert message in capsys.readouterr().err
     assert sorted(tmp_path.rglob('*')) == held
+    assert not out.exists()
+
+
+@_needs_git
+def test_run_of_the_rust_side_tells_an_edit_that_is_not_committed(
+    tmp_path: pathlib.Path,
+    corpus: runner.Corpus,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A run against the binary says what its checkout holds beyond the commit.
+
+    The binary's build id is the commit, also when cargo built it over an
+    edit that is not committed. The suite still runs against such a binary,
+    so a change can be tried before it is committed: v1's version test
+    passes on it, the command prints the paths that differ from the commit,
+    and the result file records them with the Rust side. A gate takes the
+    binary as a build of its commit, so it exits 2 before a step runs.
+    """
+    # a checkout whose binary is built over an edit of a source file
+    repo = _workspace(tmp_path)
+    edited = 'crates/wiki-cli/src/lib.rs'
+    (repo / edited).write_text('// the crate, edited\n', encoding='utf-8')
+    _build(repo)
+    named = oracle.load()
+    monkeypatch.setattr(oracle, 'load', lambda: dataclasses.replace(named, repo=repo))
+    listed = tmp_path / 'ported.toml'
+    listed.write_text('commands = ["--version"]\n', encoding='utf-8')
+    monkeypatch.setattr(ported, 'PATH', listed)
+    # the suite runs, and tells the edit
+    out = tmp_path / 'out'
+    argv = ['suite', '--engine', binary.NAME, '--jobs', '0']
+    argv += ['--test', _TESTS, '--test', _VERSION_TEST]
+    argv += ['--work', f'{tmp_path / "work"}', '--out', f'{out}']
+    assert cli.main(argv) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert f'{binary.NAME}: the checkout differs from HEAD at {edited}' in lines
+    assert f'suite: {binary.NAME}: 1 calls of 1 tests' in lines
+    document = json.loads((out / 'suite.json').read_text(encoding='utf-8'))
+    reference, rust = document['sides']
+    assert 'dirty' not in reference
+    assert (rust['name'], rust['dirty']) == (binary.NAME, [edited])
+    # the gate does not start
+    out = tmp_path / 'gate-out'
+    argv = ['gate', 'daily', '--engine', binary.NAME]
+    argv += ['--corpora', f'{_corpora_file(tmp_path, corpus)}']
+    argv += ['--cache', f'{tmp_path / "cache"}']
+    argv += ['--work', f'{tmp_path / "gate-work"}', '--out', f'{out}']
+    with pytest.raises(SystemExit) as raised:
+        cli.main(argv)
+    assert raised.value.code == 2
+    assert f'differs from HEAD at {[edited]!r}' in capsys.readouterr().err
     assert not out.exists()
 
 

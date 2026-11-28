@@ -494,11 +494,14 @@ commands to the side `--engine` names and every other call to v1.
 `parity/ported.toml` is the list of ported commands, and a change that ports a
 command adds it there. The side named `rust` is built in (`parity/binary.py`):
 the release build of this checkout, held on every command to the version in
-`Cargo.toml` and to the commit of `HEAD`, so build again after each commit. The
-tests' own assertions are the verdict; a skipped test and an expected failure
-are findings, and so is a call that does not leave the identity record of the
-side it went to. `parity/plugins/` holds only what the oracle's interpreter
-loads, so nothing else may be added to that folder.
+`Cargo.toml` and to the commit of `HEAD`, and refused when it is older than a
+file cargo built it from, so build again after each edit and each commit. A run
+against a binary built over uncommitted changes prints and records the paths
+that differ from `HEAD`, and a gate refuses it. The tests' own assertions are
+the verdict; a skipped test and an expected failure are findings, and so is a
+call that does not leave the identity record of the side it went to.
+`parity/plugins/` holds only what the oracle's interpreter loads, so nothing
+else may be added to that folder.
 
 `python -m parity replay` runs v1's core and CLI tests under a recorder
 (`parity/plugins/parity_record.py`) and then runs each call they made again as a
