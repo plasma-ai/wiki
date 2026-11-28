@@ -82,8 +82,13 @@ def test_wheel_that_keeps_the_contracts_shows_only_that_its_wiki_is_a_script(
     venv, through a link in another folder, and in a venv whose path holds
     a space. The stand-in for a build of the sdist does the same with no
     build id. So every check passes but the one that holds the installed
-    ``wiki`` to be a binary, and the report names each check that ran.
+    ``wiki`` to be a binary, and the report names each check that ran. A
+    settings file of uv's above the work folder, which no uv satisfies,
+    changes nothing: the scratch host reads none.
     """
+    (tmp_path / 'uv.toml').write_text(
+        'required-version = "==0.0.1"\n', encoding='utf-8'
+    )
     package = _package(tmp_path, engine)
     result = contracts.run(package, work=tmp_path / 'work', checks=_CHECKS)
     assert result.findings == (_SCRIPT,)
@@ -199,9 +204,9 @@ def test_run_that_would_check_nothing_is_refused(
 ) -> None:
     """A run that cannot check the wheel is refused before it makes anything.
 
-    A work folder that exists, or that lies inside a repository, where an
-    installer and a build would read files that are not the run's own; a
-    wheel that is no file; and a caller with no uv to install with.
+    A work folder that exists, or that lies inside a repository, where a
+    build would read files that are not the run's own; a wheel that is no
+    file; and a caller with no uv to install with.
     """
     package = _package(tmp_path / 'package', engine)
     work = tmp_path / 'outer' / 'work'

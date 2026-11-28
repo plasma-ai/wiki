@@ -2087,9 +2087,10 @@ files must be.
   environment and inherits nothing else: a new home below the work folder;
   `PYTHONUSERBASE`, `PYENV_ROOT`, `PIPX_HOME`, `PIPX_BIN_DIR`, `CARGO_HOME`,
   `RUSTUP_HOME` and `UV_CACHE_DIR` below that home; an empty global git config;
-  and a `PATH` of the system's folders and one folder that holds links to the
-  caller's uv and git and nothing else. So no install reaches an interpreter, a
-  cache or a toolchain of the user's.
+  `UV_NO_CONFIG`, so uv reads no settings file, neither of a folder above the
+  one it runs in nor of the system; and a `PATH` of the system's folders and one
+  folder that holds links to the caller's uv and git and nothing else. So no
+  install reaches an interpreter, a cache or a toolchain of the user's.
 - **No Rust.** The scratch host holds no `cargo`, and a run is refused when a
   system folder holds one. A build there is the build of a host with no Rust:
   the build backend fetches the toolchain the checkout pins, so it needs the

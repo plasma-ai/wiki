@@ -198,8 +198,7 @@ def validate(work: pathlib.Path) -> None:
     Raises:
         ValueError: If ``work`` lies inside a repository (the build of
             v1's wheel asks git which of its source files the repository
-            ignores, and an installer reads the settings of a project above
-            the folder it runs in), or if ``work`` exists.
+            ignores), or if ``work`` exists.
 
     """
     for parent in work.resolve().parents:
@@ -224,8 +223,8 @@ def run(
     ``work``: a home of its own, with every folder an installer or a
     toolchain keeps for a user below it, and a ``PATH`` of the system's
     folders and the two tools the checks call. Nothing of the caller's
-    environment is inherited, and the host holds no ``cargo``: a build
-    there is the build of a host with no Rust.
+    environment is inherited, uv reads no settings file, and the host holds
+    no ``cargo``: a build there is the build of a host with no Rust.
 
     Args:
         package: The built files, from :func:`load`.
@@ -270,6 +269,9 @@ def run(
         'HOME': f'{home}',
         'GIT_CONFIG_GLOBAL': f'{home / ".gitconfig"}',
         'GIT_CONFIG_NOSYSTEM': '1',
+        # NOTE: uv reads a settings file from every folder above the one it
+        # runs in, and from the system's own
+        'UV_NO_CONFIG': '1',
         'LANG': _LANG,
     }
     env.update({name: f'{home / folder}' for name, folder in _HOMES.items()})
