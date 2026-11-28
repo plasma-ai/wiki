@@ -123,6 +123,9 @@ may include breaking changes, each listed under a Breaking heading.
 - `wiki search --json` prints `[]` on stdout when nothing matches, so its output
   always parses as JSON. Before, it printed nothing. The `No matches found.`
   line on stderr and exit 1 are unchanged.
+- `wiki map` says `No entries match.` when a name, `--category` or
+  `--markdown`/`--no-markdown` left nothing to show. Before, it said
+  `Wiki is empty.` of a wiki that holds pages.
 
 ## [1.10.0] - 2026-11-27
 

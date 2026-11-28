@@ -1144,7 +1144,12 @@ def map(
         # warned about the missing *** marker, so don't also claim emptiness
         folder = wiki._resolve_folder(name) if name else wiki._root
         if not wiki._index_missing_marker(folder):
-            typer.echo('Wiki is empty.')
+            # a scope or a filter narrowed the run: nothing shown is no sign
+            # that the wiki holds nothing
+            if name or (category is not None) or (markdown is not None):
+                typer.echo('No entries match.')
+            else:
+                typer.echo('Wiki is empty.')
 
     return app
 

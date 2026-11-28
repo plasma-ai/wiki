@@ -89,6 +89,7 @@ __all__ = [
     'test_map_respects_view_options',
     'test_map_filters_by_category',
     'test_map_empty_wiki_reports_empty',
+    'test_map_says_no_entries_match_when_narrowed_to_nothing',
     'test_map_stat_and_desc_limit_bounds',
     'test_match_output_modes',
     'test_match_field_and_ignore_case',
@@ -2285,7 +2286,30 @@ def test_map_empty_wiki_reports_empty(tmp_path: pathlib.Path) -> None:
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     result = _wiki(root, 'map', '--path', str(root))
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'empty' in result.stdout.lower()
+    assert result.stdout == 'Wiki is empty.\n'
+
+
+def test_map_says_no_entries_match_when_narrowed_to_nothing(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A scope or a filter that shows nothing says so, not that the wiki is empty."""
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    # a wiki that holds one page, at its root
+    _write(root / 'note.md', _page('Note', 'A note.', 'Body.'))
+    assert _wiki(root, 'update').returncode == 0
+    assert _wiki(root, 'map').stdout.startswith('note ')
+    # a filter: a category no entry has, then a kind the wiki lacks
+    for narrowing in (('--category', 'nosuch'), ('--no-markdown',)):
+        result = _wiki(root, 'map', *narrowing)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.stdout == 'No entries match.\n', narrowing
+    # a scope: a folder that holds nothing
+    args = ('new', 'empty', '--desc', 'Nothing yet.', '--content', 'Body.')
+    assert _wiki(root, *args).returncode == 0
+    result = _wiki(root, 'map', 'empty')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == 'No entries match.\n'
 
 
 def test_map_stat_and_desc_limit_bounds(wiki: pathlib.Path) -> None:

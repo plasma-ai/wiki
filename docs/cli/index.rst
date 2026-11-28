@@ -813,9 +813,10 @@ iterated in index order, so a file not yet linked (update pending) does not
 appear. An unindexed folder renders as ``name/ (unindexed)`` with no children;
 a row whose target is gone (pending prune) renders ``(broken)`` and is never
 recursed into. Each line has the shape ``[category] name[/] (count): desc``.
-An empty result prints ``Wiki is empty.``; an index missing its ``***``
-delimiter still maps via a best-effort recovery of its link block, with a
-stderr warning to run ``wiki update``.
+An empty result prints ``Wiki is empty.``, or ``No entries match.`` when a
+``name``, ``--category`` or ``--markdown``/``--no-markdown`` narrowed the run;
+an index missing its ``***`` delimiter still maps via a best-effort recovery of
+its link block, with a stderr warning to run ``wiki update``.
 
 .. list-table::
    :header-rows: 1
