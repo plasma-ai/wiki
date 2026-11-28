@@ -421,6 +421,13 @@ class Wiki:
                 f'timestamp.format must render a single non-empty line, got'
                 f' {_as_json(format)} in {WIKI_SETTINGS}.'
             )
+        # a NUL cuts the format short where strftime takes a C string, and a
+        # stamp that holds one never reads back from frontmatter
+        if '\0' in format:
+            raise ValueError(
+                f'timestamp.format must not hold a NUL character, got'
+                f' {_as_json(format)} in {WIKI_SETTINGS}.'
+            )
         # every % opens a listed directive, so a % that ends the format opens none
         for directive in re.findall(r'%.?', format, re.DOTALL):
             if directive not in _STAMP_DIRECTIVES:

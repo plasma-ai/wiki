@@ -238,7 +238,8 @@ are rendered (see :doc:`/guide/generation` for when they are written).
    author's own claim). Four rules are checked when the policy loads:
 
    - The format renders a single non-empty line: empty or whitespace-only
-     values and literal line breaks are rejected.
+     values and literal line breaks are rejected. A NUL character is
+     rejected too: a stamp that holds one never reads back.
    - The format holds only the directives ``%Y``, ``%m``, ``%d``, ``%H``,
      ``%M``, ``%S``, ``%z`` and ``%%`` (a percent sign), with literal text
      around them. Each renders the same text on every machine. Any other

@@ -39,6 +39,7 @@ __all__ = [
     'test_timestamp_timezone_configurable',
     'test_timestamp_zone_swaps_default_z_for_offset',
     'test_timestamp_format_rejects_blank_or_multiline',
+    'test_timestamp_format_rejects_a_nul_character',
     'test_timestamp_format_stamps_parse_back',
     'test_timestamp_format_rejects_an_unsupported_directive',
     'test_timestamp_format_rejects_a_digit_after_the_offset',
@@ -569,6 +570,38 @@ def test_timestamp_format_rejects_blank_or_multiline(
     # the bad format fails loudly when update resolves the timestamp policy
     with pytest.raises(ValueError, match='single non-empty line'):
         Wiki(tmp_path).update()
+
+
+@pytest.mark.parametrize(
+    argnames='format',
+    argvalues=['\0%Y', '%Y\0%m', '%Y\0'],
+    ids=['first', 'inside', 'last'],
+)
+def test_timestamp_format_rejects_a_nul_character(
+    tmp_path: pathlib.Path,
+    format: str,
+) -> None:
+    """A ``timestamp.format`` that holds a NUL character is a settings error.
+
+    Interpreters disagree on the stamp such a format renders, and none
+    reads it back from frontmatter, so the format is refused wherever
+    the NUL sits. Nothing is stamped under it, and lint refuses it alike
+    rather than fail on every stamp.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    (tmp_path / 'page.md').write_text('Body.\n', encoding='utf-8')
+    path = tmp_path / '.wiki' / 'settings.json'
+    path.write_text(json.dumps({'timestamp': {'format': format}}), encoding='utf-8')
+    message = (
+        f'timestamp.format must not hold a NUL character, got {json.dumps(format)}'
+        ' in .wiki/settings.json.'
+    )
+
+    for operation in (Wiki(tmp_path).update, Wiki(tmp_path).lint):
+        with pytest.raises(ValueError) as excinfo:
+            operation()
+        assert str(excinfo.value) == message
+    assert (tmp_path / 'page.md').read_text(encoding='utf-8') == 'Body.\n'
 
 
 @pytest.mark.parametrize(
