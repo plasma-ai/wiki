@@ -631,22 +631,23 @@ should hold gets its layer in `layers` and its row in the spec's table.
 
 `python -m parity contracts` holds a built wheel and sdist to what the package
 keeps for whoever installs it (`parity/contracts.py`): the distribution name,
-the bare version, a `wiki` that is the wheel's binary and works where an
-installer puts it, an upgrade from v1's wheel and back, and a project that pins
-the commit and builds it. It compares no two engines. What the files must be is
-read from the checkout, the version in `Cargo.toml` and the commit of `HEAD`, so
-build the wheel and the sdist at the commit they are checked at. Every install
-runs on a scratch host below the work folder, which inherits nothing and holds
-no `cargo`: the sdist and the pin are built as on a host with no Rust, which
-fetches the pinned toolchain and needs the network. The `contracts` job of
-`build.yaml` runs the checks on the wheels that workflow builds, on macOS and on
-Linux, and the `publish` job waits for it. A new contract of the package gets
-its check in `CHECKS` and its row in the spec's table. A check that no wheel can
-fail proves nothing, so `parity/tests/test_contracts.py` doctors a stand-in
-wheel in the one thing each of seven checks holds; for `sdist` that is the empty
-build id, with a stand-in in the sdist's place. No test builds the sdist or runs
-`upgrade` or `lock`, which fetch a Rust toolchain and v1's packages: only the
-job's real runs hold those.
+the bare version, a `wiki` that is the wheel's binary and works where each
+installer puts it (uv, pip, pipx, `uv tool`, `uv run --with`), an upgrade from
+v1's wheel and back, and a project that pins the commit and builds it. It
+compares no two engines. What the files must be is read from the checkout, the
+version in `Cargo.toml` and the commit of `HEAD`, so build the wheel and the
+sdist at the commit they are checked at. Every install runs on a scratch host
+below the work folder, which inherits nothing and holds no `cargo`: the sdist
+and the pin are built as on a host with no Rust, which fetches the pinned
+toolchain and needs the network. The `contracts` job of `build.yaml` runs the
+checks on the wheels that workflow builds, on macOS and on Linux, and the
+`publish` job waits for it. A new contract of the package gets its check in
+`CHECKS` and its row in the spec's table. A check that no wheel can fail proves
+nothing, so `parity/tests/test_contracts.py` doctors a stand-in wheel in the one
+thing each of twelve checks holds; for `sdist` that is the empty build id, with
+a stand-in in the sdist's place. No test builds the sdist or runs `pipx`,
+`upgrade` or `lock`, which fetch pipx, v1's packages and a Rust toolchain: only
+the job's real runs hold those.
 
 `python -m parity container` runs one command in the Linux container
 (`parity/container.py`, `parity/Dockerfile`): the Ubuntu release of the CI

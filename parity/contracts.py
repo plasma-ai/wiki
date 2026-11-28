@@ -43,6 +43,12 @@ CHECKS = (
     'venv',
     'symlink',
     'space',
+    'pip',
+    'user',
+    'target',
+    'pipx',
+    'tool',
+    'run',
     'sdist',
     'upgrade',
     'lock',
@@ -74,11 +80,17 @@ _HOMES = {
     'CARGO_HOME': 'cargo',
     'RUSTUP_HOME': 'rustup',
     'UV_CACHE_DIR': 'uv-cache',
+    'UV_TOOL_DIR': 'uv-tools',
+    'UV_TOOL_BIN_DIR': 'uv-tools-bin',
 }
 # the locale of the scratch host: a UTF-8 locale macOS and Linux both ship
 _LANG = 'C.UTF-8'
 # the installers the upgrade runs with: uv, and the pip of the venv
 _INSTALLERS = ('uv', 'pip')
+# the file that pins every package of the venv pipx runs from
+_PIPX = pathlib.Path(__file__).with_name('constraints') / 'pipx.txt'
+# prints the interpreter a venv is made from, which lies outside every venv
+_BASE = 'import sys\nprint(sys._base_executable)'
 # the project that pins a commit: it builds nothing of its own
 _PROJECT = """\
 [project]
@@ -272,6 +284,10 @@ def run(
         # NOTE: uv reads a settings file from every folder above the one it
         # runs in, and from the system's own
         'UV_NO_CONFIG': '1',
+        # NOTE: a check runs pip and venv of the interpreter the venvs are made
+        # from, which may lie outside the work folder, and Python would keep
+        # the bytecode of those modules beside them
+        'PYTHONDONTWRITEBYTECODE': '1',
         'LANG': _LANG,
     }
     env.update({name: f'{home / folder}' for name, folder in _HOMES.items()})
@@ -284,6 +300,12 @@ def run(
         'venv': _check_venv,
         'symlink': _check_symlink,
         'space': _check_space,
+        'pip': _check_pip,
+        'user': _check_user,
+        'target': _check_target,
+        'pipx': _check_pipx,
+        'tool': _check_tool,
+        'run': _check_run,
         'sdist': _check_sdist,
         'upgrade': _check_upgrade,
         'lock': _check_lock,
@@ -440,6 +462,83 @@ def _check_space(host: _Host) -> list[str]:
     return _works(host, wiki, 'project')
 
 
+def _check_pip(host: _Host) -> list[str]:
+    """Check the ``wiki`` that the pip of a venv installs.
+
+    Python's own ``venv`` module makes the venv, with the pip the
+    interpreter ships.
+    """
+    venv = host.work / host.check / 'venv'
+    _tool(host, 'venv', [_interpreter(host), '-m', 'venv', f'{venv}'])
+    _install(host, 'install', venv, host.package.wheel, pip=True)
+    wiki = _wiki(host, venv / 'bin' / 'wiki', build=host.package.commit)
+    return _works(host, wiki, 'project')
+
+
+def _check_user(host: _Host) -> list[str]:
+    """Check the ``wiki`` of an install for the user, into no venv.
+
+    pip puts it below the user's base folder, which the scratch host keeps
+    below its home.
+    """
+    # NOTE: an interpreter that uv fetched refuses an install into no venv,
+    # the user's folder included, until pip is told to go on
+    cmd = [_interpreter(host), '-m', 'pip', 'install', '--user']
+    cmd += ['--break-system-packages', f'{host.package.wheel}']
+    _tool(host, 'install', cmd)
+    base = pathlib.Path(host.env['PYTHONUSERBASE'])
+    wiki = _wiki(host, base / 'bin' / 'wiki', build=host.package.commit)
+    return _works(host, wiki, 'project')
+
+
+def _check_target(host: _Host) -> list[str]:
+    """Check the ``wiki`` of an install into a folder that is no environment."""
+    folder = host.work / host.check / 'target'
+    cmd = [_interpreter(host), '-m', 'pip', 'install', '--target', f'{folder}']
+    _tool(host, 'install', [*cmd, f'{host.package.wheel}'])
+    wiki = _wiki(host, folder / 'bin' / 'wiki', build=host.package.commit)
+    return _works(host, wiki, 'project')
+
+
+def _check_pipx(host: _Host) -> list[str]:
+    """Check the ``wiki`` that pipx links into its folder of commands."""
+    venv = _venv(host, host.work / host.check / 'pipx')
+    cmd = [host.uv, 'pip', 'install', '--python', f'{venv / "bin" / "python"}']
+    _tool(host, 'pipx', [*cmd, '--no-deps', '--requirements', f'{_PIPX}'])
+    # NOTE: pipx picks its installer by what the host holds, and its pip
+    # backend fetches the newest pip, so the check names the uv backend
+    pipx = [f'{venv / "bin" / "pipx"}', 'install', '--backend', 'uv']
+    _tool(host, 'install', [*pipx, f'{host.package.wheel}'])
+    folder = pathlib.Path(host.env['PIPX_BIN_DIR'])
+    wiki = _wiki(host, folder / 'wiki', build=host.package.commit)
+    return _works(host, wiki, 'project')
+
+
+def _check_tool(host: _Host) -> list[str]:
+    """Check the ``wiki`` that ``uv tool install`` links into its folder of commands."""
+    cmd = [host.uv, 'tool', 'install', '--python', host.package.python]
+    _tool(host, 'install', [*cmd, f'{host.package.wheel}'])
+    folder = pathlib.Path(host.env['UV_TOOL_BIN_DIR'])
+    wiki = _wiki(host, folder / 'wiki', build=host.package.commit)
+    return _works(host, wiki, 'project')
+
+
+def _check_run(host: _Host) -> list[str]:
+    """Check the ``wiki`` that ``uv run --with`` runs.
+
+    uv installs the wheel into an environment it keeps for the one command,
+    and finds ``wiki`` there by its name.
+    """
+    package = host.package
+    # NOTE: over an environment in which a plasma-wiki 1.x is installed, uv
+    # copies the ``wiki`` script of that distribution ahead of the wheel's, so
+    # the interpreter is the one outside every venv, which holds none
+    through = [host.uv, 'run', '--quiet', '--no-project']
+    through += ['--python', _interpreter(host), '--with', f'{package.wheel}']
+    wiki = _wiki(host, pathlib.Path('wiki'), build=package.commit, through=through)
+    return _works(host, wiki, 'project')
+
+
 def _check_sdist(host: _Host) -> list[str]:
     """Check that an install from the sdist builds a working ``wiki``.
 
@@ -504,7 +603,8 @@ def _check_lock(host: _Host) -> list[str]:
     repository of the checkout at the checkout's commit. ``uv lock`` must
     record that commit as the source, and ``uv sync --locked`` must build
     it on the scratch host, whose binary then carries the commit as its
-    build id.
+    build id: run from the project's venv, and through a link in another
+    folder.
     """
     package = host.package
     project = host.work / host.check / 'pinned'
@@ -525,8 +625,13 @@ def _check_lock(host: _Host) -> list[str]:
             f' {package.commit}'
         )
     _tool(host, 'sync', [host.uv, 'sync', '--locked', *python], cwd=project)
-    wiki = _wiki(host, project / '.venv' / 'bin' / 'wiki', build=package.commit)
-    return problems + _works(host, wiki, 'project')
+    built = project / '.venv' / 'bin' / 'wiki'
+    problems += _works(host, _wiki(host, built, build=package.commit), 'project')
+    link = host.work / host.check / 'elsewhere' / 'wiki'
+    link.parent.mkdir()
+    link.symlink_to(built)
+    linked = _works(host, _wiki(host, link, build=package.commit), 'linked')
+    return problems + [f'through a link: {problem}' for problem in linked]
 
 
 def _works(host: _Host, wiki: Side, label: str) -> list[str]:
@@ -580,14 +685,24 @@ def _bare(host: _Host, shown: side.Outcome) -> list[str]:
     ]
 
 
-def _wiki(host: _Host, path: pathlib.Path, *, build: str) -> Side:
-    """Return the ``wiki`` at ``path`` as a side that must prove the build id ``build``."""
+def _wiki(
+    host: _Host,
+    path: pathlib.Path,
+    *,
+    build: str,
+    through: Sequence[str] = (),
+) -> Side:
+    """Return the ``wiki`` at ``path`` as a side that must prove the build id ``build``.
+
+    ``through`` is a command that runs it, and ``path`` is then the name
+    that command finds it by.
+    """
     identity = {
         'engine': binary.ENGINE,
         'version': host.package.version,
         'build': build,
     }
-    return Side(name=host.check, argv=(f'{path}',), identity=identity)
+    return Side(name=host.check, argv=(*through, f'{path}'), identity=identity)
 
 
 def _installed(host: _Host, name: str = 'venv') -> pathlib.Path:
@@ -601,6 +716,26 @@ def _installed(host: _Host, name: str = 'venv') -> pathlib.Path:
     venv = _venv(host, host.work / host.check / name)
     _install(host, 'install', venv, host.package.wheel)
     return venv
+
+
+def _interpreter(host: _Host) -> str:
+    """Return the interpreter the venvs of the host are made from.
+
+    Raises:
+        RuntimeError: If uv cannot make the venv that names it.
+
+    """
+    venv = _venv(host, host.work / host.check / 'base')
+    done = subprocess.run(
+        [f'{venv / "bin" / "python"}', '-c', _BASE],
+        cwd=host.work,
+        env=host.env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return done.stdout.strip()
 
 
 def _venv(host: _Host, folder: pathlib.Path, *, seed: bool = False) -> pathlib.Path:
