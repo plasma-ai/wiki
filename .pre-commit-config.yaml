@@ -68,3 +68,18 @@ repos:
           - --wrap
           - "80"
           - --number
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all -- --config group_imports=StdExternalCrate,imports_granularity=Item
+        language: system
+        types:
+          - rust
+        pass_filenames: false
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: env CARGO_BUILD_WARNINGS=deny cargo clippy --workspace --all-targets --all-features --locked
+        language: system
+        files: (\.rs|Cargo\.toml|Cargo\.lock|clippy\.toml)$
+        pass_filenames: false

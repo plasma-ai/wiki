@@ -12,24 +12,40 @@ on:
       - dev
       - v2
 
+env:
+  CARGO_BUILD_WARNINGS: deny
+
 jobs:
   tests:
     name: tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v6
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
         with:
-          enable-cache: true
-          cache-dependency-glob: "**/pyproject.toml"
-      - name: Install package with test dependencies
-        run: ./install.sh --all-extras --groups=test
+          save-if: ${{ github.event_name == 'push' }}
+      - name: Install cargo tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.152,cargo-llvm-cov@0.9.2
       - name: Run tests
-        run: uv run --no-sync pytest --cov --cov-report=xml
+        run: cargo llvm-cov nextest --workspace --all-targets --all-features --locked --profile ci --lcov --output-path lcov.info
+      - name: Run doctests
+        run: cargo test --workspace --doc --all-features --locked
       - name: Report coverage
+        if: runner.os == 'Linux'
         uses: codecov/codecov-action@v6
         with:
-          files: ./coverage.xml
+          files: ./lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
   parity:
     name: parity

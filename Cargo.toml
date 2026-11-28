@@ -1,0 +1,88 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+version = "2.0.0-dev.1"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+rust-version = "1.100.0"
+
+[workspace.dependencies]
+anstream = "1.0.0"
+anstyle = "1.0.14"
+anyhow = "1.0.105"
+clap = "4.6.10"
+clap_complete = "4.6.12"
+include_dir = "0.7.4"
+insta = "1.49.0"
+rusqlite = { version = "0.43.0", default-features = false }
+tempfile = "3.27.0"
+thiserror = "2.0.21"
+
+wiki-core = { path = "crates/wiki-core" }
+
+[workspace.lints.rust]
+elided_lifetimes_in_paths = "warn"
+missing_debug_implementations = "warn"
+missing_docs = "warn"
+unreachable_pub = "warn"
+unsafe_code = "forbid"
+unused_lifetimes = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+# restriction
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+dbg_macro = "warn"
+error_impl_error = "warn"
+map_err_ignore = "warn"
+mod_module_files = "warn"
+multiple_unsafe_ops_per_block = "warn"
+print_stderr = "warn"
+print_stdout = "warn"
+todo = "warn"
+undocumented_unsafe_blocks = "warn"
+unimplemented = "warn"
+unused_trait_names = "warn"
+unwrap_used = "warn"
+# pedantic
+cast_lossless = "warn"
+cast_possible_truncation = "warn"
+cast_possible_wrap = "warn"
+cast_sign_loss = "warn"
+cloned_instead_of_copied = "warn"
+enum_glob_use = "warn"
+explicit_into_iter_loop = "warn"
+explicit_iter_loop = "warn"
+fn_params_excessive_bools = "warn"
+implicit_clone = "warn"
+macro_use_imports = "warn"
+manual_let_else = "warn"
+match_wildcard_for_single_variants = "warn"
+needless_pass_by_value = "warn"
+non_std_lazy_statics = "warn"
+redundant_else = "warn"
+ref_option = "warn"
+return_self_not_must_use = "warn"
+semicolon_if_nothing_returned = "warn"
+uninlined_format_args = "warn"
+unnested_or_patterns = "warn"
+unreadable_literal = "warn"
+wildcard_imports = "warn"
+
+[profile.dev.package.insta]
+opt-level = 3        # snapshot assertions spend their time diffing
+
+[profile.dev.package.similar]
+opt-level = 3        # the diffing library behind insta
+
+[profile.release]
+codegen-units = 1    # whole-crate optimization for the shipped artifact
+lto = "thin"         # cross-crate inlining at near-default build time
+
+[profile.profiling]
+inherits = "release"
+debug = true         # symbols for samply, perf, Instruments

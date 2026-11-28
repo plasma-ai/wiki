@@ -366,6 +366,10 @@ so exit 1 always means that a check failed.
   base branch lacks, that branch holds v1: `base` takes the merge base with it,
   and `level` counts the unmerged commits of both branches. Once the base branch
   holds it, or the branch is gone, the base branch alone holds v1.
+- **Removed paths.** A line of `parity/removed.txt` names a file or a folder,
+  and a folder covers every file below it. A file that v1 adds to a removed
+  folder merges with no conflict at the next sync, and the folder's line is what
+  fails the check then.
 - **Where they run.** `base` and `removed` depend on the tree alone and run on
   every pull request. `level` changes when v1 gains a commit, so it runs where a
   person or an agent reads it: at the start of a work session and at each gate.
@@ -424,9 +428,13 @@ The side's own variables are applied last. stdin is the null device.
   appends one line of JSON to the file: `engine`, `version` and `build`. For a
   v1 side the launcher writes it, with the engine `python`, the package's
   version and the commit its checkout's `HEAD` holds, and takes the variable out
-  of the command's environment. A command that leaves anything but the expected
-  record, once, is an `identity` difference: the side is not the engine it
-  names.
+  of the command's environment. The Rust binary writes it itself, before it
+  reads its arguments, with the engine `rust`, the workspace's version and the
+  commit of the checkout it was built in, which its build script reads from
+  git's files; a binary built outside a checkout writes an empty `build`. It
+  writes the record only once its bundled SQLite has matched a row of a
+  full-text table. A command that leaves anything but the expected record, once,
+  is an `identity` difference: the side is not the engine it names.
 
 ## Snapshots
 

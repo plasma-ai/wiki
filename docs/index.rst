@@ -10,12 +10,6 @@ sync with the filesystem. It is built for developers and coding agents who
 keep project knowledge in git alongside the code.
 
 .. toctree::
-   :maxdepth: 3
-   :titlesonly:
-
-   api
-
-.. toctree::
    :maxdepth: 2
 
    guide/index
@@ -26,5 +20,4 @@ Indices and tables
 ------------------
 
 * :ref:`genindex`
-* :ref:`modindex`
 * :ref:`search`

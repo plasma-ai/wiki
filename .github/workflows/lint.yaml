@@ -11,10 +11,16 @@ on:
       - main
       - dev
       - v2
+  schedule:
+    - cron: "0 6 * * 1"
+
+env:
+  CARGO_BUILD_WARNINGS: deny
 
 jobs:
   lint:
     name: lint
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -22,6 +28,16 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: "**/pyproject.toml"
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name == 'push' }}
+      - name: Install cargo tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.22.1,cargo-shear@1.14.1
       - name: Cache pre-commit hooks
         uses: actions/cache@v4
         with:
@@ -43,3 +59,21 @@ jobs:
           fi
       - name: Reject forbidden file patterns
         run: test -z "$(find . -name "*.rej" -print -quit)" || exit 1
+      - name: Check Rust supply chain
+        run: |
+          cargo deny --locked check bans licenses sources
+          cargo shear --locked
+  advisories:
+    name: advisories
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Install cargo tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.22.1
+      - name: Check Rust advisories
+        run: cargo deny --locked check advisories

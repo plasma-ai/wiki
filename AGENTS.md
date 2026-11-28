@@ -22,12 +22,17 @@ below):
 
 ## Overview
 
-`plasma-wiki` is a standalone plugin providing the **wiki** skill.
+`plasma-wiki` is a standalone plugin providing the **wiki** skill, and the
+`wiki` command-line tool the skill drives.
 
-The `wiki/` Python package is organized into `cli/` (typer app), `core/`
-(business logic), `skills/` (the plugin skill), `util/` (shared utilities), and
-`_assets/` (wiki config templates and the git merge driver), with the pytest
-suite in `tests/`.
+The tool is a Cargo workspace under `crates/`, which maturin builds into a wheel
+that holds only the `wiki` binary. `wiki/skills/` (the plugin skill) and
+`wiki/_assets/` (the Obsidian config templates, the bundled Obsidian plugin and
+the git merge driver) are plain folders: the binary embeds the skill and the
+Obsidian files, and the plugin manifests point at the skill. The engine is a
+port of v1, the Python tool at the commit `parity/oracle.toml` names. v1's
+commands arrive one at a time, and `parity/ported.toml` lists the ones the
+binary has; beside them it holds `install` and `completion`.
 
 `parity/` at the repository root is the parity harness, a development tool that
 runs two engines on clones of one tree and reports every difference between them
@@ -44,33 +49,27 @@ driver auto-resolves the generated region of `_index.md` merges, so parallel
 edits conflict only on authored prose; `wiki config` installs the Obsidian
 integration.
 
-`core/` decomposes into `wiki.py` (the `Wiki` engine class), `format.py`
-(functions over the on-disk page format; frontmatter values come from PyYAML's
-composed node graph, with the line grammar as the fallback for a block a strict
-reader rejects, and every write stays byte-level; the composed blocks and
-quoting verdicts are memoized for one public `Wiki` operation, bracketed by
-`format.run_scoped`), `event.py` (the payload-only `Event` base), `_obsidian.py`
-(the internal Obsidian integration), and `_search.py` (the internal SQLite FTS5
-index). Engine diagnostics are typed notice events: each kind has an `on_<kind>`
-hook delegating to the `on_notice` funnel, which logs `event.description`
-through the stdlib `Wiki.logger`; hosts intercept by overriding hooks (the CLI
-swaps `on_notice` per instance to capture and condense narration).
-
 ## Build & Development
 
 ```bash
-# install dev dependencies (creates a .venv if none is active)
-./install.sh --all-extras --groups=test,lint,type
+# install the pinned Rust toolchain (reads rust-toolchain.toml)
+rustup toolchain install
+
+# install dev dependencies and the binary (creates a .venv if none is active)
+./install.sh --groups=lint,docs,parity,type
 
 # or set up the environment manually
-uv sync --all-extras --group test --group lint --group type
+uv sync --group lint --group docs --group parity --group type
 uv run pre-commit install
 
+# run the tool from the workspace
+cargo run -- --help
+
 # run tests
-uv run --no-sync pytest
+cargo nextest run
+cargo test --doc
 
 # run the parity harness's tests (they run v1 from the oracle checkout)
-uv sync --inexact --group parity
 uv run --no-sync python -m parity oracle ensure
 uv run --no-sync pytest parity
 
@@ -104,12 +103,14 @@ uv run --no-sync pre-commit run [--all-files]
 # run type check (not enforced)
 uv run --no-sync pyright
 
-# run security scan (not enforced)
-uv sync --inexact --group security
-uv run --no-sync safety scan
+# run supply-chain checks
+cargo deny --locked check bans licenses sources
+cargo shear --locked
 ```
 
-The test suite uses `pytest` with `--doctest-modules` enabled.
+The Cargo workspace under `crates/` is tested with `cargo-nextest`, and the
+pre-commit hooks run `cargo fmt` and `cargo clippy` on it. The harness's tests
+use `pytest` with `--doctest-modules` enabled.
 
 ## Consistency
 
@@ -420,67 +421,18 @@ prevents a plausible wrong "fix" — never by narrating what the code visibly
 does, restating signatures, or baking in considered-and-rejected alternatives.
 One load-bearing sentence beats four explanatory ones.
 
-Step-by-step `# verb noun` comments before logical blocks — but aim for the
-middle ground: short methods need no comments; longer methods label logical
-blocks, not every line, and never leave long stretches of dense logic
-uncommented.
-
-Module-level public data (constants, type aliases) carries `#:` doc-comments
-rather than plain `#` comments — Sphinx autodoc renders only doc-commented data
-members.
+In the Python of `parity/`, step-by-step `# verb noun` comments come before
+logical blocks — but aim for the middle ground: short methods need no comments;
+longer methods label logical blocks, not every line, and never leave long
+stretches of dense logic uncommented. Module-level public data (constants, type
+aliases) carries `#:` doc-comments rather than plain `#` comments.
 
 No absolute paths in persisted data — everything should be relative or derivable
 from the git repo root.
 
-See `pyproject.toml` for formatter/linter config.
-
-### CLI Commands (`cli/cmd/`)
-
-- All commands live in a single module, `cli/cmd/wiki.py`; there are no sub-apps
-- Each command's registration function is named after the command, with
-  signature `def name(app: typer.Typer) -> typer.Typer`, registered directly on
-  the wiki app in `cli/main.py`
-- Use the `@command(app, 'name')` decorator (from `wiki.cli.utils`) — commands
-  are error-wrapped, catching all but typer's `Exit`/`Abort`/`BadParameter`
-- Typer args/options as local variables before the inner function
-- Do not inline method calls in `typer.echo()` — assign to a variable first
-- When mixing positional and keyword args in multi-line calls, pass all as
-  kwargs (unless the param is positional-only with `/`)
-- A command never catches `Exception` itself; the `@command` wrapper owns that.
-  The one sanctioned case is the `_merge` driver. A merge driver passes git's
-  merge exit code through, and hook code is loaded from outside the package and
-  can raise anything, so the driver's best-effort steps catch `Exception` around
-  hook code: `_index_canonicalizer`, `_merge_stamps`, `_is_managed_page` and
-  `_canonicalize_index`, each under a `# NOTE:` giving this reason. They catch
-  `SystemExit` too: a hook's exit would end the driver before the merge runs
-
-### Event Hooks
-
-Event hooks follow a uniform shape: the per-kind `on_<kind>` hooks on `Wiki`
-(`core/wiki.py`) each carry a `logging_level: int = logging.<LEVEL>` signature
-default and delegate to the `on_notice` funnel. Two sanctioned exceptions skew
-the audit (the `logging_level: int = logging\.` grep count vs the `def on_`
-count): `on_notice` itself takes `logging_level: Optional[int] = None` (severity
-falls back to the event's own `logging_level`), and the `Event` base in
-`core/event.py` declares a `logging_level` class default that the grep counts
-without being a hook. The two offset, so the raw totals happen to match — audit
-per-kind hooks against per-kind signature defaults, not the raw grep totals.
-
-### Clock
-
-Every wall-clock read goes through `_now` (`core/wiki.py`), so the
-`WIKI_FREEZE_TIME` test seam governs all of them: when the variable holds an RFC
-3339 instant, `_now` returns that instant instead of the clock's. `_pinned_now`
-is the one reader and validator of the variable. The `@command` wrapper calls it
-as each public command starts — after typer has parsed the command line, before
-the command's own option checks: an invalid value is a command error, and a
-valid one opens stderr with the fixed `_PINNED_CLOCK_NOTICE` line, so a seam
-left set in a real shell is never silent. Help, `--version` and a parse error
-never reach the wrapper, so they never read the variable. A private command is
-exempt: git reads the `_merge` driver's exit code as the merge outcome, and the
-driver reads no clock. A new clock read calls `_now`, never `datetime.now`
-(`grep -rn --include='*.py' 'datetime\.now' wiki` shows the one call, in
-`_now`).
+See `Cargo.toml` for the lint table, `clippy.toml` for the linter config, and
+the `cargo-fmt` hook in `.pre-commit-config.yaml` for the formatter config.
+`pyproject.toml` holds the formatter and linter config of `parity/`.
 
 ### Parity Harness
 
@@ -666,24 +618,3 @@ system. Its git and its processor architecture are not the runners', so a result
 there stands for Linux, not for CI. The clone holds what is committed, so commit
 before a run. Nothing a side runs on is mounted from the host. A change to the
 container changes the spec's Container section in the same commit.
-
-### Run Bracket
-
-Every operation the `Wiki` class docstring names carries `@format.run_scoped`
-(`core/format.py`): the bracket memoizes composed frontmatter blocks and quoting
-verdicts for one operation. A nested operation — `new` runs `update` — joins the
-enclosing run rather than opening its own, so the memo is freed when the
-outermost operation returns or raises. A subclass operation that reads
-frontmatter itself carries the decorator too, whether or not it calls the base
-method: a call inside a run joins it. The decorator count
-(`grep -c '@format.run_scoped' wiki/core/wiki.py`) equals the count of
-operations the class docstring names.
-
-### Shell Scripts
-
-The only shell script in the `wiki/` package is `_assets/git/merge_index.sh`,
-the git merge driver for `_index.md` files — `wiki init`/`wiki config` wire it
-into a target wiki's `.gitattributes` (`merge=wiki`), git invokes the hidden
-`wiki _merge` command, and the command dispatches `_index.md` pathnames to the
-script with fixed positional args. It is a merge driver, not a CLI; match its
-existing conventions when editing it.
