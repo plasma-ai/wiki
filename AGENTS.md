@@ -605,11 +605,15 @@ one tree, byte for byte: draw only from the generator the operator is handed,
 and write only through the tree, which sets every file's time (one of two fixed
 times far from any stamp, or the time an operator gives the file, which the file
 then keeps) and refuses a path that leads out of the checkout through a symlink.
-A new operator goes into `operators()`, with a row in the spec's table, and each
-kind it names takes the home `perturbation` in `parity/kinds.toml`; a run exits
-2 while the list and the operators disagree. `parity/seeds.toml` holds the seeds
-every pull request runs. A change to an operator changes what every seed leaves,
-so run the loop again on the committed seeds.
+The matrix of `perturb corpus` may draw any folder of the first two levels for
+its scoped commands, and it expects each command to work there. An operator that
+adds a folder on which v1 refuses one must say so: `invalid-folder` lists its
+folder as denied, and the matrix then expects `read` of it and `new` below it to
+exit 2. A new operator goes into `operators()`, with a row in the spec's table,
+and each kind it names takes the home `perturbation` in `parity/kinds.toml`; a
+run exits 2 while the list and the operators disagree. `parity/seeds.toml` holds
+the seeds every pull request runs. A change to an operator changes what every
+seed leaves, so run the loop again on the committed seeds.
 
 `python -m parity interpreters` compares the `alt` side with the oracle over the
 matrix on a snapshot of each corpus (`parity/interpreters.py`), with no
