@@ -659,8 +659,8 @@ def test_init_says_when_settings_are_not_applied(tmp_path: pathlib.Path) -> None
     root = tmp_path / 'wiki'
     seed = '{"naming":{"validate":["ascii"],"allow":"-"},"lint":{"strict":true}}'
     line = (
-        f'--settings was not applied: the wiki at {root} already exists, and'
-        ' init leaves its settings as they are.\n'
+        '--settings was not applied: init leaves the settings of the wiki at'
+        f' {root} as they are.\n'
     )
     init = _wiki(tmp_path, 'init', '--path', str(root), '--quiet', '--settings', seed)
     assert init.returncode == 0, init.stdout + init.stderr

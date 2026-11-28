@@ -1443,8 +1443,8 @@ def _echo_unapplied_settings(root: pathlib.Path, settings: Optional[dict]) -> No
             held = None
     if held != json.dumps(settings, sort_keys=True):
         line = (
-            f'--settings was not applied: the wiki at {root} already exists,'
-            ' and init leaves its settings as they are.'
+            '--settings was not applied: init leaves the settings of the wiki at'
+            f' {root} as they are.'
         )
         typer.echo(line, err=True)
 
