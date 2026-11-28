@@ -344,7 +344,7 @@ class Wiki:
                     f' {_as_json(pattern)} in {WIKI_SETTINGS}.'
                 )
             try:
-                pattern = re.compile(pattern)
+                pattern = wiki.util.re.quiet_compile(pattern)
             except re.error as e:
                 raise ValueError(
                     f'naming.pattern in {WIKI_SETTINGS} is not a valid regex: {e}'
@@ -2598,12 +2598,20 @@ class Wiki:
             List of ``(relative_path, line_number, line_text)``
             tuples. Line numbers are 1-based.
 
+        Raises:
+            ValueError: If ``pattern`` is not a valid regex.
+
         """
         # check every settings block before anything else
         self._validate_settings()
         # compile pattern
         flags = re.IGNORECASE if ignore_case else 0
-        regex = re.compile(pattern, flags)
+        # NOTE: the parser refuses a repeat count past its limit and a nesting
+        #   past the interpreter's stack with errors of their own
+        try:
+            regex = wiki.util.re.quiet_compile(pattern, flags)
+        except (re.error, OverflowError, RecursionError) as e:
+            raise ValueError(f'Invalid regex {pattern!r}: {e}') from e
         # resolve folder scope
         if name:
             folder = self._resolve_folder(name)
@@ -2634,7 +2642,7 @@ class Wiki:
                 if path.suffix == '.md':
                     self.on_read_skip(path=relpath)
                 continue
-            lines = text.split('\n')
+            lines = wiki.util.str.split_lines(text)
             # frontmatter is a markdown concept -- read slices non-md files
             # whole, so a non-md file's leading '---' pair is body content
             # here too, not a frontmatter block to lift off
@@ -4601,7 +4609,7 @@ class Wiki:
         body = body.strip()
         # slice the body
         if on == 'lines':
-            lines = body.splitlines()
+            lines = wiki.util.str.split_lines(body)
             result = '\n'.join(lines[start:stop])
         elif on == 'words':
             # words: keep the original span from the first to the last word
@@ -5791,15 +5799,15 @@ class Wiki:
         relpath = str(path.relative_to(self._root))
         # drop difflib's '---'/'+++' header lines; the path header replaces them
         diff = difflib.unified_diff(
-            current.splitlines(),
-            corrected.splitlines(),
+            wiki.util.str.split_lines(current),
+            wiki.util.str.split_lines(corrected),
             lineterm='',
         )
         body = list(diff)[2:]
         # a byte difference with no line-level delta is a final-newline change
-        # (splitlines cannot see one; CRLF drift reads clean through universal
-        # newlines and never reaches here); still report it so the flag never
-        # desyncs from update's byte compare
+        # (the line split cannot see one; CRLF drift reads clean through
+        # universal newlines and never reaches here); still report it so the
+        # flag never desyncs from update's byte compare
         if not body:
             return Issue(
                 f'{relpath}: Requires update (final newline differs)',

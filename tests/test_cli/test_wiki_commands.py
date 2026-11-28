@@ -95,6 +95,10 @@ __all__ = [
     'test_match_no_match_exits_nonzero',
     'test_match_line_flags_are_mutually_exclusive',
     'test_match_invalid_regex_reports_error',
+    'test_match_explains_an_unescaped_wikilink',
+    'test_match_hints_follow_the_pattern',
+    'test_match_reports_no_line_past_the_end',
+    'test_naming_pattern_prints_no_line_for_a_risky_regex',
     'test_match_resolution_failure_exits_two',
     'test_match_all_skips_undecodable_files',
     'test_match_names_a_page_it_cannot_decode',
@@ -103,9 +107,14 @@ __all__ = [
     'test_search_invalid_query_reports_error',
     'test_search_prefix_and_raw_are_mutually_exclusive',
     'test_search_limit_must_be_positive',
+    'test_number_options_take_plain_digits_only',
+    'test_number_arguments_accept_a_sign_and_leading_zeros',
+    'test_number_options_are_labeled_integer',
     'test_read_slice_forms',
+    'test_read_lines_count_as_match_numbers_them',
     'test_read_resolves_dotted_page_name',
     'test_read_errors',
+    'test_read_checks_its_slice_before_the_wiki',
     'test_read_slice_short_aliases',
     'test_colliding_short_flags_are_rejected',
     'test_read_outputs_bytes_verbatim',
@@ -258,6 +267,17 @@ _not_strict_json = pytest.mark.parametrize(
         'key-twice-in-a-block',
         'nested-128-levels',
     ],
+)
+
+# the line match prints for a pattern holding an unescaped [[
+_NESTED_SET_HINT = (
+    "An unescaped '[[' opens a character class; match a wikilink with '\\[\\['."
+)
+
+# the line match prints for a doubled set operator inside a character class
+_SET_OPERATOR_HINT = (
+    "A doubled '--', '&&', '~~' or '||' inside a character class is not a set"
+    ' operation; escape each character to match it as written.'
 )
 
 # one run of each command that reads policy, each with something to do in
@@ -2319,16 +2339,134 @@ def test_match_line_flags_are_mutually_exclusive(wiki: pathlib.Path) -> None:
     assert 'mutually exclusive' in (result.stdout + result.stderr).lower()
 
 
-def test_match_invalid_regex_reports_error(wiki: pathlib.Path) -> None:
+@pytest.mark.parametrize(
+    argnames='pattern',
+    argvalues=['[', 'a{4294967296}', '(' * 3000 + 'a' + ')' * 3000],
+    ids=['syntax', 'repeat-count', 'nesting'],
+)
+def test_match_invalid_regex_reports_error(wiki: pathlib.Path, pattern: str) -> None:
     """A malformed regex is an error (exit 2), distinct from a clean no-match.
 
     Grep reserves exit 2 for errors so a script following the documented
     branch-on-exit-code contract never reads a failed match (bad regex, no
-    wiki) as an absent term (exit 1).
+    wiki) as an absent term (exit 1). A repeat count past the parser's
+    limit and a nesting past the interpreter's stack are refused in the
+    same words as a syntax error.
     """
-    result = _wiki(wiki, 'match', '[', '--path', str(wiki))
+    result = _wiki(wiki, 'match', pattern, '--path', str(wiki))
     assert result.returncode == 2
-    assert 'error' in (result.stdout + result.stderr).lower()
+    # one line names the pattern as a regex, ahead of the parser's reason
+    assert result.stderr.startswith(f'Error: Invalid regex {pattern!r}: ')
+    assert result.stderr.count('\n') == 1
+    assert result.stdout == ''
+
+
+def test_match_explains_an_unescaped_wikilink(tmp_path: pathlib.Path) -> None:
+    """An unescaped ``[[`` draws a line that says how to match a wikilink.
+
+    ``[[`` is the wiki's own link syntax and a character class in a
+    regex, so the pattern most likely to be typed means something else.
+    The line stands in for Python's warning, which names a source line
+    of the install; the pattern still runs, or is refused, as the regex
+    it is.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', 'notes', '--path', str(root)).returncode == 0
+    body = 'see [[foo|bar]] here\ncar] park'
+    _write(root / 'p.md', _page(name='p', desc='A page.', body=body))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    # the pattern runs as a class and a literal ], matching what it matched
+    result = _wiki(root, 'match', '[[foo|bar]]', '--path', str(root), '--lines')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == 'p.md:10: see [[foo|bar]] here\np.md:11: car] park\n'
+    assert result.stderr.splitlines() == [_NESTED_SET_HINT]
+    # a pattern that does not compile gets the line and one error line
+    result = _wiki(root, 'match', '[[a/p', '--path', str(root))
+    assert result.returncode == 2
+    assert result.stdout == ''
+    lines = result.stderr.splitlines()
+    assert lines[:-1] == [_NESTED_SET_HINT]
+    assert lines[-1].startswith("Error: Invalid regex '[[a/p': ")
+
+
+@pytest.mark.parametrize(
+    argnames=('pattern', 'hints'),
+    argvalues=[
+        (r'[q&&]', [_SET_OPERATOR_HINT]),
+        (r'[[q&&]', [_NESTED_SET_HINT, _SET_OPERATOR_HINT]),
+        (r'\[\[foo|fish \& chips', []),
+    ],
+    ids=['doubled-operator', 'both', 'neither'],
+)
+def test_match_hints_follow_the_pattern(
+    tmp_path: pathlib.Path,
+    pattern: str,
+    hints: list[str],
+) -> None:
+    """Each risky construct draws one line, in a fixed order, and no other.
+
+    A doubled ``&&`` inside a character class reads as two characters
+    where another regex dialect intersects sets; a pattern holding
+    neither construct prints nothing beside its matches.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', 'notes', '--path', str(root)).returncode == 0
+    body = 'see [[foo|bar]] here\nfish & chips'
+    _write(root / 'p.md', _page(name='p', desc='A page.', body=body))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    result = _wiki(root, 'match', pattern, '--path', str(root))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'p.md' in result.stdout.splitlines()
+    assert result.stderr.splitlines() == hints
+
+
+def test_match_reports_no_line_past_the_end(wiki: pathlib.Path) -> None:
+    """``match '^$'`` reports the blank lines of a file and none past its end.
+
+    A file that ends with a newline has as many lines as newlines; the
+    newline that ends the last line is not an empty line after it.
+    """
+    text = (wiki / 'core' / 'design.md').read_text(encoding='utf-8')
+    assert text.endswith('\n')
+    line_count = text.count('\n')
+    result = _wiki(wiki, 'match', '^$', 'core', '--path', str(wiki), '--lineno')
+    assert result.returncode == 0, result.stdout + result.stderr
+    hits = result.stdout.splitlines()
+    assert any(hit.startswith('core/design.md:') for hit in hits)
+    assert f'core/design.md:{line_count + 1}' not in hits
+
+
+def test_naming_pattern_prints_no_line_for_a_risky_regex(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A ``naming.pattern`` Python warns about loads without a word.
+
+    The pattern is settings, not a command argument, so the warning's
+    source line would say nothing to whoever ran the command, and no
+    line of the command's own stands in for it: each run prints what it
+    prints under a pattern that draws no warning.
+    """
+    stderr = {}
+    for label, pattern in (('risky', '[[a-z&&]+'), ('plain', '[a-z]+')):
+        root = tmp_path / label / 'wiki'
+        settings = json.dumps({'naming': {'pattern': pattern}})
+        result = _wiki(
+            tmp_path,
+            'init',
+            'notes',
+            '--path',
+            str(root),
+            '--settings',
+            settings,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        stderr[label] = [result.stderr]
+        # the policy loads again in every run that checks a name
+        _write(root / 'p.md', _page(name='p', desc='A page.', body='Text.'))
+        result = _wiki(root, 'update', '--path', str(root))
+        assert result.returncode == 0, result.stdout + result.stderr
+        stderr[label].append(result.stderr)
+    assert stderr['risky'] == stderr['plain']
 
 
 def test_match_resolution_failure_exits_two(
@@ -2505,6 +2643,104 @@ def test_search_limit_must_be_positive(wiki: pathlib.Path) -> None:
     assert '--limit must be >= 1' in (result.stdout + result.stderr)
 
 
+# ------ number arguments
+
+
+@pytest.mark.parametrize(
+    argnames='args',
+    argvalues=[
+        ['map', '--depth', ' 1_0'],
+        ['map', '--depth', '\u0661'],
+        ['map', '--depth', ''],
+        ['map', '--desc-limit', '1.0'],
+        ['map', '--desc-limit', '9223372036854775808'],
+        ['search', 'widget', '--limit', '1e1'],
+    ],
+    ids=[
+        'padded-and-underscored',
+        'non-ascii-digit',
+        'empty',
+        'decimal-point',
+        'past-64-bits',
+        'exponent',
+    ],
+)
+def test_number_options_take_plain_digits_only(
+    wiki: pathlib.Path,
+    args: list[str],
+) -> None:
+    """A number option is an optional sign and ASCII digits, in 64 bits.
+
+    Anything else Python's ``int`` would read -- padding, ``_`` between
+    digits, a digit of another script (here an Arabic-Indic one) -- is a
+    usage error that names the option and shows the value, as is a
+    number outside the signed 64-bit range.
+    """
+    option, value = args[-2:]
+    result = _wiki(wiki, *args, '--path', str(wiki))
+    assert result.returncode == 2
+    assert result.stdout == ''
+    error = f"Error: Invalid value for '{option}': {value!r} is not a valid integer."
+    assert result.stderr.splitlines()[-1] == error
+
+
+@pytest.mark.parametrize(
+    argnames=('args', 'plain'),
+    argvalues=[
+        (['map', '--depth', '+01'], ['map', '--depth', '1']),
+        (['map', '--desc-limit', '-01'], ['map', '--desc-limit', '-1']),
+        (['map', '--depth', '9223372036854775807'], ['map']),
+        (['search', 'widget', '--limit', '01'], ['search', 'widget', '--limit', '1']),
+        (
+            ['read', 'core/design', '--lines', '+1:03'],
+            ['read', 'core/design', '--lines', '1:3'],
+        ),
+        (
+            ['read', 'core/design', '--lines', '-02:'],
+            ['read', 'core/design', '--lines', '-2:'],
+        ),
+    ],
+    ids=[
+        'depth-signed',
+        'desc-limit-negative',
+        'depth-at-the-64-bit-bound',
+        'limit-zero-led',
+        'slice-signed',
+        'slice-negative',
+    ],
+)
+def test_number_arguments_accept_a_sign_and_leading_zeros(
+    wiki: pathlib.Path,
+    args: list[str],
+    plain: list[str],
+) -> None:
+    """A sign and leading zeros spell the same number as its plain digits."""
+    result = _wiki(wiki, *args, '--path', str(wiki))
+    expected = _wiki(wiki, *plain, '--path', str(wiki))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == expected.stdout
+
+
+@pytest.mark.parametrize(
+    argnames=('command', 'options'),
+    argvalues=[
+        ('map', ['--depth', '--desc-limit']),
+        ('search', ['--limit']),
+    ],
+    ids=['map', 'search'],
+)
+def test_number_options_are_labeled_integer(
+    wiki: pathlib.Path,
+    command: str,
+    options: list[str],
+) -> None:
+    """Help labels each number option ``INTEGER``."""
+    result = _wiki(wiki, command, '--help')
+    assert result.returncode == 0, result.stdout + result.stderr
+    for option in options:
+        assert re.search(rf'^ +{option} INTEGER ', result.stdout, re.MULTILINE)
+
+
 # ------ read
 
 
@@ -2548,6 +2784,34 @@ def test_read_slice_forms(
     assert unexpected not in result.stdout
 
 
+def test_read_lines_count_as_match_numbers_them(tmp_path: pathlib.Path) -> None:
+    """``read --lines`` counts lines as ``match --lines`` numbers them.
+
+    Both break a page on newlines alone, so a form feed inside a line
+    shifts neither count, and the slice returns the line with the form
+    feed where the page has it.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', 'notes', '--path', str(root)).returncode == 0
+    body = 'alpha\nbe\x0cta\ngamma'
+    _write(root / 'p.md', _page(name='p', desc='A page.', body=body))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    # the slice's index 0 is the first body line, the H1
+    result = _wiki(root, 'match', '^# p$|^gamma$', '--path', str(root), '--lineno')
+    assert result.returncode == 0, result.stdout + result.stderr
+    heading, gamma = (
+        int(hit.removeprefix('p.md:'))
+        for hit in result.stdout.splitlines()
+        if hit.startswith('p.md:')
+    )
+    index = gamma - heading
+    # the two lines up to that index: the form-feed line whole, then gamma
+    spec = f'{index - 1}:{index + 1}'
+    result = _wiki(root, 'read', 'p', '--path', str(root), '--lines', spec)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.endswith('---\n\nbe\x0cta\ngamma\n')
+
+
 def test_read_resolves_dotted_page_name(wiki: pathlib.Path) -> None:
     """A page whose name contains a dot reads by its bare name (not just <name>.md).
 
@@ -2574,6 +2838,16 @@ def test_read_resolves_dotted_page_name(wiki: pathlib.Path) -> None:
         ('core/design', ['--words', 'abc'], 2, 'slice format'),
         # a slice with non-integer bounds is a usage error
         ('core/design', ['--words', 'a:b'], 2, 'slice format'),
+        # an empty slice value is a malformed slice, not an absent one
+        ('core/design', ['--lines', ''], 2, 'slice format'),
+        ('core/design', ['--words', ''], 2, 'slice format'),
+        ('core/design', ['--chars', ''], 2, 'slice format'),
+        # ... and still excludes another unit
+        ('core/design', ['--lines', '', '--words', '0:2'], 2, 'mutually exclusive'),
+        # a slice bound is an optional sign and plain digits, in 64 bits
+        ('core/design', ['--lines', ' +0:\u0661'], 2, 'slice format'),
+        ('core/design', ['--chars', '1_0:'], 2, 'slice format'),
+        ('core/design', ['--words', ':9223372036854775808'], 2, 'slice format'),
         # a missing entry is a clean runtime error, not a traceback
         ('core/missing_entry', [], 2, 'not found'),
         # a name escaping the wiki root is refused, not resolved
@@ -2584,6 +2858,13 @@ def test_read_resolves_dotted_page_name(wiki: pathlib.Path) -> None:
     ids=[
         'non-colon-slice',
         'non-integer-slice',
+        'empty-lines-slice',
+        'empty-words-slice',
+        'empty-chars-slice',
+        'empty-slice-beside-another',
+        'padded-and-non-ascii-slice',
+        'underscored-slice',
+        'slice-past-64-bits',
         'missing-entry',
         'escaping-name',
         'blank-name',
@@ -2600,6 +2881,24 @@ def test_read_errors(
     result = _wiki(wiki, 'read', name, '--path', str(wiki), *args)
     assert result.returncode == returncode
     assert needle in (result.stdout + result.stderr).lower()
+
+
+def test_read_checks_its_slice_before_the_wiki(tmp_path: pathlib.Path) -> None:
+    """A malformed slice is reported as one whatever ``--path`` names.
+
+    The slice is checked with the other arguments, before the wiki is
+    looked for, so a command line that is wrong in two ways is reported
+    as malformed first.
+    """
+    missing = tmp_path / 'nonexistent'
+    result = _wiki(tmp_path, 'read', 'a/p', '--path', str(missing), '--lines', 'zz')
+    assert result.returncode == 2
+    assert "Invalid slice format: 'zz'" in result.stderr
+    assert 'No wiki' not in result.stderr
+    # a well-formed slice leaves the missing wiki as the error
+    result = _wiki(tmp_path, 'read', 'a/p', '--path', str(missing), '--lines', '0:1')
+    assert result.returncode == 2
+    assert 'No wiki' in result.stderr
 
 
 @pytest.mark.parametrize(

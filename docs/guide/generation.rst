@@ -318,8 +318,8 @@ followed by an indented unified diff of exactly the change update would make —
 the comparison is byte-exact against update's plan, so lint and update agree
 about what is pending, with one exception: lint does not judge hand edits, so
 a file update restamps only because it was edited since its last commit
-(below) is listed by ``update --check`` and not by lint. A change only to the
-file's final
+(below) is listed by ``update --check`` and not by lint. The diff breaks lines
+on newlines alone, as the file does. A change only to the file's final
 newline reports as ``Requires update (final newline differs)``. A bare page
 (no frontmatter) is additionally named — ``Bare page (no frontmatter); update
 will adopt it`` — so the pending adoption is legible without reading its diff.

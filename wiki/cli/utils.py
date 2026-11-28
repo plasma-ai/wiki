@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import errno
 import fcntl
@@ -10,9 +11,11 @@ import importlib.util
 import json
 import os
 import pathlib
+import re
 import stat
 import sys
 import time
+import warnings
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any, Literal, Optional
 
@@ -39,9 +42,11 @@ from wiki.util.git import _git
 
 __all__ = [
     'command',
+    'parse_int',
     'parse_slice',
     'parse_settings',
     'require_utf8',
+    'pattern_hints',
     'is_trusted',
     'trust_root',
     'load_wiki_class',
@@ -80,6 +85,30 @@ _PINNED_CLOCK_NOTICE = (
 # is a breaking change)
 _INDEX_ATTRIBUTES = ('# Wiki index merge driver', '**/_index.md merge=wiki')
 _PAGE_ATTRIBUTES = ('# Wiki page merge driver', '*.md merge=wiki')
+
+# the one form a number argument takes: an optional sign, then ASCII digits,
+# with the leading zeros grouped apart from the digits that carry the value
+_INTEGER = re.compile(r'([+-]?)0*([0-9]+)')
+
+# the range a number argument must fit: a signed 64-bit integer, whose
+# largest magnitude has 19 digits
+_INT64_MIN = -(2**63)
+_INT64_MAX = 2**63 - 1
+_INT64_DIGITS = 19
+
+# the constructs Python's regex parser warns about, in the order their lines
+# print: the words that mark the warning, and the line printed in its place
+_PATTERN_HINTS = (
+    (
+        'nested set',
+        "An unescaped '[[' opens a character class; match a wikilink with '\\[\\['.",
+    ),
+    (
+        'Possible set ',
+        "A doubled '--', '&&', '~~' or '||' inside a character class is not a set"
+        ' operation; escape each character to match it as written.',
+    ),
+)
 
 
 def command(
@@ -133,6 +162,25 @@ def command(
     return decorator
 
 
+def parse_int(value: str) -> int:
+    """Parse a number argument: an optional sign and ASCII digits.
+
+    The number must fit a signed 64-bit integer. ``int`` reads more than
+    this form (surrounding whitespace, ``_`` between digits, the digits
+    of any script), so the form is checked before ``int`` sees the value.
+    """
+    message = f'{value!r} is not a valid integer.'
+    match = _INTEGER.fullmatch(value)
+    # a run past the digit count is out of range whatever it holds, and
+    # int() raises on one of several thousand digits
+    if (match is None) or (len(match[2]) > _INT64_DIGITS):
+        raise typer.BadParameter(message)
+    result = int(match[1] + match[2])
+    if not (_INT64_MIN <= result <= _INT64_MAX):
+        raise typer.BadParameter(message)
+    return result
+
+
 def parse_slice(value: Optional[str]) -> tuple[Optional[int], Optional[int]]:
     """Parse a slice string into ``(start, stop)``."""
     if value is None:
@@ -142,9 +190,9 @@ def parse_slice(value: Optional[str]) -> tuple[Optional[int], Optional[int]]:
         raise typer.BadParameter(message)
     left, right = value.split(':', 1)
     try:
-        start = int(left) if left else None
-        stop = int(right) if right else None
-    except ValueError as e:
+        start = parse_int(left) if left else None
+        stop = parse_int(right) if right else None
+    except typer.BadParameter as e:
         raise typer.BadParameter(message) from e
     return start, stop
 
@@ -178,6 +226,34 @@ def require_utf8(option: str, value: str) -> None:
         value.encode('utf-8')
     except UnicodeEncodeError:
         raise typer.BadParameter(f'{option} is not valid UTF-8.') from None
+
+
+def pattern_hints(pattern: str) -> list[str]:
+    """Return one line for each risky construct in a regex ``pattern``.
+
+    The lines stand in for the warnings Python's parser raises: one for an
+    unescaped ``[[``, then one for a doubled set operator inside a
+    character class. A pattern that does not compile keeps the lines its
+    parse reached.
+    """
+    # the cache answers a pattern it has compiled without parsing it, and
+    # only the parser warns
+    re.purge()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always', FutureWarning)
+        # refusing a pattern that does not compile is the engine's job
+        with contextlib.suppress(re.error, OverflowError, RecursionError):
+            re.compile(pattern)
+    messages = [
+        str(warning.message)
+        for warning in caught
+        if issubclass(warning.category, FutureWarning)
+    ]
+    return [
+        hint
+        for marker, hint in _PATTERN_HINTS
+        if any(marker in message for message in messages)
+    ]
 
 
 def is_trusted(root: pathlib.Path, /) -> bool:

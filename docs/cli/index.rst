@@ -62,6 +62,15 @@ naming the matching pattern), or fenced by the enclosing repo's gitignore.
 A symlinked scope is not refused as such: it resolves to its real target,
 and the root and exclusion checks apply to that target.
 
+Number arguments
+~~~~~~~~~~~~~~~~
+
+A number on the command line — a bound of a ``wiki read`` slice, ``map
+--depth``, ``map --desc-limit`` or ``search --limit`` — is an optional sign
+followed by ASCII digits, within the signed 64-bit range. Anything else is a
+usage error: a padded ``' 10'``, ``1_0``, ``1.0``, or a digit of another
+script.
+
 Errors and exit codes
 ~~~~~~~~~~~~~~~~~~~~~
 
@@ -280,7 +289,10 @@ The slice options are pairwise mutually exclusive and share the format
 body only: the frontmatter is lifted off, structural leading and trailing
 blank lines are stripped, the slice is taken, and the output re-emits the
 frontmatter plus the slice — with a trailing newline appended, unlike an
-unsliced read. Non-markdown files slice as a whole.
+unsliced read. Non-markdown files slice as a whole. ``--lines`` counts lines as
+``wiki match`` numbers them: a line ends at a newline and at nothing else, so a
+form feed stays inside its line and comes back unchanged. An empty slice value
+is refused as an invalid slice, as any other malformed one is.
 
 .. list-table::
    :header-rows: 1
@@ -420,6 +432,18 @@ indented as a whole, has no field lines to match; other mappings the repair
 refuses still match through the line grammar. An empty ``--field ""`` is an
 explicit empty field set that matches nothing — it does not fall back to a
 body match.
+
+The pattern runs on one line at a time. A line ends at a newline, and the
+newline that ends a file opens no empty line after it, so ``^$`` matches the
+blank lines a file holds and none past its end.
+
+A pattern that does not compile fails with ``Invalid regex '<pattern>':
+<reason>``. In a regex an unescaped ``[[`` opens a character class, so a
+pattern such as ``[[topics/example`` does not look for a wikilink: the command
+says so in one line on stderr and names the form that does, ``\[\[``. A
+doubled ``--``, ``&&``, ``~~`` or ``||`` inside a character class is not a set
+operation in a Python regex and draws a line of its own. Neither line changes
+the matches or the exit code.
 
 A page that is not valid UTF-8 cannot be matched. It is skipped and named on
 stderr (``Skipping <path>: unreadable, or not valid UTF-8``, the line

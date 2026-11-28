@@ -7,10 +7,12 @@ import fcntl
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import threading
 import time
+import warnings
 from typing import Optional
 
 import pytest
@@ -23,6 +25,7 @@ from wiki.cli.utils import (
     enclosing_wiki_root,
     is_trusted,
     load_wiki_class,
+    pattern_hints,
     resolve_wiki,
     resolve_wiki_root,
     trust_root,
@@ -59,6 +62,7 @@ __all__ = [
     'test_reused_command_honors_resolve_override',
     'test_resolve_wiki_default_class',
     'test_interrupt_reports_and_exits_130',
+    'test_pattern_hints_depend_on_the_pattern_alone',
     'test_merge_driver_wiring_ignores_ambient_git_dir',
     'test_configure_git_merge_driver',
     'test_merge_driver_maps_indexes_at_the_root_and_pages_in_the_wiki',
@@ -965,6 +969,25 @@ def test_interrupt_reports_and_exits_130() -> None:
     )
     assert result.returncode == 130, result.stderr
     assert result.stderr == 'Interrupted.\n'
+
+
+# ------ pattern_hints
+
+
+def test_pattern_hints_depend_on_the_pattern_alone() -> None:
+    """A pattern draws the same lines whatever compiled before it.
+
+    Python answers a pattern it has compiled from a cache, without the
+    parse that warns, so lines read off that warning could vanish for a
+    pattern another caller compiled first, or on a second ask.
+    """
+    pattern = '[[foo|bar]]'
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        re.compile(pattern)
+    hints = pattern_hints(pattern)
+    assert len(hints) == 1
+    assert pattern_hints(pattern) == hints
 
 
 # ------ configure_git_merge_driver
