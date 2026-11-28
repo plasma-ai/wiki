@@ -31,6 +31,7 @@ include = [
     { path = "CHANGELOG.md", format = ["sdist"] },
     { path = "rust-toolchain.toml", format = ["sdist"] },
     { path = "wiki/skills/**/*", format = ["sdist"] },
+    { path = "wiki/_assets/**/*", format = ["sdist"] },
 ]
 
 [dependency-groups]
@@ -61,6 +62,7 @@ cache-keys = [
     { file = "crates/**/Cargo.toml" },
     { file = "crates/**/*.rs" },
     { file = "wiki/skills/**/*" },
+    { file = "wiki/_assets/**/*" },
 ]
 
 [tool.ruff]
