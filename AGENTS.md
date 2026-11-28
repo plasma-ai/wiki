@@ -34,6 +34,25 @@ port of v1, the Python tool at the commit `parity/oracle.toml` names. v1's
 commands arrive one at a time, and `parity/ported.toml` lists the ones the
 binary has; beside them it holds `install` and `completion`.
 
+The workspace has five crates, each the home of one piece of the port.
+Dependencies point one way: the binary depends on the engine, the engine on the
+page format, and each of them on the two crates that know nothing about wikis.
+
+- `wiki-yaml` reads YAML as libyaml 0.2.5 does, the parser under v1's
+  frontmatter loader. It is the one crate that may hold `unsafe`.
+- `wiki-pytext` is Python's text behavior as the oracle's interpreter has it:
+  the character tables, the rules of `str` and `re`, `repr`, JSON and float
+  text, `difflib`, paths and timestamps.
+- `wiki-format` is the on-disk page format, v1's `wiki.core.format` and
+  `wiki.util.markdown`: frontmatter, index rows and page text. It touches no
+  file, starts no thread and prints nothing.
+- `wiki-core` is the engine, v1's `wiki.core.wiki` with its search index, its
+  exclusion and git helpers and its merge driver, and it embeds the files the
+  binary writes. It never prints, reads the command line or ends the process: an
+  operation returns what it did and what it noticed as data.
+- `wiki-cli` is the binary `wiki`, v1's `wiki.cli`: arguments, output, exit
+  codes, and the switches only tests use. It holds no engine logic.
+
 `parity/` at the repository root is the parity harness, a development tool that
 runs two engines on clones of one tree and reports every difference between them
 (`parity/SPEC.md`). It is not part of the wheel or the sdist. Its tests are in
@@ -72,8 +91,13 @@ cargo test --doc
 # run the YAML reader's tests under Miri, on the nightly tests.yaml names
 cargo +<RUST_NIGHTLY> miri nextest run -p wiki-yaml --locked
 
-# run the parity harness's tests (they run v1 from the oracle checkout)
+# build the oracle checkout (v1 at the commit parity/oracle.toml names), and
+# check that the file is level with v1
+git fetch origin
 uv run --no-sync python -m parity oracle ensure
+uv run --no-sync python -m parity oracle check
+
+# run the parity harness's tests (they run v1 from the oracle checkout)
 uv run --no-sync pytest parity
 
 # run v1's CLI tests through the harness (a new work folder outside any repo)
@@ -477,19 +501,28 @@ wiki.
 
 The oracle is v1 at the commit `parity/oracle.toml` names, the merge base of
 this branch and `dev`. `python -m parity oracle ensure` builds its checkout, a
-detached worktree at `worktrees/wiki-oracle-<sha7>`, with one venv per v1 side:
-`oracle`, which defines parity; `alt`, the same commit under a second
-interpreter that v1 supports, with its own package versions; and `crossed`, the
-alt side's interpreter under the oracle side's packages. Each side's constraints
-file in `parity/constraints/` pins every package of its venv. A v1 side runs
-through `parity/launcher.py` and proves on every command that it is the oracle
-commit. Never edit the oracle checkout, and never sync or install into its venvs
-by hand: the harness refuses a checkout or a venv that is not what the file
-names. `python -m parity oracle check` holds the file level with v1; run it
-after `git fetch origin` when a work session starts. The five scripts the
-harness runs inside a side's interpreter, `launcher.py`, `facts.py`, `judge.py`,
-`tap.py` and `points.py`, import nothing from `parity`, and neither do the
-modules in `parity/plugins/`, which are loaded there by names of their own.
+detached worktree beside the main checkout, at `worktrees/wiki-oracle-<sha7>`,
+with one venv per v1 side: `oracle`, which defines parity; `alt`, the same
+commit under a second interpreter that v1 supports, with its own package
+versions; and `crossed`, the alt side's interpreter under the oracle side's
+packages. Each side's constraints file in `parity/constraints/` pins every
+package of its venv. A v1 side runs through `parity/launcher.py` and proves on
+every command that it is the oracle commit. Never edit the oracle checkout, and
+never sync or install into its venvs by hand: the harness refuses a checkout or
+a venv that is not what the file names. This tree holds none of v1's Python,
+neither its engine nor its command line nor its tests (`parity/removed.txt`
+lists the paths, and `oracle check` fails when one is tracked again), so the
+oracle checkout is also where v1 is read: port from its `wiki/` folder, the code
+every comparison runs, and not from another branch or an installed package.
+`python -m parity oracle check` holds the file level with v1; run it after
+`git fetch origin` when a work session starts. When its `level` check fails, v1
+has gained a commit, and a sync brings this branch level: it merges `dev`, keeps
+the listed paths removed and this branch's version, moves `commit` and `version`
+of the file to the new merge base, and carries the port of each change to a
+command the binary has. The five scripts the harness runs inside a side's
+interpreter, `launcher.py`, `facts.py`, `judge.py`, `tap.py` and `points.py`,
+import nothing from `parity`, and neither do the modules in `parity/plugins/`,
+which are loaded there by names of their own.
 
 `python -m parity suite` runs v1's CLI tests (`tests/test_cli` of the oracle
 checkout, unedited) and a short table of commands on a pseudo-terminal
