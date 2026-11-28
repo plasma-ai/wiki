@@ -8,9 +8,10 @@ is the complete reference for the public command surface; each command has a
 section below.
 
 ``wiki --version`` prints the package version and exits. ``-h`` and ``--help``
-print the help page of ``wiki`` or of a command and exit 0. The ``typer``
-built-ins ``--install-completion`` and ``--show-completion`` manage shell
-completion.
+print the help page of ``wiki`` or of a command and exit 0. ``wiki`` with no
+command is a usage error: it prints the same help page on stderr and exits 2.
+The ``typer`` built-ins ``--install-completion`` and ``--show-completion``
+manage shell completion.
 
 Conventions
 -----------

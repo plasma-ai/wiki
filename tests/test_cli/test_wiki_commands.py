@@ -161,6 +161,7 @@ __all__ = [
     'test_version_flag_reports_a_version',
     'test_short_help_flag_prints_the_help_page',
     'test_usage_error_points_at_the_long_help_flag',
+    'test_wiki_with_no_command_prints_help_as_a_usage_error',
     'test_trust_gates_hook_execution',
     'test_trust_refuses_non_wiki_path',
     'test_trust_refuses_a_store_that_is_not_utf8_naming_the_byte',
@@ -5241,6 +5242,21 @@ def test_usage_error_points_at_the_long_help_flag(tmp_path: pathlib.Path) -> Non
     result = _wiki(tmp_path, 'map', '--depth', 'deep')
     assert result.returncode == 2
     assert "Try 'wiki map --help' for help.\n" in result.stderr
+
+
+def test_wiki_with_no_command_prints_help_as_a_usage_error(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Bare ``wiki`` prints the help page on stderr and exits 2.
+
+    The page tells a person what to run next, and the stream and the exit
+    code tell a script that nothing ran.
+    """
+    result = _wiki(tmp_path)
+    assert result.returncode == 2
+    assert result.stdout == ''
+    assert result.stderr == _wiki(tmp_path, '--help').stdout
+    assert result.stderr.startswith('Usage: wiki [OPTIONS] COMMAND [ARGS]...\n')
 
 
 # ------ trust

@@ -186,7 +186,7 @@ _LINT_NOTE_CATEGORIES = [
 
 
 def version(app: typer.Typer) -> typer.Typer:
-    """Register the ``--version`` flag on the root callback."""
+    """Register the root callback: ``--version``, and help for a run with no command."""
 
     def _version_callback(value: bool) -> None:
         """Print the running ``wiki`` package's version and exit."""
@@ -204,9 +204,20 @@ def version(app: typer.Typer) -> typer.Typer:
         help=version_help,
     )
 
-    @app.callback()
-    def _main(version: Optional[bool] = version) -> None:
+    # NOTE: the group runs with no command only to refuse the run, so its
+    #   usage line names the command as required, whatever click would
+    #   derive from invoke_without_command
+    @app.callback(
+        invoke_without_command=True,
+        subcommand_metavar='COMMAND [ARGS]...',
+    )
+    def _main(ctx: typer.Context, version: Optional[bool] = version) -> None:
         """Wiki command-line interface."""
+        # a run with no command is a usage error whose message is the help page
+        if ctx.invoked_subcommand is None:
+            usage = ctx.get_help()
+            typer.echo(usage, err=True)
+            raise typer.Exit(2)
 
     return app
 

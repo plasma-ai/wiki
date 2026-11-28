@@ -20,6 +20,8 @@ may include breaking changes, each listed under a Breaking heading.
 ### Added
 
 - `-h` works as `--help`, on `wiki` and on every command.
+- `wiki` with no command prints the help page, on stderr, and exits 2. Before,
+  it printed only `Error: Missing command.`
 
 ### Changed
 
