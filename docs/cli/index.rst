@@ -64,7 +64,9 @@ positional ``name`` argument restricting the operation to a subtree. The scope
 must resolve to a directory relative to the wiki root. A name that reaches
 none fails with ``Wiki folder not found: '<name>'``, followed by a hint in
 parentheses when the tree offers a fix: a page name is told that a scope is a
-folder and is given the page's folder (``did you mean core?``), and a name that
+folder and is given the page's folder (``did you mean core?``), a page in the
+wiki root is told only that it is one
+(``a scope is a folder and this is a page in the wiki root``), and a name that
 leads with the root's own folder name (``wiki/core`` in the wiki at ``wiki``)
 is given the rest. A scope outside the root is refused, as
 is one inside an excluded directory — dot-prefixed (``.wiki``, ``.git``,

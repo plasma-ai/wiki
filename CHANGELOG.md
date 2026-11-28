@@ -132,7 +132,9 @@ may include breaking changes, each listed under a Breaking heading.
   `Wiki folder not found: '<name>'`. A name that leads with the root's own
   folder name, such as `wiki lint wiki/core --path wiki`, gets
   `(did you mean core?)`, and a page name gets
-  `(a scope is a folder and this is a page; did you mean core?)`. `Wiki.update`,
+  `(a scope is a folder and this is a page; did you mean core?)`. A page in the
+  wiki root has no folder to name and gets
+  `(a scope is a folder and this is a page in the wiki root)`. `Wiki.update`,
   `lint`, `map`, `search` and `match` raise the same `FileNotFoundError` with
   the longer message.
 
