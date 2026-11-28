@@ -871,8 +871,8 @@ def test_timestamp_format_verdict_ignores_the_clock_and_the_local_zone(
 
     The read-back check renders two fixed instants in the wiki's own zone
     and never reads the clock or the machine's zone. The refused format
-    here reads back at the frozen instant, an early hour in the wiki's
-    zone, and is refused there all the same, for the same stamp.
+    here names the hour twice, and the error shows the same stamp under
+    each: the first fixed instant, at the wiki zone's date and hour.
     """
     for name, value in env.items():
         monkeypatch.setenv(name, value)
@@ -881,13 +881,14 @@ def test_timestamp_format_verdict_ignores_the_clock_and_the_local_zone(
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
     settings = root / '.wiki' / 'settings.json'
 
-    timestamp = {'format': '%Y%z%d%H', 'timezone': 'Europe/Moscow'}
+    timestamp = {'format': '%Y-%m-%d %H %H', 'timezone': 'Europe/Moscow'}
     _write(settings, json.dumps({'timestamp': timestamp}))
     refused = _wiki(tmp_path, 'map', '--path', str(root))
     assert refused.returncode == 2, refused.stdout + refused.stderr
     assert refused.stderr == (
         f'{notice}Error: timestamp.format must read back the stamp it writes'
-        ' (\'2023+03001313\' does not), got "%Y%z%d%H" in .wiki/settings.json.\n'
+        ' (\'2023-11-26 01 01\' does not), got "%Y-%m-%d %H %H" in'
+        ' .wiki/settings.json.\n'
     )
 
     timestamp = {'format': '%d.%m.%Y %H:%M', 'timezone': 'Europe/Moscow'}

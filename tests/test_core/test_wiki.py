@@ -41,6 +41,7 @@ __all__ = [
     'test_timestamp_format_rejects_blank_or_multiline',
     'test_timestamp_format_stamps_parse_back',
     'test_timestamp_format_rejects_an_unsupported_directive',
+    'test_timestamp_format_rejects_a_digit_after_the_offset',
     'test_timestamp_format_must_read_back_its_stamp',
     'test_wiki_freeze_time_fixes_the_clock_in_process',
     'test_init_refuses_legacy_layout_before_writing',
@@ -583,8 +584,9 @@ def test_timestamp_format_rejects_blank_or_multiline(
         ({'format': '%Y-%m-%d'}, '2026-01-02'),
         ({'format': '%d.%m.%Y %H:%M'}, '02.01.2026 03:04'),
         ({'format': '%Y%m%d%H%M%S'}, '20260102030405'),
-        ({'format': '%z%H'}, '+000003'),
+        ({'format': '%z:%H:%M'}, '+0000:03:04'),
         ({'format': '%Y%%n%m'}, '2026%n01'),
+        ({'format': '%H%%z5'}, '03%z5'),
     ],
     ids=[
         'utc-default',
@@ -594,8 +596,9 @@ def test_timestamp_format_rejects_blank_or_multiline(
         'date',
         'dotted-date',
         'unseparated',
-        'offset-then-hour',
+        'offset-then-colon',
         'percent-sign',
+        'percent-sign-then-z',
     ],
 )
 def test_timestamp_format_stamps_parse_back(
@@ -608,9 +611,10 @@ def test_timestamp_format_stamps_parse_back(
 
     The set is ``%Y``, ``%m``, ``%d``, ``%H``, ``%M``, ``%S``, ``%z``,
     ``%%`` and literal text. A date-only format is one of them: a stamp
-    reads back as text, not as the instant it was taken at. The hour
-    after ``%z`` reads back because the offset gives up the seconds it
-    could take, and ``%%`` is a percent sign whatever letter follows it.
+    reads back as text, not as the instant it was taken at. A separator
+    after ``%z`` keeps the offset apart from the digits behind it, a
+    colon included, and ``%%`` is a percent sign whatever letter follows
+    it: before a ``z`` it opens no offset, so a digit may come next.
     """
     monkeypatch.setenv(WIKI_FREEZE_TIME, '2026-01-02T03:04:05Z')
     wiki = Wiki(tmp_path)
@@ -674,19 +678,62 @@ def test_timestamp_format_rejects_an_unsupported_directive(
 
 
 @pytest.mark.parametrize(
+    argnames=('format', 'pair'),
+    argvalues=[
+        ('%z%H', '%z%H'),
+        ('%z%H%M', '%z%H'),
+        ('%Y%z%d%H', '%z%d'),
+        ('%H:%M%z%Y', '%z%Y'),
+        ('%z3%H%M', '%z3'),
+        ('%Y-%m-%d%z0', '%z0'),
+    ],
+    ids=[
+        'hour',
+        'hour-and-minute',
+        'day',
+        'year',
+        'literal-digit',
+        'literal-digit-last',
+    ],
+)
+def test_timestamp_format_rejects_a_digit_after_the_offset(
+    tmp_path: pathlib.Path,
+    format: str,
+    pair: str,
+) -> None:
+    """A format with a digit straight after ``%z`` is a settings error.
+
+    A parser takes two digits after the offset for its seconds wherever
+    the rest of the stamp still parses, so such a format reads some
+    stamps back as another instant. The rule covers a directive that
+    renders digits and a literal digit alike, whether or not any stamp
+    of that one format would misread, and the error names the pair.
+    Nothing is stamped under the format, and lint refuses it alike.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    (tmp_path / 'page.md').write_text('Body.\n', encoding='utf-8')
+    path = tmp_path / '.wiki' / 'settings.json'
+    path.write_text(json.dumps({'timestamp': {'format': format}}), encoding='utf-8')
+    message = (
+        f'timestamp.format must not follow %z with a digit ({pair!r} does), got'
+        f' {json.dumps(format)} in .wiki/settings.json.'
+    )
+
+    for operation in (Wiki(tmp_path).update, Wiki(tmp_path).lint):
+        with pytest.raises(ValueError) as excinfo:
+            operation()
+        assert str(excinfo.value) == message
+    assert (tmp_path / 'page.md').read_text(encoding='utf-8') == 'Body.\n'
+
+
+@pytest.mark.parametrize(
     argnames=('timestamp', 'stamp'),
     argvalues=[
         ({'format': '%Y %Y'}, '2023 2023'),
-        ({'format': '%z%H%M'}, '+00002214'),
-        ({'format': '%z%H%M', 'timezone': 'Asia/Kolkata'}, '+05300344'),
-        ({'format': '%Y%z%d%H', 'timezone': 'Europe/Moscow'}, '2023+03001313'),
+        ({'format': '%H:%M %H', 'timezone': 'Asia/Kolkata'}, '03:44 03'),
+        ({'format': '%z %z', 'timezone': 'America/St_Johns'}, '-0330 -0330'),
     ],
-    ids=[
-        'directive-twice',
-        'offset-then-time',
-        'offset-then-time-in-a-zone',
-        'second-instant-alone',
-    ],
+    ids=['year-twice', 'hour-twice-in-a-zone', 'offset-twice-in-a-zone'],
 )
 def test_timestamp_format_must_read_back_its_stamp(
     tmp_path: pathlib.Path,
@@ -698,11 +745,8 @@ def test_timestamp_format_must_read_back_its_stamp(
     Two fixed instants are rendered in the wiki's zone, parsed under the
     format and rendered again, and the error shows the first stamp that
     fails to parse or comes back as other text. A directive named twice
-    never parses. Digits after ``%z`` read as the offset's seconds where
-    the rest still parses: always for an hour and a minute, and for a
-    day and an hour only once the hour is past nine, which in this zone
-    the second instant alone is. Nothing is stamped under the format, and
-    lint refuses it alike rather than fail on every stamp.
+    never parses. Nothing is stamped under the format, and lint refuses
+    it alike rather than fail on every stamp.
     """
     _make_wiki(tmp_path, folders={'core': ['design']})
     (tmp_path / 'page.md').write_text('Body.\n', encoding='utf-8')

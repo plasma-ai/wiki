@@ -7,6 +7,7 @@ import difflib
 import functools
 import hashlib
 import http.client
+import itertools
 import json
 import logging
 import operator
@@ -71,11 +72,14 @@ _PINNED_YEARS = (1001, 9998)
 # offset or a percent sign, alike on every platform
 _STAMP_DIRECTIVES = ('%Y', '%m', '%d', '%H', '%M', '%S', '%z', '%%')
 
-# the instants an authored timestamp.format must read back. A misread takes
-# the two digits after %z for the offset's seconds and regroups the rest,
-# which %m and %d allow only on nonzero digits: so the month, day, minute
-# and second hold two nonzero digits in every zone, and the hours sit twelve
-# apart, so one of the two opens on a nonzero digit
+# what opens on a digit: a parser takes two digits straight after %z for the
+# offset's seconds wherever the rest still parses, so none of these follows it
+_STAMP_DIGITS = ('%Y', '%m', '%d', '%H', '%M', '%S', *'0123456789')
+
+# the instants an authored timestamp.format must read back. A misread
+# regroups digits, which %m and %d allow only on nonzero ones: so the month,
+# day, minute and second hold two nonzero digits in every zone, and the
+# hours sit twelve apart, so one of the two opens on a nonzero digit
 _STAMP_PROBES = (
     dt.datetime(2023, 11, 25, 22, 14, 56, tzinfo=dt.UTC),
     dt.datetime(2023, 12, 13, 10, 12, 34, tzinfo=dt.UTC),
@@ -382,8 +386,9 @@ class Wiki:
         a bad value fails loudly with a file+key message rather than leaking a raw
         exception from :meth:`_utc_now` (settings.json is user input). A
         format holds only the directives that render alike on every
-        platform, and reads back the stamp it writes: the verdict comes
-        from fixed instants, never from the clock.
+        platform, puts no digit straight after ``%z``, and reads back the
+        stamp it writes: the verdict comes from fixed instants, never from
+        the clock.
         """
         # overlay the settings.json timestamp block onto the defaults
         override = self._settings.get('timestamp', {})
@@ -424,6 +429,16 @@ class Wiki:
                     f'Unsupported timestamp.format directive {directive!r} (must'
                     f' be one of {options}), got {_as_json(format)} in'
                     f' {WIKI_SETTINGS}.'
+                )
+        # no digit straight after %z: the rule holds for every stamp, where
+        # the read-back below samples two
+        tokens = re.findall(r'%.|[^%]', format, re.DOTALL)
+        for directive, follower in itertools.pairwise(tokens):
+            if (directive == '%z') and (follower in _STAMP_DIGITS):
+                raise ValueError(
+                    f'timestamp.format must not follow %z with a digit'
+                    f' ({directive + follower!r} does), got {_as_json(format)}'
+                    f' in {WIKI_SETTINGS}.'
                 )
         timezone = override.get('timezone')
         if (timezone is not None) and not isinstance(timezone, str):

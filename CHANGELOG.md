@@ -11,11 +11,13 @@ may include breaking changes, each listed under a Breaking heading.
 
 - `timestamp.format` accepts only `%Y`, `%m`, `%d`, `%H`, `%M`, `%S`, `%z`, `%%`
   and literal text, and the format must read back the stamp it writes. Any other
-  directive is a settings error that names it, and so is a format whose stamp
-  does not parse back, such as `%Y %Y` or `%z%H%M`. Before, wiki accepted any
-  `strftime` string: some blanked every stamp (`%Ez`), some made lint report
-  every file (`%s`), and `%Y %Y` crashed lint. A wiki with such a format changes
-  it and rewrites its stamps by hand, as any format change requires.
+  directive is a settings error that names it. So is a digit straight after
+  `%z`, whether a directive or a literal one (`%z%H`), since it can read as the
+  offset's seconds, and so is a format whose stamp does not parse back, such as
+  `%Y %Y`. Before, wiki accepted any `strftime` string: some blanked every stamp
+  (`%Ez`), some made lint report every file (`%s`), and `%Y %Y` crashed lint. A
+  wiki with such a format changes it and rewrites its stamps by hand, as any
+  format change requires.
 - A number on the command line takes an optional sign and plain digits only, and
   must fit a signed 64-bit integer. That covers the bounds of a `wiki read`
   slice and the options `map --depth`, `map --desc-limit` and `search --limit`.
