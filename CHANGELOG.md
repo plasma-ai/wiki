@@ -112,7 +112,10 @@ may include breaking changes, each listed under a Breaking heading.
   committed, or once the file's removal is committed.
 - The stderr line that names a missing `.wiki/settings.json` says to restore the
   file from git, or to run `wiki update` to recreate it with default settings.
-  Before, it said only that `wiki update` will restore the file.
+  Before, it said only that `wiki update` will restore the file. The line prints
+  only when nothing stands at the path. A `--path` inside an index tree rooted
+  at the home folder, where `.wiki/settings.json` is the trust store, no longer
+  draws it, nor the note `wiki lint` counted for it.
 - `--path ""` is a usage error, `--path must not be empty.`, in every command
   that takes `--path`. Before, an empty value meant the wiki the current folder
   resolves to, so a script with an unset variable ran on the wrong wiki and
@@ -136,14 +139,15 @@ may include breaking changes, each listed under a Breaking heading.
   in place of a raw Python error or, for a number in `naming.reserved`, no error
   at all.
 - A `.wiki/settings.json` that cannot be read (no permission, a folder or a
-  symlink loop at its path, a byte-order mark) gets an error that names the file
-  and the cause, such as `Cannot read .wiki/settings.json (Permission denied).`,
-  in place of a raw Python error. A folder or a symlink loop at the path is no
-  longer first reported as a missing settings file that `wiki update` will
-  restore, and a symlink loop no longer leaves `map` and `lint` running on
-  default settings. A byte-order mark gets a message that says to remove it. A
-  `links.external` wiki's settings file gets the same sentence after its
-  `links.external wiki '<path>': ` prefix.
+  symlink loop at its path, a file where the `.wiki` folder belongs, a
+  byte-order mark) gets an error that names the file and the cause, such as
+  `Cannot read .wiki/settings.json (Permission denied).`, in place of a raw
+  Python error. A folder or a symlink loop at the path is no longer first
+  reported as a missing settings file that `wiki update` will restore, and
+  neither a symlink loop nor a file in place of `.wiki` leaves `map` and `lint`
+  running on default settings. A byte-order mark gets a message that says to
+  remove it. A `links.external` wiki's settings file gets the same sentence
+  after its `links.external wiki '<path>': ` prefix.
 - A page that is not valid UTF-8 stops `wiki read`, `wiki update` and
   `wiki lint` with a message that leads with the page's path and gives the
   offset of the first invalid byte, such as
