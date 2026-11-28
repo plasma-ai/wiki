@@ -420,12 +420,13 @@ def test_run_that_would_compare_nothing_is_refused(
     command that fails or is missing: each would compare nothing, a side
     with itself, or two sides that fail alike, and report no difference.
     A sides file that takes the name of a v1 side would pass something
-    else off as the oracle, and one that takes the name of the Rust side
-    would pass something else off as the binary of the checkout. So would a
-    v1 side that runs another build than the one it is expected to be. A registry file that breaks
-    its rules could excuse what nobody approved. The command exits 2 with
-    a message instead, before it snapshots anything or writes a result
-    file, and leaves a work folder that was there as it stood.
+    else off as the oracle, and so would a v1 side that runs another
+    build than the one it is expected to be. One that takes the name of
+    the Rust side would pass something else off as the binary of the
+    checkout. A registry file that breaks its rules could excuse what
+    nobody approved. The command exits 2 with a message instead, before
+    it snapshots anything or writes a result file, and leaves a work
+    folder that was there as it stood.
     """
     # a working side beside the one a case breaks
     nowhere = tmp_path / 'nowhere'
