@@ -152,7 +152,9 @@ may include breaking changes, each listed under a Breaking heading.
 - For a bad backslash escape in a double-quoted frontmatter value, such as
   `title: "Uses \(p\) here"` or `desc: "Uses $\xi$."`, `wiki lint` now says to
   write LaTeX in single quotes or a block scalar, or to double each backslash.
-  Before, it said to quote a value that was already quoted.
+  Before, it said to quote a value that was already quoted. The reason it gives
+  for a bad `\x` or `\u` number spells `hexadecimal` correctly, where it read
+  `hexdecimal`.
 - `wiki search --json` prints `[]` on stdout when nothing matches, so its output
   always parses as JSON. Before, it printed nothing. The `No matches found.`
   line on stderr and exit 1 are unchanged.

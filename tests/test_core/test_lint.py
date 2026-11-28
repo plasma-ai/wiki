@@ -1293,8 +1293,8 @@ def test_lint_reports_an_escape_naming_no_character(
     argnames=('field', 'reason'),
     argvalues=[
         ('title: "Uses \\(p\\) here"', 'found unknown escape character'),
-        ('desc: "Uses $\\xi$."', 'number'),
-        ('desc: "Uses $\\upsilon$."', 'number'),
+        ('desc: "Uses $\\xi$."', 'hexadecimal number'),
+        ('desc: "Uses $\\upsilon$."', 'hexadecimal number'),
         ('desc: "Uses \\uD800."', 'found invalid Unicode character escape code'),
     ],
     ids=['unknown-escape', 'bad-x-number', 'bad-u-number', 'no-such-character'],
@@ -1310,6 +1310,8 @@ def test_lint_gives_the_quoting_remedy_for_a_bad_escape(
     The value is quoted already, so "quote the value" would send the
     author in a circle: LaTeX such as ``\(p\)`` or ``\xi`` wants single
     quotes, a block scalar, or doubled backslashes, under either loader.
+    The reason for a bad ``\x`` or ``\u`` number spells "hexadecimal" in
+    full, whichever loader worded it.
     """
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
     page = tmp_path / 'core' / 'design.md'

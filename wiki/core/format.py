@@ -144,7 +144,8 @@ _FIELD_CONTROLS = re.compile(r'[\x00-\x1f\x7f\x85\u2028\u2029]')
 _CONTENT_CONTROLS = re.compile(r'[\x00-\x08\x0b-\x1f\x7f]')
 
 # how a parser's problem opens when a double-quoted scalar holds a backslash
-# escape it cannot decode, in libyaml's words and in the pure loader's
+# escape it cannot decode, in libyaml's words (its spelling included) and in
+# the pure loader's
 _ESCAPE_PROBLEMS = (
     'found unknown escape character',
     'did not find expected hexdecimal number',
@@ -2361,7 +2362,9 @@ def _parse_issue(error: Exception, body: str, offset: int) -> _Issue:
     # already, so the remedy is a different quoting, not a quote
     problem = str(getattr(error, 'problem', None))
     cause = 'escape' if problem.startswith(_ESCAPE_PROBLEMS) else 'parse'
-    return line, str(reason), cause
+    # libyaml misspells the word in its problem for a bad \x or \u number
+    reason = str(reason).replace('hexdecimal', 'hexadecimal')
+    return line, reason, cause
 
 
 def _continues_a_scalar(line: str) -> bool:
