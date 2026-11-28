@@ -11,9 +11,13 @@ on:
       - main
       - dev
       - v2
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
 
 env:
   CARGO_BUILD_WARNINGS: deny
+  RUST_NIGHTLY: nightly-2026-11-20
 
 jobs:
   tests:
@@ -49,6 +53,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
   parity:
     name: parity
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -66,10 +71,6 @@ jobs:
         run: uv run --no-sync python -m parity oracle ensure
       - name: Run harness tests
         run: uv run --no-sync pytest parity
-      - name: Run v1's CLI tests through the harness
-        run: >-
-          uv run --no-sync python -m parity suite
-          --work "$RUNNER_TEMP/suite-work" --out "$RUNNER_TEMP/suite-out"
       - name: Replay the calls of v1's tests through the harness
         run: >-
           uv run --no-sync python -m parity replay
@@ -84,12 +85,12 @@ jobs:
         with:
           name: parity-out
           path: |
-            ${{ runner.temp }}/suite-out
             ${{ runner.temp }}/replay-out
             ${{ runner.temp }}/fixtures-out
           if-no-files-found: ignore
   perturbation:
     name: perturbation
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -114,3 +115,114 @@ jobs:
           name: perturbation-out
           path: ${{ runner.temp }}/perturb-out
           if-no-files-found: ignore
+  suite:
+    name: suite
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name == 'push' }}
+      - name: Install harness test dependencies
+        run: uv sync --only-group parity
+      - name: Build the oracle checkout
+        run: uv run --no-sync python -m parity oracle ensure --side oracle
+      - name: Build the binary
+        run: cargo build --release --locked
+      - name: Run v1's CLI tests against the binary
+        run: >-
+          uv run --no-sync python -m parity suite --engine rust
+          --work "$RUNNER_TEMP/suite-work" --out "$RUNNER_TEMP/suite-out"
+      - name: Keep the output of a failed run of the harness
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: suite-out-${{ matrix.os }}
+          path: ${{ runner.temp }}/suite-out
+          if-no-files-found: ignore
+  miri:
+    name: miri
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust nightly toolchain
+        run: rustup toolchain install "$RUST_NIGHTLY" --profile minimal --component miri,rust-src
+      - name: Install cargo tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.152
+      - name: Run the YAML reader's tests under Miri
+        run: cargo +"$RUST_NIGHTLY" miri nextest run -p wiki-yaml --locked
+  nightly:
+    name: nightly
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
+      - name: Install harness test dependencies
+        run: uv sync --only-group parity
+      - name: Build the oracle checkout
+        run: uv run --no-sync python -m parity oracle ensure --side oracle
+      - name: Run the perturbation loop on fresh seeds
+        timeout-minutes: 330
+        run: >-
+          uv run --no-sync python -m parity perturb loop --every --fresh 250
+          --work "$RUNNER_TEMP/perturb-work" --out "$RUNNER_TEMP/perturb-out"
+      - name: Keep the output of a failed run of the harness
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-out-${{ matrix.shard }}
+          path: ${{ runner.temp }}/perturb-out
+          if-no-files-found: ignore
+  issue:
+    name: issue
+    if: failure()
+    needs: nightly
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Add a failed run of the nightly job to its issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TITLE: The nightly job failed
+        run: |
+          run="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          number=$(
+            gh issue list --state open --search "in:title \"$TITLE\"" --json number,title \
+              --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty"
+          )
+          if [[ -n "$number" ]]; then
+            gh issue comment "$number" --body "$run"
+          else
+            gh issue create --title "$TITLE" --body "$run"
+          fi

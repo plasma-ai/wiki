@@ -11,6 +11,7 @@ sides.
 from __future__ import annotations
 
 import dataclasses
+import json
 import pathlib
 import signal
 import sys
@@ -29,6 +30,7 @@ __all__ = [
     'test_test_that_does_not_pass_is_a_finding',
     'test_test_file_that_is_not_loaded_is_a_finding',
     'test_ported_commands_go_to_the_second_engine',
+    'test_test_holds_the_version_to_the_side_that_prints_it',
     'test_call_that_does_not_prove_its_side_is_a_finding',
     'test_call_outside_the_dispatcher_or_a_trace_is_a_finding',
     'test_tests_the_settings_leave_out_are_listed',
@@ -255,6 +257,29 @@ if trace:
 sys.exit(os.environ.get('PARITY_OWN') != 'own')
 """
 
+# a test that holds what `--version` prints to the version its module names,
+# as v1's does with the version of the package it imports, and makes one call
+# that stays on v1
+_VERSION = """
+from .conftest import _wiki
+
+WIKI_VERSION = 'the version of the package the tests import'
+
+
+def test_version():
+    assert _wiki('--version').stdout.strip() == WIKI_VERSION
+    assert _wiki('--help').returncode == 0
+"""
+
+# an engine that leaves the identity record it is given and prints the
+# version the record states
+_STATED = f"""
+import json, os, sys
+with open(os.environ[{side.TRACE!r}], 'a') as handle:
+    handle.write(sys.argv[1] + chr(10))
+print(json.loads(sys.argv[1])['version'])
+"""
+
 # an engine that runs the command it is given and leaves the identity record
 # as its mode says: once, a second time, or not at all
 _RELAY = f"""
@@ -405,6 +430,41 @@ def test_ported_commands_go_to_the_second_engine(
         '--version': {'tests': 1, 'calls': 1},
         'lint': {'tests': 0, 'calls': 0},
     }
+
+
+@pytest.mark.parametrize('ported', [False, True], ids=['v1', 'second engine'])
+def test_test_holds_the_version_to_the_side_that_prints_it(
+    tmp_path: pathlib.Path,
+    engine: side.Side,
+    ported: bool,
+) -> None:
+    """A test expects of ``--version`` the version of the side the call goes to.
+
+    v1's test compares what ``--version`` prints with the version of the
+    package it imports, which is v1's. Once ``--version`` is ported the call
+    goes to a second engine, which has a version of its own. The module's
+    name is set to the version the side that takes the call states, so the
+    test passes on either side, and it still holds the output to a version
+    the command did not supply.
+    """
+    identity = {'engine': 'second', 'version': '9.9.9', 'build': 'commit'}
+    second = side.Side(
+        name='second',
+        argv=(sys.executable, '-c', _STATED, json.dumps(identity)),
+        identity=identity,
+    )
+    result = _run(
+        tmp_path,
+        _VERSION,
+        reference=engine,
+        engine=second if ported else None,
+        commands=['--version'] if ported else [],
+    )
+    assert result.findings == ()
+    (test,) = result.report['tests']
+    assert test['outcome'] == 'passed'
+    calls = {engine.name: 1, 'second': 1} if ported else {engine.name: 2}
+    assert test['calls'] == calls
 
 
 @pytest.mark.parametrize(

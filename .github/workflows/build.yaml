@@ -169,6 +169,23 @@ jobs:
             cd "$(mktemp -d)"
             wiki install --project
           '
+      - name: Check binary's build id is the workflow's commit
+        run: |
+          mkdir "$RUNNER_TEMP/trace"
+          if [[ "${{ matrix.manylinux }}" == musllinux_1_2 ]]; then
+            docker run --rm --volume "$PWD/dist:/dist" --volume "$RUNNER_TEMP/trace:/trace" python:3.14-alpine sh -ec '
+              pip install /dist/*.whl
+              WIKI_TRACE=/trace/record wiki --version
+            '
+          else
+            WIKI_TRACE="$RUNNER_TEMP/trace/record" smoke/bin/wiki --version
+          fi
+          build=$(jq -r .build "$RUNNER_TEMP/trace/record")
+          if [[ "$build" != "$GITHUB_SHA" ]]; then
+            echo "::error::build id is '$build', expected $GITHUB_SHA"
+            exit 1
+          fi
+          echo "Build id is $build"
       - uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.target }}

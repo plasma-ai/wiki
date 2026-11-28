@@ -15,6 +15,10 @@ use crate::support::TestResult;
 impl Sandbox {
     /// Runs the crate's build script for a workspace at `root` and returns
     /// what it tells cargo.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the harness reads cargo's line protocol and resolves paths that exist"
+    )]
     pub(crate) fn run_build_script(&self, root: &Path) -> TestResult<BuildScriptOutput> {
         let output = Command::new(build_script_program()?)
             .stdin(Stdio::null())

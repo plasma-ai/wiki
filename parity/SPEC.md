@@ -65,8 +65,9 @@ python -m parity container [--commit COMMIT] [--out DIR] COMMAND [ARG ...]
 ```
 
 A side name is `oracle`, `alt` or `crossed`, the three v1 sides that
-`parity/oracle.toml` names (Oracle, below), or a side that the `SIDES` file
-declares. `SIDES` may not declare a side under the name of a v1 side.
+`parity/oracle.toml` names (Oracle, below), `rust`, the binary cargo builds from
+this checkout (Sides, Rust side), or a side that the `SIDES` file declares.
+`SIDES` may not declare a side under the name of a v1 side or of the Rust side.
 
 Every command reads `parity/oracle.toml` and asks git where the repository and
 its main checkout are, whichever sides a run names. So the harness needs git on
@@ -87,9 +88,10 @@ shape, a `--now` that is not an instant in the form `WIKI_FREEZE_TIME` takes, a
 checkout or a work folder the harness refuses (see Snapshots), a side or a
 `describe` command that cannot be started, a side whose `--version` fails or
 prints nothing, a side that does not prove its identity, a v1 side the oracle
-rules refuse, or a registry file that breaks a rule of Registry. An error of the
-harness itself prints a Python traceback and exits 2 as well, so exit 1 always
-means that a result is not the expected one.
+rules refuse, a Rust side that is not built or is stale (Sides, Rust side), or a
+registry file that breaks a rule of Registry. An error of the harness itself
+prints a Python traceback and exits 2 as well, so exit 1 always means that a
+result is not the expected one.
 
 The harness makes `<work>/<label>` for each corpus; it must not exist
 beforehand. `matrix` removes it at the end unless `--keep` is given. `selfcheck`
@@ -136,13 +138,14 @@ root = "wiki"
 
 Each corpus gets one result file, `<out>/<label>.json`. It records the host
 (platform, Python, SQLite, git, the system git config), the instant, each side's
-argv, variables, identity, reported version and description, the status of every
-registry entry, the sample, for every stage how many commands of each run ended
-with each exit code, which searches found nothing and which commands a registry
-entry excused, and for every case the exit code, the size and sha256 of both
-streams, and the touched count on every run. `matrix` saves the streams of a
-case under `<out>/<label>/<stage>/` when they differ, an excused case included,
-and `selfcheck` and `registry` save those of a failed check under
+argv, variables, identity, reported version and description, for the Rust side
+the paths that differ from its commit (`dirty`), the status of every registry
+entry, the sample, for every stage how many commands of each run ended with each
+exit code, which searches found nothing and which commands a registry entry
+excused, and for every case the exit code, the size and sha256 of both streams,
+and the touched count on every run. `matrix` saves the streams of a case under
+`<out>/<label>/<stage>/` when they differ, an excused case included, and
+`selfcheck` and `registry` save those of a failed check under
 `<out>/<label>/<check>/<stage>/`. `selfcheck` and `registry` both write
 `<out>/<label>.json`, so each takes an `--out` folder of its own. Result files
 hold corpus paths and text, so they stay outside the repository too.
@@ -423,6 +426,34 @@ The side's own variables are applied last. stdin is the null device.
   command `parity/tap.py` (Perturbation, Kinds), and its `points` command
   `parity/points.py` (Interpreters Run, Names). Only a v1 side has a tap or a
   `points` command.
+- **Rust side.** The side named `rust` is the binary of a release build of the
+  checkout that holds the harness, `target/release/wiki`, called by its resolved
+  path. The harness builds nothing: `cargo build --release --locked` runs first,
+  and a checkout with no such binary is refused. The side's identity is read
+  from the checkout, not from the binary: the engine `rust`, the version the
+  workspace's manifest states, and the commit `HEAD` holds. So a binary built at
+  another commit, or under another version, fails every command it is given. A
+  sides file that declares a side named `rust` is refused.
+- **Uncommitted edits.** The commit says nothing of an edit that is not
+  committed: a binary carries the commit of `HEAD` whatever the tree held when
+  cargo built it. Two rules hold the binary to the tree as it stands.
+  - *Stale.* cargo lists what it built the binary from in
+    `target/release/wiki.d`: the sources of the crates, their build scripts, the
+    embedded files, and the files of the git folder that hold the commit; a
+    listed folder stands for everything below it. A binary is stale when that
+    file is missing, or when a listed path is gone or was written after the
+    binary. Every command refuses a stale Rust side, with the command that
+    builds it. These are the cases in which cargo builds again, so a build
+    always clears the refusal, and a test file, which is no input of the binary,
+    never causes one.
+  - *Dirty.* The paths that differ from `HEAD`, changed, added or deleted, among
+    `crates`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `wiki/_assets`
+    and `wiki/skills`. A binary that is not stale is a build of its commit only
+    when there are none. A gate whose engine is the Rust side exits 2 before a
+    step runs when there is one (Gates). Every other command runs, prints the
+    paths and records them as `dirty` with the Rust side in its result file, so
+    a change can be tried before it is committed and no result passes for a
+    result of the commit.
 - **Identity.** A side with an identity gets `WIKI_TRACE=<file>` on every
   command, a fresh file outside the slot. Before it runs the command, the side
   appends one line of JSON to the file: `engine`, `version` and `build`. For a
@@ -1426,6 +1457,13 @@ commands = ["read", "--version"]
   then the dispatcher: a name it binds, a command it builds while it is
   imported, a parameter of a test. A call a module makes while it is imported
   belongs to no test, so it is an `untraced` finding.
+- **Version.** One test holds what `--version` prints to the version of the
+  package it imports, which its module names `WIKI_VERSION`. A second engine has
+  a version of its own. The plugin sets that name, in every test module that
+  holds it, to the version the side that takes `--version` states in its
+  identity. The test then holds the engine's output to the version its checkout
+  states. A side with no identity states no version, and the name stays as it
+  is.
 - **Past the helper.** A test that finds the console script without the helper,
   for example beside the interpreter, runs v1 unseen: v1's console script leaves
   no identity record. No test of the oracle does. The two tests that run
@@ -1951,7 +1989,8 @@ an output folder and a log below the gate's.
   exits with the highest of its layers' codes. It exits 2 with a message, before
   a step runs: on a corpora or sides file of the wrong shape, on an unknown
   corpus or side, on a corpus named twice, on a `--loop` corpus the gate does
-  not run on, on a count below one, and on a work folder that exists. A gate
+  not run on, on a count below one, on a work folder that exists, and on a Rust
+  side whose checkout differs from its commit (Sides, Uncommitted edits). A gate
   that passed removes its work folder; one that did not leaves the trees its
   steps kept.
 

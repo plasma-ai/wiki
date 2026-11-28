@@ -4,6 +4,7 @@ Two engines on one tree, compared byte for byte.
 """
 
 from . import (
+    binary,
     cache,
     classify,
     compare,

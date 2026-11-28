@@ -23,9 +23,12 @@ nothing -- no corpus, an unknown corpus, stage or side, one side named
 twice, a sides or corpora file of the wrong shape, a ``--now`` no engine
 takes, a checkout or a work folder the harness refuses, a side or a
 ``describe`` command that does not start, a side that does not prove its
-identity, a v1 side the oracle rules refuse, a registry file the harness
-cannot hold to its classifiers -- exits 2 before it snapshots anything. A
-side is one the sides file declares, or a v1 side of ``oracle.toml``.
+identity, a v1 side the oracle rules refuse, a Rust side that is not built
+or is older than a file it is built from, a registry file the harness cannot
+hold to its classifiers -- exits 2 before it snapshots anything. A side is
+one the sides file declares, a v1 side of ``oracle.toml``, or ``rust``: the
+binary of a release build of this checkout. A run of the Rust side records
+and prints what differs from the commit among the paths a build reads.
 ``registry --release`` also exits 1 while an entry of the registry is not
 ready for a release.
 
@@ -110,7 +113,8 @@ daily gate holds the comparison with the engine and the merges the cache does
 not hold yet. It records for each layer the seconds on the clock, the
 processor seconds of its commands and how many processors that comes to, and
 exits 0 when every step did, 1 when a step exited 1 and none ended any other
-way, and 2 otherwise.
+way, and 2 otherwise. It exits 2, before a step runs, when the engine is the
+Rust side and a path its build reads differs from the commit.
 
 The registry lists what a second engine may do differently from v1, and two
 builds of v1 have nothing registered between them. ``matrix`` therefore
@@ -157,6 +161,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Optional, Union
 
 from . import (
+    binary,
     config,
     container,
     dispatch,
@@ -1748,6 +1753,15 @@ def _gate(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
             _sides([options.engine], declared, path=options.sides)
         except ValueError as e:
             parser.error(f'{e}')
+    # a gate takes the Rust side's binary as a build of the commit it names
+    if options.engine == binary.NAME:
+        repo = oracle.load().repo
+        differs = binary.changed(repo)
+        if differs:
+            parser.error(
+                f'Side {binary.NAME!r} may be no build of its commit: {repo}'
+                f' differs from HEAD at {differs!r}; commit and build first.'
+            )
     # a gate that failed leaves its trees in its work folder
     work = options.work.resolve()
     if os.path.lexists(work):
@@ -1836,7 +1850,9 @@ def _sides(
     *,
     path: Optional[pathlib.Path],
 ) -> list[Side]:
-    """Return the sides ``names``: declared in the sides file, or v1 sides.
+    """Return the sides ``names``: declared in the sides file, or built in.
+
+    The v1 sides of ``oracle.toml`` and the Rust side are built in.
 
     Args:
         names: The names a run gives its sides.
@@ -1845,8 +1861,9 @@ def _sides(
 
     Raises:
         ValueError: If the file declares a side under the name of a v1 side
-            of ``oracle.toml``, if no side has one of the names, or if a v1
-            side is not what ``oracle.toml`` names.
+            of ``oracle.toml`` or of the Rust side, if no side has one of
+            the names, if a v1 side is not what ``oracle.toml`` names, or
+            if the Rust side is not built.
 
     """
     named = oracle.load()
@@ -1855,12 +1872,16 @@ def _sides(
         raise ValueError(
             f'{path} declares {taken!r}, which {named.path.name} names as v1 sides.'
         )
+    if binary.NAME in declared:
+        raise ValueError(f'{path} declares {binary.NAME!r}, the name of the Rust side.')
     result = []
     for name in names:
         if name in declared:
             result.append(declared[name])
         elif name in named.builds:
             result.append(oracle.side(named, name))
+        elif name == binary.NAME:
+            result.append(binary.side(named.repo))
         else:
             raise ValueError(f'No side is named {name!r}.')
     return result
@@ -1985,7 +2006,10 @@ def _no_hits(report: Mapping[str, Any]) -> list[str]:
 
 
 def _header(sides: Sequence[Side], *, now: str) -> dict[str, Any]:
-    """Return what a result file records about the host and the sides."""
+    """Return what a result file records about the host and the sides.
+
+    A Rust side whose checkout differs from its commit is printed too.
+    """
     # read the host's git under the caller's environment; a host with no
     # system config file records none
     git = snapshot._git(['--version'], check=False) or ''
@@ -1997,15 +2021,22 @@ def _header(sides: Sequence[Side], *, now: str) -> dict[str, Any]:
         'git': git,
         'git_system_config': system.splitlines(),
     }
-    return {
-        'host': host,
-        'now': now,
-        'sides': [_side_record(item, now=now) for item in sides],
-    }
+    records = [_side_record(item, now=now) for item in sides]
+    # say so when the Rust side's binary may be no build of the commit it names
+    for record in records:
+        if record.get('dirty'):
+            differs = ', '.join(record['dirty'])
+            name = record['name']
+            print(f'{name}: the checkout differs from HEAD at {differs}', flush=True)
+    return {'host': host, 'now': now, 'sides': records}
 
 
 def _side_record(item: Side, *, now: str) -> dict[str, Any]:
     """Return one side's argv, variables, identity, version and description.
+
+    The record of the Rust side also holds ``dirty``: the paths that differ
+    from the commit among those its build reads. With none, a binary that
+    is not stale is a build of that commit.
 
     Raises:
         ValueError: If the side's ``--version`` does not start, fails or
@@ -2060,7 +2091,7 @@ def _side_record(item: Side, *, now: str) -> dict[str, Any]:
             f'Side {item.name!r}: describe exited {described.returncode}'
             f' ({error!r} on stderr).'
         )
-    return {
+    record = {
         'name': item.name,
         'argv': list(item.argv),
         'env': dict(item.env),
@@ -2069,6 +2100,11 @@ def _side_record(item: Side, *, now: str) -> dict[str, Any]:
         'version': version,
         'describe': described.stdout.strip() if described is not None else None,
     }
+    # the commit of the Rust side's identity says nothing of an edit that is
+    # not committed
+    if item.name == binary.NAME:
+        record['dirty'] = binary.changed(oracle.load().repo)
+    return record
 
 
 if __name__ == '__main__':

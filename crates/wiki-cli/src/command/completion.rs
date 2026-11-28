@@ -17,6 +17,10 @@ pub(crate) struct CompletionArgs {
 }
 
 /// Runs the `completion` command.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the script is clap's own text, which ends its lines with a line feed"
+)]
 pub(crate) fn run(
     output: &mut Output,
     args: &CompletionArgs,
