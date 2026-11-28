@@ -150,7 +150,8 @@ outside the wiki keeps git's own merge:
 
 ``wiki config`` writes both files in the working tree only — you stage and
 commit them yourself — and skips a file entirely while it has uncommitted
-changes (its lines land on the next run with the file clean).
+changes. A stderr line names each file it skips and the mapping line it did
+not add; commit the file and run ``wiki config`` again.
 
 Once per clone
 ~~~~~~~~~~~~~~
@@ -404,9 +405,11 @@ the wiki root, so a stale note suggests the root-relative form the author
 likely meant when one resolves: ``(use [[canonical]])`` for a prefix-free
 slip, or the root-relative spelling of an allowlisted file for a prefixed or
 absolute one.
-Five environment notes ride along and count in the closing summary: a
+Six environment notes ride along and count in the closing summary: a
 ``.gitattributes`` ``merge=wiki`` mapping with no ``merge.wiki.driver``
-configured in the clone (the fresh-clone state — run ``wiki config``); an
+configured in the clone (the fresh-clone state — run ``wiki config``); index
+files mapped to ``merge=wiki`` while the wiki's pages are not (the pages merge
+as plain text — run ``wiki config`` and commit the file it writes); an
 indexed path this machine's personal ``core.excludesFile`` ignores (its
 generated row ships where the file cannot, so every other clone reds on a
 broken link); a ``git check-ignore`` probe that fails inside the enclosing

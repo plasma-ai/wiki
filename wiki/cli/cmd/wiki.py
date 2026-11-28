@@ -365,11 +365,14 @@ def init(app: typer.Typer) -> typer.Typer:
         # materialize Obsidian config (plugins, new-link format seed)
         warnings = wiki.update_config()
         # configure git merge driver
-        configure_git_merge_driver(path)
+        skipped = configure_git_merge_driver(path)
         if not quiet:
             typer.echo(f'Initialized wiki at: {path}')
         # a settings file that stood before the root index was kept
         _echo_unapplied_settings(path, settings)
+        # a .gitattributes with uncommitted changes was left as it stands
+        for line in skipped:
+            typer.echo(line, err=True)
         # surface soft warnings, else point at the one manual step
         if warnings:
             for warning in warnings:
@@ -434,8 +437,11 @@ def config(
             if sys.stderr.isatty():
                 typer.echo('', err=True)
                 typer.echo(_OBSIDIAN_SETUP_HINT, err=True)
-        # (re)configure git merge driver
-        configure_git_merge_driver(wiki._root)
+        # (re)configure git merge driver, naming each .gitattributes left as
+        # it stands for its uncommitted changes
+        skipped = configure_git_merge_driver(wiki._root)
+        for line in skipped:
+            typer.echo(line, err=True)
 
     return app
 

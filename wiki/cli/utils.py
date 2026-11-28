@@ -662,7 +662,7 @@ def refuse_nested_init(path: pathlib.Path) -> None:
         )
 
 
-def configure_git_merge_driver(path: pathlib.Path) -> None:
+def configure_git_merge_driver(path: pathlib.Path) -> list[str]:
     """Wire git's wiki merge driver for the repo holding the wiki.
 
     Sets the ``merge.wiki`` config, maps ``_index.md`` files to the driver
@@ -675,12 +675,16 @@ def configure_git_merge_driver(path: pathlib.Path) -> None:
     Args:
         path: The wiki root (also used to find the enclosing repo).
 
+    Returns:
+        One line for each ``.gitattributes`` left as it stands for its
+        uncommitted changes, naming the file and the mapping it lacks.
+
     """
     # resolve enclosing git repo (no-op outside one)
     cmd = ['rev-parse', '--show-toplevel']
     toplevel = _git(cmd, cwd=path, check=False)
     if toplevel is None:
-        return
+        return []
     repo = pathlib.Path(toplevel)
     # name the merge driver
     cmd = [
@@ -705,19 +709,27 @@ def configure_git_merge_driver(path: pathlib.Path) -> None:
     # a failed query names no place: map nothing rather than take it for the
     # top level, which would map every page in the repo
     if prefix is None:
-        return
+        return []
     if prefix:
-        _append_attributes(repo / '.gitattributes', [_INDEX_ATTRIBUTES])
-        _append_attributes(pathlib.Path(path) / '.gitattributes', [_PAGE_ATTRIBUTES])
+        skipped = [
+            _append_attributes(repo / '.gitattributes', [_INDEX_ATTRIBUTES]),
+            _append_attributes(
+                pathlib.Path(path) / '.gitattributes', [_PAGE_ATTRIBUTES]
+            ),
+        ]
     else:
         blocks = [_INDEX_ATTRIBUTES, _PAGE_ATTRIBUTES]
-        _append_attributes(repo / '.gitattributes', blocks)
+        skipped = [_append_attributes(repo / '.gitattributes', blocks)]
+    return [line for line in skipped if line is not None]
 
 
 # ------ helper functions
 
 
-def _append_attributes(path: pathlib.Path, blocks: list[tuple[str, str]]) -> None:
+def _append_attributes(
+    path: pathlib.Path,
+    blocks: list[tuple[str, str]],
+) -> Optional[str]:
     """Append to ``path`` each attribute block whose mapping line it lacks.
 
     Existing bytes are never rewritten: each block follows the file's last
@@ -731,6 +743,10 @@ def _append_attributes(path: pathlib.Path, blocks: list[tuple[str, str]]) -> Non
         path: The ``.gitattributes`` file to append to.
         blocks: Comment and mapping-line pairs, in the order they land.
 
+    Returns:
+        The line that says the file was left untouched and names each
+        mapping line it lacks, or ``None`` when nothing was held back.
+
     """
     # git reads the file as bytes, in any encoding: a byte that is not UTF-8
     # rides through the append as it is, escaped here and restored at the write
@@ -739,12 +755,16 @@ def _append_attributes(path: pathlib.Path, blocks: list[tuple[str, str]]) -> Non
     lines = current.splitlines()
     missing = [block for block in blocks if block[1] not in lines]
     if not missing:
-        return
+        return None
     # read without the optional index lock a plain status takes, which would
     # fail a concurrent git add or commit in the same repository
     cmd = ['--no-optional-locks', 'status', '--porcelain', '--', f'./{path.name}']
     if _git(cmd, cwd=path.parent, check=False):
-        return
+        mappings = ' and '.join(f"'{mapping}'" for _, mapping in missing)
+        return (
+            f'Skipping {path}: it has uncommitted changes, so wiki did not add'
+            f' {mappings}; commit the file, then run `wiki config`'
+        )
     eol = '\r\n' if '\r\n' in current else '\n'
     text = current
     for block in missing:
@@ -758,6 +778,7 @@ def _append_attributes(path: pathlib.Path, blocks: list[tuple[str, str]]) -> Non
     # write into the working tree only; the user stages and commits the file
     # (this command never touches the index)
     wiki.util.fs.write_atomic(path, text.encode('utf-8', errors='surrogateescape'))
+    return None
 
 
 def _config_home() -> pathlib.Path:

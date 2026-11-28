@@ -99,6 +99,10 @@ _MERGE_HINT_TAIL = 'delete this line when resolving -->'
 # the marker line _conflict_marker_lines scans for, shape documented there
 _CONFLICT_MARKER = re.compile(r'^(<{7,}|>{7,})( |$)')
 
+# the path lint asks git about to learn whether the wiki's pages are mapped
+# to the merge driver: a page name in the wiki root, which need not exist
+_PAGE_PROBE = 'page.md'
+
 # a folder's indexed entries, sorted: the child folders the walk descends
 # into and the files it indexes, each judged once against the exclusions
 _Listing = tuple[list[pathlib.Path], list[pathlib.Path]]
@@ -852,21 +856,13 @@ class Wiki:
                 )
 
     @functools.cached_property
-    def _gitignore_fence(self: Wiki) -> frozenset[str]:
-        """Return the root-relative POSIX paths the repo's gitignore fences.
+    def _gitignore_matches(self: Wiki) -> Optional[frozenset[str]]:
+        """Return the root-relative POSIX paths the repo's ignore rules match.
 
-        The enclosing git repository's ignore rules are an exclusion
-        source beside ``exclude.patterns``: what the repo fences out of
-        version control is not wiki content, so indexing must not adopt
-        it -- a script's stray output beside tracked pages would
-        otherwise gain frontmatter, a minted ``_index.md``, and a parent
-        link row from the very update run for a red lint. Matching is
-        pattern-pure (``--no-index``), so a fenced file that was
-        force-tracked reads as fenced all the same and the fence and the
-        tool agree about what is content. Empty -- no fencing -- outside
-        a git repository, when git is unavailable (narrated, inside a
-        repository), and when the root and its index are both ignored (a
-        deliberately unindexed wiki inside a repo must keep working).
+        The one batch probe behind the fence (:attr:`_gitignore_fence`)
+        and the ignored-wiki test (:attr:`_gitignored_wiki`), so a run
+        asks git once for both: the root reads as ``.``. ``None`` where
+        no fence applies (see :meth:`_check_ignore`).
         """
         # enumerate the candidates one batch probe covers: the root and its
         # index (together probing the fence-disable case) and every non-dot
@@ -883,12 +879,41 @@ class Wiki:
                 candidates.append(prefix + name)
         matched = self._check_ignore(candidates)
         if matched is None:
-            return frozenset()
+            return None
+        return frozenset(matched)
+
+    @property
+    def _gitignored_wiki(self: Wiki) -> bool:
+        """Return ``True`` if the repo's ignore rules match the root and its index.
+
+        The index must read ignored too, since at a repository's top
+        level git reads ``.`` as ignored under any ``*`` line, whatever
+        re-includes follow it.
+        """
+        matched = self._gitignore_matches
+        return (matched is not None) and ({'.', WIKI_INDEX} <= matched)
+
+    @functools.cached_property
+    def _gitignore_fence(self: Wiki) -> frozenset[str]:
+        """Return the root-relative POSIX paths the repo's gitignore fences.
+
+        The enclosing git repository's ignore rules are an exclusion
+        source beside ``exclude.patterns``: what the repo fences out of
+        version control is not wiki content, so indexing must not adopt
+        it -- a script's stray output beside tracked pages would
+        otherwise gain frontmatter, a minted ``_index.md``, and a parent
+        link row from the very update run for a red lint. Matching is
+        pattern-pure (``--no-index``), so a fenced file that was
+        force-tracked reads as fenced all the same and the fence and the
+        tool agree about what is content. Empty -- no fencing -- outside
+        a git repository, when git is unavailable (narrated, inside a
+        repository), and when the root and its index are both ignored (a
+        deliberately unindexed wiki inside a repo must keep working).
+        """
+        matched = self._gitignore_matches
         # a fenced root would fence the whole wiki out of itself: leave a
-        # deliberately ignored wiki unfenced instead; its index must read
-        # ignored too, since at a repository's top level git reads '.' as
-        # ignored under any '*' line, whatever re-includes follow it
-        if {'.', WIKI_INDEX} <= matched:
+        # deliberately ignored wiki unfenced instead
+        if (matched is None) or self._gitignored_wiki:
             return frozenset()
         return frozenset(matched - {'.'})
 
@@ -1246,8 +1271,8 @@ class Wiki:
         """
         return wiki.util.git._git(cmd, cwd=self._root, check=False)
 
-    def _warn_unconfigured_merge_driver(self: Wiki) -> None:
-        """Note a ``merge=wiki`` attribute with no configured driver.
+    def _warn_merge_wiring(self: Wiki) -> None:
+        """Note a ``merge=wiki`` index mapping with no configured driver, or no page mapping.
 
         ``wiki init``/``wiki config`` wire two halves: the
         ``.gitattributes`` map (committed, it travels with the
@@ -1256,14 +1281,41 @@ class Wiki:
         back to a plain text merge of ``_index.md`` files and pages --
         silently, at the clone's first merge -- so lint notes the gap
         while it is one ``wiki config`` away from wired.
+
+        The map has two lines of its own, one for index files and one
+        for the wiki's pages, and a wiki may hold the first alone (the
+        wiki root's file skipped for its uncommitted changes, a map
+        written by hand): its pages then merge as plain text. One
+        ``check-attr`` call answers for both, the root index and a page
+        name in the root (``_PAGE_PROBE``). A wiki with no mapping at
+        all is unwired by choice, and one the repository ignores merges
+        nothing, so neither draws a note. The repository's own rules
+        decide what is ignored, as for the fence, so the note reads the
+        same on every clone.
         """
-        cmd = ['--no-optional-locks', 'check-attr', 'merge', '--', WIKI_INDEX]
-        attribute = self._git_read(cmd)
-        if (attribute is None) or not attribute.endswith(': merge: wiki'):
+        cmd = [
+            '--no-optional-locks',
+            'check-attr',
+            'merge',
+            '--',
+            WIKI_INDEX,
+            _PAGE_PROBE,
+        ]
+        attributes = self._git_read(cmd)
+        if attributes is None:
             return
-        if self._git_read(['config', '--get', 'merge.wiki.driver']):
+        # git answers one '<path>: merge: <value>' line per path
+        lines = attributes.splitlines()
+        if f'{WIKI_INDEX}: merge: wiki' not in lines:
             return
-        self.on_merge_driver_unconfigured()
+        if not self._git_read(['config', '--get', 'merge.wiki.driver']):
+            self.on_merge_driver_unconfigured()
+        # NOTE: the ignored-wiki test reads the fence's batch probe, which
+        #   lint's walk runs for the first entry it weighs against the fence,
+        #   so the note costs a git call of its own only where the walk
+        #   weighs none (a wiki that holds nothing but its root index)
+        if (f'{_PAGE_PROBE}: merge: wiki' not in lines) and not self._gitignored_wiki:
+            self.on_page_merge_unmapped()
 
     def _warn_missing_link_folders(self: Wiki) -> None:
         """Note each ``links.external`` entry that names no folder on disk.
@@ -2248,10 +2300,10 @@ class Wiki:
         self._refuse_legacy_layout()
         # a settings file git still holds is never swept past on defaults
         self._refuse_lost_settings()
-        # a merge=wiki attributes map without its config half means git
-        # text-merges indexes silently: note the gap (soft) before the
-        # clone's first merge pays for it
-        self._warn_unconfigured_merge_driver()
+        # a merge=wiki attributes map without its config half, or without
+        # its page line, means git text-merges silently: note each gap
+        # (soft) before a merge pays for it
+        self._warn_merge_wiring()
         # inside a repository the untrackable-row note walks the scope and the
         # plan reads that walk (nothing between the walk and the plan touches
         # the walked tree); outside one there is no note, and the plan walks
@@ -3306,6 +3358,26 @@ class Wiki:
         """
         if event is None:
             event = MergeDriverUnconfiguredEvent(message, **kwargs)
+        return self.on_notice(event, logging_level=logging_level)
+
+    def on_page_merge_unmapped(
+        self: Wiki,
+        message: Optional[str] = None,
+        *,
+        logging_level: int = logging.WARNING,
+        event: Optional[PageMergeUnmappedEvent] = None,
+        **kwargs: Any,
+    ) -> Event:
+        """Handle an unmapped-page-merge notice event.
+
+        Constructs a ``PageMergeUnmappedEvent`` from ``message`` and the
+        payload kwargs unless a pre-built ``event`` is passed through,
+        then delegates to ``on_notice``. Override in subclasses to
+        intercept this notice kind alone; override ``on_notice`` to
+        intercept every notice.
+        """
+        if event is None:
+            event = PageMergeUnmappedEvent(message, **kwargs)
         return self.on_notice(event, logging_level=logging_level)
 
     def on_write_skip(
@@ -7273,6 +7345,19 @@ class MergeDriverUnconfiguredEvent(Event):
         )
 
 
+class PageMergeUnmappedEvent(Event):
+    """Emitted when ``merge=wiki`` is mapped for index files but not for pages."""
+
+    @property
+    def description(self: PageMergeUnmappedEvent) -> str:
+        """Return the unmapped-page-merge notice line."""
+        return (
+            '.gitattributes maps _index.md files to merge=wiki but not the'
+            " wiki's pages; run `wiki config` to map them (pages merge as"
+            ' plain text, and conflict on their updated: lines, until then)'
+        )
+
+
 class WriteSkipEvent(Event):
     """Emitted when apply skips a file edited concurrently with the plan."""
 
@@ -7482,6 +7567,7 @@ _NOTICE_HOOKS = {
     GitFenceUnavailableEvent: 'on_git_fence_unavailable',
     PathUntrackableEvent: 'on_path_untrackable',
     MergeDriverUnconfiguredEvent: 'on_merge_driver_unconfigured',
+    PageMergeUnmappedEvent: 'on_page_merge_unmapped',
     WriteSkipEvent: 'on_write_skip',
     ReadSkipEvent: 'on_read_skip',
     FrontmatterMalformedEvent: 'on_frontmatter_malformed',

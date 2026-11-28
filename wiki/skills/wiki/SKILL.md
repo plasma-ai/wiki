@@ -346,8 +346,13 @@ rather than authoring or auditing page by page yourself:
   the driver in local git config and write `**/_index.md merge=wiki` to the
   repository root's `.gitattributes` and `*.md merge=wiki` to one in the wiki
   root, in the working tree only — you stage and commit them yourself, and each
-  clone runs `wiki config` once to register the driver. Without `wiki` on PATH
-  the driver falls back to git's own text merge.
+  clone runs `wiki config` once to register the driver. A `.gitattributes` with
+  uncommitted changes is skipped, and a stderr line names it and the mapping
+  line it lacks: commit the file and run `wiki config` again. `wiki lint` notes
+  a wiki whose index files are mapped and whose pages are not: its pages merge
+  as plain text and conflict on their `updated:` lines until `wiki config` adds
+  the mapping. Without `wiki` on PATH the driver falls back to git's own text
+  merge.
 - **Leave new-directory index bodies empty during concurrent work.** When
   sibling branches both create the same new directory, its two `_index.md`s
   merge add/add with no common ancestor: the generated region resolves

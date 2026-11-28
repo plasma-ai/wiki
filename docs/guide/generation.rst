@@ -260,7 +260,8 @@ reports two kinds of problem — without writing anything:
 - **Notes** (stderr): soft advisories — unauthored descriptions, stale prose
   links (issues under ``lint.strict``), a ``links.external`` entry naming no
   folder on this machine,
-  pending CRLF normalization, an unconfigured merge driver in a fresh clone.
+  pending CRLF normalization, an unconfigured merge driver in a fresh clone,
+  pages left out of the merge driver's mapping.
   Notes **never affect the exit code**. A note kind that repeats condenses to
   one count line (``12 indexes have empty content``) unless you pass
   ``--full``.
@@ -628,6 +629,17 @@ notes is clean — lint exits 0.
        per-clone ``merge.wiki.driver`` config, so git text-merges
        ``_index.md`` files and pages until ``wiki config`` registers the
        driver (see :doc:`/guide/merge-driver`).
+   * - ``.gitattributes maps _index.md files to merge=wiki but not the wiki's pages; run `wiki config` to map them (pages merge as plain text, and conflict on their updated: lines, until then)``
+     - Git maps the root ``_index.md`` to the merge driver but not a page in
+       the wiki root: the repository root's ``.gitattributes`` holds
+       ``**/_index.md merge=wiki`` and nothing maps the wiki's ``*.md``
+       files, typically because the wiki root has no ``.gitattributes`` of
+       its own. Two branches that both ran ``wiki update`` on a page then
+       conflict on its ``updated:`` line. ``wiki config`` writes the missing
+       file; commit it. A page mapped by any file counts, the repository
+       root's included. A wiki with no ``merge=wiki`` mapping at all, a wiki
+       the repository ignores, and a wiki outside a repository draw no note.
+       Typed ``page_merge_unmapped`` in ``--json``, with no ``path``.
    * - ``links.external entry '<folder>' names no folder on this machine; links into it are not checked``
      - A ``links.external`` entry names a folder absent from this clone (a
        sibling checkout missing from a partial clone) or names a file

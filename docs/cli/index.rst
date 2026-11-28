@@ -165,6 +165,11 @@ object in another key order or spacing prints nothing, and a caller that
 passes its seed on every run stays silent. A settings file that is missing or
 cannot be read counts as different. The wiki name is not compared.
 
+``init`` leaves a ``.gitattributes`` that has uncommitted changes as it
+stands, as ``wiki config`` does. One stderr line names the file and the
+mapping line it lacks, under ``--quiet`` too, and the exit code stays 0; see
+:doc:`/guide/merge-driver`.
+
 ``init`` refuses to scaffold inside an enclosing wiki, refuses to scaffold
 while ``.wiki/settings.json`` is missing and git still holds it (see
 :doc:`/configuration`), refuses an invalid wiki name (naming the violated
@@ -221,8 +226,9 @@ see :doc:`/configuration`), registers the ``merge.wiki`` driver in the
 repository's local git config, and maps the driver in ``.gitattributes`` —
 ``**/_index.md merge=wiki`` in the repository root's file and
 ``*.md merge=wiki`` in the wiki root's own — skipping a file that has
-uncommitted changes; it never stages or commits. See :doc:`/guide/obsidian`
-and :doc:`/guide/merge-driver`.
+uncommitted changes, with one stderr line that names the file and the mapping
+line it lacks; it never stages or commits. See :doc:`/guide/obsidian` and
+:doc:`/guide/merge-driver`.
 
 Because the merge driver lives in each clone's local git config while
 ``.gitattributes`` only names it, every contributor runs ``wiki config`` once
@@ -706,8 +712,9 @@ stderr note is not a blocking issue). ``--json`` replaces the prose report
 with one JSON document on stdout carrying every finding under an explicit
 ``severity`` (``issue``/``note``) and a machine ``kind`` with its per-kind
 payload fields (``path`` on every issue and on most notes — the
-``resolver_notice``, ``merge_driver_unconfigured``, ``git_fence_unavailable``,
-and ``link_folder_missing`` notes carry none — plus e.g. ``target``/``label``
+``resolver_notice``, ``merge_driver_unconfigured``, ``page_merge_unmapped``,
+``git_fence_unavailable``, and ``link_folder_missing`` notes carry none — plus
+e.g. ``target``/``label``
 on a broken link, ``line`` on a wrap mangle, or ``line``/``reason`` on
 invalid YAML frontmatter), the rendered prose under ``text``, and a
 ``summary`` with both counts; the exit-code contract is unchanged.
@@ -756,10 +763,12 @@ indexed path this machine's git ignores (a personal ``core.excludesFile`` rule
 — the row ships where the file cannot, so every other clone reds on a broken
 link), a gitignore fence the probe cannot read inside an enclosing repository
 (``git check-ignore`` failed — git off ``PATH`` or a broken install — so
-indexing proceeds unfenced and adopts what the repository ignores), and a
+indexing proceeds unfenced and adopts what the repository ignores), a
 ``.gitattributes`` mapping ``merge=wiki`` with no ``merge.wiki.driver``
 configured — the fresh-clone state where index and page merges silently fall
-back to a plain text merge until ``wiki config`` registers the driver. Resolver
+back to a plain text merge until ``wiki config`` registers the driver — and
+index files mapped to ``merge=wiki`` while the wiki's pages are not, so the
+pages merge as plain text until ``wiki config`` adds their mapping. Resolver
 diagnostics (an upward resolution, a missing settings marker or root index,
 an outer index above the declared root) join the notes too — counted in the
 closing summary and typed as ``resolver_notice`` rows in ``--json`` — beside
