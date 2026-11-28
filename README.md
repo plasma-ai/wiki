@@ -234,7 +234,9 @@ wiki/
 On macOS, a walk of the wiki slows down sharply when the tree has more entries
 than `kern.maxvnodes`, the number of files and folders the kernel keeps cached.
 The same happens when several large checkouts are walked in turn and together
-exceed it. Check the limit, and raise it if a large wiki is slow:
+exceed it. Check the limit, and if a large wiki is slow, raise it above the
+number of files and folders in the trees you walk. The value in the second line
+is an example:
 
 ```bash
 sysctl kern.maxvnodes
