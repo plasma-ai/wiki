@@ -17,6 +17,7 @@ clap = "4.6.10"
 clap_complete = "4.6.12"
 include_dir = "0.7.4"
 insta = "1.49.0"
+rusqlite = { version = "0.43.0", default-features = false }
 tempfile = "3.27.0"
 thiserror = "2.0.21"
 
