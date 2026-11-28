@@ -176,12 +176,13 @@ Like a formatter's check mode, it **exits 1 when changes are pending** and 0
 (``Nothing to update.``) when the wiki is clean — a nonzero exit is not an
 error, and a real error (an unresolvable wiki, a bad subtree) exits 2, so a
 gate reading 1 as pending drift never mistakes a typo'd path for one.
-Pending-action narration (create, adopt, add, prune, overwrite) uses
-``Would ...`` wording; the state-report categories — skipped names and files,
-malformed frontmatter, truncated indexes — keep their normal wording. A dry
-run performs no housekeeping either: it neither restores a missing
-``.wiki/settings.json`` nor reports it (the resolver's stderr diagnostic
-covers the gap).
+Pending-action narration (create, adopt, restamp, add, prune, overwrite) uses
+``Would ...`` wording, in the count lines and in the lines ``--full`` prints
+(``Would adopt bare page: topics/sample.md``); the state-report categories —
+skipped names and files, malformed frontmatter, truncated indexes — keep
+their normal wording. A dry run performs no housekeeping either: it neither
+restores a missing ``.wiki/settings.json`` nor reports it (the resolver's
+stderr diagnostic covers the gap).
 
 What update leaves alone
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -697,8 +698,35 @@ line.``
 
 Under ``--check`` the pending-action categories read ``Would create ...``,
 ``Would add ...``, ``Would prune ...``, and so on; the skips keep their
-wording. A few notices have no category and always print verbatim, even in
-condensed mode:
+wording. The lines ``--full`` prints for a change follow the run the same
+way:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 50 50
+
+   * - ``--full`` line
+     - Under ``--check``
+   * - ``New index: <path> (fill in its desc)``
+     - ``Would create index: <path>``
+   * - ``Adopted bare page: <path> (frontmatter added)``
+     - ``Would adopt bare page: <path>``
+   * - ``Adopted bare page: <path> (frontmatter added; title: seeded from its
+       H1)``
+     - ``Would adopt bare page: <path> (would seed title: from its H1)``
+   * - ``Restamped <path>: edited since its updated: stamp``
+     - ``Would restamp <path>: edited since its updated: stamp``
+   * - ``New link: [[target|label]] in <path>``
+     - ``Would add link: [[target|label]] in <path>``
+   * - ``Pruned link: [[target|label]] from <path>``
+     - ``Would prune link: [[target|label]] from <path>``
+   * - ``Overwrote desc: [[target|label]] in <path> (the page frontmatter
+       desc wins; edit it in <page>)``
+     - ``Would overwrite desc: [[target|label]] in <path> (the page
+       frontmatter desc wins; edit it in <page>)``
+
+A few notices have no category and always print verbatim, even in condensed
+mode:
 
 - ``Link targets a symlink: [[target|label]] in <path> (symlinked files are
   not indexed)`` — likewise the excluded-path and gitignored-path cause

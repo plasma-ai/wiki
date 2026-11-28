@@ -89,9 +89,11 @@ _OBSIDIAN_SETUP_HINT = (
     ' Mode, then enable Front Matter Title and Wiki Root Links if needed.'
 )
 
-# condensed-mode change categories, as (event class, one, many, check_one,
-# check_many): a notice of the class collapses into the category's count
-# line, worded for apply and --check runs
+# change categories, as (event class, one, many, check_one, check_many,
+# check_line): a notice of the class collapses into the category's count
+# line, worded for apply and --check runs; check_line is the notice's own
+# line under --check --full, over the event's fields, where the event's
+# description words the change as done
 _UPDATE_CATEGORIES = [
     (
         IndexCreateEvent,
@@ -99,6 +101,7 @@ _UPDATE_CATEGORIES = [
         'Created {n} new indexes (fill in their descs)',
         'Would create 1 new index',
         'Would create {n} new indexes',
+        'Would create index: {path}',
     ),
     (
         PageAdoptEvent,
@@ -106,6 +109,7 @@ _UPDATE_CATEGORIES = [
         'Adopted {n} bare pages (frontmatter added)',
         'Would adopt 1 bare page',
         'Would adopt {n} bare pages',
+        'Would adopt bare page: {path}',
     ),
     (
         RestampEvent,
@@ -113,6 +117,7 @@ _UPDATE_CATEGORIES = [
         'Restamped {n} files edited since their stamps',
         'Would restamp 1 file edited since its stamp',
         'Would restamp {n} files edited since their stamps',
+        'Would restamp {path}: edited since its updated: stamp',
     ),
     (
         LinkAddEvent,
@@ -120,6 +125,7 @@ _UPDATE_CATEGORIES = [
         'Added {n} new links',
         'Would add 1 new link',
         'Would add {n} new links',
+        'Would add link: [[{target}|{label}]] in {path}',
     ),
     (
         LinkPruneEvent,
@@ -127,6 +133,7 @@ _UPDATE_CATEGORIES = [
         'Pruned {n} broken links',
         'Would prune 1 broken link',
         'Would prune {n} broken links',
+        'Would prune link: [[{target}|{label}]] from {path}',
     ),
     (
         DescOverwriteEvent,
@@ -134,6 +141,8 @@ _UPDATE_CATEGORIES = [
         'Overwrote {n} link descs (page frontmatter descs win)',
         'Would overwrite 1 link desc (page frontmatter descs win)',
         'Would overwrite {n} link descs (page frontmatter descs win)',
+        'Would overwrite desc: [[{target}|{label}]] in {path} (the page'
+        ' frontmatter desc wins; edit it in {page})',
     ),
 ]
 
@@ -793,7 +802,9 @@ def update(
             """Capture a notice; stream it in --full mode (order preserved)."""
             notices.append(event)
             if full:
-                typer.echo(event.description, err=True)
+                # a dry run words a change as pending, never as done
+                line = _check_line(event) if check else event.description
+                typer.echo(line, err=True)
             return event
 
         wiki.on_notice = _capture
@@ -1354,7 +1365,7 @@ def _condense(notices: list[Event], check: bool, pointer: str) -> list[str]:
     for event_class, (position, event) in first_seen.items():
         n = counts[event_class]
         if event_class in changes:
-            one, many, check_one, check_many = changes[event_class]
+            one, many, check_one, check_many, _line = changes[event_class]
             if check:
                 one, many = check_one, check_many
             line = one if n == 1 else many.format(n=n)
@@ -1367,6 +1378,32 @@ def _condense(notices: list[Event], check: bool, pointer: str) -> list[str]:
     if any(counts[event_class] > 1 for event_class in counts if event_class in notes):
         lines.append((len(notices), pointer))
     return [line for _position, line in sorted(lines)]
+
+
+def _check_line(event: Event) -> str:
+    """Return an update event's line as a ``--check --full`` run words it.
+
+    A change reads as pending (``Would adopt bare page: ...``), from its
+    category's ``check_line`` in ``_UPDATE_CATEGORIES``, where the
+    event's description reads as done. Every other event reports a skip
+    or a state, true of a dry run as written, and keeps its description.
+
+    Args:
+        event: The update event to word.
+
+    Returns:
+        The event's dry-run narration line.
+
+    """
+    for event_class, *_counts, check_line in _UPDATE_CATEGORIES:
+        if type(event) is event_class:
+            result = check_line.format(**vars(event))
+            # an adoption says when the page's H1 would seed its title, as
+            # the applied line does
+            if isinstance(event, PageAdoptEvent) and event.title:
+                result += ' (would seed title: from its H1)'
+            return result
+    return event.description
 
 
 def _condense_notes(notices: list[Event]) -> list[str]:

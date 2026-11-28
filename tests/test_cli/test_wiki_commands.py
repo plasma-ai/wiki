@@ -57,6 +57,7 @@ __all__ = [
     'test_update_generates_child_links',
     'test_update_prunes_broken_link',
     'test_update_check_reports_changes_without_writing',
+    'test_update_check_full_words_each_change_as_pending',
     'test_update_noop_reports_nothing_to_update',
     'test_update_failed_entry_mutates_nothing',
     'test_update_narrations_condense_by_default',
@@ -1192,6 +1193,76 @@ def test_update_check_reports_changes_without_writing(tmp_path: pathlib.Path) ->
     clean = _wiki(root, 'update', '--check', '--path', str(root))
     assert clean.returncode == 0, clean.stdout + clean.stderr
     assert 'Nothing to update.' in clean.stdout
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_update_check_full_words_each_change_as_pending(tmp_path: pathlib.Path) -> None:
+    """``update --check --full`` says what would change, never that it did.
+
+    A dry run writes nothing, so each change line reads ``Would ...``;
+    the applied run narrates the same plan as done work.
+    """
+    root = tmp_path / 'wiki'
+    _git_repo(tmp_path)
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'core' / '_index.md', _index('core', 'Core concepts.', 'Text.'))
+    _write(root / 'core' / 'keep.md', _page('keep', 'Stays.', 'Body.'))
+    _write(root / 'core' / 'gone.md', _page('gone', 'Removed soon.', 'Body.'))
+    _write(root / 'core' / 'edited.md', _page('edited', 'Edited later.', 'Body.'))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+    _git(tmp_path, 'add', '-A')
+    assert _git(tmp_path, 'commit', '-q', '-m', 'base').returncode == 0
+
+    # one pending change of each kind: a bare page to adopt, a folder with no
+    # index, a row whose page is gone, a row desc edited away from its page,
+    # and a committed page edited by hand well after its stamp
+    _write(root / 'core' / 'bare.md', '# Bare\n\nBody.\n')
+    _write(root / 'guides' / 'setup.md', _page('setup', 'A guide.', 'Body.'))
+    (root / 'core' / 'gone.md').unlink()
+    index = root / 'core' / '_index.md'
+    text = index.read_text(encoding='utf-8')
+    index.write_text(text.replace('Stays.', 'Edited in the index.'), encoding='utf-8')
+    edited = root / 'core' / 'edited.md'
+    edited.write_text(edited.read_text(encoding='utf-8') + 'More.\n', encoding='utf-8')
+    later = edited.stat().st_mtime + 300
+    os.utime(edited, (later, later))
+    before = _tree(root)
+
+    # the dry run words every change as pending and writes nothing
+    check = _wiki(root, 'update', '--check', '--full', '--path', str(root))
+    assert check.returncode == 1, check.stdout + check.stderr
+    assert sorted(check.stderr.splitlines()) == sorted(
+        [
+            'Would adopt bare page: core/bare.md (would seed title: from its H1)',
+            'Would create index: guides/_index.md',
+            'Would add link: [[core/bare|bare]] in core/_index.md',
+            'Would add link: [[guides/setup|setup]] in guides/_index.md',
+            'Would add link: [[guides/_index|guides/]] in _index.md',
+            'Would prune link: [[core/gone|gone]] from core/_index.md',
+            'Would overwrite desc: [[core/keep|keep]] in core/_index.md (the page'
+            ' frontmatter desc wins; edit it in core/keep.md)',
+            'Would restamp core/edited.md: edited since its updated: stamp',
+        ]
+    )
+    assert _tree(root) == before
+
+    # the applied run narrates the same changes as done
+    applied = _wiki(root, 'update', '--full', '--path', str(root))
+    assert applied.returncode == 0, applied.stdout + applied.stderr
+    assert sorted(applied.stderr.splitlines()) == sorted(
+        [
+            'Adopted bare page: core/bare.md (frontmatter added; title: seeded'
+            ' from its H1)',
+            'New index: guides/_index.md (fill in its desc)',
+            'New link: [[core/bare|bare]] in core/_index.md',
+            'New link: [[guides/setup|setup]] in guides/_index.md',
+            'New link: [[guides/_index|guides/]] in _index.md',
+            'Pruned link: [[core/gone|gone]] from core/_index.md',
+            'Overwrote desc: [[core/keep|keep]] in core/_index.md (the page'
+            ' frontmatter desc wins; edit it in core/keep.md)',
+            'Restamped core/edited.md: edited since its updated: stamp',
+        ]
+    )
 
 
 def test_update_noop_reports_nothing_to_update(tmp_path: pathlib.Path) -> None:

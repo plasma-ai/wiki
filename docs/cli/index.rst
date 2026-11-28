@@ -582,8 +582,10 @@ outside a ``no-lint`` region — resolve the conflicts and re-run.
      - off
      - Dry run: writes nothing, lists ``Would update: <path>`` lines, and
        exits 1 when changes are pending, 0 when clean. A nonzero exit is not
-       an error — it is a formatter-style check result. ``--check`` never
-       restores a missing ``.wiki/settings.json``; only a writing run does.
+       an error — it is a formatter-style check result. Narration words each
+       change as pending (``Would add 2 new links``; with ``--full``, ``Would
+       add link: ...``). ``--check`` never restores a missing
+       ``.wiki/settings.json``; only a writing run does.
    * - ``--full``
      - off
      - Print every narration line in emission order.

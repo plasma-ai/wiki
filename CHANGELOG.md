@@ -161,6 +161,12 @@ may include breaking changes, each listed under a Breaking heading.
   Before, it printed a line for each path, so a personal ignore rule that
   matched many pages filled the condensed output. One path still prints its own
   line, and `--full` lists each.
+- `wiki update --check --full` says what would change:
+  `Would adopt bare page: notes/draft.md`, `Would add link: ...`,
+  `Would prune link: ...`, `Would create index: ...`, `Would restamp ...` and
+  `Would overwrite desc: ...`. Before, it printed the lines of a writing run,
+  such as `Adopted bare page: notes/draft.md (frontmatter added)`, while the
+  file was untouched. A run without `--check` prints the same lines as before.
 - The `wiki update` line about an overwritten desc names the page's real file
   when the page sits beside a file of the same name. For `tools/Makefile.md`
   beside `tools/Makefile` it says `edit it in tools/Makefile.md`. Before, it
