@@ -25,3 +25,6 @@
 
 # Windows batch files
 *.bat    text eol=crlf
+
+# Wiki index merge driver
+**/_index.md merge=wiki

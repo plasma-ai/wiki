@@ -4,11 +4,16 @@ version = "2.0.0-dev.1"
 description = "Indexed knowledge bases with command-line tools for agents."
 readme = "README.md"
 requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [
     { name = "Plasma AI", email = "eng@plasma.ai" },
 ]
 maintainers = [
     { name = "Plasma AI", email = "eng@plasma.ai" },
+]
+classifiers = [
+    "Operating System :: POSIX",
 ]
 dependencies = []
 
@@ -37,6 +42,12 @@ lint = [
     "cruft",
     "ruff",
     "pre-commit",
+]
+parity = [
+    "pytest-xdist",
+]
+type = [
+    "pyright",
 ]
 
 [tool.uv]
@@ -181,12 +192,33 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 # NOTE: ruff globs need "**" to match nested dirs
+"**/__init__.py" = [
+    "ANN001",
+    "ANN003",
+    "ANN201",
+    "ANN202",
+    "ANN204",
+    "F401",
+    "I002",
+]
 "docs/conf.py" = [
     "I002",
+]
+"parity/**" = [
+    "S404",
+    "S603",
+    "S607",
+]
+"parity/tests/**" = [
+    "F811",
+    "S101",
 ]
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
+# the harness's side scripts import v1's package, which the oracle checkout
+# holds and this tree does not
+known-first-party = ["wiki"]
 required-imports = ["from __future__ import annotations"]
 
 [tool.ruff.lint.pydocstyle]
@@ -195,6 +227,12 @@ convention = "google"
 [tool.ruff.lint.flake8-annotations]
 suppress-none-returning = true
 suppress-dummy-args = true
+
+[tool.pyright]
+include = ["parity"]
+# the side scripts run under a v1 venv and import its package, which the oracle
+# checkout holds and this tree does not
+exclude = ["parity/facts.py", "parity/launcher.py", "parity/tap.py"]
 
 [build-system]
 requires = ["maturin>=1.16,<2"]

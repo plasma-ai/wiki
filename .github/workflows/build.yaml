@@ -4,10 +4,14 @@ on:
   push:
     branches:
       - main
+      - dev
+      - v2
     tags: ["v*"]
   pull_request:
     branches:
       - main
+      - dev
+      - v2
 
 env:
   CARGO_BUILD_WARNINGS: deny

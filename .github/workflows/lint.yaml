@@ -4,9 +4,13 @@ on:
   push:
     branches:
       - main
+      - dev
+      - v2
   pull_request:
     branches:
       - main
+      - dev
+      - v2
   schedule:
     - cron: "0 6 * * 1"
 
