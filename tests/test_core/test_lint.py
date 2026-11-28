@@ -1354,8 +1354,13 @@ def test_lint_gives_the_quoting_remedy_for_a_bad_escape(
             'U+0001, U+007F, U+0085 (\\N), U+2028 (\\L)',
             ['U+0001', 'U+007F', 'U+0085', 'U+2028'],
         ),
+        (
+            '"A tab\tand a break\n\n  typed raw."',
+            'U+0009 (\\t), U+000A (\\n)',
+            ['U+0009', 'U+000A'],
+        ),
     ],
-    ids=['latex', 'rare-controls'],
+    ids=['latex', 'rare-controls', 'typed-raw'],
 )
 @pytest.mark.usefixtures('_vary_loader')
 def test_lint_flags_a_control_character_in_a_double_quoted_field(
@@ -1370,7 +1375,10 @@ def test_lint_flags_a_control_character_in_a_double_quoted_field(
     there decodes to a line break (``\nu``), a tab (``\theta``), and a
     form feed (``\frac``), and update copies them into the parent's row.
     Lint names the field, its line, and each character once, with the
-    remedy; the row that holds the copy draws no second finding.
+    remedy; the row that holds the copy draws no second finding. The
+    decoded value is what is judged, so a tab typed raw between the
+    quotes, or the line break a blank line there folds to, is the same
+    finding.
     """
     wiki = _make_wiki(tmp_path, folders={'core': ['design']})
     page = tmp_path / 'core' / 'design.md'
