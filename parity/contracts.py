@@ -505,8 +505,10 @@ def _check_pipx(host: _Host) -> list[str]:
     venv = _venv(host, host.work / host.check / 'pipx')
     cmd = [host.uv, 'pip', 'install', '--python', f'{venv / "bin" / "python"}']
     _tool(host, 'pipx', [*cmd, '--no-deps', '--requirements', f'{_PIPX}'])
-    pipx = f'{venv / "bin" / "pipx"}'
-    _tool(host, 'install', [pipx, 'install', f'{host.package.wheel}'])
+    # NOTE: pipx picks its installer by what the host holds, and its pip
+    # backend fetches the newest pip, so the check names the uv backend
+    pipx = [f'{venv / "bin" / "pipx"}', 'install', '--backend', 'uv']
+    _tool(host, 'install', [*pipx, f'{host.package.wheel}'])
     folder = pathlib.Path(host.env['PIPX_BIN_DIR'])
     wiki = _wiki(host, folder / 'wiki', build=host.package.commit)
     return _works(host, wiki, 'project')
