@@ -71,10 +71,6 @@ jobs:
         run: uv run --no-sync python -m parity oracle ensure
       - name: Run harness tests
         run: uv run --no-sync pytest parity
-      - name: Run v1's CLI tests through the harness
-        run: >-
-          uv run --no-sync python -m parity suite
-          --work "$RUNNER_TEMP/suite-work" --out "$RUNNER_TEMP/suite-out"
       - name: Replay the calls of v1's tests through the harness
         run: >-
           uv run --no-sync python -m parity replay
@@ -89,7 +85,6 @@ jobs:
         with:
           name: parity-out
           path: |
-            ${{ runner.temp }}/suite-out
             ${{ runner.temp }}/replay-out
             ${{ runner.temp }}/fixtures-out
           if-no-files-found: ignore
@@ -119,6 +114,47 @@ jobs:
         with:
           name: perturbation-out
           path: ${{ runner.temp }}/perturb-out
+          if-no-files-found: ignore
+  suite:
+    name: suite
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name == 'push' }}
+      - name: Install harness test dependencies
+        run: uv sync --only-group parity
+      - name: Build the oracle checkout
+        run: uv run --no-sync python -m parity oracle ensure --side oracle
+      - name: Build the binary
+        run: cargo build --release --locked
+      - name: Run v1's CLI tests against the binary
+        run: >-
+          uv run --no-sync python -m parity suite --engine rust
+          --work "$RUNNER_TEMP/suite-work" --out "$RUNNER_TEMP/suite-out"
+      - name: Keep the output of a failed run of the harness
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: suite-out-${{ matrix.os }}
+          path: ${{ runner.temp }}/suite-out
           if-no-files-found: ignore
   miri:
     name: miri
