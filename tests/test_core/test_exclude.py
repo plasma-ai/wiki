@@ -37,6 +37,7 @@ from ._helpers import (
 __all__ = [
     'test_exclude_policy_rejects_invalid_settings',
     'test_init_rejects_invalid_exclude_seed',
+    'test_caret_class_is_refused_where_a_bang_class_negates',
     'test_exclude_pattern_matching',
     'test_exclusion_names_the_pattern_a_full_scan_names',
     'test_update_skips_excluded_subtree',
@@ -162,7 +163,6 @@ _CORNER_PATTERNS = [
     '[a&&b]',
     '[a~~b]',
     '[a||b]',
-    '[^a]',
     '[[:alpha:]]',
     '[[a]',
     '[a[b]',
@@ -356,6 +356,12 @@ _FUZZ_MEMBER_CHARS = ['a', 'b', '-', '!', 'z', '^']
         ({'patterns': ['a//b']}, r'empty segment'),
         ({'patterns': ['!vendor']}, r'negation'),
         ({'patterns': ['a\\b']}, r'separator'),
+        (
+            {'patterns': ['a/[^p]*.md']},
+            r"'\[\^' does not negate a class \(use '\[!\.\.\.\]'\)",
+        ),
+        ({'patterns': ['[a][^b]']}, r"'\[\^' does not negate a class"),
+        ({'patterns': ['x[^']}, r"'\[\^' does not negate a class"),
         ({'patterns': ['./vendor']}, r'segments are not allowed'),
         ({'patterns': ['a/../b']}, r'segments are not allowed'),
     ],
@@ -370,6 +376,9 @@ _FUZZ_MEMBER_CHARS = ['a', 'b', '-', '!', 'z', '^']
         'empty-segment',
         'negation',
         'backslash',
+        'caret-class',
+        'caret-class-after-a-class',
+        'caret-class-unclosed',
         'dot-segment',
         'dot-dot-segment',
     ],
@@ -383,9 +392,11 @@ def test_exclude_policy_rejects_invalid_settings(
 
     ``settings.json`` is user-editable input: a wrong-typed block or a
     pattern outside the supported grammar (negation and escapes are
-    reserved, ``.``/``..`` and empty segments never name a wiki path)
-    raises ``ValueError`` through any command that walks the tree,
-    rather than silently indexing what the author meant to exclude.
+    reserved, ``[^`` reads as a negated class in gitignore and as a
+    literal caret here, ``.``/``..`` and empty segments never name a
+    wiki path) raises ``ValueError`` through any command that reads
+    policy, rather than silently indexing what the author meant to
+    exclude.
     """
     _make_wiki(tmp_path, folders={'core': ['design']})
     settings = tmp_path / '.wiki' / 'settings.json'
@@ -401,14 +412,39 @@ def test_exclude_policy_rejects_invalid_settings(
 def test_init_rejects_invalid_exclude_seed(tmp_path: pathlib.Path) -> None:
     """A rejected ``exclude`` seed aborts ``init`` before writing anything.
 
-    The exclude policy is read lazily (first inside the walk), so init
-    touches it up front: a bad seed must fail before the settings file,
-    the root index, or any sweep write lands.
+    Init validates its whole seed up front: a bad one must fail before
+    the settings file, the root index, or any sweep write lands.
     """
     root = tmp_path / 'wiki'
     with pytest.raises(ValueError, match=r'exclude\.patterns'):
         Wiki(root).init(settings={'exclude': {'patterns': ['!vendor']}})
     assert not root.exists()
+
+
+def test_caret_class_is_refused_where_a_bang_class_negates(
+    tmp_path: pathlib.Path,
+) -> None:
+    """``[^...]`` is refused with a pointer to ``[!...]``, which negates.
+
+    A gitignore reader takes ``[^p]`` for "any character but p", and the
+    pattern would exclude ``p.md`` itself here, in silence: the refusal
+    names the spelling that excludes every other page.
+    """
+    _make_wiki(tmp_path, folders={'a': ['p', 'q']})
+    _set_exclude_patterns(tmp_path, ['a/[^p]*.md'])
+    with pytest.raises(ValueError) as excinfo:
+        Wiki(tmp_path).update(check=True)
+    assert str(excinfo.value) == (
+        "Invalid exclude.patterns pattern 'a/[^p]*.md': '[^' does not negate a"
+        " class (use '[!...]') in .wiki/settings.json."
+    )
+
+    # the bang class excludes every page but p
+    _set_exclude_patterns(tmp_path, ['a/[!p]*.md'])
+    Wiki(tmp_path).update()
+    rows = (tmp_path / 'a' / '_index.md').read_text(encoding='utf-8')
+    assert '[[a/p|' in rows
+    assert '[[a/q|' not in rows
 
 
 # ------ matching semantics

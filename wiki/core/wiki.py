@@ -541,6 +541,8 @@ class Wiki:
                 reason = "negation ('!') is not supported"
             elif '\\' in pattern:
                 reason = "use '/' as the separator (no '\\')"
+            elif '[^' in pattern:
+                reason = "'[^' does not negate a class (use '[!...]')"
             elif '' in segments:
                 reason = "empty segment ('//')"
             elif ('.' in segments) or ('..' in segments):

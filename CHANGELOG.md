@@ -24,6 +24,9 @@ may include breaking changes, each listed under a Breaking heading.
 - A `naming.min_length` above `naming.max_length` is a settings error that names
   both keys. Before, every name was skipped and `wiki update` pruned every index
   row.
+- An `exclude.patterns` entry that holds `[^` is refused, with a pointer to
+  `[!...]`, the spelling that negates a class. Before, `[^a]` matched `a`, the
+  opposite of gitignore.
 
 ### Fixed
 

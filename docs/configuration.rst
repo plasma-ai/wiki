@@ -322,7 +322,9 @@ content (dot-paths read the same way).
    - Within a segment, ``*``, ``?``, and ``[...]`` never cross ``/``.
      Classes are fnmatch-style (``[!...]`` negates); a reversed range
      like ``[z-a]`` matches nothing. An embedded ``**`` (``a**b``)
-     collapses to ``*``.
+     collapses to ``*``. A pattern holding ``[^`` is rejected: gitignore
+     reads ``[^a]`` as "not ``a``", and the message names ``[!...]``, the
+     spelling that negates here.
    - No negation (a leading ``!`` is rejected; the syntax is reserved) and
      no escapes (``\`` is rejected — ``/`` is the separator). Empty or
      whitespace-only patterns, empty segments (``//``), and ``.``/``..``
