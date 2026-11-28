@@ -74,9 +74,9 @@ may include breaking changes, each listed under a Breaking heading.
   whose pages are not: git maps the root `_index.md` to `merge=wiki` and not a
   page in the wiki root. Such pages merge as plain text and conflict on their
   `updated:` lines. `wiki config` adds the mapping, in a `.gitattributes` in the
-  wiki root that you commit. A wiki with no mapping at all, a wiki git ignores
-  and a wiki outside a repository draw no note. In `--json` its kind is
-  `page_merge_unmapped`.
+  wiki root that you commit. A wiki with no mapping at all, a wiki the
+  repository ignores and a wiki outside a repository draw no note. In `--json`
+  its kind is `page_merge_unmapped`.
 
 ### Changed
 

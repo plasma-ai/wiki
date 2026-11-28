@@ -421,10 +421,11 @@ def test_lint_notes_unconfigured_merge_driver(tmp_path: pathlib.Path) -> None:
     assert not any('merge.wiki.driver' in event.description for event in notices)
 
 
-# the mapping lines of the merge wiring, and the note for a wiki that holds
-# the first alone
+# the mapping lines of the merge wiring, the file a case writes its personal
+# ignore rules to, and the note for a wiki that holds the first line alone
 _INDEX_MAPPING = '**/_index.md merge=wiki\n'
 _PAGE_MAPPING = '*.md merge=wiki\n'
+_PERSONAL_IGNORE = 'personal_ignore'
 _PAGE_MERGE_UNMAPPED = (
     ".gitattributes maps _index.md files to merge=wiki but not the wiki's pages;"
     ' run `wiki config` to map them (pages merge as plain text, and conflict on'
@@ -459,6 +460,12 @@ _PAGE_MERGE_UNMAPPED = (
             {'.gitattributes': _INDEX_MAPPING, '.gitignore': 'wiki/\n'},
             False,
         ),
+        (
+            'wiki',
+            True,
+            {'.gitattributes': _INDEX_MAPPING, _PERSONAL_IGNORE: 'wiki/\n'},
+            True,
+        ),
         ('wiki', False, {'.gitattributes': _INDEX_MAPPING}, False),
     ],
     ids=[
@@ -470,6 +477,7 @@ _PAGE_MERGE_UNMAPPED = (
         'neither-mapped',
         'no-attributes',
         'ignored-wiki',
+        'personally-ignored-wiki',
         'no-repository',
     ],
 )
@@ -488,10 +496,16 @@ def test_lint_notes_pages_unmapped_to_the_merge_driver(
     answers for a page in the wiki root, so a mapping in the repository
     root's file counts as one in the wiki's own. A wiki with no mapping,
     one the repository ignores, and one outside a repository draw none.
+    A wiki only this machine's ``core.excludesFile`` ignores draws the
+    note, which then reads the same on every clone.
     """
     if repository:
         _git_repo(tmp_path)
         _git(tmp_path, 'config', 'merge.wiki.driver', 'wiki _merge %O %A %B %L %P')
+        # a personal ignore file, in force on this machine only: git reads
+        # it where a case writes it
+        excludes = tmp_path / _PERSONAL_IGNORE
+        _git(tmp_path, 'config', 'core.excludesFile', str(excludes))
     root = tmp_path / folder
     root.mkdir(exist_ok=True)
     for name, text in files.items():

@@ -1289,7 +1289,9 @@ class Wiki:
         ``check-attr`` call answers for both, the root index and a page
         name in the root (``_PAGE_PROBE``). A wiki with no mapping at
         all is unwired by choice, and one the repository ignores merges
-        nothing, so neither draws a note.
+        nothing, so neither draws a note. The repository's own rules
+        decide what is ignored, as for the fence, so the note reads the
+        same on every clone.
         """
         cmd = [
             '--no-optional-locks',
