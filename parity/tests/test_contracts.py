@@ -87,8 +87,8 @@ def test_wheel_that_keeps_the_contracts_shows_only_that_its_wiki_is_a_script(
         package.commit,
         VERSION,
     )
-    # what the installer printed is kept with the check that first installed
-    assert sorted(result.logs) == ['name/install.txt', 'space/install.txt']
+    # every check installs into a venv of its own, and keeps what was printed
+    assert sorted(result.logs) == sorted(f'{name}/install.txt' for name in _CHECKS)
 
 
 @pytest.mark.parametrize(
@@ -247,7 +247,7 @@ def test_contracts_command_holds_a_wheel_to_the_checkout(
     document = json.loads((out / 'contracts.json').read_text(encoding='utf-8'))
     assert document['dirty'] == [edited]
     assert (out / 'contracts' / 'name' / 'install.txt').is_file()
-    assert (work / 'contracts' / 'wheel' / 'venv').is_dir()
+    assert (work / 'contracts' / 'venv' / 'venv').is_dir()
     # a check named twice
     out = tmp_path / 'out-twice'
     with pytest.raises(SystemExit) as raised:

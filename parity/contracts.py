@@ -96,6 +96,8 @@ _LOOKUP = (
 )
 # how a script that an interpreter runs starts
 _SHEBANG = b'#!'
+# the folder of the installers' output, below the work folder
+_LOGS = 'logs'
 # seconds one command of an installer may run -- one that runs this long has hung
 _TIMEOUT = 3_600
 # how many lines of an installer's output a finding quotes
@@ -271,13 +273,7 @@ def run(
         'LANG': _LANG,
     }
     env.update({name: f'{home / folder}' for name, folder in _HOMES.items()})
-    host = _Host(
-        package=package,
-        work=work,
-        env=env,
-        uv=f'{links / "uv"}',
-        skills=_skills(package),
-    )
+    skills = _skills(package)
     # run each check, and time it
     table = {
         'name': _check_name,
@@ -293,7 +289,14 @@ def run(
     findings = []
     rows = []
     for name in checks:
-        host.check = name
+        host = _Host(
+            package=package,
+            work=work,
+            env=env,
+            uv=f'{links / "uv"}',
+            skills=skills,
+            check=name,
+        )
         started = time.monotonic()
         try:
             problems = table[name](host)
@@ -315,7 +318,11 @@ def run(
         'v1': {'commit': package.v1, 'version': package.v1_version},
         'checks': rows,
     }
-    return Result(findings=tuple(findings), report=report, logs=host.logs)
+    # a run whose checks called no installer has no output to hand back
+    logs = {}
+    if (work / _LOGS).is_dir():
+        logs = _tree(work / _LOGS)
+    return Result(findings=tuple(findings), report=report, logs=logs)
 
 
 # ------ helper functions
@@ -325,9 +332,9 @@ class _Failed(Exception):
     """A command of an installer that failed inside a check: the check's finding."""
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class _Host:
-    """The scratch host of one run, and what the run has made on it.
+    """The scratch host of a run, as one check sees it.
 
     Attributes:
         package: The built files under check.
@@ -337,9 +344,8 @@ class _Host:
         uv: The uv of the host.
         skills: The bytes of every skill file the commit holds, by its path
             below the skills folder.
-        check: The check that is running.
-        logs: What each command of an installer printed, by file name.
-        plain: The venv that holds the wheel, once a check has made it.
+        check: The check that is running, which names its folder below
+            ``work`` and the folder of its installers' output.
 
     """
 
@@ -348,9 +354,7 @@ class _Host:
     env: Mapping[str, str]
     uv: str
     skills: Mapping[str, bytes]
-    check: str = ''
-    logs: dict[str, bytes] = dataclasses.field(default_factory=dict)
-    plain: Optional[pathlib.Path] = None
+    check: str
 
 
 def _check_name(host: _Host) -> list[str]:
@@ -361,7 +365,7 @@ def _check_name(host: _Host) -> list[str]:
         problems.append(
             f'the wheel names its distribution {metadata["Name"]!r}, not {NAME!r}'
         )
-    found = _lookup(host, _plain(host))
+    found = _lookup(host, _installed(host))
     if found != metadata['Version']:
         problems.append(
             f'the interpreter finds {NAME} at {found or "no version"}, and the'
@@ -378,7 +382,7 @@ def _check_version(host: _Host) -> list[str]:
     Python normalizes it to, so the two are held equal as versions, not as
     text.
     """
-    wiki = _wiki(host, _plain(host) / 'bin' / 'wiki', build=host.package.commit)
+    wiki = _wiki(host, _installed(host) / 'bin' / 'wiki', build=host.package.commit)
     shown = side.run(wiki, ['--version'], cwd=host.work, env=host.env, notice=False)
     problems = _bare(host, shown)
     text = shown.stdout.decode('utf-8', 'replace').removesuffix('\n')
@@ -401,7 +405,7 @@ def _check_native(host: _Host) -> list[str]:
     if held is None:
         return ['the wheel holds no wiki among its scripts']
     problems = []
-    installed = _plain(host) / 'bin' / 'wiki'
+    installed = _installed(host) / 'bin' / 'wiki'
     if installed.is_symlink() or (installed.read_bytes() != held):
         problems.append(f'{installed} is not the file the wheel holds')
     if held.startswith(_SHEBANG):
@@ -411,7 +415,7 @@ def _check_native(host: _Host) -> list[str]:
 
 def _check_venv(host: _Host) -> list[str]:
     """Check that the ``wiki`` of a venv works."""
-    wiki = _wiki(host, _plain(host) / 'bin' / 'wiki', build=host.package.commit)
+    wiki = _wiki(host, _installed(host) / 'bin' / 'wiki', build=host.package.commit)
     return _works(host, wiki, 'project')
 
 
@@ -419,15 +423,14 @@ def _check_symlink(host: _Host) -> list[str]:
     """Check that the ``wiki`` of a venv works through a link in another folder."""
     link = host.work / host.check / 'elsewhere' / 'wiki'
     link.parent.mkdir(parents=True)
-    link.symlink_to(_plain(host) / 'bin' / 'wiki')
+    link.symlink_to(_installed(host) / 'bin' / 'wiki')
     wiki = _wiki(host, link, build=host.package.commit)
     return _works(host, wiki, 'project')
 
 
 def _check_space(host: _Host) -> list[str]:
     """Check that the ``wiki`` of a venv whose path holds a space works."""
-    venv = _venv(host, host.work / host.check / 'a venv')
-    _install(host, 'install', venv, host.package.wheel)
+    venv = _installed(host, 'a venv')
     wiki = _wiki(host, venv / 'bin' / 'wiki', build=host.package.commit)
     return _works(host, wiki, 'project')
 
@@ -578,13 +581,17 @@ def _wiki(host: _Host, path: pathlib.Path, *, build: str) -> Side:
     return Side(name=host.check, argv=(f'{path}',), identity=identity)
 
 
-def _plain(host: _Host) -> pathlib.Path:
-    """Return the venv that holds the wheel, which the first call makes."""
-    if host.plain is None:
-        venv = _venv(host, host.work / 'wheel' / 'venv')
-        _install(host, 'install', venv, host.package.wheel)
-        host.plain = venv
-    return host.plain
+def _installed(host: _Host, name: str = 'venv') -> pathlib.Path:
+    """Make a venv of the check's own, install the wheel into it, and return it.
+
+    Raises:
+        RuntimeError: If uv cannot make the venv.
+        _Failed: If the installer fails.
+
+    """
+    venv = _venv(host, host.work / host.check / name)
+    _install(host, 'install', venv, host.package.wheel)
+    return venv
 
 
 def _venv(host: _Host, folder: pathlib.Path, *, seed: bool = False) -> pathlib.Path:
@@ -654,6 +661,9 @@ def _tool(
 ) -> None:
     """Run one command of an installer on the scratch host and keep what it printed.
 
+    What it printed is written below ``work`` at once, so a run that ends in
+    an error leaves it behind.
+
     Raises:
         _Failed: If the command fails.
 
@@ -667,17 +677,19 @@ def _tool(
         stderr=subprocess.STDOUT,
         timeout=_TIMEOUT,
     )
-    host.logs[f'{host.check}/{label}.txt'] = done.stdout
+    log = host.work / _LOGS / host.check / f'{label}.txt'
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_bytes(done.stdout)
     if done.returncode != 0:
         tail = done.stdout.decode('utf-8', 'replace').splitlines()[-_TAIL:]
         raise _Failed(f'{label} failed (exit {done.returncode}): {tail!r}')
 
 
 def _setup(host: _Host, cmd: Sequence[str]) -> None:
-    """Run one command that a check needs before it can start.
+    """Run one uv command that a check needs before it can start.
 
     Raises:
-        RuntimeError: If the command fails.
+        RuntimeError: If uv fails.
 
     """
     done = subprocess.run(
@@ -691,7 +703,7 @@ def _setup(host: _Host, cmd: Sequence[str]) -> None:
     )
     if done.returncode != 0:
         tail = done.stdout.decode('utf-8', 'replace').splitlines()[-_TAIL:]
-        raise RuntimeError(f'{cmd!r} failed (exit {done.returncode}): {tail!r}')
+        raise RuntimeError(f'uv failed (exit {done.returncode}): {tail!r}')
 
 
 def _lookup(host: _Host, venv: pathlib.Path) -> str:
@@ -760,6 +772,7 @@ def _archive(repo: pathlib.Path, commit: str, *paths: str) -> tarfile.TarFile:
         RuntimeError: If git fails.
 
     """
+    # NOTE: the archive is bytes, and the package's git helper returns text
     done = subprocess.run(
         ['git', '-C', f'{repo}', 'archive', '--format=tar', commit, '--', *paths],
         capture_output=True,

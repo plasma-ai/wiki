@@ -2094,8 +2094,10 @@ files must be.
   system folder holds one. A build there is the build of a host with no Rust:
   the build backend fetches the toolchain the checkout pins, so it needs the
   network. A build with a `cargo` at hand would prove nothing of such a host.
-- **Interpreter.** Every venv is made from the interpreter version of the
-  `oracle` side, which uv fetches into the scratch home.
+- **Venvs.** A check installs into venvs of its own, below a folder of the work
+  folder that carries its name, so each check stands alone. Every venv is made
+  from the interpreter version of the `oracle` side, which uv fetches into the
+  scratch home.
 - **Working `wiki`.** A check that installs a `wiki` holds it to three things.
   `wiki --version` prints the version and a newline on stdout and nothing on
   stderr, and exits 0. `wiki install --project`, run in a new folder, exits 0
@@ -2106,7 +2108,9 @@ files must be.
 - **Findings.** A check that does not hold is a finding, one line for each thing
   it found. An installer that fails inside a check is that check's finding, with
   the end of what it printed. A step that is no part of a check, a venv or the
-  build of v1's wheel, ends the run with an error when it fails.
+  build of v1's wheel, ends the run with an error when it fails. What each
+  command of an installer printed is written to `<work>/contracts/logs/` as the
+  command ends, so a run that ends in an error leaves it there.
 
 | Check     | Holds                                                                                                                                                                                                                                                                                                                                                                                           |
 | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
