@@ -371,7 +371,8 @@ carries the full float).
 
 The exit code follows the grep convention: matches exit 0; no match prints
 ``No matches found.`` on stderr and exits 1; an invalid FTS5 query, unavailable
-FTS5 support, or unresolved wiki exits 2.
+FTS5 support, or unresolved wiki exits 2. With ``--json``, no match still
+prints a document on stdout, the empty list ``[]``.
 
 .. list-table::
    :header-rows: 1

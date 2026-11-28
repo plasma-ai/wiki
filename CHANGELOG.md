@@ -120,6 +120,9 @@ may include breaking changes, each listed under a Breaking heading.
 - The help of `wiki new` marks `--desc` and `--content` as required once, where
   it said `(required). [required]`, and the help of `wiki search --limit` states
   its default of 10.
+- `wiki search --json` prints `[]` on stdout when nothing matches, so its output
+  always parses as JSON. Before, it printed nothing. The `No matches found.`
+  line on stderr and exit 1 are unchanged.
 
 ## [1.10.0] - 2026-11-27
 

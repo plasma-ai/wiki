@@ -105,6 +105,7 @@ __all__ = [
     'test_match_names_a_page_it_cannot_decode',
     'test_search_ranked_and_json_output',
     'test_search_no_match_exits_nonzero',
+    'test_search_json_prints_an_empty_list_for_no_match',
     'test_search_invalid_query_reports_error',
     'test_search_prefix_and_raw_are_mutually_exclusive',
     'test_search_limit_must_be_positive',
@@ -2659,6 +2660,20 @@ def test_search_no_match_exits_nonzero(wiki: pathlib.Path) -> None:
     assert result.returncode == 1
     assert 'No matches' in result.stderr
     assert result.stdout == ''
+
+
+def test_search_json_prints_an_empty_list_for_no_match(wiki: pathlib.Path) -> None:
+    """``search --json`` with no hits prints ``[]``, a document as any other.
+
+    A consumer parses stdout whatever the exit code, and empty output is
+    not JSON. The notice and exit 1 stand beside the document.
+    """
+    args = ('search', 'zzz_no_such_token', '--json', '--path', str(wiki))
+    result = _wiki(wiki, *args)
+    assert result.returncode == 1
+    assert result.stdout == '[]\n'
+    assert json.loads(result.stdout) == []
+    assert result.stderr == 'No matches found.\n'
 
 
 def test_search_invalid_query_reports_error(wiki: pathlib.Path) -> None:

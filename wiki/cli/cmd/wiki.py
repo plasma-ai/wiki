@@ -624,12 +624,9 @@ def search(
             prefix=prefix,
             raw=raw,
         )
-        # grep convention: no-match exits 1 with the notice on stderr, so
-        # scripts can distinguish no-match from match by exit code alone
-        if not matches:
-            typer.echo('No matches found.', err=True)
-            raise SystemExit(1)
-        elif as_json:
+        # --json: stdout carries one document whatever the outcome, so a
+        # consumer that parses it reads no match as an empty list
+        if as_json:
             results = [
                 {'path': relpath, 'snippet': snippet, 'score': score}
                 for relpath, snippet, score in matches
@@ -639,6 +636,11 @@ def search(
         else:
             for relpath, snippet, score in matches:
                 typer.echo(f'{score:>7.3f}  {relpath}\n         {snippet}')
+        # grep convention: no-match exits 1 with the notice on stderr, so
+        # scripts can distinguish no-match from match by exit code alone
+        if not matches:
+            typer.echo('No matches found.', err=True)
+            raise SystemExit(1)
 
     return app
 
