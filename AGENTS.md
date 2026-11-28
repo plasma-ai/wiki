@@ -492,8 +492,10 @@ runs it on its seed before its first write: every settings block, in the order
 and `canonicalize_index` never call it; each reads only the per-block policy
 properties it uses, so a page stays readable, the repair runnable and a merge
 settled on a wiki with a broken block elsewhere. A settings check that follows a
-path on disk stays out of the routine: the one there is,
-`_refuse_aliased_link_folders`, runs in `lint` and `init`.
+path in the checkout stays out of the routine: the one there is,
+`_refuse_aliased_link_folders`, runs in `lint` and `init`. The routine's one
+read outside the settings file is the lookup of a named `timestamp.timezone` in
+the interpreter's zone database.
 
 ### Shell Scripts
 

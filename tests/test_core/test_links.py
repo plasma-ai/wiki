@@ -187,9 +187,9 @@ def test_links_alias_into_the_wiki_is_refused_by_lint_and_init_alone(
 ) -> None:
     """An entry a symlink leads back into the wiki stops ``lint`` and ``init``.
 
-    It is the one settings check that follows a path on disk, so the
-    sweep never runs it: ``update`` accepts a settings file whose text is
-    sound, whatever a symlink does in one checkout.
+    It is the one settings check that follows a path in the checkout, so
+    the sweep never runs it: ``update`` accepts a settings file whose text
+    is sound, whatever a symlink does in one checkout.
     """
     root = tmp_path / 'wiki'
     _make_wiki(root, folders={'core': ['design']})

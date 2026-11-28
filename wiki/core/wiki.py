@@ -676,8 +676,11 @@ class Wiki:
         on to use. ``read``, ``update_config``, and the merge driver's
         entry points never run it: each reads only the blocks it uses, so
         a page stays readable, the repair runnable, and a merge settled on
-        a wiki with a malformed block elsewhere. No check here follows a
-        path on disk (see :meth:`_refuse_aliased_link_folders`).
+        a wiki with a malformed block elsewhere. No check here reads a
+        path in or around the wiki (see
+        :meth:`_refuse_aliased_link_folders`). One leaves the settings
+        text: a named ``timestamp.timezone`` is looked up in the
+        interpreter's zone database, so that verdict can differ by machine.
         """
         self._naming_policy  # noqa: B018
         self._timestamp_policy  # noqa: B018
@@ -690,10 +693,9 @@ class Wiki:
     def _refuse_aliased_link_folders(self: Wiki) -> None:
         """Refuse a ``links.external`` folder a symlink leads back into the wiki.
 
-        The one settings check that follows a path on disk, so it stays
-        out of :meth:`_validate_settings`: a symlink differs from one
-        checkout to the next, and a sweep's verdict on a settings file
-        must not.
+        The one settings check that follows a path in the checkout, so it
+        stays out of :meth:`_validate_settings`: a symlink differs from
+        one checkout to the next.
         """
         for folder, joined in self._links_policy:
             if pathlib.Path(os.path.realpath(joined)).is_relative_to(self._root):

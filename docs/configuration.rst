@@ -104,10 +104,12 @@ line, so ``wiki update --check`` never passes on a file that ``wiki lint`` or
 running on a wiki with a broken block elsewhere: ``wiki read``, so a page
 stays readable; ``wiki config``, so the repair command stays runnable; and
 the merge driver, so a merge still settles stamps. The check reads the
-settings file and no other file in or around the wiki. The one check that
-follows a path on disk — a ``links.external`` folder that resolves inside
-the wiki through a symlink — is left to ``wiki lint`` and ``wiki init``,
-since a symlink differs from one checkout to the next.
+settings file and no other file in or around the wiki. A ``timestamp.timezone``
+name is checked against the machine's zone database, so a zone one machine
+knows can be refused on another. The one check that follows a path in the
+checkout — a ``links.external`` folder that resolves inside the wiki through a
+symlink — is left to ``wiki lint`` and ``wiki init``, since a symlink differs
+from one checkout to the next.
 
 A file that cannot be read fails the same commands with
 ``Cannot read .wiki/settings.json (<reason>).`` The reason is the system's own
