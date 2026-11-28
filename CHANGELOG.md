@@ -46,12 +46,14 @@ may include breaking changes, each listed under a Breaking heading.
 - An empty `--lines`, `--words` or `--chars` value of `wiki read` is an invalid
   slice. Before, it returned the whole page, so a script with an unset variable
   read a page it meant to slice. `wiki read` also checks its slice before it
-  looks for the wiki, so a malformed slice is reported as one whatever `--path`
-  names.
+  looks for the wiki, so a malformed slice is reported as one whatever a
+  non-empty `--path` names.
 - `--path ""` is a usage error, `--path must not be empty.`, in every command
   that takes `--path`. Before, an empty value meant the wiki the current folder
   resolves to, so a script with an unset variable ran on the wrong wiki and
-  exited 0.
+  exited 0. When another argument is bad too, the empty `--path` is the error
+  reported, ahead of a malformed slice of `wiki read`. Only a value the option
+  parser refuses, such as a `--limit` that is not an integer, comes first.
 
 ### Fixed
 

@@ -32,6 +32,7 @@ from .conftest import GIT, WIKI, _env, _git, _git_repo, _wiki
 __all__ = [
     'test_command_errors_exit_two',
     'test_empty_path_is_a_usage_error',
+    'test_empty_path_error_order',
     'test_untrusted_hook_refusal_exits_two',
     'test_update_check_separates_pending_from_error',
     'test_page_that_is_not_utf8_stops_a_command_naming_the_byte',
@@ -429,6 +430,44 @@ def test_empty_path_is_a_usage_error(
     assert result.stdout == ''
     assert result.stderr.endswith('Error: Invalid value: --path must not be empty.\n')
     assert _tree(tmp_path) == before
+
+
+@pytest.mark.parametrize(
+    argnames=('args', 'error'),
+    argvalues=[
+        (
+            ('read', 'core/design', '--lines', 'x'),
+            'Invalid value: --path must not be empty.',
+        ),
+        (
+            ('read', 'core/design', '--lines', '1:2', '--words', '1:2'),
+            'Invalid value: --path must not be empty.',
+        ),
+        (
+            ('search', 'design', '--limit', 'x'),
+            "Invalid value for '--limit': 'x' is not a valid integer.",
+        ),
+    ],
+    ids=['bad-slice', 'exclusive-pair', 'bad-number'],
+)
+def test_empty_path_error_order(
+    tmp_path: pathlib.Path,
+    args: tuple[str, ...],
+    error: str,
+) -> None:
+    """An empty ``--path`` is the first error a command reports of its own.
+
+    A run with two bad arguments names one of them. The empty ``--path``
+    comes ahead of every check a command makes itself, the slice of
+    ``read`` included, and behind a value the option parser refuses,
+    which ends the run before the command starts.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    result = _wiki(tmp_path, *args, '--path', '')
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stdout == ''
+    assert result.stderr.endswith(f'Error: {error}\n')
 
 
 def test_untrusted_hook_refusal_exits_two(tmp_path: pathlib.Path) -> None:
