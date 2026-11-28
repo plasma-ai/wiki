@@ -65,6 +65,11 @@ __all__ = [
     'test_lint_reports_one_issue_for_what_update_refuses',
     'test_lint_reports_deep_nesting_instead_of_crashing',
     'test_lint_reports_an_escape_naming_no_character',
+    'test_lint_gives_the_quoting_remedy_for_a_bad_escape',
+    'test_lint_flags_a_control_character_in_a_double_quoted_field',
+    'test_lint_keeps_a_quoted_field_that_decodes_to_text',
+    'test_lint_judges_every_text_field_for_control_characters',
+    'test_lint_flags_a_text_field_that_is_a_mapping_or_list',
     'test_lint_invalid_yaml_yields_to_merge_states',
     'test_lint_names_a_comment_truncated_desc',
     'test_valueless_desc_draws_only_its_repair_diff',
@@ -87,6 +92,8 @@ __all__ = [
     'test_lint_survives_index_deleted_mid_check',
     'test_quoted_placeholder_desc_is_soft',
     'test_long_desc_is_note_only',
+    'test_lint_notes_a_control_character_in_authored_content',
+    'test_lint_scans_no_generated_text_for_control_characters',
     'test_lint_relative_prefix_inside_wiki_is_issue',
     'test_lint_absolute_link_inside_wiki_is_issue',
     'test_lint_relative_root_link_names_the_index_page',
@@ -290,12 +297,13 @@ def test_lint_issues_are_typed(tmp_path: pathlib.Path) -> None:
         '---\nname: malformed\ndesc: A page.\n\n# malformed\n\nBody.\n',
         encoding='utf-8',
     )
-    # a period-less desc, an unparseable stamp, both wrap mangles, a directory
+    # an escape decoded to a control character, a period-less desc, a list
+    # for a category, an unparseable stamp, both wrap mangles, a directory
     # link, a relative link, an absolute link, an outside link, and a dangling
     # region marker on one messy page
     (tmp_path / 'data' / 'messy.md').write_text(
-        '---\nname: messy\ndesc: No trailing period\n'
-        'created: not-a-stamp\n---\n\n# messy\n\n'
+        '---\nname: messy\ntitle: "A \\tau"\ndesc: No trailing period\n'
+        'category: [a, b]\ncreated: not-a-stamp\n---\n\n# messy\n\n'
         'a twenty-\nclass system, that\n+ wraps into a marker.\n\n'
         f'See [[core]], [[./keep]], [[{tmp_path}/keep]], and [[../gone]] for more.\n\n'
         '<!-- start: no-lint -->\n',
@@ -349,6 +357,7 @@ def test_lint_issues_are_typed(tmp_path: pathlib.Path) -> None:
         'bare_page',
         'broken_link',
         'conflict_markers',
+        'control_character',
         'directory_link',
         'escaped_wikilinks',
         'excluded_link_target',
@@ -363,6 +372,7 @@ def test_lint_issues_are_typed(tmp_path: pathlib.Path) -> None:
         'missing_period',
         'missing_title',
         'nested_wiki_root',
+        'nonscalar_field',
         'outside_link',
         'region_marker',
         'relative_link',
@@ -1279,6 +1289,227 @@ def test_lint_reports_an_escape_naming_no_character(
     assert Wiki(tmp_path).update() == []
 
 
+@pytest.mark.parametrize(
+    argnames=('field', 'reason'),
+    argvalues=[
+        ('title: "Uses \\(p\\) here"', 'found unknown escape character'),
+        ('desc: "Uses $\\xi$."', 'hexadecimal number'),
+        ('desc: "Uses $\\upsilon$."', 'hexadecimal number'),
+        ('desc: "Uses \\uD800."', 'found invalid Unicode character escape code'),
+        (
+            'desc: "Uses \\U00110000."',
+            'found invalid Unicode character escape code',
+        ),
+    ],
+    ids=[
+        'unknown-escape',
+        'bad-x-number',
+        'bad-u-number',
+        'no-such-character',
+        'past-unicode',
+    ],
+)
+@pytest.mark.usefixtures('_vary_loader')
+def test_lint_gives_the_quoting_remedy_for_a_bad_escape(
+    tmp_path: pathlib.Path,
+    field: str,
+    reason: str,
+) -> None:
+    r"""A backslash escape a double-quoted value cannot decode draws the quoting remedy.
+
+    The value is quoted already, so "quote the value" would send the
+    author in a circle: LaTeX such as ``\(p\)`` or ``\xi`` wants single
+    quotes, a block scalar, or doubled backslashes, under either loader.
+    The reason for a bad ``\x`` or ``\u`` number spells "hexadecimal" in
+    full, whichever loader worded it.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    desc = '' if field.startswith('desc:') else 'desc: A page.\n'
+    page.write_text(
+        f'---\nname: core/design\n{field}\n{desc}---\n\n# core/design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    issues = [issue for issue in wiki.lint() if issue.kind == 'invalid_yaml']
+    assert [issue.fields['line'] for issue in issues] == [3]
+    assert reason in issues[0].fields['reason']
+    assert issues[0].endswith(
+        '; a backslash starts an escape inside double quotes, so write LaTeX in'
+        ' single quotes or a block scalar, or double each backslash'
+    )
+    assert 'quote or rewrite the value' not in issues[0]
+
+
+@pytest.mark.parametrize(
+    argnames=('desc', 'named', 'characters'),
+    argvalues=[
+        (
+            '"Bound on $\\nu$ and $\\theta$ and $\\frac12$."',
+            'U+000A (\\n), U+0009 (\\t), U+000C (\\f)',
+            ['U+000A', 'U+0009', 'U+000C'],
+        ),
+        (
+            '"Stray \\x01, \\x7f, \\N, \\L and \\x01 again."',
+            'U+0001, U+007F, U+0085 (\\N), U+2028 (\\L)',
+            ['U+0001', 'U+007F', 'U+0085', 'U+2028'],
+        ),
+        (
+            '"A tab\tand a break\n\n  typed raw."',
+            'U+0009 (\\t), U+000A (\\n)',
+            ['U+0009', 'U+000A'],
+        ),
+    ],
+    ids=['latex', 'rare-controls', 'typed-raw'],
+)
+@pytest.mark.usefixtures('_vary_loader')
+def test_lint_flags_a_control_character_in_a_double_quoted_field(
+    tmp_path: pathlib.Path,
+    desc: str,
+    named: str,
+    characters: list[str],
+) -> None:
+    r"""A double-quoted field that decodes to control characters is one issue, on its own page.
+
+    YAML reads a backslash in double quotes as an escape, so LaTeX typed
+    there decodes to a line break (``\nu``), a tab (``\theta``), and a
+    form feed (``\frac``), and update copies them into the parent's row.
+    Lint names the field, its line, and each character once, with the
+    remedy; the row that holds the copy draws no second finding. The
+    decoded value is what is judged, so a tab typed raw between the
+    quotes, or the line break a blank line there folds to, is the same
+    finding.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        f'---\nname: core/design\ndesc: {desc}\n---\n\n# core/design\n\nBody.\n',
+        encoding='utf-8',
+    )
+    wiki.update()
+
+    # one issue for the whole wiki, typed for --json
+    issues = Wiki(tmp_path).lint()
+    assert issues == [
+        f'core/design.md: Control character in desc (line 3): {named}; a backslash'
+        ' starts an escape inside double quotes, so write LaTeX in single quotes'
+        ' or a block scalar, or double each backslash'
+    ]
+    assert issues[0].kind == 'control_character'
+    assert issues[0].fields == {
+        'path': 'core/design.md',
+        'field': 'desc',
+        'line': 3,
+        'characters': characters,
+    }
+
+
+@pytest.mark.parametrize(
+    argnames='desc',
+    argvalues=[
+        "'Bound on $\\nu$ and $\\theta$ and $\\frac12$.'",
+        '>-\n  Bound on $\\nu$ and $\\theta$ and $\\frac12$.',
+        '"Bound on $\\\\nu$ and $\\\\theta$ and $\\\\frac12$."',
+        '"A caf\\u00e9."',
+        '"Say \\"x\\"."',
+    ],
+    ids=[
+        'single-quoted',
+        'block-scalar',
+        'doubled-backslashes',
+        'unicode-escape',
+        'quote-escape',
+    ],
+)
+@pytest.mark.usefixtures('_vary_loader')
+def test_lint_keeps_a_quoted_field_that_decodes_to_text(
+    tmp_path: pathlib.Path,
+    desc: str,
+) -> None:
+    """LaTeX outside double quotes, or behind doubled backslashes, and an escape that spells text all lint clean."""
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        f'---\nname: core/design\ndesc: {desc}\n---\n\n# core/design\n\nBody.\n',
+        encoding='utf-8',
+    )
+    wiki.update()
+    assert Wiki(tmp_path).lint() == []
+
+
+@page_index
+def test_lint_judges_every_text_field_for_control_characters(
+    tmp_path: pathlib.Path,
+    kind: str,
+) -> None:
+    """``name``, ``title``, ``desc``, and ``category`` are each judged, in a page and in an index; another field is not."""
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    name = 'design.md' if kind == 'page' else '_index.md'
+    (tmp_path / 'core' / name).write_text(
+        '---\nname: "co\\re"\ntitle: "A $\\frac12$ title"\ndesc: "On $\\theta$."\n'
+        'category: "\\beta"\ntags: ["\\tau"]\n---\n\n# x\n\n***\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    issues = [issue for issue in wiki.lint() if issue.kind == 'control_character']
+    assert [issue.fields for issue in issues] == [
+        {'path': f'core/{name}', 'field': 'name', 'line': 2, 'characters': ['U+000D']},
+        {'path': f'core/{name}', 'field': 'title', 'line': 3, 'characters': ['U+000C']},
+        {'path': f'core/{name}', 'field': 'desc', 'line': 4, 'characters': ['U+0009']},
+        {
+            'path': f'core/{name}',
+            'field': 'category',
+            'line': 5,
+            'characters': ['U+0008'],
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    argnames=('field', 'key', 'line'),
+    argvalues=[
+        ('desc:\n  Theorem: every x is y.', 'desc', 3),
+        ('title:\n- One\n- Two\ndesc: A page.', 'title', 3),
+        ('desc: A page.\ncategory: [math, draft]', 'category', 4),
+        ('desc: A page.\ncategory: {}', 'category', 4),
+    ],
+    ids=['nested-mapping', 'block-list', 'flow-list', 'empty-flow-mapping'],
+)
+@page_index
+@pytest.mark.usefixtures('_vary_loader')
+def test_lint_flags_a_text_field_that_is_a_mapping_or_list(
+    tmp_path: pathlib.Path,
+    kind: str,
+    field: str,
+    key: str,
+    line: int,
+) -> None:
+    """A ``title``, ``desc``, or ``category`` that YAML reads as a mapping or a list is one issue.
+
+    The block is valid YAML, so no other check names it: update writes
+    the field's source lines into the H1 and the parent's row while a
+    strict reader hands other tools a collection. Lint names the field
+    and its line, with the remedy, in a page and in an index; a field
+    that is a list by design (``tags``) stays clean.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    name = 'design.md' if kind == 'page' else '_index.md'
+    named = 'core/design' if kind == 'page' else 'core'
+    (tmp_path / 'core' / name).write_text(
+        f'---\nname: {named}\n{field}\ntags: [a, b]\n---\n\n# {named}\n\nBody.\n',
+        encoding='utf-8',
+    )
+    wiki.update()
+
+    issues = Wiki(tmp_path).lint()
+    assert issues == [
+        f'core/{name}: Mapping or list in {key} (line {line}): a strict reader'
+        ' finds no text there, so quote the value or write it as a >- block'
+    ]
+    assert issues[0].kind == 'nonscalar_field'
+    assert issues[0].fields == {'path': f'core/{name}', 'field': key, 'line': line}
+
+
 def test_lint_invalid_yaml_yields_to_merge_states(tmp_path: pathlib.Path) -> None:
     """Merge debris keeps its own finding: markers win, the hint stays valid YAML.
 
@@ -2002,6 +2233,83 @@ def test_long_desc_is_note_only(tmp_path: pathlib.Path) -> None:
     assert 'keep descs under' in err
     assert 'design.md' in err
     assert issues == []
+
+
+@page_index
+@pytest.mark.parametrize('strict', [False, True], ids=['default', 'strict'])
+def test_lint_notes_a_control_character_in_authored_content(
+    tmp_path: pathlib.Path,
+    kind: str,
+    strict: bool,
+) -> None:
+    r"""Control characters in a page body, or below an index's ``***``, draw one note per file.
+
+    A form feed where ``\frac`` stood is what a decoded escape leaves in
+    prose and in code alike. The note names the first line and character
+    and counts the rest; a tab is text, a ``no-lint`` region is skipped,
+    and the wiki stays clean, under ``lint.strict`` too.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    if strict:
+        settings = tmp_path / '.wiki' / 'settings.json'
+        data = json.loads(settings.read_text(encoding='utf-8'))
+        data['lint'] = {'strict': True}
+        settings.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
+    name = 'design.md' if kind == 'page' else '_index.md'
+    path = tmp_path / 'core' / name
+    authored = (
+        '\nA\ttabbed line.\n\nThe bound $\x0crac12$ and $\x0crac13$.\n\n'
+        '```\ncode \x01 sample\n```\n\n'
+        '<!-- start: no-lint -->\nA sampled \x0c byte.\n<!-- end: no-lint -->\n'
+    )
+    text = path.read_text(encoding='utf-8') + authored
+    path.write_text(text, encoding='utf-8')
+    first_line = text.split('\n').index('The bound $\x0crac12$ and $\x0crac13$.') + 1
+
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+    assert wiki.lint() == []
+    notes = [
+        event.description
+        for event in notices
+        if 'Control character' in event.description
+    ]
+    assert notes == [
+        f'core/{name}: Control character in content (line {first_line}): U+000C,'
+        ' the first of 3'
+    ]
+
+
+def test_lint_scans_no_generated_text_for_control_characters(
+    tmp_path: pathlib.Path,
+) -> None:
+    r"""A control character update copied into an H1 or a link row draws no finding of its own.
+
+    The page's double-quoted title and desc decode ``\frac`` to a form
+    feed, and update writes both into the page's H1 and the parent's
+    row. The two fields are the findings; the generated copies, in the
+    page body and in the index, draw no note.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        '---\nname: core/design\ntitle: "On $\\frac12$"\ndesc: "Half, $\\frac12$."\n'
+        '---\n\n# core/design\n\nBody.\n',
+        encoding='utf-8',
+    )
+    wiki.update()
+    assert '# On $\x0crac12$\n' in page.read_text(encoding='utf-8')
+    index = (tmp_path / 'core' / '_index.md').read_text(encoding='utf-8')
+    assert '[[core/design|design]]: Half, $\x0crac12$.' in index
+
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+    issues = wiki.lint()
+    assert [(issue.kind, issue.fields['field']) for issue in issues] == [
+        ('control_character', 'title'),
+        ('control_character', 'desc'),
+    ]
+    assert not any('Control character' in event.description for event in notices)
 
 
 # ------ body links and structure

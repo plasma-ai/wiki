@@ -41,7 +41,14 @@ strict YAML reader (Obsidian's included) reads them — a value continued on
 indented lines folds into one, a quoted value decodes, a space followed by
 ``#`` starts a comment — and ``wiki lint`` reports a block a strict reader
 rejects (an unquoted ``': '`` inside a value, a duplicate key, a body that is
-not ``key: value`` pairs) as an ``invalid_yaml`` issue. Fresh frontmatter —
+not ``key: value`` pairs) as an ``invalid_yaml`` issue. Inside double quotes a
+backslash starts an escape, so LaTeX there decodes to control characters
+(``"$\frac12$"`` holds a form feed): write it in single quotes or a block
+scalar, or double each backslash. ``wiki lint`` reports a double-quoted
+``name``, ``title``, ``desc``, or ``category`` that holds a control character
+as a ``control_character`` issue, and one of those fields whose value is a
+YAML mapping or list (an indented ``Key: value`` line under a bare ``desc:``)
+as a ``nonscalar_field`` issue. Fresh frontmatter —
 written when a bare page is adopted or when ``wiki init`` or ``wiki update``
 creates an index — contains exactly ``name``, a ``desc: ...`` placeholder,
 ``tags: []``, ``sources: []``, ``created``, and ``updated``, plus a ``title:``
@@ -166,10 +173,10 @@ by ``#`` (the start of a YAML comment), must be YAML-quoted: ``wiki lint``
 reports the unquoted colon on a one-line description, or on a continuation
 line of one, as invalid YAML — though under a bare ``desc:`` key an indented
 ``Key: value`` line nests a mapping instead, which no strict reader shows as
-text and lint does not report — and names the comment as the likely cause
-when a description it truncated fails the period check. Do not
-hand-wrap a description mid-word — let the YAML block scalar carry any line
-breaks.
+text and lint reports as a ``nonscalar_field`` issue — and names the comment
+as the likely cause when a description it truncated fails the period check.
+Do not hand-wrap a description mid-word — let the YAML block scalar carry any
+line breaks.
 
 Categories
 ~~~~~~~~~~
@@ -306,8 +313,9 @@ Any page or index may wrap lines in an HTML-comment region:
 
 Each marker sits alone on its line. The ``no-lint`` directive suppresses
 ``wiki lint``'s positional rules — conflict markers and leftover merge repair
-hints, escaped wikilinks, wrap mangles, stale-link notes, outside-link,
-directory-link, relative-link and absolute-link issues — for the wrapped
+hints, escaped wikilinks, wrap mangles, stale-link notes, control-character
+notes, outside-link, directory-link, relative-link and absolute-link issues —
+for the wrapped
 lines, so a page can display sample conflict markers or stale-link examples
 without failing lint. A nested or dangling marker is itself a hard lint issue,
 and a malformed pair suppresses nothing. Markers inside fenced or inline code

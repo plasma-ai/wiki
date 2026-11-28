@@ -157,6 +157,16 @@ rather than authoring or auditing page by page yourself:
   block whose repair would leave a strict reader worse off (an accepted block
   rejected, or authored lines folded into a quoted value), which it leaves
   untouched.
+- **Keep LaTeX out of double quotes.** In a double-quoted value YAML reads a
+  backslash as an escape: `"$\theta$"` holds a tab, `"$\nu$"` a line break,
+  `"$\frac12$"` a form feed, and `wiki update` copies them into the H1 and the
+  parent's row. Write the value in single quotes or as a block scalar (`>-`), or
+  double each backslash. `wiki lint` fails a double-quoted `name`, `title`,
+  `desc`, or `category` that holds a control character (`control_character`),
+  and reports a backslash that opens no YAML escape (`"\(p\)"`, `"$\xi$"`) as
+  `invalid_yaml` with the same remedy. A control character in a page body or
+  below an index's `***` (a form feed where the `\f` of `\frac` was decoded on
+  the way in) draws a soft note with its first line; retype the text there.
 - **Wikilinks stay inside the wiki unless a folder is allowlisted.** Every
   wikilink (`[[...]]`) target is read from the wiki root, one rule per spelling:
   a prefix-free target (`[[core/design]]`) must name something inside the wiki;
@@ -245,12 +255,13 @@ rather than authoring or auditing page by page yourself:
   `: ` or ` #` must be YAML-quoted — a strict reader rejects the unquoted colon
   on a one-line desc or on a continuation line of one (`wiki lint` reports it as
   `invalid_yaml`; under a bare `desc:` key an indented `Key: value` line nests a
-  mapping instead, which no strict reader shows as text and lint does not
-  report) and reads ` #` as a comment (lint names it as the likely cause only
-  when the cut-short desc loses its period); surrounding quotes are stripped
-  when the value is read. Never hand-wrap a desc mid-word or onto a list-marker
-  start — let the block scalar carry the breaks; lint fails the wrap artifacts
-  (a hyphen dangle, a phantom list item).
+  mapping instead, which no strict reader shows as text and lint reports as
+  `nonscalar_field`, as it does a `title` or `category` that is a list) and
+  reads ` #` as a comment (lint names it as the likely cause only when the
+  cut-short desc loses its period); surrounding quotes are stripped when the
+  value is read. Never hand-wrap a desc mid-word or onto a list-marker start —
+  let the block scalar carry the breaks; lint fails the wrap artifacts (a hyphen
+  dangle, a phantom list item).
 - **Fill in auto-created index descs.** `wiki update` creates a missing
   `_index.md` for every new directory with a `desc: ...` placeholder and
   announces the batch in its condensed summary

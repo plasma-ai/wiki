@@ -378,16 +378,52 @@ its meaning:
 ``Invalid YAML frontmatter (line N): <reason>; <advice>``
    A strict YAML reader rejects the block — an unquoted ``': '`` inside a
    one-line value, a value ending in ``:``, a duplicate key, a control
-   character, a key that is not a scalar, or a body that is not ``key: value``
-   pairs — so Obsidian and any YAML library lose every field, while the wiki
+   character, a backslash escape a double-quoted value cannot decode, a key
+   that is not a scalar, or a body that is not ``key: value`` pairs — so
+   Obsidian and any YAML library lose every field, while the wiki
    still reads the block through its line grammar (or, for a body that is not
    a mapping, leaves it untouched). The advice names the cause: a parse error
    (``a strict reader drops the whole block, so quote or rewrite the value``),
+   a bad backslash escape in a double-quoted value, such as the ``\(`` of
+   ``"\(p\)"`` or the ``\x`` of ``"$\xi$"`` (``a backslash starts an escape
+   inside double quotes, so write LaTeX in single quotes or a block scalar, or
+   double each backslash``),
    a duplicate key (``a strict reader rejects the block or keeps the last
    copy, the wiki reads the first``), a key that is not a scalar (``the wiki
    reads the block by its line grammar alone``), or a body that is not a
    mapping (``no strict reader finds key: value pairs in it``). Quote the
-   value, drop the duplicate, or rewrite the block.
+   value, requote the LaTeX, drop the duplicate, or rewrite the block.
+
+``Control character in <field> (line N): <characters>; <advice>``
+   A double-quoted ``name:``, ``title:``, ``desc:``, or ``category:`` holds a
+   control character: a C0 control (a tab and a line break included), DEL,
+   U+0085, U+2028, or U+2029. YAML reads a backslash inside double quotes as
+   an escape, so LaTeX typed there decodes — ``\theta`` opens with a tab,
+   ``\nu`` with a line break, ``\frac`` with a form feed — and update copies
+   the result into the H1 and the parent index's row. Each character is named
+   once by its code point, with the one-letter escape that spells it where it
+   has one (``U+000C (\f)``); N is the field's key line. The advice is ``a
+   backslash starts an escape inside double quotes, so write LaTeX in single
+   quotes or a block scalar, or double each backslash``. The decoded value is
+   what is judged, so a control character typed raw between the quotes — a
+   tab, or the line break a blank line inside a multi-line value folds to —
+   draws the same finding and the same advice, though no backslash wrote it.
+   An escape that decodes to text (``\u00e9``, ``\"``) is not reported, and
+   neither are the generated copies: the finding stands once, on the file that
+   holds the field. Typed ``control_character`` in ``--json``, with ``path``,
+   ``field``, ``line``, and ``characters`` (the code points) fields.
+
+``Mapping or list in <field> (line N): a strict reader finds no text there, so quote the value or write it as a >- block``
+   A ``name:``, ``title:``, ``desc:``, or ``category:`` whose value YAML reads
+   as a mapping or a list: an indented ``Key: value`` line under a bare
+   ``desc:``, a ``title: [Draft]``, a ``category:`` over ``- item`` lines.
+   The block is valid YAML, so it is not an ``Invalid YAML frontmatter``
+   issue; update writes the field's source lines, joined, into the H1 and the
+   parent index's row, while Obsidian and any YAML library read a collection.
+   N is the field's key line. Quote the value, or write it as a block scalar.
+   A field that is a list by design (``tags:``, ``sources:``) is not judged.
+   Typed ``nonscalar_field`` in ``--json``, with ``path``, ``field``, and
+   ``line`` fields.
 
 ``Empty or truncated index (no frontmatter); restore it from git or delete it to rebuild``
    An emptied or truncated ``_index.md``; update keeps it as-is. Restore or
@@ -537,6 +573,20 @@ notes is clean — lint exits 0.
      - An index's user-content section below ``***`` is empty.
    * - ``<path>: CRLF line endings; update will normalize``
      - The next writing update rewrites the file to LF.
+   * - ``<path>: Control character in content (line N): <character>``
+     - Authored content — a page's body, or an index's text below ``***`` —
+       holds a C0 control character other than a tab or a line break, or
+       DEL: typically what is left of LaTeX once a tool decoded a backslash
+       escape (a form feed where the ``\f`` of ``\frac`` stood). One note per
+       file names the first line and its character by code point
+       (``U+000C``); when the file holds more, the line ends ``, the first
+       of M``. Code samples are scanned too. Generated text — a page's H1,
+       an index's link rows — is not: a control character there is copied
+       from a frontmatter field and reported on the file that holds the
+       field (``Control character in <field>``, above). It stays a note
+       under ``lint.strict``. Typed ``content_control_character`` in
+       ``--json``, with ``path``, ``line``, ``character``, and ``count``
+       fields.
    * - ``<path>: Stale link [[target]]``
      - A ``[[wikilink]]`` in authored prose points at nothing — inside the
        wiki for a prefix-free target, or under a ``links.external`` folder
@@ -625,9 +675,11 @@ wrapped lines:
 
 Each marker stands alone on its line. The region suppresses the positional
 rules — conflict markers, escaped wikilinks, wrap mangles, stale-link notes,
-outside-link, directory-link, relative-link and absolute-link issues — for the
-wrapped lines only; file-level checks are unaffected. Content inside fenced or
-inline code is already masked, so those code samples need no region. The link
+control-character notes, outside-link, directory-link, relative-link and
+absolute-link issues — for the wrapped lines only; file-level checks are
+unaffected. Content inside fenced or inline code is already masked, so those
+code samples need no region — except for the control-character note, which
+scans code too. The link
 rules — the stale-link notes, the outside-link, directory-link, relative-link
 and absolute-link issues — also skip a wikilink inside an HTML comment or an
 indented code block, so a link sample in either needs no wrapping; the
