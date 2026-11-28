@@ -815,6 +815,14 @@ class Wiki:
                                 ' space (the space is part of the pattern)'
                             )
                             warnings.append((dotted, reason))
+                # the flag narrows the identifier rule and no other
+                elif (dotted == 'naming.leading_digits') and (value is False):
+                    if 'identifier' not in self._naming_policy['validate']:
+                        reason = (
+                            f"{dotted} is false without 'identifier' in"
+                            ' naming.validate (it has no effect)'
+                        )
+                        warnings.append((dotted, reason))
         for key, reason in warnings:
             self.on_settings_warning(path=WIKI_SETTINGS, key=key, reason=reason)
 

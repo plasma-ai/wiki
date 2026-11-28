@@ -41,6 +41,8 @@ may include breaking changes, each listed under a Breaking heading.
 - The same warning names an `exclude.patterns` entry that starts or ends with a
   space, such as `"drafts "`. The pattern is not trimmed: the space is part of
   it, so it leaves `drafts/` indexed.
+- The same warning names `naming.leading_digits: false` set without the
+  `identifier` rule in `naming.validate`, where the flag has no effect.
 
 ### Changed
 

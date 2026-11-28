@@ -36,6 +36,7 @@ __all__ = [
     'test_settings_blocks_are_validated_in_the_documented_order',
     'test_settings_error_spells_the_wrong_value_as_json',
     'test_settings_warnings_name_only_keys_nothing_reads',
+    'test_leading_digits_warns_without_the_identifier_rule',
     'test_timestamp_format_configurable',
     'test_timestamp_timezone_configurable',
     'test_timestamp_zone_swaps_default_z_for_offset',
@@ -537,6 +538,51 @@ def test_settings_warnings_name_only_keys_nothing_reads(
         ".wiki/settings.json: unknown key 'review.cadence' (ignored)",
         ".wiki/settings.json: unknown key 'labels' (ignored)",
     ]
+
+
+@pytest.mark.parametrize(
+    argnames=('naming', 'warned'),
+    argvalues=[
+        ({'leading_digits': False}, True),
+        ({'validate': ['ascii'], 'leading_digits': False}, True),
+        ({'validate': ['ascii', 'identifier'], 'leading_digits': False}, False),
+        ({'leading_digits': False, 'validate': ['identifier']}, False),
+        ({'leading_digits': True}, False),
+    ],
+    ids=[
+        'no-rules',
+        'another-rule',
+        'identifier',
+        'identifier-listed-after',
+        'default-value',
+    ],
+)
+def test_leading_digits_warns_without_the_identifier_rule(
+    tmp_path: pathlib.Path,
+    naming: dict,
+    warned: bool,
+) -> None:
+    """``leading_digits: false`` is named when no ``identifier`` rule reads it.
+
+    The flag only narrows the ``identifier`` rule, so without that rule a
+    name that opens on a digit still passes. The default ``true`` asks for
+    nothing and draws no warning, with or without the rule.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    path = tmp_path / '.wiki' / 'settings.json'
+    path.write_text(json.dumps({'naming': naming}), encoding='utf-8')
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+    wiki.update(check=True)
+
+    line = (
+        ".wiki/settings.json: naming.leading_digits is false without 'identifier'"
+        ' in naming.validate (it has no effect)'
+    )
+    assert [event.description for event in notices] == [line] * warned
+    assert [event.key for event in notices] == ['naming.leading_digits'] * warned
+    if warned:
+        assert wiki.validate_name('2026-plan')
 
 
 # ------ timestamps

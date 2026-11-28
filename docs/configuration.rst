@@ -118,7 +118,10 @@ each. A key the wiki does not know is named as a dotted path:
 ``exclude.patterns`` entry that starts or ends with a space is named too, since
 the space is part of the pattern and keeps it off the name it was typed beside:
 ``.wiki/settings.json: exclude.patterns entry 'drafts ' starts or ends with a
-space (the space is part of the pattern)``. The unknown key is
+space (the space is part of the pattern)``. So is ``naming.leading_digits``
+set to ``false`` while ``naming.validate`` does not list ``identifier``, the one
+rule the flag narrows: ``.wiki/settings.json: naming.leading_digits is false
+without 'identifier' in naming.validate (it has no effect)``. The unknown key is
 still ignored and the pattern is not trimmed, and a warning changes no exit
 code and no written file.
 ``wiki init``, ``wiki update`` (``--check`` included), ``wiki new`` and
@@ -226,6 +229,8 @@ predicates sets ``"allow": "."``.
 ``naming.leading_digits``
    Boolean, default ``true``. Only affects the ``identifier`` predicate: when
    true, a leading digit passes (the check runs with an underscore prefixed).
+   Set to ``false`` without ``identifier`` in ``naming.validate``, it has no
+   effect and draws a settings warning.
 
 ``naming.reserved``
    List of strings, default ``[]``. Names rejected outright. ``_index`` is
