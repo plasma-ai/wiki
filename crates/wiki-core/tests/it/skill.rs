@@ -54,6 +54,10 @@ fn install_writes_linked_agent_directories_once() -> TestResult {
 /// Checks that a link replaces an installed copy and points each agent at the
 /// source folder, so an edit there needs no further install.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the test resolves the source folder as the installer does"
+)]
 fn link_points_both_agents_at_the_source_folder() -> TestResult {
     let (_guard, root) = temp_root()?;
     let source = Path::new(skill::SOURCE_DIR).canonicalize()?;
@@ -86,6 +90,10 @@ fn link_fails_when_the_source_folder_is_missing() -> TestResult {
 
 /// Creates a temporary directory for one test and returns it with its
 /// canonical path, since a temporary directory is often behind a symlink.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the test resolves a temporary directory it has just made"
+)]
 fn temp_root() -> TestResult<(TempDir, PathBuf)> {
     let guard = tempfile::Builder::new().prefix("wiki-test-").tempdir()?;
     let root = guard.path().canonicalize()?;

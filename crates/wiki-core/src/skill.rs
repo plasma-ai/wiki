@@ -131,6 +131,10 @@ pub fn link(source: &Path, root: &Path) -> Result<Vec<InstalledSkill>, LinkSkill
 
 /// Returns the name and canonical path of each skill folder under `source`,
 /// in name order.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the installer resolves a folder of its own, which is no wiki path"
+)]
 fn source_skills(source: &Path) -> Result<Vec<(String, PathBuf)>, PathError> {
     let source = fs::canonicalize(source).with_path(source)?;
     let mut skills = Vec::new();
@@ -147,6 +151,10 @@ fn source_skills(source: &Path) -> Result<Vec<(String, PathBuf)>, PathError> {
 
 /// Creates the skills directory of each agent under `root` and returns their
 /// canonical paths, each once.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the installer resolves a folder of its own, which is no wiki path"
+)]
 fn prepare_targets(root: &Path) -> Result<Vec<PathBuf>, PathError> {
     let mut targets = Vec::new();
     for dir in AGENT_DIRS {

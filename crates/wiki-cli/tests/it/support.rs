@@ -25,6 +25,10 @@ pub(crate) struct Sandbox {
 
 impl Sandbox {
     /// Creates the root and its three directories.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the harness resolves a temporary directory it has just made"
+    )]
     pub(crate) fn new() -> TestResult<Self> {
         let guard = tempfile::Builder::new().prefix("wiki-test-").tempdir()?;
         // A temporary directory is often behind a symlink, and the binary
@@ -93,6 +97,10 @@ impl Sandbox {
 
     /// Decodes a stream, writes this sandbox's root as `[ROOT]`, and drops the
     /// trailing spaces clap leaves on some help lines.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the harness reads a stream for a snapshot, which follows no rule of a wiki"
+    )]
     fn normalize(&self, stream: Vec<u8>) -> TestResult<String> {
         let text = String::from_utf8(stream)?.replace(&self.root.display().to_string(), "[ROOT]");
         Ok(text
