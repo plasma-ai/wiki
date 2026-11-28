@@ -17,6 +17,10 @@ may include breaking changes, each listed under a Breaking heading.
   are labeled `INTEGER` in help and refuse a value as
   `'<value>' is not a valid integer.` whatever version of typer is installed.
 
+### Added
+
+- `-h` works as `--help`, on `wiki` and on every command.
+
 ### Changed
 
 - `.wiki/settings.json` and `init --settings` must be strict JSON. `NaN`,

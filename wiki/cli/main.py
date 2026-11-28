@@ -16,9 +16,11 @@ def cli(**kwargs: Any) -> None:
     # construct app
     kwargs.setdefault('rich_markup_mode', None)
     kwargs.setdefault('pretty_exceptions_enable', False)
-    # NOTE: without a color setting, a write to a pipe or a file drops the
-    #   escape sequences a page holds, and the output is not the page's bytes
-    kwargs.setdefault('context_settings', {'color': True})
+    # NOTE: without the color setting, a write to a pipe or a file drops the
+    #   escape sequences a page holds, and the output is not the page's bytes;
+    #   --help leads the help names because a usage error points at the first
+    context_settings = {'color': True, 'help_option_names': ['--help', '-h']}
+    kwargs.setdefault('context_settings', context_settings)
     app = typer.Typer(name='wiki', **kwargs)
     # version callback
     cmd.version(app)

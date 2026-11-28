@@ -1132,7 +1132,14 @@ def merge(app: typer.Typer) -> typer.Typer:
     pathname = typer.Argument(..., help=pathname_help)
 
     # a %P pathname may lead with a dash; never parse it as an option
-    @command(app, '_merge', context_settings={'ignore_unknown_options': True})
+    # NOTE: a help option is one too: -h.md read as a help flag would exit 0
+    #   with nothing merged, which git takes for a clean merge
+    @command(
+        app=app,
+        name='_merge',
+        context_settings={'ignore_unknown_options': True},
+        add_help_option=False,
+    )
     def _merge(
         base: str = base,
         ours: str = ours,

@@ -7,7 +7,8 @@ package on PyPI; see :doc:`/guide/getting-started` for installation. This page
 is the complete reference for the public command surface; each command has a
 section below.
 
-``wiki --version`` prints the package version and exits. The ``typer``
+``wiki --version`` prints the package version and exits. ``-h`` and ``--help``
+print the help page of ``wiki`` or of a command and exit 0. The ``typer``
 built-ins ``--install-completion`` and ``--show-completion`` manage shell
 completion.
 

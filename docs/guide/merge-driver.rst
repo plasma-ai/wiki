@@ -250,9 +250,11 @@ Plumbing: the hidden ``_merge`` command
 ---------------------------------------
 
 The ``wiki _merge`` command that git invokes is plumbing, not user surface —
-it is hidden from ``--help`` and there is never a reason to run it by hand.
-Git hands it the base, ours, and theirs versions, the conflict-marker size,
-and the repo-relative pathname of the merging file. The command dispatches on
+it is hidden from ``--help`` and there is never a reason to run it by hand. It
+takes no help option of its own, so a pathname such as ``-h.md`` is merged
+like any other. Git hands it the base, ours, and theirs versions, the
+conflict-marker size, and the repo-relative pathname of the merging file. The
+command dispatches on
 the pathname: an ``_index.md`` below a declared wiki root (an ancestor
 holding ``.wiki/settings.json``) gets the region-aware index merge described
 above, a page the wiki manages gets its stamps settled and a three-way text

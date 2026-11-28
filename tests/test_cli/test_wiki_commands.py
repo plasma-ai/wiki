@@ -150,6 +150,7 @@ __all__ = [
     'test_merge_reads_an_escaped_sides_rows',
     'test_merge_keeps_frontmatter_when_side_is_mangled',
     'test_merge_dispatches_on_pathname',
+    'test_merge_driver_takes_no_help_option',
     'test_merge_settles_the_stamps_of_a_managed_page',
     'test_merge_of_a_restamped_page_is_clean',
     'test_markdown_outside_the_wiki_keeps_its_own_merge',
@@ -158,6 +159,8 @@ __all__ = [
     'test_merge_conflicts_when_side_loses_separator',
     'test_merge_hints_add_add_body_conflicts',
     'test_version_flag_reports_a_version',
+    'test_short_help_flag_prints_the_help_page',
+    'test_usage_error_points_at_the_long_help_flag',
     'test_trust_gates_hook_execution',
     'test_trust_refuses_non_wiki_path',
     'test_trust_refuses_a_store_that_is_not_utf8_naming_the_byte',
@@ -4766,6 +4769,35 @@ def test_merge_dispatches_on_pathname(tmp_path: pathlib.Path) -> None:
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
 @pytest.mark.parametrize(
+    argnames='pathname',
+    argvalues=['-h.md', '-h', '--help.md', '--help'],
+)
+def test_merge_driver_takes_no_help_option(
+    tmp_path: pathlib.Path,
+    pathname: str,
+) -> None:
+    """A pathname that reads as a help flag is merged like any other.
+
+    git hands the driver the pathname of every mapped file. A help page
+    printed for one would exit 0 with the current branch's file as it was,
+    which git takes for a clean merge, so the other branch's edit would
+    be lost in silence.
+    """
+    base = tmp_path / 'base'
+    ours = tmp_path / 'ours'
+    theirs = tmp_path / 'theirs'
+    base.write_text('one\ntwo\nthree\n', encoding='utf-8')
+    ours.write_text('ONE\ntwo\nthree\n', encoding='utf-8')
+    theirs.write_text('one\ntwo\nTHREE\n', encoding='utf-8')
+    args = [str(base), str(ours), str(theirs), '7', pathname]
+    result = _wiki(tmp_path, '_merge', *args)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == ''
+    assert ours.read_text(encoding='utf-8') == 'ONE\ntwo\nTHREE\n'
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
     argnames=('pathname', 'later', 'hook', 'eol', 'settled'),
     argvalues=[
         ('wiki/core/notes.md', 'ours', None, '\n', True),
@@ -5168,6 +5200,47 @@ def test_version_flag_reports_a_version(tmp_path: pathlib.Path) -> None:
     result = _wiki(tmp_path, '--version')
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.strip() == WIKI_VERSION
+
+
+# ------ help
+
+
+@pytest.mark.parametrize(
+    argnames='command',
+    argvalues=[
+        (),
+        ('install',),
+        ('init',),
+        ('config',),
+        ('trust',),
+        ('read',),
+        ('search',),
+        ('match',),
+        ('update',),
+        ('new',),
+        ('lint',),
+        ('map',),
+    ],
+    ids=lambda command: command[0] if command else 'wiki',
+)
+def test_short_help_flag_prints_the_help_page(
+    tmp_path: pathlib.Path,
+    command: tuple[str, ...],
+) -> None:
+    """``-h`` prints what ``--help`` prints, on ``wiki`` and on every command."""
+    short = _wiki(tmp_path, *command, '-h')
+    assert short.returncode == 0, short.stdout + short.stderr
+    assert short.stdout.startswith('Usage: wiki')
+    assert '-h, --help' in short.stdout
+    long = _wiki(tmp_path, *command, '--help')
+    assert (short.stdout, short.stderr) == (long.stdout, long.stderr)
+
+
+def test_usage_error_points_at_the_long_help_flag(tmp_path: pathlib.Path) -> None:
+    """A usage error names ``--help`` as the way to the help page."""
+    result = _wiki(tmp_path, 'map', '--depth', 'deep')
+    assert result.returncode == 2
+    assert "Try 'wiki map --help' for help.\n" in result.stderr
 
 
 # ------ trust
