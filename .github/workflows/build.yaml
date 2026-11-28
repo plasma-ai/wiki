@@ -230,7 +230,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: contracts-out-${{ matrix.target }}
-          path: ${{ runner.temp }}/contracts-out
+          path: |
+            ${{ runner.temp }}/contracts-out
+            ${{ runner.temp }}/contracts-work/contracts/logs
           if-no-files-found: ignore
   publish:
     name: publish
