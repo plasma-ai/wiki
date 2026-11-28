@@ -455,14 +455,16 @@ def test_spaced_pattern_warns_and_matches_as_written(tmp_path: pathlib.Path) -> 
 
     The space is part of the pattern, so ``'drafts '`` leaves ``drafts/``
     indexed and excludes only a folder whose name ends with the space. A
-    space inside a pattern is no stray: a comment-shaped entry that marks
-    off a part of the list draws nothing.
+    space inside a pattern is no stray: the pair of comment-shaped entries
+    that marks off a part of the list draws nothing.
     """
     _make_wiki(tmp_path, folders={'drafts': ['idea'], 'scratch': ['note']})
     (tmp_path / 'drafts ').mkdir()
     (tmp_path / 'drafts ' / 'idea.md').write_text('An idea.\n', encoding='utf-8')
-    marker = '<!-- start: generated patterns -->'
-    _set_exclude_patterns(tmp_path, ['drafts ', marker, 'old notes/', ' scratch'])
+    start = '<!-- start: generated patterns -->'
+    end = '<!-- end: generated patterns -->'
+    patterns = ['drafts ', start, 'old notes/', end, ' scratch']
+    _set_exclude_patterns(tmp_path, patterns)
     wiki = Wiki(tmp_path)
     notices = _capture_notices(wiki)
     wiki.update()

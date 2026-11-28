@@ -1184,7 +1184,8 @@ def test_settings_warnings_are_lint_notes(tmp_path: pathlib.Path) -> None:
     The ``--json`` document types each warning ``settings_warning`` with
     the file and the dotted key, and the run exits 0 when warnings are all
     it found -- under ``lint.strict`` too, which makes issues of stale
-    links alone.
+    links alone. ``--count`` shows the warnings in its summary and prints
+    no line for them.
     """
     root = tmp_path / 'wiki'
     assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
@@ -1229,6 +1230,10 @@ def test_settings_warnings_are_lint_notes(tmp_path: pathlib.Path) -> None:
         ".wiki/settings.json: unknown key 'lint.strick' (ignored)\n"
         ".wiki/settings.json: unknown key 'review' (ignored)\n"
     )
+    count = _wiki(tmp_path, 'lint', '--count', '--path', str(root))
+    assert count.returncode == 0, count.stdout + count.stderr
+    assert count.stdout == 'No issues found (2 notes).\n'
+    assert count.stderr == ''
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
