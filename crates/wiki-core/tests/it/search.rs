@@ -4,10 +4,10 @@ use wiki_core::search;
 
 use crate::support::TestResult;
 
-/// Checks that a query reaches the bundled SQLite and returns the version of
-/// the library the binary links.
+/// Checks that the bundled SQLite makes a full-text table and matches a row of
+/// it, which a library built without FTS5 cannot do.
 #[test]
-fn sqlite_version_is_the_one_of_the_linked_library() -> TestResult {
-    assert_eq!(search::sqlite_version()?, rusqlite::version());
+fn bundled_sqlite_matches_a_row_of_a_full_text_table() -> TestResult {
+    search::check_full_text()?;
     Ok(())
 }

@@ -18,10 +18,11 @@ const BUILD: &str = env!("WIKI_BUILD_ID");
 /// holds the engine's name, its version and its build id.
 ///
 /// The record vouches for the whole binary, so it is written only once the
-/// bundled SQLite has answered a query. A harness refuses a run that left no
-/// record, which is all a failure here needs: nothing is reported.
+/// bundled SQLite has matched a row of a full-text table. A harness refuses a
+/// run that left no record, which is all a failure here needs: nothing is
+/// reported.
 pub(crate) fn append(path: &Path) {
-    if search::sqlite_version().is_err() {
+    if search::check_full_text().is_err() {
         return;
     }
     // A failed write leaves no record, and the missing record is the report.

@@ -428,9 +428,9 @@ The side's own variables are applied last. stdin is the null device.
   reads its arguments, with the engine `rust`, the workspace's version and the
   commit of the checkout it was built in, which its build script reads from
   git's files; a binary built outside a checkout writes an empty `build`. It
-  writes the record only once its bundled SQLite has answered a query. A command
-  that leaves anything but the expected record, once, is an `identity`
-  difference: the side is not the engine it names.
+  writes the record only once its bundled SQLite has matched a row of a
+  full-text table. A command that leaves anything but the expected record, once,
+  is an `identity` difference: the side is not the engine it names.
 
 ## Snapshots
 
