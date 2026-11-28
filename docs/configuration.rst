@@ -260,7 +260,10 @@ are rendered (see :doc:`/guide/generation` for when they are written).
      directive named twice never parses. A date-only format passes: the
      comparison is of text, not of instants. The check reads neither the
      clock nor ``WIKI_FREEZE_TIME``, so a format gets the same verdict on
-     every run.
+     every run. Two instants are a sample, and one case passes them: a
+     format with ``%m`` and ``%d`` but no ``%Y`` reads its date in the year
+     1900, which has no 29 February, so ``wiki lint`` fails each stamp
+     written on a leap day. Name the year in a format that names the day.
 
 Changing ``timestamp.format`` on an existing wiki requires rewriting the
 existing stamps by hand — ``wiki lint`` flags each stamp that no longer
