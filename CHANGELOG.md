@@ -7,6 +7,16 @@ may include breaking changes, each listed under a Breaking heading.
 
 ## [Unreleased]
 
+### Breaking
+
+- A number on the command line takes an optional sign and plain digits only, and
+  must fit a signed 64-bit integer. That covers the bounds of a `wiki read`
+  slice and the options `map --depth`, `map --desc-limit` and `search --limit`.
+  Forms that Python happened to read, such as `' 10'`, `1_0` and non-ASCII
+  digits, are usage errors: write the number in plain digits. The three options
+  are labeled `INTEGER` in help and refuse a value as
+  `'<value>' is not a valid integer.` whatever version of typer is installed.
+
 ### Changed
 
 - `.wiki/settings.json` and `init --settings` must be strict JSON. `NaN`,

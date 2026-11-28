@@ -62,6 +62,15 @@ naming the matching pattern), or fenced by the enclosing repo's gitignore.
 A symlinked scope is not refused as such: it resolves to its real target,
 and the root and exclusion checks apply to that target.
 
+Number arguments
+~~~~~~~~~~~~~~~~
+
+A number on the command line — a bound of a ``wiki read`` slice, ``map
+--depth``, ``map --desc-limit`` or ``search --limit`` — is an optional sign
+followed by ASCII digits, within the signed 64-bit range. Anything else is a
+usage error: a padded ``' 10'``, ``1_0``, ``1.0``, or a digit of another
+script.
+
 Errors and exit codes
 ~~~~~~~~~~~~~~~~~~~~~
 

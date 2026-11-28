@@ -21,6 +21,7 @@ from wiki.cli.utils import (
     command,
     configure_git_merge_driver,
     load_wiki_class,
+    parse_int,
     parse_settings,
     parse_slice,
     pattern_hints,
@@ -542,7 +543,13 @@ def search(
     path = typer.Option(None, '--path', help=path_help)
     # result limit option
     limit_help = 'Maximum number of ranked pages to return (at least 1).'
-    limit = typer.Option(None, '--limit', help=limit_help)
+    limit = typer.Option(
+        None,
+        '--limit',
+        help=limit_help,
+        parser=parse_int,
+        metavar='INTEGER',
+    )
     # tag filter option
     tag_help = 'Require a frontmatter tag token.'
     tag = typer.Option(None, '--tag', help=tag_help)
@@ -1000,7 +1007,13 @@ def map(
     path = typer.Option(None, '--path', help=path_help)
     # maximum depth option
     depth_help = 'Maximum tree depth (0 means top-level only).'
-    depth = typer.Option(None, '--depth', help=depth_help)
+    depth = typer.Option(
+        None,
+        '--depth',
+        help=depth_help,
+        parser=parse_int,
+        metavar='INTEGER',
+    )
     # description flag
     desc_help = 'Show descriptions from parent index.'
     desc = typer.Option(True, '--desc/--no-desc', help=desc_help)
@@ -1009,7 +1022,13 @@ def map(
         'Max characters per description (defaults to the map.desc_limit'
         ' setting, else untruncated); -1 disables truncation.'
     )
-    desc_limit = typer.Option(None, '--desc-limit', help=desc_limit_help)
+    desc_limit = typer.Option(
+        None,
+        '--desc-limit',
+        help=desc_limit_help,
+        parser=parse_int,
+        metavar='INTEGER',
+    )
     # category filter option
     category_help = 'Comma-separated categories (empty string for uncategorized only).'
     category = typer.Option(None, '--category', help=category_help)

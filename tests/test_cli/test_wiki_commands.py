@@ -104,6 +104,9 @@ __all__ = [
     'test_search_invalid_query_reports_error',
     'test_search_prefix_and_raw_are_mutually_exclusive',
     'test_search_limit_must_be_positive',
+    'test_number_options_take_plain_digits_only',
+    'test_number_arguments_accept_a_sign_and_leading_zeros',
+    'test_number_options_are_labeled_integer',
     'test_read_slice_forms',
     'test_read_lines_count_as_match_numbers_them',
     'test_read_resolves_dotted_page_name',
@@ -2480,6 +2483,104 @@ def test_search_limit_must_be_positive(wiki: pathlib.Path) -> None:
     assert '--limit must be >= 1' in (result.stdout + result.stderr)
 
 
+# ------ number arguments
+
+
+@pytest.mark.parametrize(
+    argnames='args',
+    argvalues=[
+        ['map', '--depth', ' 1_0'],
+        ['map', '--depth', '\u0661'],
+        ['map', '--depth', ''],
+        ['map', '--desc-limit', '1.0'],
+        ['map', '--desc-limit', '9223372036854775808'],
+        ['search', 'widget', '--limit', '1e1'],
+    ],
+    ids=[
+        'padded-and-underscored',
+        'non-ascii-digit',
+        'empty',
+        'decimal-point',
+        'past-64-bits',
+        'exponent',
+    ],
+)
+def test_number_options_take_plain_digits_only(
+    wiki: pathlib.Path,
+    args: list[str],
+) -> None:
+    """A number option is an optional sign and ASCII digits, in 64 bits.
+
+    Anything else Python's ``int`` would read -- padding, ``_`` between
+    digits, a digit of another script (here an Arabic-Indic one) -- is a
+    usage error that names the option and shows the value, as is a
+    number outside the signed 64-bit range.
+    """
+    option, value = args[-2:]
+    result = _wiki(wiki, *args, '--path', str(wiki))
+    assert result.returncode == 2
+    assert result.stdout == ''
+    error = f"Error: Invalid value for '{option}': {value!r} is not a valid integer."
+    assert result.stderr.splitlines()[-1] == error
+
+
+@pytest.mark.parametrize(
+    argnames=('args', 'plain'),
+    argvalues=[
+        (['map', '--depth', '+01'], ['map', '--depth', '1']),
+        (['map', '--desc-limit', '-01'], ['map', '--desc-limit', '-1']),
+        (['map', '--depth', '9223372036854775807'], ['map']),
+        (['search', 'widget', '--limit', '01'], ['search', 'widget', '--limit', '1']),
+        (
+            ['read', 'core/design', '--lines', '+1:03'],
+            ['read', 'core/design', '--lines', '1:3'],
+        ),
+        (
+            ['read', 'core/design', '--lines', '-02:'],
+            ['read', 'core/design', '--lines', '-2:'],
+        ),
+    ],
+    ids=[
+        'depth-signed',
+        'desc-limit-negative',
+        'depth-at-the-64-bit-bound',
+        'limit-zero-led',
+        'slice-signed',
+        'slice-negative',
+    ],
+)
+def test_number_arguments_accept_a_sign_and_leading_zeros(
+    wiki: pathlib.Path,
+    args: list[str],
+    plain: list[str],
+) -> None:
+    """A sign and leading zeros spell the same number as its plain digits."""
+    result = _wiki(wiki, *args, '--path', str(wiki))
+    expected = _wiki(wiki, *plain, '--path', str(wiki))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == expected.stdout
+
+
+@pytest.mark.parametrize(
+    argnames=('command', 'options'),
+    argvalues=[
+        ('map', ['--depth', '--desc-limit']),
+        ('search', ['--limit']),
+    ],
+    ids=['map', 'search'],
+)
+def test_number_options_are_labeled_integer(
+    wiki: pathlib.Path,
+    command: str,
+    options: list[str],
+) -> None:
+    """Help labels each number option ``INTEGER``."""
+    result = _wiki(wiki, command, '--help')
+    assert result.returncode == 0, result.stdout + result.stderr
+    for option in options:
+        assert re.search(rf'^ +{option} INTEGER ', result.stdout, re.MULTILINE)
+
+
 # ------ read
 
 
@@ -2583,6 +2684,10 @@ def test_read_resolves_dotted_page_name(wiki: pathlib.Path) -> None:
         ('core/design', ['--chars', ''], 2, 'slice format'),
         # ... and still excludes another unit
         ('core/design', ['--lines', '', '--words', '0:2'], 2, 'mutually exclusive'),
+        # a slice bound is an optional sign and plain digits, in 64 bits
+        ('core/design', ['--lines', ' +0:\u0661'], 2, 'slice format'),
+        ('core/design', ['--chars', '1_0:'], 2, 'slice format'),
+        ('core/design', ['--words', ':9223372036854775808'], 2, 'slice format'),
         # a missing entry is a clean runtime error, not a traceback
         ('core/missing_entry', [], 2, 'not found'),
         # a name escaping the wiki root is refused, not resolved
@@ -2597,6 +2702,9 @@ def test_read_resolves_dotted_page_name(wiki: pathlib.Path) -> None:
         'empty-words-slice',
         'empty-chars-slice',
         'empty-slice-beside-another',
+        'padded-and-non-ascii-slice',
+        'underscored-slice',
+        'slice-past-64-bits',
         'missing-entry',
         'escaping-name',
         'blank-name',
