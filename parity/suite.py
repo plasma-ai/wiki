@@ -32,6 +32,8 @@ REFERENCE = 'oracle'
 # console script from
 _TESTS = 'tests/test_cli'
 _HELPER = 'tests.test_cli.conftest'
+# the call whose output v1's tests hold to a version
+_VERSION = '--version'
 # the plugin that points the tests at the dispatcher, and the folder that
 # holds it and nothing else
 _PLUGIN = 'parity_suite'
@@ -210,12 +212,14 @@ def run(
     for folder in (home, traces):
         folder.mkdir(parents=True)
     (home / '.gitconfig').write_bytes(b'')
-    # tell the plugin where the dispatcher and the files of the run are
+    # tell the plugin where the dispatcher and the files of the run are, and
+    # the version of the side that answers `--version`
     plan = work / 'plan.json'
     result = work / 'result.json'
     document = {
         'helper': source.helper,
         'wiki': f'{dispatcher.path}',
+        'version': dispatch.route(dispatcher, _VERSION).identity.get('version'),
         'traces': f'{traces}',
         'result': f'{result}',
     }

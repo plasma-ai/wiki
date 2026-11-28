@@ -69,12 +69,19 @@ cargo run -- --help
 cargo nextest run
 cargo test --doc
 
+# run the YAML reader's tests under Miri, on the nightly tests.yaml names
+cargo +<RUST_NIGHTLY> miri nextest run -p wiki-yaml --locked
+
 # run the parity harness's tests (they run v1 from the oracle checkout)
 uv run --no-sync python -m parity oracle ensure
 uv run --no-sync pytest parity
 
 # run v1's CLI tests through the harness (a new work folder outside any repo)
 uv run --no-sync python -m parity suite --work <dir> --out <dir>
+
+# run them against the binary: the ported commands go to a release build of HEAD
+cargo build --release --locked
+uv run --no-sync python -m parity suite --engine rust --work <dir> --out <dir>
 
 # record the calls of v1's core and CLI tests and replay them as commands
 uv run --no-sync python -m parity replay --work <dir> --out <dir>
@@ -485,10 +492,13 @@ checkout, unedited) and a short table of commands on a pseudo-terminal
 (`parity/dispatch.py`), one executable that sends the calls of the ported
 commands to the side `--engine` names and every other call to v1.
 `parity/ported.toml` is the list of ported commands, and a change that ports a
-command adds it there. The tests' own assertions are the verdict; a skipped test
-and an expected failure are findings, and so is a call that does not leave the
-identity record of the side it went to. `parity/plugins/` holds only what the
-oracle's interpreter loads, so nothing else may be added to that folder.
+command adds it there. The side named `rust` is built in (`parity/binary.py`):
+the release build of this checkout, held on every command to the version in
+`Cargo.toml` and to the commit of `HEAD`, so build again after each commit. The
+tests' own assertions are the verdict; a skipped test and an expected failure
+are findings, and so is a call that does not leave the identity record of the
+side it went to. `parity/plugins/` holds only what the oracle's interpreter
+loads, so nothing else may be added to that folder.
 
 `python -m parity replay` runs v1's core and CLI tests under a recorder
 (`parity/plugins/parity_record.py`) and then runs each call they made again as a

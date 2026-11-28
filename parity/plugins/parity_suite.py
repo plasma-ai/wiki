@@ -6,15 +6,19 @@ v1's CLI tests take the console script from one helper module, as its
 ``WIKI`` path and its ``VENV_BIN`` folder. The plugin points both at the
 dispatcher of the run as the helper is imported, before any module takes a
 name from it, so every call a test makes, by the path or by the bare name,
-goes where the dispatcher sends it. It gives each test a trace file of its
-own through ``WIKI_TRACE``, and writes one result file: every test with its
-outcome and its trace file, every test file that was not loaded, and every
-test left out.
+goes where the dispatcher sends it. A test module holds what ``--version``
+prints to the package's version, as its ``WIKI_VERSION``; the plugin sets that
+name to the version of the side the call goes to. It gives each test a trace
+file of its own through ``WIKI_TRACE``, and writes one result file: every test
+with its outcome and its trace file, every test file that was not loaded, and
+every test left out.
 
 ``PLAN`` is a JSON object: ``helper`` is the helper module's name, ``wiki``
-the dispatcher, ``traces`` the folder for the trace files and ``result`` the
-result file. The plugin runs inside a v1 side's interpreter, so it imports
-nothing from ``parity``, and its folder holds nothing else.
+the dispatcher, ``version`` the version of the side that takes ``--version``
+(null for a side that states none), ``traces`` the folder for the trace files
+and ``result`` the result file. The plugin runs inside a v1 side's
+interpreter, so it imports nothing from ``parity``, and its folder holds
+nothing else.
 """
 
 from __future__ import annotations
@@ -39,6 +43,8 @@ TRACE = 'WIKI_TRACE'
 # the names the helper module holds the console script under
 _WIKI = 'WIKI'
 _BIN = 'VENV_BIN'
+# the name a test module holds the version `--version` prints under
+_VERSION = 'WIKI_VERSION'
 # the property a test carries the name of its trace file under
 _PROPERTY = 'parity_trace'
 # the key a worker hands the tests it left out to the controller under
@@ -219,6 +225,21 @@ def pytest_collection_modifyitems(
             f'{helper} does not name the console script as {_WIKI} and'
             f' {_BIN}; the tests cannot be pointed at the dispatcher.'
         )
+
+
+def pytest_itemcollected(item: pytest.Item) -> None:
+    """Set the version the test's module expects of ``--version``.
+
+    v1's tests take the version from the package they import, which is
+    v1's. A call that goes to a second engine prints that engine's
+    version, so the module's name is set to the version of the side that
+    takes the call. A side that states no version leaves the name as it
+    is.
+    """
+    version = _plan(item.config)['version']
+    module = getattr(item, 'module', None)
+    if (version is not None) and hasattr(module, _VERSION):
+        setattr(module, _VERSION, version)
 
 
 def pytest_sessionfinish(session: pytest.Session) -> None:

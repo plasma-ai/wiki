@@ -132,6 +132,14 @@ def build(
     )
 
 
+def route(dispatcher: Dispatcher, command: str) -> Side:
+    """Return the side that takes a call whose first argument is ``command``."""
+    reference, *engines = dispatcher.sides.values()
+    if command in dispatcher.commands:
+        return engines[0]
+    return reference
+
+
 def environment(dispatcher: Dispatcher, home: pathlib.Path) -> dict[str, str]:
     """Return the full environment the callers of ``dispatcher`` run under.
 

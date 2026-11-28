@@ -3,4 +3,4 @@
 
 # the first arguments of the calls a second engine takes; v1 takes every other
 # call
-commands = []
+commands = ["--version"]

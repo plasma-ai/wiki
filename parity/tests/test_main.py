@@ -19,6 +19,7 @@ import pytest
 
 from parity import (
     __main__ as cli,
+    binary,
     fixtures,
     kinds,
     matrix,
@@ -364,6 +365,7 @@ def test_matrix_command_passes_an_excused_command_only_when_told(
         ('corpora', 'declares no corpus.'),
         ('argv', 'argv must be'),
         ('taken', 'names as v1 sides'),
+        ('rust', 'the name of the Rust side'),
         # the registry file
         ('registry', 'has the status'),
         # the checkout and the work folder
@@ -387,6 +389,7 @@ def test_matrix_command_passes_an_excused_command_only_when_told(
         'corpora',
         'argv',
         'taken',
+        'rust',
         'registry',
         'worktree',
         'work',
@@ -417,8 +420,9 @@ def test_run_that_would_compare_nothing_is_refused(
     command that fails or is missing: each would compare nothing, a side
     with itself, or two sides that fail alike, and report no difference.
     A sides file that takes the name of a v1 side would pass something
-    else off as the oracle, and so would a v1 side that runs another
-    build than the one it is expected to be. A registry file that breaks
+    else off as the oracle, and one that takes the name of the Rust side
+    would pass something else off as the binary of the checkout. So would a
+    v1 side that runs another build than the one it is expected to be. A registry file that breaks
     its rules could excuse what nobody approved. The command exits 2 with
     a message instead, before it snapshots anything or writes a result
     file, and leaves a work folder that was there as it stood.
@@ -444,6 +448,10 @@ def test_run_that_would_compare_nothing_is_refused(
         taken = json.dumps(engine.argv)
         sides.write_text(f'[oracle]\nargv = {taken}\n', encoding='utf-8')
         first = 'oracle'
+    elif broken == 'rust':
+        taken = json.dumps(engine.argv)
+        sides.write_text(f'[{binary.NAME}]\nargv = {taken}\n', encoding='utf-8')
+        first = binary.NAME
     elif broken == 'identity':
         # the oracle side is handed out as a build its checkout does not hold
         expected = {**engine.identity, 'build': 'another'}

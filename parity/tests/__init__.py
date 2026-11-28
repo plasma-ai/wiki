@@ -1,5 +1,6 @@
 """Tests for the ``parity`` harness."""
 
+from .test_binary import *
 from .test_cache import *
 from .test_classify import *
 from .test_compare import *

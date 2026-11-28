@@ -23,9 +23,10 @@ nothing -- no corpus, an unknown corpus, stage or side, one side named
 twice, a sides or corpora file of the wrong shape, a ``--now`` no engine
 takes, a checkout or a work folder the harness refuses, a side or a
 ``describe`` command that does not start, a side that does not prove its
-identity, a v1 side the oracle rules refuse, a registry file the harness
-cannot hold to its classifiers -- exits 2 before it snapshots anything. A
-side is one the sides file declares, or a v1 side of ``oracle.toml``.
+identity, a v1 side the oracle rules refuse, a Rust side that is not built,
+a registry file the harness cannot hold to its classifiers -- exits 2 before
+it snapshots anything. A side is one the sides file declares, a v1 side of
+``oracle.toml``, or ``rust``: the binary of a release build of this checkout.
 ``registry --release`` also exits 1 while an entry of the registry is not
 ready for a release.
 
@@ -157,6 +158,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Optional, Union
 
 from . import (
+    binary,
     config,
     container,
     dispatch,
@@ -1836,7 +1838,9 @@ def _sides(
     *,
     path: Optional[pathlib.Path],
 ) -> list[Side]:
-    """Return the sides ``names``: declared in the sides file, or v1 sides.
+    """Return the sides ``names``: declared in the sides file, or built in.
+
+    The v1 sides of ``oracle.toml`` and the Rust side are built in.
 
     Args:
         names: The names a run gives its sides.
@@ -1845,8 +1849,9 @@ def _sides(
 
     Raises:
         ValueError: If the file declares a side under the name of a v1 side
-            of ``oracle.toml``, if no side has one of the names, or if a v1
-            side is not what ``oracle.toml`` names.
+            of ``oracle.toml`` or of the Rust side, if no side has one of
+            the names, if a v1 side is not what ``oracle.toml`` names, or
+            if the Rust side is not built.
 
     """
     named = oracle.load()
@@ -1855,12 +1860,16 @@ def _sides(
         raise ValueError(
             f'{path} declares {taken!r}, which {named.path.name} names as v1 sides.'
         )
+    if binary.NAME in declared:
+        raise ValueError(f'{path} declares {binary.NAME!r}, the name of the Rust side.')
     result = []
     for name in names:
         if name in declared:
             result.append(declared[name])
         elif name in named.builds:
             result.append(oracle.side(named, name))
+        elif name == binary.NAME:
+            result.append(binary.side(named.repo))
         else:
             raise ValueError(f'No side is named {name!r}.')
     return result

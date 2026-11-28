@@ -423,6 +423,14 @@ The side's own variables are applied last. stdin is the null device.
   command `parity/tap.py` (Perturbation, Kinds), and its `points` command
   `parity/points.py` (Interpreters Run, Names). Only a v1 side has a tap or a
   `points` command.
+- **Rust side.** The side named `rust` is the binary of a release build of the
+  checkout that holds the harness, `target/release/wiki`, called by its resolved
+  path. The harness builds nothing: `cargo build --release --locked` runs first,
+  and a checkout with no such binary is refused. The side's identity is read
+  from the checkout, not from the binary: the engine `rust`, the version the
+  workspace's manifest states, and the commit `HEAD` holds. So a binary built at
+  another commit, or under another version, fails every command it is given. A
+  sides file that declares a side named `rust` is refused.
 - **Identity.** A side with an identity gets `WIKI_TRACE=<file>` on every
   command, a fresh file outside the slot. Before it runs the command, the side
   appends one line of JSON to the file: `engine`, `version` and `build`. For a
@@ -1426,6 +1434,13 @@ commands = ["read", "--version"]
   then the dispatcher: a name it binds, a command it builds while it is
   imported, a parameter of a test. A call a module makes while it is imported
   belongs to no test, so it is an `untraced` finding.
+- **Version.** One test holds what `--version` prints to the version of the
+  package it imports, which its module names `WIKI_VERSION`. A second engine has
+  a version of its own. The plugin sets that name, in every test module that
+  holds it, to the version the side that takes `--version` states in its
+  identity. The test then holds the engine's output to the version its checkout
+  states. A side with no identity states no version, and the name stays as it
+  is.
 - **Past the helper.** A test that finds the console script without the helper,
   for example beside the interpreter, runs v1 unseen: v1's console script leaves
   no identity record. No test of the oracle does. The two tests that run
