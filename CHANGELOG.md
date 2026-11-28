@@ -34,8 +34,9 @@ may include breaking changes, each listed under a Breaking heading.
   `.wiki/settings.json: unknown key 'exclude.pattern' (ignored)`. Each key gets
   one stderr line per run, before the command's other notes, in the order the
   keys stand in the file. The key is still ignored and exit codes do not change.
-  `wiki lint --json` lists each warning as a note of kind `settings_warning`
-  with `path`, `key` and `reason` fields. `wiki read`, `search`, `match`, `map`,
+  `wiki lint --json` lists each warning in its document instead, as a note of
+  kind `settings_warning` with `path`, `key` and `reason` fields, and
+  `wiki lint --count` only counts it. `wiki read`, `search`, `match`, `map`,
   `config` and the merge driver print none. A `.wiki/wiki.py` hook that reads a
   key of its own lists it in its class's `settings_keys` table.
 - The same warning names an `exclude.patterns` entry that starts or ends with a
