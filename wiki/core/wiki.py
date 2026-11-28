@@ -3726,9 +3726,13 @@ class Wiki:
 
     def _is_scope(self: Wiki, path: str) -> bool:
         """Return ``True`` if ``path`` resolves as a folder scope."""
+        # a miss is answered here: resolving it would look for a hint of
+        # its own, one level deeper for each leading root name
+        if not (self._root / path).resolve().is_dir():
+            return False
         try:
             self._resolve_folder(path)
-        except (FileNotFoundError, ValueError):
+        except ValueError:
             return False
         return True
 

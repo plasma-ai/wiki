@@ -1746,6 +1746,8 @@ def test_scope_that_is_not_found_suggests_the_fix(tmp_path: pathlib.Path) -> Non
         # a name the tree has no fix for
         'nowhere': "Wiki folder not found: 'nowhere'",
         'wiki/nowhere': "Wiki folder not found: 'wiki/nowhere'",
+        # the root's folder name twice: the rest is no folder
+        'wiki/wiki/core': "Wiki folder not found: 'wiki/wiki/core'",
         # the other refusals of a scope
         '.wiki': "Path is inside an excluded directory: '.wiki'",
         '..': "Path is outside wiki root: '..'",

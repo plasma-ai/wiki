@@ -46,6 +46,7 @@ __all__ = [
     'test_exclude_lifts_nested_wiki_refusal',
     'test_scope_inside_excluded_dir_refused',
     'test_scope_hint_never_names_an_excluded_folder',
+    'test_scope_led_by_the_root_name_many_times_is_a_plain_miss',
     'test_gitignored_residue_is_never_adopted',
     'test_fenced_directory_is_invisible_to_every_check',
     'test_gitignore_fence_is_pattern_pure',
@@ -822,6 +823,24 @@ def test_scope_hint_never_names_an_excluded_folder(tmp_path: pathlib.Path) -> No
         with pytest.raises(FileNotFoundError) as excinfo:
             Wiki(root).lint(name)
         assert str(excinfo.value) == f'Wiki folder not found: {name!r}'
+
+
+def test_scope_led_by_the_root_name_many_times_is_a_plain_miss(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A scope name led by the root's folder name many times over is one miss.
+
+    The hint drops one leading root name and no more, so the rest of such
+    a name is no folder and the line carries no hint, however long the
+    name is.
+    """
+    root = tmp_path / 'w'
+    root.mkdir()
+    _make_wiki(root, folders={'core': ['mod']})
+    name = '/'.join(['w'] * 350 + ['core'])
+    with pytest.raises(FileNotFoundError) as excinfo:
+        Wiki(root).lint(name)
+    assert str(excinfo.value) == f'Wiki folder not found: {name!r}'
 
 
 # ------ gitignore fences
