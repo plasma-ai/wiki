@@ -4,97 +4,42 @@ on:
   push:
     branches:
       - main
-      - dev
-      - v2
   pull_request:
     branches:
       - main
-      - dev
-      - v2
+
+env:
+  CARGO_BUILD_WARNINGS: deny
 
 jobs:
   tests:
     name: tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v6
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
         with:
-          enable-cache: true
-          cache-dependency-glob: "**/pyproject.toml"
-      - name: Install package with test dependencies
-        run: ./install.sh --all-extras --groups=test
+          save-if: ${{ github.event_name == 'push' }}
+      - name: Install cargo tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.152,cargo-llvm-cov@0.9.2
       - name: Run tests
-        run: uv run --no-sync pytest --cov --cov-report=xml
+        run: cargo llvm-cov nextest --workspace --all-targets --all-features --locked --profile ci --lcov --output-path lcov.info
+      - name: Run doctests
+        run: cargo test --workspace --doc --all-features --locked
       - name: Report coverage
+        if: runner.os == 'Linux'
         uses: codecov/codecov-action@v6
         with:
-          files: ./coverage.xml
+          files: ./lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
-  parity:
-    name: parity
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-          cache-dependency-glob: "**/pyproject.toml"
-      - name: Install harness test dependencies
-        run: uv sync --only-group parity
-      - name: Check that the oracle is the merge base with v1
-        run: uv run --no-sync python -m parity oracle check --skip level
-      - name: Build the oracle checkout
-        run: uv run --no-sync python -m parity oracle ensure
-      - name: Run harness tests
-        run: uv run --no-sync pytest parity
-      - name: Run v1's CLI tests through the harness
-        run: >-
-          uv run --no-sync python -m parity suite
-          --work "$RUNNER_TEMP/suite-work" --out "$RUNNER_TEMP/suite-out"
-      - name: Replay the calls of v1's tests through the harness
-        run: >-
-          uv run --no-sync python -m parity replay
-          --work "$RUNNER_TEMP/replay-work" --out "$RUNNER_TEMP/replay-out"
-      - name: Run the fixture families through the harness
-        run: >-
-          uv run --no-sync python -m parity fixtures --every
-          --work "$RUNNER_TEMP/fixtures-work" --out "$RUNNER_TEMP/fixtures-out"
-      - name: Keep the output of a failed run of the harness
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: parity-out
-          path: |
-            ${{ runner.temp }}/suite-out
-            ${{ runner.temp }}/replay-out
-            ${{ runner.temp }}/fixtures-out
-          if-no-files-found: ignore
-  perturbation:
-    name: perturbation
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-          cache-dependency-glob: "**/pyproject.toml"
-      - name: Install harness test dependencies
-        run: uv sync --only-group parity
-      - name: Build the oracle checkout
-        run: uv run --no-sync python -m parity oracle ensure
-      - name: Run the perturbation loop through the harness
-        run: >-
-          uv run --no-sync python -m parity perturb loop --every
-          --work "$RUNNER_TEMP/perturb-work" --out "$RUNNER_TEMP/perturb-out"
-      - name: Keep the output of a failed run of the harness
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: perturbation-out
-          path: ${{ runner.temp }}/perturb-out
-          if-no-files-found: ignore

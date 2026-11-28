@@ -18,6 +18,11 @@ __MACOSX/
 .LSOverride
 Icon?
 
+# Rust
+target/
+*.pending-snap
+*.snap.new
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -90,8 +95,6 @@ instance/
 
 # Sphinx documentation
 docs/_build/
-docs/modules.rst
-docs/wiki*.rst
 
 # PyBuilder
 .pybuilder/

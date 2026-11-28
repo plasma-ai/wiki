@@ -7,9 +7,7 @@ build:
     post_create_environment:
       - pip install uv
     install:
-      - UV_PROJECT_ENVIRONMENT=$READTHEDOCS_VIRTUALENV_PATH uv sync --all-extras --group docs
-    pre_build:
-      - sphinx-apidoc -f -o docs wiki
+      - UV_PROJECT_ENVIRONMENT=$READTHEDOCS_VIRTUALENV_PATH uv sync --no-install-project --group docs
 sphinx:
   configuration: docs/conf.py
   fail_on_warning: true

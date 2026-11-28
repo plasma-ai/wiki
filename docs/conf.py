@@ -8,15 +8,10 @@
 
 # -- Path setup --------------------------------------------------------------
 
-# If extensions (or modules to document with autodoc) are in another directory,
-# add these directories to sys.path here. If the directory is relative to the
-# documentation root, use os.path.abspath to make it absolute, like shown here.
 import datetime as dt
-import importlib
-import os
-import sys
+import pathlib
+import tomllib
 
-sys.path.insert(0, os.path.abspath('..'))
 year = dt.date.today().year
 
 # -- Project information -----------------------------------------------------
@@ -26,55 +21,14 @@ author = 'Plasma AI'
 copyright = f'{year}: {author}'
 
 # The full version, including alpha/beta/rc tags
-release = importlib.import_module('wiki').__version__
+cargo = tomllib.loads(pathlib.Path('../Cargo.toml').read_text(encoding='utf-8'))
+release = cargo['workspace']['package']['version']
 
 # -- Configure extensions ----------------------------------------------------
 
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom ones.
-extensions = [
-    'sphinx.ext.autodoc',
-    'sphinx.ext.autosummary',
-    'sphinx.ext.napoleon',
-    'sphinx_autodoc_typehints',
-    'sphinx.ext.todo',
-    'sphinx.ext.viewcode',
-    'sphinx.ext.mathjax',
-]
-
-# List packages which will not (in general) be installed
-# when generating documentation with Autodoc.
-autodoc_mock_imports = []
-
-# Autodoc settings
-autodoc_member_order = 'bysource'
-autodoc_default_options = {'ignore-module-all': True}
-autoclass_content = 'both'
-suppress_warnings = ['autodoc.import_object']
-
-# Napoleon settings
-napoleon_google_docstring = True
-napoleon_numpy_docstring = False
-napoleon_include_init_with_doc = False
-napoleon_include_private_with_doc = False
-napoleon_include_special_with_doc = False
-napoleon_use_admonition_for_examples = False
-napoleon_use_admonition_for_notes = False
-napoleon_use_admonition_for_references = False
-napoleon_use_ivar = False
-napoleon_use_param = True
-napoleon_use_rtype = False
-napoleon_type_aliases = None
-napoleon_attr_annotations = True
-
-# sphinx-autodoc-typehints settings
-always_document_param_types = True
-
-# Autosummary settings
-autosummary_generate = True
-
-# Viewcode settings
-viewcode_follow_imported_members = True
+extensions = []
 
 # -- General configuration ---------------------------------------------------
 
@@ -87,13 +41,10 @@ source_suffix = '.rst'
 # Changed from `master_doc` in Sphinx 4
 root_doc = 'index'
 
-# The reST default role (used for this markup: `text`) to use for all documents.
-default_role = 'autolink'
-
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
-exclude_patterns = ['modules.rst']
+exclude_patterns = []
 
 # -- Options for HTML output -------------------------------------------------
 
@@ -108,7 +59,7 @@ html_static_path = ['_static']
 html_theme = 'pydata_sphinx_theme'
 
 html_favicon = '_static/favicon.png'
-html_css_files = ['https://use.typekit.net/zfv6aax.css', 'custom.css']
+html_css_files = ['custom.css']
 html_title = 'Wiki Documentation'
 html_file_suffix = '.html'
 
@@ -138,14 +89,7 @@ html_theme_options = {
     # Enable 'Edit this Page' button (see configuration below)
     'use_edit_page_button': False,
     # Icons with links to show at top of page
-    'icon_links': [
-        {
-            'name': 'GitHub',
-            'url': 'https://github.com/plasma-ai/wiki',
-            'icon': 'fa-brands fa-github',
-            'type': 'fontawesome',
-        },
-    ],
+    'github_url': 'https://github.com/plasma-ai/wiki',
     # Other links without icons
     'external_links': [],
     # Keep the footer to the copyright line

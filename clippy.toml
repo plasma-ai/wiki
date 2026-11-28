@@ -1,0 +1,11 @@
+allow-dbg-in-tests = true
+allow-print-in-tests = true
+allow-unwrap-in-tests = true
+avoid-breaking-exported-api = false
+disallowed-methods = [
+    { path = "std::env::var", reason = "read the environment once, in the configuration module" },
+    { path = "std::env::var_os", reason = "read the environment once, in the configuration module" },
+    { path = "std::io::stderr", reason = "write through the output type" },
+    { path = "std::io::stdout", reason = "write through the output type" },
+    { path = "std::process::exit", reason = "return ExitCode from main so destructors run" },
+]

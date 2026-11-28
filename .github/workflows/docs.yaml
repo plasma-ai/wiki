@@ -4,13 +4,12 @@ on:
   push:
     branches:
       - main
-      - dev
-      - v2
   pull_request:
     branches:
       - main
-      - dev
-      - v2
+
+env:
+  CARGO_BUILD_WARNINGS: deny
 
 jobs:
   docs:
@@ -22,9 +21,15 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: "**/pyproject.toml"
-      - name: Install package with docs dependencies
-        run: ./install.sh --all-extras --groups=docs
-      - name: Generate API docs
-        run: uv run --no-sync sphinx-apidoc -f -o docs wiki
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name == 'push' }}
+      - name: Install docs dependencies
+        run: uv sync --no-install-project --group docs
       - name: Build docs
         run: uv run --no-sync sphinx-build -W docs docs/_build
+      - name: Build Rust docs
+        run: cargo doc --workspace --no-deps --document-private-items --locked

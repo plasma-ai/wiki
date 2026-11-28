@@ -4,14 +4,13 @@ on:
   push:
     branches:
       - main
-      - dev
-      - v2
     tags: ["v*"]
   pull_request:
     branches:
       - main
-      - dev
-      - v2
+
+env:
+  CARGO_BUILD_WARNINGS: deny
 
 jobs:
   build:
@@ -23,40 +22,61 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: "**/pyproject.toml"
-      - name: Check tag matches package, plugin, and cruft versions
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Install cargo tools
+        uses: taiki-e/install-action@v2
         if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          tool: cargo-deny@0.22.1
+      - name: Check Rust advisories
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: cargo deny --locked check advisories
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          maturin-version: v1.16.0
+          command: sdist
+          args: --out dist
+      - name: Check Cargo, package, plugin, and cruft versions match
         run: |
           python3 - <<'PY'
-          import json, os, pathlib, tomllib
+          import json, tomllib
 
-          tag = os.environ['GITHUB_REF_NAME'].removeprefix('v')
-          init = pathlib.Path('wiki/__init__.py').read_text()
-          version_line = next(
-              line for line in init.splitlines() if line.startswith('__version__')
-          )
-          version = version_line.split('=', 1)[1].strip().strip('\'"')
+          cargo = tomllib.load(open('Cargo.toml', 'rb'))['workspace']['package']
           project_version = tomllib.load(open('pyproject.toml', 'rb'))['project']['version']
           claude_version = json.load(open('.claude-plugin/plugin.json'))['version']
           codex_version = json.load(open('.codex-plugin/plugin.json'))['version']
           cruft = json.load(open('.cruft.json'))['context']['cookiecutter']
           versions = {
-              '__version__': version,
+              'Cargo.toml': cargo['version'],
               'pyproject.toml': project_version,
               '.claude-plugin/plugin.json': claude_version,
               '.codex-plugin/plugin.json': codex_version,
               '.cruft.json': cruft['project']['version'],
           }
-          bad = {name: v for name, v in versions.items() if v != tag}
-          if bad:
-              detail = ', '.join(f'{name}={v}' for name, v in bad.items())
-              raise SystemExit(f'::error::tag v{tag} != {detail}')
-          print(f'All versions aligned at v{tag}')
+          if len(set(versions.values())) != 1:
+              detail = ', '.join(f'{name}={v}' for name, v in versions.items())
+              raise SystemExit(f'::error::versions differ: {detail}')
+          print(f'All versions aligned at {project_version}')
           PY
-      - name: Build wheel
-        run: uv build
+      - name: Check tag matches sdist version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          python3 - <<'PY'
+          import os, pathlib
+
+          tag = os.environ['GITHUB_REF_NAME'].removeprefix('v')
+          # a candidate is 2.0.0-rc.1 in the version files and 2.0.0rc1 in the tag and the sdist name
+          sdist = next(pathlib.Path('dist').glob('*.tar.gz'))
+          version = sdist.name.removesuffix('.tar.gz').rsplit('-', 1)[1]
+          if version != tag:
+              raise SystemExit(f'::error::tag v{tag} != sdist version {version}')
+          print(f'Tag v{tag} matches the sdist')
+          PY
       - name: Check distribution metadata
         run: uvx twine check dist/*
-      - name: Check wheel and sdist ship every tracked package file
+      - name: Check sdist ships every tracked skill file
         run: |
           export LC_ALL=C
           tracked=$(git ls-files wiki | sort)
@@ -66,21 +86,92 @@ jobs:
             exit 1
           fi
           # the sdist nests every path under its top folder
-          missing=$(
-            comm -23 <(echo "$tracked") <(unzip -Z1 dist/plasma_wiki-*.whl | sort) | sed 's/^/::error::wheel lacks /'
-            comm -23 <(echo "$tracked") <(tar -tzf dist/plasma_wiki-*.tar.gz | sed 's|^[^/]*/||' | sort) | sed 's/^/::error::sdist lacks /'
-          )
+          missing=$(comm -23 <(echo "$tracked") <(tar -tzf dist/plasma_wiki-*.tar.gz | sed 's|^[^/]*/||' | sort) | sed 's/^/::error::sdist lacks /')
           if [[ -n "$missing" ]]; then
             echo "$missing"
             exit 1
           fi
+      - name: Smoke-test installed sdist
+        run: |
+          uv venv smoke
+          uv pip install --python smoke/bin/python dist/*.tar.gz
+          smoke/bin/wiki --version
+          cd "$(mktemp -d)"
+          "$GITHUB_WORKSPACE/smoke/bin/wiki" install --project
       - uses: actions/upload-artifact@v7
         with:
-          name: dist
+          name: dist-sdist
+          path: dist/
+  wheels:
+    name: wheels (${{ matrix.target }})
+    needs: [build]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            manylinux: "2_17"
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            manylinux: "2_17"
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            manylinux: musllinux_1_2
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            manylinux: musllinux_1_2
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          maturin-version: v1.16.0
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --locked --out dist
+      - name: Check distribution metadata
+        run: uvx twine check dist/*
+      - name: Check wheel holds only the binary
+        run: |
+          entries=$(unzip -Z1 dist/plasma_wiki-*.whl | grep -v '\.dist-info/')
+          if [[ "$entries" != *.data/scripts/wiki || "$entries" == *$'\n'* ]]; then
+            echo "::error::wheel should hold only the binary, found: $entries"
+            exit 1
+          fi
+      - name: Smoke-test installed wheel
+        if: matrix.manylinux != 'musllinux_1_2'
+        run: |
+          uv venv smoke
+          uv pip install --python smoke/bin/python dist/*.whl
+          smoke/bin/wiki --version
+          cd "$(mktemp -d)"
+          "$GITHUB_WORKSPACE/smoke/bin/wiki" install --project
+      - name: Smoke-test installed wheel on musl
+        if: matrix.manylinux == 'musllinux_1_2'
+        run: |
+          docker run --rm --volume "$PWD/dist:/dist" python:3.14-alpine sh -ec '
+            pip install /dist/*.whl
+            wiki --version
+            cd "$(mktemp -d)"
+            wiki install --project
+          '
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-${{ matrix.target }}
           path: dist/
   publish:
     name: publish
-    needs: [build]
+    needs: [build, wheels]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment:
@@ -91,6 +182,9 @@ jobs:
     steps:
     - uses: actions/download-artifact@v8
       with:
-        name: dist
+        pattern: dist-*
         path: dist/
+        merge-multiple: true
     - uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        skip-existing: true

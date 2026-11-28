@@ -1,0 +1,26 @@
+[package]
+name = "wiki-cli"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "wiki"
+path = "src/main.rs"
+
+[dependencies]
+anstream.workspace = true
+anstyle.workspace = true
+clap = { workspace = true, features = ["derive"] }
+clap_complete.workspace = true
+wiki-core.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true
+insta.workspace = true
+tempfile.workspace = true
