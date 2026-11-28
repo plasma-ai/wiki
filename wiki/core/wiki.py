@@ -5477,11 +5477,18 @@ class Wiki:
                 # announce a genuine overwrite (a hand-edit would otherwise vanish
                 # silently); first-time propagation onto the placeholder stays quiet
                 if link_desc not in ('', '...'):
+                    # the page's file is the target as written when the
+                    # target carries its suffix (a page beside a file of its
+                    # stripped name), else the target plus the .md it strips
+                    page = target
+                    if child_path != self._root / target:
+                        page = f'{target}.md'
                     notices.append(
                         DescOverwriteEvent(
                             path=str(relpath),
                             target=target,
                             label=label,
+                            page=page,
                         )
                     )
                 propagated.append((target, label, child_desc))
@@ -6753,13 +6760,14 @@ class DescOverwriteEvent(Event):
     path: str
     target: str
     label: str
+    page: str
 
     @property
     def description(self: DescOverwriteEvent) -> str:
         """Return the overwritten-desc notice line."""
         return (
             f'Overwrote desc: [[{self.target}|{self.label}]] in {self.path}'
-            f' (the page frontmatter desc wins; edit it in {self.target}.md)'
+            f' (the page frontmatter desc wins; edit it in {self.page})'
         )
 
 

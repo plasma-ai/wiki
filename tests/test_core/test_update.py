@@ -84,6 +84,7 @@ __all__ = [
     'test_update_announces_created_index',
     'test_update_announces_adoption',
     'test_update_announces_desc_overwrite',
+    'test_desc_overwrite_names_the_file_of_a_page_beside_its_namesake',
     'test_placeholder_child_desc_never_propagates',
     'test_update_trailing_whitespace_desc_converges_quietly',
     'test_update_rewrapped_desc_converges_quietly',
@@ -1567,6 +1568,42 @@ def test_update_announces_desc_overwrite(tmp_path: pathlib.Path) -> None:
     notices.clear()
     wiki.update()
     assert 'Overwrote desc:' not in '\n'.join(event.description for event in notices)
+
+
+def test_desc_overwrite_names_the_file_of_a_page_beside_its_namesake(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The overwrite notice names the real file of a page that links by full name.
+
+    ``Makefile.md`` beside ``Makefile`` links as ``Makefile.md``, suffix
+    included, so the place to edit is the target as written: the target
+    plus ``.md`` names no file.
+    """
+    wiki = _make_wiki(tmp_path, folders={'tools': []})
+    (tmp_path / 'tools' / 'Makefile').write_text('all:\n', encoding='utf-8')
+    (tmp_path / 'tools' / 'Makefile.md').write_text(
+        '---\nname: tools/Makefile.md\ndesc: Documentation for the build.\n---\n\n'
+        '# tools/Makefile.md\n\nBuild docs.\n',
+        encoding='utf-8',
+    )
+    wiki.update()
+
+    # hand-edit the page's row away from its frontmatter desc
+    index_path = tmp_path / 'tools' / '_index.md'
+    content = index_path.read_text(encoding='utf-8')
+    index_path.write_text(
+        content.replace('Documentation for the build.', 'Hand-edited description.'),
+        encoding='utf-8',
+    )
+
+    # the revert names the file that exists
+    notices = _capture_notices(wiki)
+    wiki.update()
+    err = '\n'.join(event.description for event in notices)
+    assert (
+        'Overwrote desc: [[tools/Makefile.md|Makefile.md]] in tools/_index.md'
+        ' (the page frontmatter desc wins; edit it in tools/Makefile.md)'
+    ) in err
 
 
 def test_placeholder_child_desc_never_propagates(tmp_path: pathlib.Path) -> None:

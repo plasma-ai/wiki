@@ -161,6 +161,10 @@ may include breaking changes, each listed under a Breaking heading.
   Before, it printed a line for each path, so a personal ignore rule that
   matched many pages filled the condensed output. One path still prints its own
   line, and `--full` lists each.
+- The `wiki update` line about an overwritten desc names the page's real file
+  when the page sits beside a file of the same name. For `tools/Makefile.md`
+  beside `tools/Makefile` it says `edit it in tools/Makefile.md`. Before, it
+  said `tools/Makefile.md.md`, a file that does not exist.
 
 ## [1.10.0] - 2026-11-27
 
