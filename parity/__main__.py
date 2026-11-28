@@ -11,6 +11,7 @@ usage: python -m parity matrix --a NAME --b NAME [--registered] [--sides FILE] -
        python -m parity interpreters --corpora FILE --work DIR --out DIR
        python -m parity merges [--engine NAME] [--sides FILE] --corpora FILE [--cache DIR] [--at DIR] --work DIR --out DIR
        python -m parity gate {full,daily} [--engine NAME] [--sides FILE] --corpora FILE --cache DIR --work DIR --out DIR
+       python -m parity contracts --wheel FILE --sdist FILE [--check NAME] --work DIR --out DIR
        python -m parity oracle ensure [--side NAME]
        python -m parity oracle check [--skip NAME]
        python -m parity container [--commit COMMIT] [--out DIR] COMMAND [ARG ...]
@@ -116,6 +117,17 @@ exits 0 when every step did, 1 when a step exited 1 and none ended any other
 way, and 2 otherwise. It exits 2, before a step runs, when the engine is the
 Rust side and a path its build reads differs from the commit.
 
+``contracts`` holds a built wheel and sdist to what the package keeps for
+whoever installs it: the distribution name, the bare version, a ``wiki``
+that is the wheel's binary and works where an installer puts it, an upgrade
+from v1's wheel and back, and a project that pins the commit and builds it.
+Every install runs on a scratch host that holds no Rust, and each ``wiki``
+is held to the version and the commit of this checkout. It exits 0 when
+every check holds, and 1 otherwise. It exits 2, before it installs anything,
+on a file that is none, on a check named twice, on a work folder the harness
+refuses, on a ``PATH`` with no uv or no git, and on a system folder that
+holds a ``cargo``.
+
 The registry lists what a second engine may do differently from v1, and two
 builds of v1 have nothing registered between them. ``matrix`` therefore
 counts a command the registry excuses as a result that is not the expected
@@ -164,6 +176,7 @@ from . import (
     binary,
     config,
     container,
+    contracts,
     dispatch,
     fixtures,
     gate,
@@ -209,8 +222,8 @@ _YEARS = (1001, 9998)
 _DESCRIPTION = """\
 Run two wiki engines on the same trees and report what they do differently.
 
-matrix, selfcheck, registry, suite, replay, fixtures, perturb, interpreters, merges and gate exit 0
-when every result is the expected one, and 1 otherwise. A run that would compare nothing exits 2 with a message,
+matrix, selfcheck, registry, suite, replay, fixtures, perturb, interpreters, merges, gate and
+contracts exit 0 when every result is the expected one, and 1 otherwise. A run that would compare nothing exits 2 with a message,
 before it snapshots anything or runs a test. oracle ensure exits 2 when it
 refuses a checkout or a venv, and oracle check exits 1 when a check fails. An
 error of the harness itself prints its traceback and exits 2.
@@ -241,6 +254,9 @@ _AT = 'at'
 _GATE = 'gate'
 # the command that runs another in the Linux container
 _CONTAINER = 'container'
+# the command that checks the contracts of the built files, and its folder
+# below the work folder
+_CONTRACTS = 'contracts'
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -609,6 +625,28 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # command argument
     argv_help = "The command and its arguments, run from the clone's root."
     command.add_argument('argv', nargs=argparse.REMAINDER, help=argv_help)
+    summary = 'Check what a built wheel and sdist keep for whoever installs them.'
+    command = commands.add_parser(_CONTRACTS, help=summary, description=summary)
+    # wheel file option
+    wheel_help = 'The wheel of this checkout, built for this host.'
+    command.add_argument('--wheel', type=pathlib.Path, required=True, help=wheel_help)
+    # sdist file option
+    sdist_help = 'The sdist of this checkout.'
+    command.add_argument('--sdist', type=pathlib.Path, required=True, help=sdist_help)
+    # check name option
+    check_help = 'Name of a check to run (repeatable; default: every check).'
+    command.add_argument(
+        '--check',
+        action='append',
+        choices=contracts.CHECKS,
+        help=check_help,
+    )
+    # work folder option
+    work_help = 'Folder the harness makes one new folder in.'
+    command.add_argument('--work', type=pathlib.Path, required=True, help=work_help)
+    # output folder option
+    out_help = "Folder for the result file and the installers' output."
+    command.add_argument('--out', type=pathlib.Path, required=True, help=out_help)
     # parse arguments
     options = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -692,6 +730,8 @@ def _run(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
         return _gate(parser, options)
     if options.command == _CONTAINER:
         return _container(parser, options)
+    if options.command == _CONTRACTS:
+        return _contracts(parser, options)
     # read the registry
     try:
         entries = registry.load()
@@ -1844,6 +1884,53 @@ def _container(parser: argparse.ArgumentParser, options: argparse.Namespace) -> 
         parser.error(f'{e}')
 
 
+def _contracts(parser: argparse.ArgumentParser, options: argparse.Namespace) -> int:
+    """Check the contracts of a built wheel and sdist and return the exit code."""
+    # refuse what would check nothing before anything is installed
+    names = options.check or list(contracts.CHECKS)
+    twice = sorted({name for name in names if names.count(name) > 1})
+    if twice:
+        parser.error(f'--check names {twice[0]!r} twice.')
+    package = contracts.load(options.wheel, options.sdist)
+    # a wheel built over an edit that is not committed carries the commit all
+    # the same
+    dirty = binary.changed(package.repo)
+    if dirty:
+        differs = ', '.join(dirty)
+        print(f'{_CONTRACTS}: the checkout differs from HEAD at {differs}', flush=True)
+    work = options.work.resolve() / _CONTRACTS
+    try:
+        result = contracts.run(package, work=work, checks=names)
+    except ValueError as e:
+        parser.error(f'{e}')
+    # write the result file and what the installers printed
+    tools = {}
+    for name in ('git', 'uv'):
+        shown = subprocess.run([name, '--version'], capture_output=True, text=True)
+        tools[name] = shown.stdout.strip()
+    host = {'platform': platform.platform(), 'python': sys.version, **tools}
+    document = {'host': host, 'dirty': dirty, **result.report}
+    options.out.mkdir(parents=True, exist_ok=True)
+    path = options.out / f'{_CONTRACTS}.json'
+    path.write_text(json.dumps(document, indent=2) + '\n', encoding='utf-8')
+    _save(result.logs, options.out / _CONTRACTS)
+    # print each check, then what does not hold
+    failed = {finding.check for finding in result.findings}
+    for row in result.report['checks']:
+        verdict = 'FAILED' if row['name'] in failed else 'passed'
+        print(f'{_CONTRACTS}: {row["name"]}: {verdict}, {row["seconds"]} s')
+    count = len(result.report['checks'])
+    s = 's' if count != 1 else ''
+    print(f'{_CONTRACTS}: {count} check{s}: {len(failed)} failed')
+    for finding in result.findings:
+        line = _line(finding)
+        print(f'  {line}')
+    if result.findings:
+        return 1
+    shutil.rmtree(work)
+    return 0
+
+
 def _sides(
     names: Sequence[str],
     declared: Mapping[str, Side],
@@ -1985,7 +2072,9 @@ def _save(streams: Mapping[str, bytes], folder: pathlib.Path) -> None:
         target.write_bytes(stream)
 
 
-def _line(difference: Union[Difference, Excused, replay.Finding]) -> str:
+def _line(
+    difference: Union[Difference, Excused, replay.Finding, contracts.Finding],
+) -> str:
     """Return one difference, excused command or finding as a line of the summary.
 
     A path may hold bytes that are no valid UTF-8, which a string carries as

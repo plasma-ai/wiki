@@ -8,12 +8,16 @@ and its venvs; the suite fails without them.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import pathlib
 import shutil
 import subprocess
 import sys
+import zipfile
+from typing import Optional
 
 import pytest
 
@@ -42,6 +46,28 @@ record = json.loads(pathlib.Path(__file__).with_name('build.json').read_text())
 with open(os.environ[{side.TRACE!r}], 'a') as handle:
     handle.write(json.dumps(record) + chr(10))
 print(record['version'])
+"""
+#: the version an installer records a wheel of :data:`VERSION` under
+RECORDED = '2.0.0.dev1'
+#: the one skill file of a checkout from :func:`_workspace`, by its path below
+#: the skills folder
+SKILLS = {'wiki/SKILL.md': 'The skill.\n'}
+# a ``wiki`` that does what the binary of a wheel does: it leaves the identity
+# record of its build, prints its version, and writes its skills for each
+# agent into the project it is run in
+_WIKI = """#!{python}
+import json, os, pathlib, sys
+held = json.loads({held!r})
+with open(os.environ[{trace!r}], 'a') as handle:
+    handle.write(json.dumps(held['record']) + chr(10))
+if sys.argv[1:] == ['--version']:
+    print(held['prints'])
+if sys.argv[1:] == ['install', '--project']:
+    for agent in ('.claude/skills', '.agents/skills'):
+        for name, text in held['skills'].items():
+            path = pathlib.Path(agent, name)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding='utf-8')
 """
 # gates the tests that need git: the oracle checkout and the committed corpus
 _needs_git = pytest.mark.skipif(shutil.which('git') is None, reason='requires git')
@@ -134,6 +160,71 @@ def _build(repo: pathlib.Path) -> None:
     # NOTE: the binary is written last, so no input is newer than it
     path.write_text(_BINARY, encoding='utf-8')
     path.chmod(0o755)
+
+
+def _wheel(
+    folder: pathlib.Path,
+    repo: pathlib.Path,
+    *,
+    name: str = 'plasma-wiki',
+    version: str = RECORDED,
+    prints: str = VERSION,
+    build: Optional[str] = None,
+    skills: Optional[dict[str, str]] = None,
+    wiki: bool = True,
+) -> pathlib.Path:
+    """Write a stand-in for the wheel of the checkout ``repo`` and return it.
+
+    The wheel holds one script, ``wiki``, as the real one holds one binary.
+    With no other argument it keeps every contract but one: its ``wiki`` is a
+    script that an interpreter runs. Each argument doctors one thing: the
+    distribution name, the version the wheel states, the text ``--version``
+    prints, the build id of the identity record (the commit of ``repo`` when
+    none is given), the skills ``install --project`` writes, and whether the
+    wheel holds a ``wiki`` at all.
+    """
+    record = {
+        'engine': 'rust',
+        'version': VERSION,
+        'build': _git(repo, 'rev-parse', 'HEAD') if build is None else build,
+    }
+    held = {
+        'record': record,
+        'prints': prints,
+        'skills': SKILLS if skills is None else skills,
+    }
+    script = _WIKI.format(
+        python=sys.executable, held=json.dumps(held), trace=side.TRACE
+    )
+    stem = f'{name.replace("-", "_")}-{version}'
+    files = {
+        f'{stem}.data/scripts/wiki': script,
+        f'{stem}.dist-info/METADATA': (
+            f'Metadata-Version: 2.4\nName: {name}\nVersion: {version}\n'
+        ),
+        f'{stem}.dist-info/WHEEL': (
+            'Wheel-Version: 1.0\nGenerator: stand-in\nRoot-Is-Purelib: false\n'
+            'Tag: py3-none-any\n'
+        ),
+    }
+    if not wiki:
+        del files[f'{stem}.data/scripts/wiki']
+    # the list an installer holds every file of the wheel to
+    rows = []
+    for path, text in files.items():
+        digest = hashlib.sha256(text.encode('utf-8')).digest()
+        encoded = base64.urlsafe_b64encode(digest).rstrip(b'=').decode('ascii')
+        rows.append(f'{path},sha256={encoded},{len(text.encode("utf-8"))}')
+    listing = f'{stem}.dist-info/RECORD'
+    files[listing] = '\n'.join([*rows, f'{listing},,']) + '\n'
+    folder.mkdir(parents=True, exist_ok=True)
+    wheel = folder / f'{stem}-py3-none-any.whl'
+    with zipfile.ZipFile(wheel, 'w') as archive:
+        for path, text in files.items():
+            item = zipfile.ZipInfo(path)
+            item.external_attr = 0o755 << 16
+            archive.writestr(item, text)
+    return wheel
 
 
 @pytest.fixture(scope='session')

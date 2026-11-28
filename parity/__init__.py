@@ -10,6 +10,7 @@ from . import (
     compare,
     config,
     container,
+    contracts,
     dispatch,
     doctor,
     facts,
