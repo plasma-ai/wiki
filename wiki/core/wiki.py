@@ -118,10 +118,17 @@ _UNREPAIRABLE = 'its repair would break the YAML'
 # for an outside miss the page's folder resolves, so both spell it identically
 _RELATIVE_LINK_TEXT = "points inside the wiki through './' or '../'"
 
+# the remedy for a backslash a double-quoted scalar reads as an escape
+_ESCAPE_ADVICE = (
+    'a backslash starts an escape inside double quotes, so write LaTeX in'
+    ' single quotes or a block scalar, or double each backslash'
+)
+
 # the remedy lint appends to an invalid_yaml finding, per
 # cause (see format.frontmatter_issues)
 _YAML_ADVICE = {
     'parse': 'a strict reader drops the whole block, so quote or rewrite the value',
+    'escape': _ESCAPE_ADVICE,
     'nonmapping': 'no strict reader finds key: value pairs in it',
     'nonscalar_key': 'the wiki reads the block by its line grammar alone',
     'duplicate_key': (
@@ -133,12 +140,6 @@ _YAML_ADVICE = {
 # the frontmatter fields whose value is text the generated surfaces copy: the
 # H1 and the parent's row
 _TEXT_FIELDS = ('name', 'title', 'desc', 'category')
-
-# the remedy for a backslash a double-quoted scalar reads as an escape
-_ESCAPE_ADVICE = (
-    'a backslash starts an escape inside double quotes, so write LaTeX in'
-    ' single quotes or a block scalar, or double each backslash'
-)
 
 # str.is* predicates a policy may require (applied to the name minus allow chars)
 _NAMING_PREDICATES = {
@@ -6215,7 +6216,9 @@ class Wiki:
         fences stay outside the parse -- they are the wiki's grammar, and
         document markers to YAML -- and update never rewrites an authored
         value, so the fix is the author's: quote the value, drop the
-        duplicate, or write ``key: value`` pairs.
+        duplicate, or write ``key: value`` pairs. A backslash escape a
+        double-quoted value cannot decode (LaTeX typed there) draws the
+        quoting remedy instead: the value is quoted already.
         """
         # initialize issues
         result = []

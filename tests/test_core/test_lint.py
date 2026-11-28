@@ -65,6 +65,7 @@ __all__ = [
     'test_lint_reports_one_issue_for_what_update_refuses',
     'test_lint_reports_deep_nesting_instead_of_crashing',
     'test_lint_reports_an_escape_naming_no_character',
+    'test_lint_gives_the_quoting_remedy_for_a_bad_escape',
     'test_lint_flags_a_control_character_in_a_double_quoted_field',
     'test_lint_keeps_a_quoted_field_that_decodes_to_text',
     'test_lint_judges_every_text_field_for_control_characters',
@@ -1286,6 +1287,46 @@ def test_lint_reports_an_escape_naming_no_character(
     index = (tmp_path / 'core' / '_index.md').read_text(encoding='utf-8')
     assert f'[[core/design|design]]: a{escape}b.' in index
     assert Wiki(tmp_path).update() == []
+
+
+@pytest.mark.parametrize(
+    argnames=('field', 'reason'),
+    argvalues=[
+        ('title: "Uses \\(p\\) here"', 'found unknown escape character'),
+        ('desc: "Uses $\\xi$."', 'number'),
+        ('desc: "Uses $\\upsilon$."', 'number'),
+        ('desc: "Uses \\uD800."', 'found invalid Unicode character escape code'),
+    ],
+    ids=['unknown-escape', 'bad-x-number', 'bad-u-number', 'no-such-character'],
+)
+@pytest.mark.usefixtures('_vary_loader')
+def test_lint_gives_the_quoting_remedy_for_a_bad_escape(
+    tmp_path: pathlib.Path,
+    field: str,
+    reason: str,
+) -> None:
+    r"""A backslash escape a double-quoted value cannot decode draws the quoting remedy.
+
+    The value is quoted already, so "quote the value" would send the
+    author in a circle: LaTeX such as ``\(p\)`` or ``\xi`` wants single
+    quotes, a block scalar, or doubled backslashes, under either loader.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    desc = '' if field.startswith('desc:') else 'desc: A page.\n'
+    page.write_text(
+        f'---\nname: core/design\n{field}\n{desc}---\n\n# core/design\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    issues = [issue for issue in wiki.lint() if issue.kind == 'invalid_yaml']
+    assert [issue.fields['line'] for issue in issues] == [3]
+    assert reason in issues[0].fields['reason']
+    assert issues[0].endswith(
+        '; a backslash starts an escape inside double quotes, so write LaTeX in'
+        ' single quotes or a block scalar, or double each backslash'
+    )
+    assert 'quote or rewrite the value' not in issues[0]
 
 
 @pytest.mark.parametrize(

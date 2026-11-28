@@ -378,16 +378,21 @@ its meaning:
 ``Invalid YAML frontmatter (line N): <reason>; <advice>``
    A strict YAML reader rejects the block — an unquoted ``': '`` inside a
    one-line value, a value ending in ``:``, a duplicate key, a control
-   character, a key that is not a scalar, or a body that is not ``key: value``
-   pairs — so Obsidian and any YAML library lose every field, while the wiki
+   character, a backslash escape a double-quoted value cannot decode, a key
+   that is not a scalar, or a body that is not ``key: value`` pairs — so
+   Obsidian and any YAML library lose every field, while the wiki
    still reads the block through its line grammar (or, for a body that is not
    a mapping, leaves it untouched). The advice names the cause: a parse error
    (``a strict reader drops the whole block, so quote or rewrite the value``),
+   a bad backslash escape in a double-quoted value, such as the ``\(`` of
+   ``"\(p\)"`` or the ``\x`` of ``"$\xi$"`` (``a backslash starts an escape
+   inside double quotes, so write LaTeX in single quotes or a block scalar, or
+   double each backslash``),
    a duplicate key (``a strict reader rejects the block or keeps the last
    copy, the wiki reads the first``), a key that is not a scalar (``the wiki
    reads the block by its line grammar alone``), or a body that is not a
    mapping (``no strict reader finds key: value pairs in it``). Quote the
-   value, drop the duplicate, or rewrite the block.
+   value, requote the LaTeX, drop the duplicate, or rewrite the block.
 
 ``Control character in <field> (line N): <characters>; <advice>``
    A double-quoted ``name:``, ``title:``, ``desc:``, or ``category:`` holds a

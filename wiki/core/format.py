@@ -83,7 +83,8 @@ _INDICATOR_CHARS = ',[]{}#&*!|>\'"%@`'
 _Fields = dict[str, Optional[tuple[str, Optional[str], str]]]
 
 # a strict-reader finding on a block: (1-based file line, reason, cause), the
-# cause one of 'parse', 'nonmapping', 'nonscalar_key', 'duplicate_key'
+# cause one of 'parse', 'escape', 'nonmapping', 'nonscalar_key',
+# 'duplicate_key'
 _Issue = tuple[int, str, str]
 
 # the top-level keys of a block in document order, each with the 0-based line
@@ -141,6 +142,15 @@ _FIELD_CONTROLS = re.compile(r'[\x00-\x1f\x7f\x85\u2028\u2029]')
 # the characters authored content holds only as damage: the C0 controls but
 # the tab and the line break, and the DEL
 _CONTENT_CONTROLS = re.compile(r'[\x00-\x08\x0b-\x1f\x7f]')
+
+# how a parser's problem opens when a double-quoted scalar holds a backslash
+# escape it cannot decode, in libyaml's words and in the pure loader's
+_ESCAPE_PROBLEMS = (
+    'found unknown escape character',
+    'did not find expected hexdecimal number',
+    'expected escape sequence of',
+    'found invalid Unicode character escape code',
+)
 
 # lone surrogates: text no UTF-8 writer can emit
 _SURROGATES = re.compile(r'[\ud800-\udfff]')
@@ -937,8 +947,9 @@ def frontmatter_issues(frontmatter: str) -> list[_Issue]:
 
     Each is ``(line, reason, cause)``: the 1-based file line, the
     parser's problem or the wiki's description, and the cause -- a
-    ``'parse'`` error, a ``'nonmapping'`` body, a ``'nonscalar_key'``,
-    or a ``'duplicate_key'``. An empty list is a block the installed
+    ``'parse'`` error, a bad backslash ``'escape'`` in a double-quoted
+    value, a ``'nonmapping'`` body, a ``'nonscalar_key'``, or a
+    ``'duplicate_key'``. An empty list is a block the installed
     PyYAML build accepts as a mapping with unique scalar keys -- the
     verdict is that build's, so a pure-Python wheel rejects a tab
     inside a plain value the C loader accepts.
@@ -2237,7 +2248,7 @@ def _compose_block(
             # writer can emit, so the block reads as the C loader rejects it
             if _SURROGATES.search(value_node.value):
                 reason = 'found invalid Unicode character escape code'
-                return 'invalid', {}, ((file_line, reason, 'parse'),), (), False
+                return 'invalid', {}, ((file_line, reason, 'escape'),), (), False
         else:
             fields[key] = None
     # an alias composes as the anchored node object reached a second time; a
@@ -2280,7 +2291,9 @@ def _parse_issue(error: Exception, body: str, offset: int) -> _Issue:
     error without a mark (a character YAML forbids, the recursion limit)
     locates by the first forbidden character, else names the block's
     first line. A problem worded as a fragment ("but found another
-    document") keeps the context it continues.
+    document") keeps the context it continues. A backslash escape a
+    double-quoted scalar cannot decode is the ``'escape'`` cause; every
+    other error is ``'parse'``.
     """
     import yaml
 
@@ -2344,7 +2357,11 @@ def _parse_issue(error: Exception, body: str, offset: int) -> _Issue:
         first = body.count('\n', 0, context_mark.index) + offset + 1
         context_head = str(context).split(';')[0]
         reason = f'{context_head} (first at line {first})'
-    return line, str(reason), 'parse'
+    # an escape the scalar cannot decode is its own cause: the value is quoted
+    # already, so the remedy is a different quoting, not a quote
+    problem = str(getattr(error, 'problem', None))
+    cause = 'escape' if problem.startswith(_ESCAPE_PROBLEMS) else 'parse'
+    return line, str(reason), cause
 
 
 def _continues_a_scalar(line: str) -> bool:
