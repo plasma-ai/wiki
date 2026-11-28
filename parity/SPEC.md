@@ -2095,7 +2095,9 @@ files must be.
 - **No Rust.** The scratch host holds no `cargo`, and a run is refused when a
   system folder holds one. A build there is the build of a host with no Rust:
   the build backend fetches the toolchain the checkout pins, so it needs the
-  network. A build with a `cargo` at hand would prove nothing of such a host.
+  network. It keeps that toolchain in the cache folder of the home, whatever
+  `CARGO_HOME` and `RUSTUP_HOME` name. A build with a `cargo` at hand would
+  prove nothing of such a host.
 - **Venvs.** A check installs into venvs and folders of its own, below a folder
   of the work folder that carries its name, or into the folder of the scratch
   home that its installer keeps for a user, which no other check installs into.
