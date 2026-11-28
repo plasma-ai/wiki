@@ -70,6 +70,13 @@ may include breaking changes, each listed under a Breaking heading.
   file, with the first line and the count, and a `no-lint` region is skipped. It
   is a note under `lint.strict` too. In `--json` its kind is
   `content_control_character`.
+- `wiki lint` notes a wiki whose index files are mapped to the merge driver but
+  whose pages are not: git maps the root `_index.md` to `merge=wiki` and not a
+  page in the wiki root. Such pages merge as plain text and conflict on their
+  `updated:` lines. `wiki config` adds the mapping, in a `.gitattributes` in the
+  wiki root that you commit. A wiki with no mapping at all, a wiki git ignores
+  and a wiki outside a repository draw no note. In `--json` its kind is
+  `page_merge_unmapped`.
 
 ### Changed
 

@@ -40,6 +40,7 @@ __all__ = [
     'test_lint_flags_what_update_fixes',
     'test_lint_issues_are_typed',
     'test_lint_notes_unconfigured_merge_driver',
+    'test_lint_notes_pages_unmapped_to_the_merge_driver',
     'test_lint_names_bare_page',
     'test_lint_names_nested_wiki_root',
     'test_lint_flags_human_only_issues',
@@ -418,6 +419,91 @@ def test_lint_notes_unconfigured_merge_driver(tmp_path: pathlib.Path) -> None:
     notices = _capture_notices(wiki)
     assert wiki.lint() == []
     assert not any('merge.wiki.driver' in event.description for event in notices)
+
+
+# the mapping lines of the merge wiring, and the note for a wiki that holds
+# the first alone
+_INDEX_MAPPING = '**/_index.md merge=wiki\n'
+_PAGE_MAPPING = '*.md merge=wiki\n'
+_PAGE_MERGE_UNMAPPED = (
+    ".gitattributes maps _index.md files to merge=wiki but not the wiki's pages;"
+    ' run `wiki config` to map them (pages merge as plain text, and conflict on'
+    ' their updated: lines, until then)'
+)
+
+
+@_needs_git
+@pytest.mark.parametrize(
+    argnames=('folder', 'repository', 'files', 'expected'),
+    argvalues=[
+        ('wiki', True, {'.gitattributes': _INDEX_MAPPING}, True),
+        ('', True, {'.gitattributes': _INDEX_MAPPING}, True),
+        (
+            'wiki',
+            True,
+            {'.gitattributes': _INDEX_MAPPING, 'wiki/.gitattributes': _PAGE_MAPPING},
+            False,
+        ),
+        ('', True, {'.gitattributes': _INDEX_MAPPING + _PAGE_MAPPING}, False),
+        (
+            'wiki',
+            True,
+            {'.gitattributes': _INDEX_MAPPING + 'wiki/**/*.md merge=wiki\n'},
+            False,
+        ),
+        ('wiki', True, {'.gitattributes': '*.png binary\n'}, False),
+        ('wiki', True, {}, False),
+        (
+            'wiki',
+            True,
+            {'.gitattributes': _INDEX_MAPPING, '.gitignore': 'wiki/\n'},
+            False,
+        ),
+        ('wiki', False, {'.gitattributes': _INDEX_MAPPING}, False),
+    ],
+    ids=[
+        'indexes-only',
+        'indexes-only-at-the-repository-root',
+        'both-mapped',
+        'both-mapped-at-the-repository-root',
+        'pages-mapped-by-the-root-file',
+        'neither-mapped',
+        'no-attributes',
+        'ignored-wiki',
+        'no-repository',
+    ],
+)
+def test_lint_notes_pages_unmapped_to_the_merge_driver(
+    tmp_path: pathlib.Path,
+    folder: str,
+    repository: bool,
+    files: dict[str, str],
+    expected: bool,
+) -> None:
+    """Index files mapped to the merge driver and pages not draws one note.
+
+    Such a wiki merges its indexes through the driver and its pages as
+    plain text, which conflict on their ``updated:`` lines. The note is
+    soft and names ``wiki config``, which adds the page mapping. Git
+    answers for a page in the wiki root, so a mapping in the repository
+    root's file counts as one in the wiki's own. A wiki with no mapping,
+    one the repository ignores, and one outside a repository draw none.
+    """
+    if repository:
+        _git_repo(tmp_path)
+        _git(tmp_path, 'config', 'merge.wiki.driver', 'wiki _merge %O %A %B %L %P')
+    root = tmp_path / folder
+    root.mkdir(exist_ok=True)
+    for name, text in files.items():
+        (tmp_path / name).write_text(text, encoding='utf-8')
+    wiki = _make_wiki(root, folders={'core': ['design']})
+
+    notices = _capture_notices(wiki)
+    assert wiki.lint() == []
+    notes = [
+        event.description for event in notices if 'merge=wiki' in event.description
+    ]
+    assert notes == ([_PAGE_MERGE_UNMAPPED] if expected else [])
 
 
 def test_lint_names_bare_page(tmp_path: pathlib.Path) -> None:

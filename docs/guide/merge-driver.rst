@@ -235,6 +235,12 @@ files and pages, silently, at its first merge. ``wiki lint`` notes the gap
 (soft, and a typed row in ``lint --json``) until ``wiki config`` registers
 the driver.
 
+``wiki lint`` also notes a wiki whose index files are mapped to the driver
+while its pages are not — the repository root's ``.gitattributes`` holds the
+index line and the wiki root has no ``.gitattributes`` with the page line.
+Such pages merge as plain text and conflict on their ``updated:`` lines.
+``wiki config`` adds the mapping; commit the file it writes.
+
 Run ``wiki update --check`` after a merge, and ``wiki update`` when it
 reports changes. Once the merge is committed, a clean merge in which each
 side only added, deleted, or retitled entries checks clean — the driver

@@ -340,8 +340,11 @@ rather than authoring or auditing page by page yourself:
   root, in the working tree only — you stage and commit them yourself, and each
   clone runs `wiki config` once to register the driver. A `.gitattributes` with
   uncommitted changes is skipped, and a stderr line names it and the mapping
-  line it lacks: commit the file and run `wiki config` again. Without `wiki` on
-  PATH the driver falls back to git's own text merge.
+  line it lacks: commit the file and run `wiki config` again. `wiki lint` notes
+  a wiki whose index files are mapped and whose pages are not: its pages merge
+  as plain text and conflict on their `updated:` lines until `wiki config` adds
+  the mapping. Without `wiki` on PATH the driver falls back to git's own text
+  merge.
 - **Leave new-directory index bodies empty during concurrent work.** When
   sibling branches both create the same new directory, its two `_index.md`s
   merge add/add with no common ancestor: the generated region resolves

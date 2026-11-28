@@ -144,6 +144,7 @@ __all__ = [
     'test_init_writes_gitattributes_without_committing',
     'test_init_and_config_append_to_gitattributes_that_is_not_utf8',
     'test_init_and_config_name_a_gitattributes_they_skip',
+    'test_lint_notes_pages_unmapped_to_the_merge_driver',
     'test_merge_driver_merges_authored_frontmatter',
     'test_merge_driver_moves_regenerated_keys_with_their_bodies',
     'test_merge_driver_takes_the_other_sides_row_edit',
@@ -4080,6 +4081,57 @@ def test_init_and_config_name_a_gitattributes_they_skip(
     assert '.gitattributes' not in config.stdout + config.stderr
     index_block = b'\n# Wiki index merge driver\n**/_index.md merge=wiki\n'
     assert attributes.read_bytes() == b'*.png binary\n' + index_block
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_lint_notes_pages_unmapped_to_the_merge_driver(tmp_path: pathlib.Path) -> None:
+    """``lint`` notes a wiki whose indexes reach the merge driver and pages do not.
+
+    The note is one stderr line and a typed ``--json`` row, the exit code
+    stays 0, and it follows the unconfigured-driver note when a clone
+    lacks both halves. ``wiki config`` adds the page mapping and
+    registers the driver, which clears both.
+    """
+    # a wiki whose root holds no .gitattributes of its own: the repository
+    # root's file maps its index files alone
+    _git_repo(tmp_path)
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    (root / '.gitattributes').unlink()
+
+    # the note prints on stderr, and lint still passes
+    unmapped = (
+        ".gitattributes maps _index.md files to merge=wiki but not the wiki's pages;"
+        ' run `wiki config` to map them (pages merge as plain text, and conflict on'
+        ' their updated: lines, until then)'
+    )
+    prose = _wiki(root, 'lint', '--path', str(root))
+    assert prose.returncode == 0, prose.stdout + prose.stderr
+    assert [line for line in prose.stderr.splitlines() if 'merge=wiki' in line] == [
+        unmapped
+    ]
+    as_json = _wiki(root, 'lint', '--path', str(root), '--json')
+    assert as_json.returncode == 0
+    notes = json.loads(as_json.stdout)['notes']
+    assert [note for note in notes if 'merge' in note['kind']] == [
+        {'severity': 'note', 'kind': 'page_merge_unmapped', 'text': unmapped}
+    ]
+
+    # a clone with no driver registered either draws that note first
+    _git(tmp_path, 'config', '--unset', 'merge.wiki.driver')
+    both = _wiki(root, 'lint', '--path', str(root), '--json')
+    assert both.returncode == 0
+    notes = json.loads(both.stdout)['notes']
+    assert [note['kind'] for note in notes if 'merge' in note['kind']] == [
+        'merge_driver_unconfigured',
+        'page_merge_unmapped',
+    ]
+
+    # config wires both halves, and neither note is left
+    assert _wiki(root, 'config', '--path', str(root)).returncode == 0
+    wired = _wiki(root, 'lint', '--path', str(root))
+    assert wired.returncode == 0
+    assert 'merge=wiki' not in wired.stderr
 
 
 @pytest.mark.skipif(GIT is None, reason='git not on PATH')
