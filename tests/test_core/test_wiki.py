@@ -33,6 +33,8 @@ __all__ = [
     'test_init_rejects_invalid_wiki_name',
     'test_init_refuses_conflict_markers',
     'test_settings_reject_malformed_values',
+    'test_settings_blocks_are_validated_in_the_documented_order',
+    'test_settings_error_spells_the_wrong_value_as_json',
     'test_timestamp_format_configurable',
     'test_timestamp_timezone_configurable',
     'test_timestamp_zone_swaps_default_z_for_offset',
@@ -145,6 +147,7 @@ def test_validate_name_strict_via_settings(tmp_path: pathlib.Path) -> None:
         ({'min_length': 3}, 'abc', True),
         ({'max_length': 5}, 'abcde', True),
         ({'max_length': 5}, 'abcdef', False),
+        ({'min_length': 3, 'max_length': 3}, 'abc', True),
         ({'deny': '$'}, 'pri$e', False),
         ({'validate': ['identifier']}, 'spin-lock', False),
         ({'validate': ['identifier'], 'allow': '-'}, 'spin-lock', True),
@@ -158,6 +161,7 @@ def test_validate_name_strict_via_settings(tmp_path: pathlib.Path) -> None:
         'min-length-ok',
         'max-length-ok',
         'too-long',
+        'min-equals-max',
         'denied-char',
         'identifier-rejects-dash',
         'allow-exempts-dash',
@@ -356,6 +360,122 @@ def test_settings_reject_malformed_values(
     with pytest.raises(ValueError, match=match) as excinfo:
         Wiki(tmp_path).lint()
     assert 'settings.json' in str(excinfo.value)
+
+
+def test_settings_blocks_are_validated_in_the_documented_order(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Of several malformed blocks, the first in the documented order is named.
+
+    A command checks every block before it acts, so the block an error
+    names depends on the settings file alone: not on the command, and not
+    on the order the file lists its blocks in.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    order = ['naming', 'timestamp', 'map', 'titles', 'lint', 'exclude', 'links']
+    settings = dict.fromkeys(reversed(order), 'malformed')
+    path = tmp_path / '.wiki' / 'settings.json'
+
+    # mend the named block each time, and the next one in order is named
+    for block in order:
+        path.write_text(json.dumps(settings), encoding='utf-8')
+        message = f'The {block} block must be a JSON object'
+        with pytest.raises(ValueError, match=message):
+            Wiki(tmp_path).update(check=True)
+        del settings[block]
+
+
+@pytest.mark.parametrize(
+    argnames=('settings', 'message'),
+    argvalues=[
+        # the JSON spelling of each kind of value
+        (
+            {'naming': {'leading_digits': None}},
+            'naming.leading_digits must be a boolean, got null',
+        ),
+        (
+            {'map': {'desc_limit': True}},
+            'map.desc_limit must be an int >= -1 or null, got true',
+        ),
+        ({'map': {'indent': 1.5}}, 'map.indent must be a string, got 1.5'),
+        # a float with an exponent prints in the interpreter's spelling
+        ({'map': {'indent': 1e104}}, 'map.indent must be a string, got 1e+104'),
+        (
+            {'links': {'external': '../src'}},
+            'links.external must be a list of folder paths, got "../src"',
+        ),
+        (
+            {'timestamp': {'format': 'a\nb'}},
+            'timestamp.format must render a single non-empty line, got "a\\nb"',
+        ),
+        # text outside ASCII prints as escapes
+        (
+            {'links': {'external': 'café'}},
+            'links.external must be a list of folder paths, got "caf\\u00e9"',
+        ),
+        (
+            {'exclude': {'patterns': {'a': True, 'b': [1.5, None]}}},
+            'exclude.patterns must be a list of glob strings, got'
+            ' {"a": true, "b": [1.5, null]}',
+        ),
+        # a value of 80 characters prints whole, and a longer one is cut there
+        (
+            {'naming': {'reserved': 'x' * 78}},
+            'naming.reserved must be a list of strings, got "' + 'x' * 78 + '"',
+        ),
+        (
+            {'naming': {'reserved': 'x' * 79}},
+            'naming.reserved must be a list of strings, got "' + 'x' * 79 + '...',
+        ),
+        # an entry of a naming list that is not a string
+        (
+            {'naming': {'validate': [{'a': 1}]}},
+            'naming.validate entry must be a string, got {"a": 1}',
+        ),
+        (
+            {'naming': {'reserved': [['x']]}},
+            'naming.reserved entry must be a string, got ["x"]',
+        ),
+        (
+            {'naming': {'reserved': ['drafts', 1]}},
+            'naming.reserved entry must be a string, got 1',
+        ),
+    ],
+    ids=[
+        'null',
+        'true',
+        'number',
+        'number-with-an-exponent',
+        'string',
+        'string-with-a-line-break',
+        'string-outside-ascii',
+        'object',
+        'eighty-characters',
+        'cut-past-eighty',
+        'object-in-validate',
+        'list-in-reserved',
+        'number-in-reserved',
+    ],
+)
+def test_settings_error_spells_the_wrong_value_as_json(
+    tmp_path: pathlib.Path,
+    settings: dict,
+    message: str,
+) -> None:
+    """A settings error shows the wrong value in the settings file's notation.
+
+    The value prints as JSON, cut at 80 characters, so the error answers
+    in the language the file is written in. An entry of ``naming.validate``
+    or ``naming.reserved`` that is not a string gets the same error shape,
+    naming its key, on every interpreter.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    path = tmp_path / '.wiki' / 'settings.json'
+    path.write_text(json.dumps(settings), encoding='utf-8')
+
+    with pytest.raises(ValueError) as excinfo:
+        Wiki(tmp_path).update(check=True)
+    assert str(excinfo.value) == f'{message} in .wiki/settings.json.'
 
 
 # ------ timestamps

@@ -51,6 +51,10 @@ __all__ = ['test_translate_matching']
         ('[z-a]', 'q', False),
         ('[!z-a]', 'q', True),
         ('[a&&b]', '&', True),
+        # a leading '^' in a class is a literal caret, never a negation
+        ('[^a]', '^', True),
+        ('[^a]', 'a', True),
+        ('[^a]', 'b', False),
         # matching is case-sensitive
         ('Vendor', 'vendor', False),
     ],
@@ -85,6 +89,9 @@ __all__ = ['test_translate_matching']
         'reversed-range-never-matches',
         'negated-reversed-range-matches-any',
         'set-operations-literal',
+        'caret-class-holds-the-caret',
+        'caret-class-holds-its-member',
+        'caret-class-misses-another',
         'case-sensitive',
     ],
 )
