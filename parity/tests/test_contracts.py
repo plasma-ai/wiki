@@ -1,10 +1,11 @@
 """Test the ``parity.contracts`` module.
 
 The checks run on real wheels in the ``contracts`` job, which builds them
-first. This module carries what that job cannot show: that each check
-reports the wheel that breaks its contract. The wheel here is a stand-in
-that holds a script where the real one holds a binary, and it is installed
-by the real installer into real venvs.
+first. This module carries what that job cannot show: that a check reports
+the wheel that breaks its contract. The wheel here is a stand-in that holds
+a script where the real one holds a binary, and it is installed by the real
+installer into real venvs. The ``upgrade`` and ``lock`` checks fetch v1's
+packages and a Rust toolchain, so only that job runs them.
 """
 
 from __future__ import annotations
@@ -29,9 +30,9 @@ __all__ = [
 
 pytestmark = _needs_git
 
-# the checks that install the wheel and nothing else: the others build from
-# source or fetch v1's packages
-_CHECKS = ('name', 'version', 'native', 'venv', 'symlink', 'space')
+# the checks that install a built file and nothing else: the others fetch
+# v1's packages or a Rust toolchain
+_CHECKS = ('name', 'version', 'native', 'venv', 'symlink', 'space', 'sdist')
 # the one finding of a stand-in that keeps every contract it can
 _SCRIPT = contracts.Finding(
     'native',
@@ -42,20 +43,22 @@ _SCRIPT = contracts.Finding(
 def _package(
     folder: pathlib.Path,
     engine: side.Side,
+    *,
+    sdist_build: str = '',
     **doctored: Any,
 ) -> contracts.Package:
     """Return a committed checkout and its stand-in wheel as a package.
 
     The venvs are made from the oracle side's interpreter, so no check
-    fetches one. The sdist is a file no check of this module reads.
+    fetches one. The sdist is a stand-in wheel too, so no check builds from
+    source: its ``wiki`` carries the build id ``sdist_build``, and a build
+    of the real sdist carries none.
     """
     repo = _workspace(folder)
-    sdist = folder / 'sdist.tar.gz'
-    sdist.write_bytes(b'')
     named = oracle.load()
     return contracts.Package(
         wheel=_wheel(folder / 'dist', repo, **doctored),
-        sdist=sdist,
+        sdist=_wheel(folder / 'sdist', repo, build=sdist_build),
         repo=repo,
         commit=_git(repo, 'rev-parse', 'HEAD'),
         version=VERSION,
@@ -76,7 +79,8 @@ def test_wheel_that_keeps_the_contracts_shows_only_that_its_wiki_is_a_script(
     manifest's version in Cargo's spelling, proves the commit of the
     checkout on every command, and writes the skills the commit holds: in a
     venv, through a link in another folder, and in a venv whose path holds
-    a space. So every check passes but the one that holds the installed
+    a space. The stand-in for a build of the sdist does the same with no
+    build id. So every check passes but the one that holds the installed
     ``wiki`` to be a binary, and the report names each check that ran.
     """
     package = _package(tmp_path, engine)
@@ -124,8 +128,13 @@ def test_wheel_that_keeps_the_contracts_shows_only_that_its_wiki_is_a_script(
             {'venv', 'symlink', 'space'},
             "unlike wiki/skills at 'wiki/more.md'",
         ),
+        (
+            {'sdist_build': '0' * 40},
+            {'sdist'},
+            'left no identity record',
+        ),
     ],
-    ids=['name', 'spelling', 'version', 'commit', 'skill', 'added skill'],
+    ids=['name', 'spelling', 'version', 'commit', 'skill', 'added skill', 'sdist'],
 )
 def test_wheel_that_breaks_a_contract_is_reported_by_its_checks(
     tmp_path: pathlib.Path,
@@ -140,8 +149,9 @@ def test_wheel_that_breaks_a_contract_is_reported_by_its_checks(
     spelling an installer normalizes the version to, where the manifest
     states Cargo's; a wheel that states another version than its binary
     prints; a binary built at another commit; a skill whose text is not the
-    commit's; and a skill file the commit does not hold. Every other check
-    still passes, so a finding names the contract that broke.
+    commit's; a skill file the commit does not hold; and a build of the
+    sdist that carries a build id. Every other check still passes, so a
+    finding names the contract that broke.
     """
     package = _package(tmp_path, engine, **doctored)
     result = contracts.run(package, work=tmp_path / 'work', checks=_CHECKS)

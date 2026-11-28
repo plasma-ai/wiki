@@ -643,7 +643,10 @@ fetches the pinned toolchain and needs the network. The `contracts` job of
 Linux, and the `publish` job waits for it. A new contract of the package gets
 its check in `CHECKS` and its row in the spec's table. A check that no wheel can
 fail proves nothing, so `parity/tests/test_contracts.py` doctors a stand-in
-wheel in the one thing each check holds.
+wheel in the one thing each of seven checks holds; for `sdist` that is the empty
+build id, with a stand-in in the sdist's place. No test builds the sdist or runs
+`upgrade` or `lock`, which fetch a Rust toolchain and v1's packages: only the
+job's real runs hold those.
 
 `python -m parity container` runs one command in the Linux container
 (`parity/container.py`, `parity/Dockerfile`): the Ubuntu release of the CI
