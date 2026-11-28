@@ -331,7 +331,9 @@ def init(app: typer.Typer) -> typer.Typer:
         characters, a leading dot, and the reserved _index stem are rejected);
         stricter rules are opt-in per wiki via naming.validate in
         .wiki/settings.json, which --settings seeds at creation. The wiki is
-        created at {cwd}/wiki/ when no --path is given.
+        created at {cwd}/wiki/ when no --path is given. An existing wiki keeps
+        its settings: when --settings names something else, one stderr line
+        says it was not applied, and the exit code stays 0.
         """
         # an empty --path is a usage error, never the default root
         refuse_empty_path(path)
@@ -352,6 +354,7 @@ def init(app: typer.Typer) -> typer.Typer:
         if (path / WIKI_INDEX).is_file():
             if not quiet:
                 typer.echo(f'Wiki already initialized at: {path}')
+            _echo_unapplied_settings(path, settings)
             return
         # initialize wiki, streaming its notices to stderr
         wiki = Wiki(path)
@@ -363,6 +366,8 @@ def init(app: typer.Typer) -> typer.Typer:
         configure_git_merge_driver(path)
         if not quiet:
             typer.echo(f'Initialized wiki at: {path}')
+        # a settings file that stood before the root index was kept
+        _echo_unapplied_settings(path, settings)
         # surface soft warnings, else point at the one manual step
         if warnings:
             for warning in warnings:
@@ -1477,6 +1482,39 @@ def _echo_notice(event: Event, **kwargs: Any) -> Event:
     """
     typer.echo(event.description, err=True)
     return event
+
+
+def _echo_unapplied_settings(root: pathlib.Path, settings: Optional[dict]) -> None:
+    """Say on stderr when ``init --settings`` is not what the wiki at ``root`` holds.
+
+    ``init`` never changes the settings of an existing wiki, and it exits
+    0 there, so the line is the caller's one sign that the policy it
+    passed is not in force. The two compare as JSON text with sorted
+    keys, so key order and spacing never matter, and a settings file that
+    is missing or cannot be read holds something else.
+
+    Args:
+        root: Wiki root the command ran on.
+        settings: The parsed ``--settings`` object, or ``None`` without one.
+
+    """
+    if settings is None:
+        return
+    # NOTE: the engine reads a missing file as all defaults, as it reads an
+    #   empty object, so only a file that stands is compared
+    held = None
+    if (root / WIKI_SETTINGS).is_file():
+        try:
+            held = json.dumps(Wiki(root)._settings, sort_keys=True)
+        # a file that cannot be read holds something else
+        except ValueError:
+            held = None
+    if held != json.dumps(settings, sort_keys=True):
+        line = (
+            '--settings was not applied: init leaves the settings of the wiki at'
+            f' {root} as they are.'
+        )
+        typer.echo(line, err=True)
 
 
 def _index_canonicalizer(root: pathlib.Path, path: pathlib.Path) -> Optional[Wiki]:

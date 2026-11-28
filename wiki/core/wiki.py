@@ -175,6 +175,27 @@ class Wiki:
     path_sep: str = '/'
     index_delimiter: str = '***'
     category_order: Optional[list[str]] = None
+    #: the keys ``.wiki/settings.json`` may hold: each block with the keys
+    #: read inside it. A key outside the table draws a settings warning, so
+    #: a subclass that reads a key of its own lists it here
+    settings_keys: dict[str, tuple[str, ...]] = {
+        'naming': (
+            'validate',
+            'allow',
+            'deny',
+            'pattern',
+            'min_length',
+            'max_length',
+            'leading_digits',
+            'reserved',
+        ),
+        'timestamp': ('timezone', 'format'),
+        'map': ('desc_limit', 'indent', 'ellipsis'),
+        'titles': ('required',),
+        'lint': ('strict',),
+        'exclude': ('patterns',),
+        'links': ('external',),
+    }
 
     def __init__(self: Wiki, path: PathLike) -> None:
         """Initialize the wiki manager.
@@ -191,6 +212,9 @@ class Wiki:
         # the verdict on each folder the link scan has climbed through: the
         # wiki rooted there, or None for a plain folder, judged once per instance
         self._link_wikis: dict[pathlib.Path, Optional[Wiki]] = {}
+        # whether an enclosing operation has said the settings warnings, so
+        # the operation it runs inside repeats none
+        self._settings_warned = False
 
     @functools.cached_property
     def _root_name(self: Wiki) -> str:
@@ -755,6 +779,52 @@ class Wiki:
         self._lint_strict  # noqa: B018
         self._exclude_policy  # noqa: B018
         self._links_policy  # noqa: B018
+
+    def _warn_settings(self: Wiki) -> None:
+        """Warn of each setting the file holds that does nothing as written.
+
+        The warnings follow the keys in file order, and each operation
+        says them once: the sweep ``new`` runs inside repeats none. Only
+        ``init``, ``update``, ``new`` and ``lint`` call this, each ahead of
+        its other notices: a warning from the settings loader would reach
+        every reader, the merge driver's engines and a linked wiki's among
+        them.
+        """
+        if self._settings_warned:
+            return
+        # collect each warning as (dotted key, reason)
+        warnings = []
+        for key, block in self._settings.items():
+            if key not in self.settings_keys:
+                warnings.append((key, f'unknown key {key!r} (ignored)'))
+                continue
+            # a subclass's own key may hold any value
+            if not isinstance(block, dict):
+                continue
+            for leaf, value in block.items():
+                dotted = f'{key}.{leaf}'
+                if leaf not in self.settings_keys[key]:
+                    warnings.append((dotted, f'unknown key {dotted!r} (ignored)'))
+                # a pattern is matched as written, so a space at either end
+                # keeps it off the name it was typed beside
+                elif dotted == 'exclude.patterns':
+                    for pattern in value:
+                        if pattern != pattern.strip(' '):
+                            reason = (
+                                f'{dotted} entry {pattern!r} starts or ends with a'
+                                ' space (the space is part of the pattern)'
+                            )
+                            warnings.append((dotted, reason))
+                # the flag narrows the identifier rule and no other
+                elif (dotted == 'naming.leading_digits') and (value is False):
+                    if 'identifier' not in self._naming_policy['validate']:
+                        reason = (
+                            f"{dotted} is false without 'identifier' in"
+                            ' naming.validate (it has no effect)'
+                        )
+                        warnings.append((dotted, reason))
+        for key, reason in warnings:
+            self.on_settings_warning(path=WIKI_SETTINGS, key=key, reason=reason)
 
     def _refuse_aliased_link_folders(self: Wiki) -> None:
         """Refuse a ``links.external`` folder a symlink leads back into the wiki.
@@ -1391,6 +1461,8 @@ class Wiki:
             settings_path.parent.mkdir(parents=True, exist_ok=True)
             content = json.dumps(seed, indent=2)
             wiki.util.fs.write_atomic(settings_path, content + '\n')
+        # the settings file stands now, so its warnings name a file on disk
+        self._warn_settings()
         # seed .wiki/obsidian from stock template
         _obsidian.seed_template(self._root)
         # create root index
@@ -1689,7 +1761,9 @@ class Wiki:
         marker -- is restored as ``{}`` (all defaults; policy is never
         invented) with a notice; a dry run leaves it untouched,
         neither restoring nor reporting it (the CLI's resolver
-        names it instead).
+        names it instead). A setting the file holds to no effect is
+        warned about ahead of every other notice
+        (:meth:`_warn_settings`).
 
         Args:
             name: Restrict scope to named subtree (relative
@@ -1718,8 +1792,10 @@ class Wiki:
             the parent folder is outside the scope.
 
         """
-        # check every settings block before anything else
+        # check every settings block before anything else, then say what
+        # the file holds to no effect
         self._validate_settings()
+        self._warn_settings()
         # resolve the scope first, so a bad entry fails before the write
         # sweeps below mutate anything
         if name:
@@ -1855,8 +1931,10 @@ class Wiki:
                 checked before the write, with nothing created.
 
         """
-        # check every settings block before anything else
+        # check every settings block before anything else, then say what
+        # the file holds to no effect
         self._validate_settings()
+        self._warn_settings()
         # the authored inputs are the point: refuse placeholders outright,
         # never stub them
         desc = desc.strip()
@@ -1981,8 +2059,13 @@ class Wiki:
         folder.mkdir(exist_ok=True)
         wiki.util.fs.write_atomic(index_path, text)
         # the scoped sweep adds the folder's own rows and the parent's new
-        # row, propagating the desc, so the adoption lands converged
-        self.update(name=scope)
+        # row, propagating the desc, so the adoption lands converged; the
+        # settings warnings are out already
+        self._settings_warned = True
+        try:
+            self.update(name=scope)
+        finally:
+            self._settings_warned = False
         return str(index_path.relative_to(self._root))
 
     @format.run_scoped
@@ -2060,7 +2143,8 @@ class Wiki:
         it go unchecked), and CRLF line endings (which the next
         ``update`` normalizes) are soft notes (stderr)
         and do not count as issues; ``lint.strict`` makes the stale links
-        issues.
+        issues. A setting the file holds to no effect is a soft note too,
+        ahead of the others (:meth:`_warn_settings`).
 
         Args:
             name: Restrict scope to named subtree (relative
@@ -2072,9 +2156,11 @@ class Wiki:
             ``kind`` and per-kind payload ``fields``.
 
         """
-        # check every settings block before anything else, then the one
-        # links.external rule that follows a path on disk
+        # check every settings block before anything else, say what the
+        # file holds to no effect, then check the one links.external rule
+        # that follows a path on disk
         self._validate_settings()
+        self._warn_settings()
         self._refuse_aliased_link_folders()
         # resolve folder
         if name:
@@ -3252,6 +3338,26 @@ class Wiki:
         """
         if event is None:
             event = SettingsRestoreEvent(message, **kwargs)
+        return self.on_notice(event, logging_level=logging_level)
+
+    def on_settings_warning(
+        self: Wiki,
+        message: Optional[str] = None,
+        *,
+        logging_level: int = logging.WARNING,
+        event: Optional[SettingsWarningEvent] = None,
+        **kwargs: Any,
+    ) -> Event:
+        """Handle a settings-warning notice event.
+
+        Constructs a ``SettingsWarningEvent`` from ``message`` and the
+        payload kwargs (the settings file, the dotted key and the reason)
+        unless a pre-built ``event`` is passed through, then delegates to
+        ``on_notice``. Override in subclasses to intercept this notice
+        kind alone; override ``on_notice`` to intercept every notice.
+        """
+        if event is None:
+            event = SettingsWarningEvent(message, **kwargs)
         return self.on_notice(event, logging_level=logging_level)
 
     def on_cache_restore(
@@ -6951,6 +7057,19 @@ class SettingsRestoreEvent(Event):
         return f'Restored missing {self.path} ({{}} -- all defaults)'
 
 
+class SettingsWarningEvent(Event):
+    """Emitted for a setting that is accepted and does nothing as written."""
+
+    path: str
+    key: str
+    reason: str
+
+    @property
+    def description(self: SettingsWarningEvent) -> str:
+        """Return the settings-warning notice line."""
+        return f'{self.path}: {self.reason}'
+
+
 class CacheRestoreEvent(Event):
     """Emitted when a deleted ``.wiki/cache/`` is recreated."""
 
@@ -7063,6 +7182,7 @@ _NOTICE_HOOKS = {
     IndexTruncatedEvent: 'on_index_truncated',
     IndexMarkerlessEvent: 'on_index_markerless',
     SettingsRestoreEvent: 'on_settings_restore',
+    SettingsWarningEvent: 'on_settings_warning',
     CacheRestoreEvent: 'on_cache_restore',
     DescMissingEvent: 'on_desc_missing',
     DescLongEvent: 'on_desc_long',

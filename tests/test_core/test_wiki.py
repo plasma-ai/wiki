@@ -10,6 +10,7 @@ driver runs. Each verb's behavior has its own suite (``test_update``,
 
 from __future__ import annotations
 
+import functools
 import json
 import pathlib
 import re
@@ -20,7 +21,7 @@ import pytest
 from wiki.constants import WIKI_FREEZE_TIME
 from wiki.core.wiki import Wiki
 
-from ._helpers import CategorizedWiki, _make_wiki
+from ._helpers import CategorizedWiki, _capture_notices, _make_wiki
 
 __all__ = [
     'test_init_creates_structure',
@@ -35,6 +36,9 @@ __all__ = [
     'test_settings_reject_malformed_values',
     'test_settings_blocks_are_validated_in_the_documented_order',
     'test_settings_error_spells_the_wrong_value_as_json',
+    'test_settings_warnings_name_only_keys_nothing_reads',
+    'test_settings_warnings_come_from_every_operation',
+    'test_leading_digits_warns_without_the_identifier_rule',
     'test_timestamp_format_configurable',
     'test_timestamp_timezone_configurable',
     'test_timestamp_zone_swaps_default_z_for_offset',
@@ -485,6 +489,137 @@ def test_settings_error_spells_the_wrong_value_as_json(
     with pytest.raises(ValueError) as excinfo:
         Wiki(tmp_path).update(check=True)
     assert str(excinfo.value) == f'{message} in .wiki/settings.json.'
+
+
+def test_settings_warnings_name_only_keys_nothing_reads(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A settings file draws a warning for each key no reader takes, and no other.
+
+    A file that sets every documented key is silent. A subclass that reads
+    a key of its own lists it in ``settings_keys``: the key is then known,
+    and a key beside it or inside it that the table does not list is named.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    path = tmp_path / '.wiki' / 'settings.json'
+    settings: dict = {
+        'naming': {
+            'validate': ['ascii', 'identifier'],
+            'allow': '-',
+            'deny': '~',
+            'pattern': '[a-z_-]+',
+            'min_length': 2,
+            'max_length': 40,
+            'leading_digits': False,
+            'reserved': ['tmp'],
+        },
+        'timestamp': {'timezone': 'Europe/Paris', 'format': '%Y-%m-%d %H:%M:%S%z'},
+        'map': {'desc_limit': 80, 'indent': '    ', 'ellipsis': '~'},
+        'titles': {'required': False},
+        'lint': {'strict': True},
+        'exclude': {'patterns': ['drafts/']},
+        'links': {'external': ['../src']},
+    }
+    path.write_text(json.dumps(settings), encoding='utf-8')
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+    wiki.update(check=True)
+    assert [type(event).__name__ for event in notices] == []
+
+    class ReviewedWiki(Wiki):
+        """Wiki subclass that reads a ``review`` block of its own."""
+
+        settings_keys = {**Wiki.settings_keys, 'review': ('owner',)}
+
+    settings = {'review': {'owner': 'ada', 'cadence': 7}, 'labels': ['draft']}
+    path.write_text(json.dumps(settings), encoding='utf-8')
+    wiki = ReviewedWiki(tmp_path)
+    notices = _capture_notices(wiki)
+    wiki.update(check=True)
+    assert [event.description for event in notices] == [
+        ".wiki/settings.json: unknown key 'review.cadence' (ignored)",
+        ".wiki/settings.json: unknown key 'labels' (ignored)",
+    ]
+
+
+def test_settings_warnings_come_from_every_operation(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Each operation on one instance says the settings warnings, once.
+
+    A host that runs several operations on one instance gets the warnings
+    from every one of them, ahead of its other notices. ``new`` runs an
+    update inside and still says each line once.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    path = tmp_path / '.wiki' / 'settings.json'
+    settings = {'labels': ['draft'], 'exclude': {'pattern': ['drafts/']}}
+    path.write_text(json.dumps(settings), encoding='utf-8')
+    warnings = [
+        ".wiki/settings.json: unknown key 'labels' (ignored)",
+        ".wiki/settings.json: unknown key 'exclude.pattern' (ignored)",
+    ]
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+    operations = [
+        wiki.lint,
+        wiki.lint,
+        functools.partial(wiki.update, check=True),
+        wiki.lint,
+        functools.partial(wiki.new, 'tools', desc='The tools.', content='Overview.'),
+        wiki.lint,
+    ]
+    for operation in operations:
+        notices.clear()
+        operation()
+        lines = [event.description for event in notices]
+        assert lines[: len(warnings)] == warnings
+        assert not set(warnings).intersection(lines[len(warnings) :])
+
+
+@pytest.mark.parametrize(
+    argnames=('naming', 'warned'),
+    argvalues=[
+        ({'leading_digits': False}, True),
+        ({'validate': ['ascii'], 'leading_digits': False}, True),
+        ({'validate': ['ascii', 'identifier'], 'leading_digits': False}, False),
+        ({'leading_digits': False, 'validate': ['identifier']}, False),
+        ({'leading_digits': True}, False),
+    ],
+    ids=[
+        'no-rules',
+        'another-rule',
+        'identifier',
+        'identifier-listed-after',
+        'default-value',
+    ],
+)
+def test_leading_digits_warns_without_the_identifier_rule(
+    tmp_path: pathlib.Path,
+    naming: dict,
+    warned: bool,
+) -> None:
+    """``leading_digits: false`` is named when no ``identifier`` rule reads it.
+
+    The flag only narrows the ``identifier`` rule, so without that rule a
+    name that opens on a digit still passes. The default ``true`` asks for
+    nothing and draws no warning, with or without the rule.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    path = tmp_path / '.wiki' / 'settings.json'
+    path.write_text(json.dumps({'naming': naming}), encoding='utf-8')
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+    wiki.update(check=True)
+
+    line = (
+        ".wiki/settings.json: naming.leading_digits is false without 'identifier'"
+        ' in naming.validate (it has no effect)'
+    )
+    assert [event.description for event in notices] == [line] * warned
+    assert [event.key for event in notices] == ['naming.leading_digits'] * warned
+    if warned:
+        assert wiki.validate_name('2026-plan')
 
 
 # ------ timestamps

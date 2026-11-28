@@ -504,6 +504,15 @@ path in the checkout stays out of the routine: the one there is,
 read outside the settings file is the lookup of a named `timestamp.timezone` in
 the interpreter's zone database.
 
+`init`, `update`, `new` and `lint` then call `self._warn_settings()`, which
+emits a `settings_warning` notice for each setting the file holds to no effect,
+ahead of every other notice: `update`, `new` and `lint` straight after the
+check, `init` once it has written its seed. No other operation calls it and no
+settings property emits a notice, so `read`, `search`, `match`, `map`,
+`update_config`, the merge driver's engines and a linked wiki's stay silent. The
+keys the file may hold are the `Wiki.settings_keys` table; a new settings key
+joins the table and `docs/configuration.rst` together.
+
 ### Shell Scripts
 
 The only shell script in the `wiki/` package is `_assets/git/merge_index.sh`,
