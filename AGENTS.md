@@ -35,8 +35,9 @@ commands arrive one at a time, and `parity/ported.toml` lists the ones the
 binary has; beside them it holds `install` and `completion`.
 
 The workspace has five crates, each the home of one piece of the port.
-Dependencies point one way: the binary depends on the engine, the engine on the
-page format, and each of them on the two crates that know nothing about wikis.
+Dependencies point one way, up the list below: the first two crates know nothing
+about wikis, and each of the three others depends only on crates listed before
+it, so no crate depends on `wiki-cli`.
 
 - `wiki-yaml` reads YAML as libyaml 0.2.5 does, the parser under v1's
   frontmatter loader. It is the one crate that may hold `unsafe`.
@@ -74,6 +75,9 @@ integration.
 # install the pinned Rust toolchain (reads rust-toolchain.toml)
 rustup toolchain install
 
+# install the cargo tools, at the versions the workflows' tool: lines name
+cargo install --locked cargo-nextest@<version> cargo-deny@<version> cargo-shear@<version>
+
 # install dev dependencies and the binary (creates a .venv if none is active)
 ./install.sh --groups=lint,docs,parity,type
 
@@ -89,6 +93,7 @@ cargo nextest run
 cargo test --doc
 
 # run the YAML reader's tests under Miri, on the nightly tests.yaml names
+rustup toolchain install <RUST_NIGHTLY> --component miri,rust-src
 cargo +<RUST_NIGHTLY> miri nextest run -p wiki-yaml --locked
 
 # build the oracle checkout (v1 at the commit parity/oracle.toml names), and
@@ -479,17 +484,22 @@ repository's own, where it adds to a convention and where it departs from one on
 purpose.
 
 The Rust tool template owns the tool configuration, the hooks, the four
-workflows, `pyproject.toml` and the lint table and profiles of the root
-manifest, and it seeds two crates, `wiki-core` and `wiki-cli`. `.cruft.json`
-pins it and there is no skip list, so a template change to a line this
-repository has changed comes back as a `.rej` to resolve by hand. Its own
+workflows and the lint table and profiles of the root manifest. It renders
+`pyproject.toml` and the rest of the root manifest, which are then the
+repository's to change, and it seeds two crates, `wiki-core` and `wiki-cli`.
+`.cruft.json` pins it and there is no skip list, so a template change to a line
+this repository has changed comes back as a `.rej` to resolve by hand. Its own
 additions therefore sit beside the rendered content: the integration branches in
-the trigger lists of the workflows; the jobs `parity`, `perturbation`, `suite`,
-`miri`, `nightly` and `issue` in `tests.yaml`, and `contracts` and the build-id
-step of the `wheels` job in `build.yaml`; one block of entries after the
-template's in `clippy.toml`; its hooks and the `mdformat-wiki` swap in
-`.pre-commit-config.yaml`; and its entries in `pyproject.toml`, `.gitattributes`
-and `docs/conf.py`. In `tests.yaml` each of those jobs that runs on a pull
+the trigger lists of the workflows; `schedule` and `workflow_dispatch` under
+`on:`, the `RUST_NIGHTLY` variable and the jobs `parity`, `perturbation`,
+`suite`, `miri`, `nightly` and `issue` in `tests.yaml`; `contracts` and the
+build-id step of the `wheels` job in `build.yaml`; one block of entries after
+the template's in `clippy.toml`; its hooks in `.pre-commit-config.yaml`; and its
+entries in `pyproject.toml` and `.gitattributes`. These changes replace a
+rendered line and do not sit beside one: the `needs` line of the `publish` job
+in `build.yaml`, which names `contracts`; the `mdformat-wiki` swap in
+`.pre-commit-config.yaml`; and the stylesheet and icon-link settings of
+`docs/conf.py`. In `tests.yaml` each of the added jobs that runs on a pull
 request carries a guard that keeps it off the schedule and a dispatch, and the
 `nightly` job carries the opposite guard; no added job carries a YAML comment.
 The three other crates are the repository's own files. A seed file takes a
@@ -508,17 +518,18 @@ arguments are parsed, because clap ends a run itself on a usage error or a
 request for help, and only once the bundled SQLite has matched a row of a
 full-text table, so a binary whose C code does not work leaves none.
 
-- **Look-alike calls are disallowed before their helpers exist.** The block of
-  entries in `clippy.toml` disallows the calls whose results differ from
-  Python's: trimming, whitespace splitting and tests, `lines`, the Unicode
-  property and case methods, `canonicalize`, and the constructors of `regex` and
-  `fancy_regex`. Each reason names the crate that holds Python's form,
-  `wiki-pytext`, and no helper function, so an entry is in force before its
-  helper is written and no look-alike call is written first. The function of
-  `wiki-pytext` that is the home of such a call carries
-  `#[expect(clippy::disallowed_methods, reason = "...")]`, and so does a seed or
-  test function that makes the call on text or a path no rule of a wiki covers.
-  No entry catches a regex built through a trait (`str::parse`,
+- **Look-alike calls are disallowed in every crate.** The block of entries in
+  `clippy.toml` disallows the calls whose results differ from Python's:
+  trimming, whitespace splitting and tests, `lines`, the Unicode property and
+  case methods, `canonicalize`, and the constructors of `regex` and
+  `fancy_regex`. An entry is in force before its helper is written, so that no
+  look-alike call is written first, and until then its reason names the crate
+  that holds Python's form, `wiki-pytext`. A change that writes a helper also
+  changes the reason of each entry the helper replaces, so that the reason names
+  the helper. The function of `wiki-pytext` that is the home of such a call
+  carries `#[expect(clippy::disallowed_methods, reason = "...")]`, and so does a
+  seed or test function that makes the call on text or a path no rule of a wiki
+  covers. No entry catches a regex built through a trait (`str::parse`,
   `FromStr::from_str`, `TryFrom::try_from`): build every pattern through the
   regex gateway of `wiki-pytext`.
 - **Ported code takes Rust's shapes.** No integer sentinel, no kind carried as a
