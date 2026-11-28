@@ -470,6 +470,93 @@ See `Cargo.toml` for the lint table, `clippy.toml` for the linter config, and
 the `cargo-fmt` hook in `.pre-commit-config.yaml` for the formatter config.
 `pyproject.toml` holds the formatter and linter config of `parity/`.
 
+### Rust Workspace
+
+Rust code follows the org's Rust conventions, part of the pattern reference that
+the `AGENTS.md` of the parent directory locates: read the ones that cover a
+surface before writing code for it. This section holds only what is this
+repository's own, where it adds to a convention and where it departs from one on
+purpose.
+
+The Rust tool template owns the tool configuration, the hooks, the four
+workflows, `pyproject.toml` and the lint table and profiles of the root
+manifest, and it seeds two crates, `wiki-core` and `wiki-cli`. `.cruft.json`
+pins it and there is no skip list, so a template change to a line this
+repository has changed comes back as a `.rej` to resolve by hand. Its own
+additions therefore sit beside the rendered content: the integration branches in
+the trigger lists of the workflows; the jobs `parity`, `perturbation`, `suite`,
+`miri`, `nightly` and `issue` in `tests.yaml`, and `contracts` and the build-id
+step of the `wheels` job in `build.yaml`; one block of entries after the
+template's in `clippy.toml`; its hooks and the `mdformat-wiki` swap in
+`.pre-commit-config.yaml`; and its entries in `pyproject.toml`, `.gitattributes`
+and `docs/conf.py`. In `tests.yaml` each of those jobs that runs on a pull
+request carries a guard that keeps it off the schedule and a dispatch, and the
+`nightly` job carries the opposite guard; no added job carries a YAML comment.
+The three other crates are the repository's own files. A seed file takes a
+change only where no file of the repository's own can hold it: a `mod` line, an
+`#[expect]`, a field of the configuration. Every `cruft` command runs the
+template's hook, which calls `cargo fmt`, so `cargo` must be on `PATH`.
+
+`crates/wiki-cli/build.rs` records the commit of the checkout as the build id.
+It reads git's files and never runs git, which refuses a checkout that another
+user owns; a build outside a checkout, such as one from the sdist, has no id.
+Under `WIKI_TRACE=<path>` the binary appends its identity record to the file,
+one line that holds the engine's name, its version and its build id, which is
+how the harness knows which binary it ran. The record is written before the
+arguments are parsed, because clap ends a run itself on a usage error or a
+request for help, and only once the bundled SQLite has matched a row of a
+full-text table, so a binary whose C code does not work leaves none.
+
+- **Look-alike calls are disallowed before their helpers exist.** The block of
+  entries in `clippy.toml` disallows the calls whose results differ from
+  Python's: trimming, whitespace splitting and tests, `lines`, the Unicode
+  property and case methods, `canonicalize`, and the constructors of `regex` and
+  `fancy_regex`. Each reason names the crate that holds Python's form,
+  `wiki-pytext`, and no helper function, so an entry is in force before its
+  helper is written and no look-alike call is written first. The function of
+  `wiki-pytext` that is the home of such a call carries
+  `#[expect(clippy::disallowed_methods, reason = "...")]`, and so does a seed or
+  test function that makes the call on text or a path no rule of a wiki covers.
+  No entry catches a regex built through a trait (`str::parse`,
+  `FromStr::from_str`, `TryFrom::try_from`): build every pattern through the
+  regex gateway of `wiki-pytext`.
+- **Ported code takes Rust's shapes.** No integer sentinel, no kind carried as a
+  string, no unnamed tuple of three or more fields and no collected `Vec<char>`.
+  A function ported from v1 keeps the order of v1's steps, so the two read side
+  by side; where it is long and does not split well, a short sentence labels
+  each logical block, the one case in which a Rust comment labels a block.
+- **A build script is tested as a program.** Cargo runs no test inside a build
+  script, and a test target on `build.rs` would put one file into two targets.
+  The tests of the build script (`crates/wiki-cli/tests/it/build_script.rs`)
+  compile it with the `rustc` beside the cargo that built them, once per content
+  of the script, run it as cargo does on repositories that git makes in the
+  test's own root, and read the `cargo::` lines it prints. Their helpers are
+  child modules of the CLI test harness (`tests/it/support/build_script.rs` and
+  `tests/it/support/git.rs`), so those two build a `Command` beside the helper
+  that runs the binary.
+- **A build script reads the variables cargo sets.** The binary reads its
+  environment in the configuration module alone. The build script reads
+  `CARGO_MANIFEST_DIR` when it runs, under an `#[expect]`, because its tests
+  point it at other roots through that variable.
+- **The manifests carry the license.** The template renders no license key.
+  `pyproject.toml` holds `license` and `license-files`, `[workspace.package]`
+  holds `license`, and every member inherits it with `license.workspace = true`,
+  the two seed crates included, so a new crate's manifest carries the line.
+- **v1's CLI suite is the conformance check.**
+  `python -m parity suite --engine rust` runs v1's CLI tests, unedited, from the
+  oracle checkout, with every call of a command that `parity/ported.toml` lists
+  sent to the binary, in the `suite` job of every pull request. It stays until
+  the Rust CLI tests hold the same contract.
+- **The Miri job names the components of its toolchain.** Every other
+  `rustup toolchain install` step takes no argument and reads
+  `rust-toolchain.toml`. The `miri` job installs the dated nightly that
+  `RUST_NIGHTLY` names in `tests.yaml` with `miri` and `rust-src`, which the
+  minimal profile lacks.
+- **`rusqlite` is taken without its default features.** The engine uses the
+  bundled SQLite and nothing else of the crate, so the dependency graph holds no
+  license beyond the template's three; a feature that brings one adds it to the
+  `allow` list of `deny.toml` in the same change.
+
 ### Parity Harness
 
 `parity/` compares two sides: each is an argv prefix that the harness runs under
