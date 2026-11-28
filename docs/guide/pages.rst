@@ -41,7 +41,12 @@ strict YAML reader (Obsidian's included) reads them — a value continued on
 indented lines folds into one, a quoted value decodes, a space followed by
 ``#`` starts a comment — and ``wiki lint`` reports a block a strict reader
 rejects (an unquoted ``': '`` inside a value, a duplicate key, a body that is
-not ``key: value`` pairs) as an ``invalid_yaml`` issue. Fresh frontmatter —
+not ``key: value`` pairs) as an ``invalid_yaml`` issue. Inside double quotes a
+backslash starts an escape, so LaTeX there decodes to control characters
+(``"$\frac12$"`` holds a form feed): write it in single quotes or a block
+scalar, or double each backslash. ``wiki lint`` reports a double-quoted
+``name``, ``title``, ``desc``, or ``category`` that holds a control character
+as a ``control_character`` issue. Fresh frontmatter —
 written when a bare page is adopted or when ``wiki init`` or ``wiki update``
 creates an index — contains exactly ``name``, a ``desc: ...`` placeholder,
 ``tags: []``, ``sources: []``, ``created``, and ``updated``, plus a ``title:``

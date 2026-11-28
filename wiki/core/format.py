@@ -133,6 +133,11 @@ _SHORT_ESCAPES = {
     if letter not in ('\t', ' ', '"', '/', '\\')
 }
 
+# the characters a double-quoted text field holds only as damage: the C0
+# controls, the DEL, and the line breaks NEL, LS, and PS -- what a backslash
+# escape decodes to where LaTeX was typed (\theta, \nu, \frac)
+_FIELD_CONTROLS = re.compile(r'[\x00-\x1f\x7f\x85\u2028\u2029]')
+
 # lone surrogates: text no UTF-8 writer can emit
 _SURROGATES = re.compile(r'[\ud800-\udfff]')
 
@@ -951,10 +956,50 @@ def field_text(frontmatter: str, key: str) -> Optional[str]:
     return frontmatter[start:end]
 
 
+def field_line(frontmatter: str, key: str) -> Optional[int]:
+    """Return the 1-based file line of ``key``'s key line, or ``None`` when absent.
+
+    The line :func:`_field_span` opens the field on; the block opens the
+    file, so a block line is a file line.
+    """
+    span = _field_span(frontmatter, key)
+    if span is None:
+        return None
+    start, _ = span
+    return frontmatter.count('\n', 0, start) + 1
+
+
 def is_collection_field(frontmatter: str, /, key: str) -> bool:
     """Return whether ``key`` carries a sequence or mapping in a block the parser accepts."""
     fields = _scalar_fields(frontmatter)
     return bool(fields) and (key in fields) and (fields[key] is None)
+
+
+def quoted_controls(
+    frontmatter: str,
+    /,
+    key: str,
+) -> list[tuple[str, Optional[str]]]:
+    r"""Return the control characters a double-quoted ``key`` holds in a block the parser accepts.
+
+    Each is ``(code point, escape)`` -- ``('U+000C', '\\f')``, the escape
+    ``None`` for a character with no one-letter spelling -- once per
+    character, in order of first appearance. Only a double-quoted scalar
+    decodes a backslash, so a plain, single-quoted, or block value holds
+    its text as typed and names nothing here; neither does an escape
+    that decodes to text.
+    """
+    fields = _scalar_fields(frontmatter)
+    if not fields or (fields.get(key) is None):
+        return []
+    value, style, _ = fields[key]
+    if style != '"':
+        return []
+    result = []
+    for char in dict.fromkeys(_FIELD_CONTROLS.findall(value)):
+        escape = _SHORT_ESCAPES.get(char)
+        result.append((f'U+{ord(char):04X}', f'\\{escape}' if escape else None))
+    return result
 
 
 def comment_cuts_desc(frontmatter: str) -> bool:

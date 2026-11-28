@@ -150,6 +150,12 @@ rather than authoring or auditing page by page yourself:
   block whose repair would leave a strict reader worse off (an accepted block
   rejected, or authored lines folded into a quoted value), which it leaves
   untouched.
+- **Keep LaTeX out of double quotes.** In a double-quoted value YAML reads a
+  backslash as an escape: `"$\theta$"` holds a tab, `"$\nu$"` a line break,
+  `"$\frac12$"` a form feed, and `wiki update` copies them into the H1 and the
+  parent's row. Write the value in single quotes or as a block scalar (`>-`), or
+  double each backslash. `wiki lint` fails a double-quoted `name`, `title`,
+  `desc`, or `category` that holds a control character (`control_character`).
 - **Wikilinks stay inside the wiki unless a folder is allowlisted.** Every
   wikilink (`[[...]]`) target is read from the wiki root, one rule per spelling:
   a prefix-free target (`[[core/design]]`) must name something inside the wiki;

@@ -31,6 +31,12 @@ may include breaking changes, each listed under a Breaking heading.
 - `-h` works as `--help`, on `wiki` and on every command.
 - `wiki` with no command prints the help page, on stderr, and exits 2. Before,
   it printed a usage line and `Error: Missing command.`
+- `wiki lint` reports a `name`, `title`, `desc` or `category` in double quotes
+  that holds a control character. YAML reads a backslash there as an escape, so
+  `"$\frac{1}{2}$"` holds a form feed, and `wiki update` copies it into the
+  parent index. The issue names the field, its line and each character, such as
+  `U+000C (\f)`, and says to write LaTeX in single quotes or a block scalar, or
+  to double each backslash. In `--json` its kind is `control_character`.
 
 ### Changed
 

@@ -130,6 +130,16 @@ _YAML_ADVICE = {
     ),
 }
 
+# the frontmatter fields whose value is text the generated surfaces copy: the
+# H1 and the parent's row
+_TEXT_FIELDS = ('name', 'title', 'desc', 'category')
+
+# the remedy for a backslash a double-quoted scalar reads as an escape
+_ESCAPE_ADVICE = (
+    'a backslash starts an escape inside double quotes, so write LaTeX in'
+    ' single quotes or a block scalar, or double each backslash'
+)
+
 # str.is* predicates a policy may require (applied to the name minus allow chars)
 _NAMING_PREDICATES = {
     'ascii': str.isascii,
@@ -2015,7 +2025,10 @@ class Wiki:
           or a list marker mid-sentence or directly under a
           paragraph), missing trailing periods, unparseable
           ``created:``/``updated:`` stamps (the fields are
-          tool-owned, so a parseable value is never judged), broken
+          tool-owned, so a parseable value is never judged), a control
+          character in a double-quoted ``name``, ``title``, ``desc``, or
+          ``category`` (a backslash escape decoded where LaTeX was
+          typed), broken
           index links (targets that no longer exist; ``update`` prunes
           these, so the row is also part of the file's pending diff --
           a target still on disk as a symlinked file is named as such,
@@ -2289,6 +2302,7 @@ class Wiki:
                     result.extend(self._lint_title(index_path, frontmatter))
                     result.extend(self._lint_timestamps(index_path, frontmatter))
                     result.extend(self._lint_frontmatter_yaml(index_path, frontmatter))
+                    result.extend(self._lint_field_controls(index_path, frontmatter))
                     # the root display name has no enclosing dir to validate it
                     if folder == self._root:
                         root_name = format.read_frontmatter_name(frontmatter)
@@ -2515,6 +2529,7 @@ class Wiki:
                     result.extend(self._lint_title(page, frontmatter))
                     result.extend(self._lint_timestamps(page, frontmatter))
                     result.extend(self._lint_frontmatter_yaml(page, frontmatter))
+                    result.extend(self._lint_field_controls(page, frontmatter))
                 # hand-wrap artifacts in the content and raw desc lines
                 # are hard issues
                 result.extend(
@@ -6189,6 +6204,52 @@ class Wiki:
                     path=str(relpath),
                     line=line,
                     reason=reason,
+                )
+            )
+        return result
+
+    def _lint_field_controls(
+        self: Wiki,
+        path: pathlib.Path,
+        frontmatter: str,
+    ) -> list[Issue]:
+        r"""Check no double-quoted text field holds a control character.
+
+        A double-quoted scalar reads a backslash as an escape, so LaTeX
+        typed there decodes to controls -- ``\theta`` to a tab, ``\nu`` to
+        a line break, ``\frac`` to a form feed -- which update copies into
+        the H1 and the parent's row. The generated copies are never
+        scanned, so the finding stands once, on the file that caused it.
+        An escape that decodes to text (``\u00e9``, ``\"``) is the
+        author's spelling and is not judged.
+        """
+        # initialize issues
+        result = []
+        for field in _TEXT_FIELDS:
+            controls = format.quoted_controls(frontmatter, field)
+            if not controls:
+                continue
+            # a key line the line grammar cannot place (an indented
+            # mapping) is the unaddressable check's finding, not this one
+            line = format.field_line(frontmatter, field)
+            if line is None:
+                continue
+            # alias relative path
+            relpath = path.relative_to(self._root)
+            # name each character by its code point, with the escape that
+            # spells it where one letter does
+            named = ', '.join(
+                f'{code} ({escape})' if escape else code for code, escape in controls
+            )
+            result.append(
+                Issue(
+                    f'{relpath}: Control character in {field} (line {line}):'
+                    f' {named}; {_ESCAPE_ADVICE}',
+                    kind='control_character',
+                    path=str(relpath),
+                    field=field,
+                    line=line,
+                    characters=[code for code, _ in controls],
                 )
             )
         return result

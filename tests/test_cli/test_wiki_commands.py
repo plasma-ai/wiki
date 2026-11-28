@@ -89,6 +89,7 @@ __all__ = [
     'test_lint_summary_counts_notes',
     'test_lint_condenses_repeated_notes',
     'test_lint_json_reports_typed_findings',
+    'test_lint_fails_on_latex_in_a_double_quoted_desc',
     'test_lint_types_resolver_diagnostics',
     'test_lint_error_exits_two',
     'test_lint_error_keeps_the_notes_before_it',
@@ -2510,6 +2511,42 @@ def test_lint_json_reports_typed_findings(tmp_path: pathlib.Path) -> None:
     # --json owns the report shape; the prose modes cannot combine with it
     both = _wiki(root, 'lint', '--path', str(root), '--json', '--count')
     assert both.returncode == 2
+
+
+def test_lint_fails_on_latex_in_a_double_quoted_desc(tmp_path: pathlib.Path) -> None:
+    r"""LaTeX in a double-quoted desc fails lint, in prose and in ``--json``.
+
+    YAML decodes ``\nu``, ``\theta``, and ``\frac`` there to a line
+    break, a tab, and a form feed, which update has copied into the
+    parent's row: lint exits 1 on the one issue, and the document types
+    it with the field, the line, and the characters.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    desc = '"Bound on $\\nu$ and $\\theta$ and $\\frac12$."'
+    _write(root / 'bound.md', _page('bound', desc, 'Body.'))
+    assert _wiki(root, 'update', '--path', str(root)).returncode == 0
+
+    prose = _wiki(root, 'lint', '--path', str(root))
+    assert prose.returncode == 1
+    assert prose.stdout.splitlines()[0] == (
+        'bound.md: Control character in desc (line 3): U+000A (\\n), U+0009 (\\t),'
+        ' U+000C (\\f); a backslash starts an escape inside double quotes, so write'
+        ' LaTeX in single quotes or a block scalar, or double each backslash'
+    )
+    as_json = _wiki(root, 'lint', '--path', str(root), '--json')
+    assert as_json.returncode == 1
+    assert json.loads(as_json.stdout)['issues'] == [
+        {
+            'severity': 'issue',
+            'kind': 'control_character',
+            'path': 'bound.md',
+            'field': 'desc',
+            'line': 3,
+            'characters': ['U+000A', 'U+0009', 'U+000C'],
+            'text': prose.stdout.splitlines()[0],
+        }
+    ]
 
 
 def test_lint_types_resolver_diagnostics(tmp_path: pathlib.Path) -> None:

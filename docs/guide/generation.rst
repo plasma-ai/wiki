@@ -389,6 +389,22 @@ its meaning:
    mapping (``no strict reader finds key: value pairs in it``). Quote the
    value, drop the duplicate, or rewrite the block.
 
+``Control character in <field> (line N): <characters>; <advice>``
+   A double-quoted ``name:``, ``title:``, ``desc:``, or ``category:`` holds a
+   control character: a C0 control (a tab and a line break included), DEL,
+   U+0085, U+2028, or U+2029. YAML reads a backslash inside double quotes as
+   an escape, so LaTeX typed there decodes — ``\theta`` opens with a tab,
+   ``\nu`` with a line break, ``\frac`` with a form feed — and update copies
+   the result into the H1 and the parent index's row. Each character is named
+   once by its code point, with the one-letter escape that spells it where it
+   has one (``U+000C (\f)``); N is the field's key line. The advice is ``a
+   backslash starts an escape inside double quotes, so write LaTeX in single
+   quotes or a block scalar, or double each backslash``. An escape that decodes
+   to text (``\u00e9``, ``\"``) is not reported, and neither are the generated
+   copies: the finding stands once, on the file that holds the field. Typed
+   ``control_character`` in ``--json``, with ``path``, ``field``, ``line``, and
+   ``characters`` (the code points) fields.
+
 ``Empty or truncated index (no frontmatter); restore it from git or delete it to rebuild``
    An emptied or truncated ``_index.md``; update keeps it as-is. Restore or
    delete it.

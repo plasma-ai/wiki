@@ -65,6 +65,9 @@ __all__ = [
     'test_lint_reports_one_issue_for_what_update_refuses',
     'test_lint_reports_deep_nesting_instead_of_crashing',
     'test_lint_reports_an_escape_naming_no_character',
+    'test_lint_flags_a_control_character_in_a_double_quoted_field',
+    'test_lint_keeps_a_quoted_field_that_decodes_to_text',
+    'test_lint_judges_every_text_field_for_control_characters',
     'test_lint_invalid_yaml_yields_to_merge_states',
     'test_lint_names_a_comment_truncated_desc',
     'test_valueless_desc_draws_only_its_repair_diff',
@@ -290,11 +293,12 @@ def test_lint_issues_are_typed(tmp_path: pathlib.Path) -> None:
         '---\nname: malformed\ndesc: A page.\n\n# malformed\n\nBody.\n',
         encoding='utf-8',
     )
-    # a period-less desc, an unparseable stamp, both wrap mangles, a directory
-    # link, a relative link, an absolute link, an outside link, and a dangling
-    # region marker on one messy page
+    # an escape decoded to a control character, a period-less desc, an
+    # unparseable stamp, both wrap mangles, a directory link, a relative link,
+    # an absolute link, an outside link, and a dangling region marker on one
+    # messy page
     (tmp_path / 'data' / 'messy.md').write_text(
-        '---\nname: messy\ndesc: No trailing period\n'
+        '---\nname: messy\ntitle: "A \\tau"\ndesc: No trailing period\n'
         'created: not-a-stamp\n---\n\n# messy\n\n'
         'a twenty-\nclass system, that\n+ wraps into a marker.\n\n'
         f'See [[core]], [[./keep]], [[{tmp_path}/keep]], and [[../gone]] for more.\n\n'
@@ -349,6 +353,7 @@ def test_lint_issues_are_typed(tmp_path: pathlib.Path) -> None:
         'bare_page',
         'broken_link',
         'conflict_markers',
+        'control_character',
         'directory_link',
         'escaped_wikilinks',
         'excluded_link_target',
@@ -1277,6 +1282,122 @@ def test_lint_reports_an_escape_naming_no_character(
     index = (tmp_path / 'core' / '_index.md').read_text(encoding='utf-8')
     assert f'[[core/design|design]]: a{escape}b.' in index
     assert Wiki(tmp_path).update() == []
+
+
+@pytest.mark.parametrize(
+    argnames=('desc', 'named', 'characters'),
+    argvalues=[
+        (
+            '"Bound on $\\nu$ and $\\theta$ and $\\frac12$."',
+            'U+000A (\\n), U+0009 (\\t), U+000C (\\f)',
+            ['U+000A', 'U+0009', 'U+000C'],
+        ),
+        (
+            '"Stray \\x01, \\x7f, \\N, \\L and \\x01 again."',
+            'U+0001, U+007F, U+0085 (\\N), U+2028 (\\L)',
+            ['U+0001', 'U+007F', 'U+0085', 'U+2028'],
+        ),
+    ],
+    ids=['latex', 'rare-controls'],
+)
+@pytest.mark.usefixtures('_vary_loader')
+def test_lint_flags_a_control_character_in_a_double_quoted_field(
+    tmp_path: pathlib.Path,
+    desc: str,
+    named: str,
+    characters: list[str],
+) -> None:
+    r"""A double-quoted field that decodes to control characters is one issue, on its own page.
+
+    YAML reads a backslash in double quotes as an escape, so LaTeX typed
+    there decodes to a line break (``\nu``), a tab (``\theta``), and a
+    form feed (``\frac``), and update copies them into the parent's row.
+    Lint names the field, its line, and each character once, with the
+    remedy; the row that holds the copy draws no second finding.
+    """
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        f'---\nname: core/design\ndesc: {desc}\n---\n\n# core/design\n\nBody.\n',
+        encoding='utf-8',
+    )
+    wiki.update()
+
+    # one issue for the whole wiki, typed for --json
+    issues = Wiki(tmp_path).lint()
+    assert issues == [
+        f'core/design.md: Control character in desc (line 3): {named}; a backslash'
+        ' starts an escape inside double quotes, so write LaTeX in single quotes'
+        ' or a block scalar, or double each backslash'
+    ]
+    assert issues[0].kind == 'control_character'
+    assert issues[0].fields == {
+        'path': 'core/design.md',
+        'field': 'desc',
+        'line': 3,
+        'characters': characters,
+    }
+
+
+@pytest.mark.parametrize(
+    argnames='desc',
+    argvalues=[
+        "'Bound on $\\nu$ and $\\theta$ and $\\frac12$.'",
+        '>-\n  Bound on $\\nu$ and $\\theta$ and $\\frac12$.',
+        '"Bound on $\\\\nu$ and $\\\\theta$ and $\\\\frac12$."',
+        '"A caf\\u00e9."',
+        '"Say \\"x\\"."',
+    ],
+    ids=[
+        'single-quoted',
+        'block-scalar',
+        'doubled-backslashes',
+        'unicode-escape',
+        'quote-escape',
+    ],
+)
+@pytest.mark.usefixtures('_vary_loader')
+def test_lint_keeps_a_quoted_field_that_decodes_to_text(
+    tmp_path: pathlib.Path,
+    desc: str,
+) -> None:
+    """LaTeX outside double quotes, or behind doubled backslashes, and an escape that spells text all lint clean."""
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    page = tmp_path / 'core' / 'design.md'
+    page.write_text(
+        f'---\nname: core/design\ndesc: {desc}\n---\n\n# core/design\n\nBody.\n',
+        encoding='utf-8',
+    )
+    wiki.update()
+    assert Wiki(tmp_path).lint() == []
+
+
+@page_index
+def test_lint_judges_every_text_field_for_control_characters(
+    tmp_path: pathlib.Path,
+    kind: str,
+) -> None:
+    """``name``, ``title``, ``desc``, and ``category`` are each judged, in a page and in an index; another field is not."""
+    wiki = _make_wiki(tmp_path, folders={'core': ['design']})
+    name = 'design.md' if kind == 'page' else '_index.md'
+    (tmp_path / 'core' / name).write_text(
+        '---\nname: "co\\re"\ntitle: "A $\\frac12$ title"\ndesc: "On $\\theta$."\n'
+        'category: "\\beta"\ntags: ["\\tau"]\n---\n\n# x\n\n***\n\nBody.\n',
+        encoding='utf-8',
+    )
+
+    issues = [issue for issue in wiki.lint() if issue.kind == 'control_character']
+    assert [issue.fields for issue in issues] == [
+        {'path': f'core/{name}', 'field': 'name', 'line': 2, 'characters': ['U+000D']},
+        {'path': f'core/{name}', 'field': 'title', 'line': 3, 'characters': ['U+000C']},
+        {'path': f'core/{name}', 'field': 'desc', 'line': 4, 'characters': ['U+0009']},
+        {
+            'path': f'core/{name}',
+            'field': 'category',
+            'line': 5,
+            'characters': ['U+0008'],
+        },
+    ]
 
 
 def test_lint_invalid_yaml_yields_to_merge_states(tmp_path: pathlib.Path) -> None:
