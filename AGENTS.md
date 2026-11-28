@@ -638,10 +638,12 @@ read from the checkout, the version in `Cargo.toml` and the commit of `HEAD`, so
 build the wheel and the sdist at the commit they are checked at. Every install
 runs on a scratch host below the work folder, which inherits nothing and holds
 no `cargo`: the sdist and the pin are built as on a host with no Rust, which
-fetches the pinned toolchain and needs the network. A new contract of the
-package gets its check in `CHECKS` and its row in the spec's table. A check that
-no wheel can fail proves nothing, so `parity/tests/test_contracts.py` doctors a
-stand-in wheel in the one thing each check holds.
+fetches the pinned toolchain and needs the network. The `contracts` job of
+`build.yaml` runs the checks on the wheels that workflow builds, on macOS and on
+Linux, and the `publish` job waits for it. A new contract of the package gets
+its check in `CHECKS` and its row in the spec's table. A check that no wheel can
+fail proves nothing, so `parity/tests/test_contracts.py` doctors a stand-in
+wheel in the one thing each check holds.
 
 `python -m parity container` runs one command in the Linux container
 (`parity/container.py`, `parity/Dockerfile`): the Ubuntu release of the CI
