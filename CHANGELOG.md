@@ -14,9 +14,30 @@ may include breaking changes, each listed under a Breaking heading.
   128 levels deep and a key named twice in one object are refused with a message
   that names the cause. Before, wiki read such a file, kept only the last of two
   equal keys, and `init --settings` could write a file that is not JSON.
+- Every command that reads policy (`wiki update`, `wiki new`, `wiki lint`,
+  `wiki map`, `wiki search` and `wiki match`) checks the whole settings file
+  before it does anything else, so `wiki update --check` no longer passes on a
+  file that `wiki lint` or `wiki map` refuses. The blocks are checked in the
+  order the documentation lists them, and the first one at fault is named.
+  `wiki read`, `wiki config` and the merge driver still run on a wiki with a
+  broken block they do not use.
+- A `naming.min_length` above `naming.max_length` is a settings error that names
+  both keys. Before, every name was skipped and `wiki update` pruned every index
+  row.
+- An `exclude.patterns` entry that holds `[^` is refused, with a pointer to
+  `[!...]`, the spelling that negates a class. Before, `[^a]` matched `a`, the
+  opposite of gitignore.
 
 ### Fixed
 
+- A settings error shows the wrong value as JSON: `got null` and
+  `got {"a": true}`, where it printed Python's `None` and `{'a': True}`. A value
+  longer than 80 characters is cut there with `...`. An entry of
+  `naming.validate` or `naming.reserved` that is not a string gets a settings
+  error that names the key, such as
+  `naming.reserved entry must be a string, got ["x"] in .wiki/settings.json.`,
+  in place of a raw Python error or, for a number in `naming.reserved`, no error
+  at all.
 - A `.wiki/settings.json` that cannot be read (no permission, a folder or a
   symlink loop at its path, a byte-order mark) gets an error that names the file
   and the cause, such as `Cannot read .wiki/settings.json (Permission denied).`,

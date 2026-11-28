@@ -71,6 +71,9 @@ _PINNED_YEARS = (1001, 9998)
 # since every map row and parent index link reproduces the whole desc
 _DESC_NOTE_CHARS = 500
 
+# how much of a wrong settings value an error prints before cutting it
+_VALUE_CHARS = 80
+
 # closing words shared by the index merge driver's repair hints, which it
 # plants above the first conflict marker (_assets/git/merge_index.sh)
 _MERGE_HINT_TAIL = 'delete this line when resolving -->'
@@ -258,9 +261,14 @@ class Wiki:
         if not isinstance(validate, list):
             raise ValueError(
                 f'naming.validate must be a list of predicate names, got'
-                f' {validate!r} in {WIKI_SETTINGS}.'
+                f' {_as_json(validate)} in {WIKI_SETTINGS}.'
             )
         for predicate in validate:
+            if not isinstance(predicate, str):
+                raise ValueError(
+                    f'naming.validate entry must be a string, got'
+                    f' {_as_json(predicate)} in {WIKI_SETTINGS}.'
+                )
             if predicate not in _NAMING_PREDICATES:
                 options = ', '.join(_NAMING_PREDICATES)
                 raise ValueError(
@@ -275,7 +283,7 @@ class Wiki:
         elif (type(min_length) is not int) or (min_length < 1):
             raise ValueError(
                 f'naming.min_length must be an int >= 1 or null, got'
-                f' {min_length!r} in {WIKI_SETTINGS}.'
+                f' {_as_json(min_length)} in {WIKI_SETTINGS}.'
             )
         # max_length is null (no cap) or a positive int
         max_length = policy['max_length']
@@ -283,26 +291,38 @@ class Wiki:
             if (type(max_length) is not int) or (max_length < 1):
                 raise ValueError(
                     f'naming.max_length must be an int >= 1 or null, got'
-                    f' {max_length!r} in {WIKI_SETTINGS}.'
+                    f' {_as_json(max_length)} in {WIKI_SETTINGS}.'
+                )
+            # a minimum above the maximum admits no name at all
+            if min_length > max_length:
+                raise ValueError(
+                    f'naming.min_length ({min_length}) must not exceed'
+                    f' naming.max_length ({max_length}) in {WIKI_SETTINGS}.'
                 )
         # deny/allow are strings of characters; reserved is a list of names
         for leaf in ('deny', 'allow'):
             if not isinstance(policy[leaf], str):
                 raise ValueError(
                     f'naming.{leaf} must be a string of characters, got'
-                    f' {policy[leaf]!r} in {WIKI_SETTINGS}.'
+                    f' {_as_json(policy[leaf])} in {WIKI_SETTINGS}.'
                 )
         reserved = policy['reserved']
         if not isinstance(reserved, list):
             raise ValueError(
                 f'naming.reserved must be a list of strings, got'
-                f' {reserved!r} in {WIKI_SETTINGS}.'
+                f' {_as_json(reserved)} in {WIKI_SETTINGS}.'
             )
+        for entry in reserved:
+            if not isinstance(entry, str):
+                raise ValueError(
+                    f'naming.reserved entry must be a string, got'
+                    f' {_as_json(entry)} in {WIKI_SETTINGS}.'
+                )
         leading_digits = policy['leading_digits']
         if not isinstance(leading_digits, bool):
             raise ValueError(
                 f'naming.leading_digits must be a boolean, got'
-                f' {leading_digits!r} in {WIKI_SETTINGS}.'
+                f' {_as_json(leading_digits)} in {WIKI_SETTINGS}.'
             )
         # always deny the path separator, index delimiter, and link/markdown grammar
         deny = set(policy['deny'])
@@ -321,7 +341,7 @@ class Wiki:
             if not isinstance(pattern, str):
                 raise ValueError(
                     f'naming.pattern must be a string or null, got'
-                    f' {pattern!r} in {WIKI_SETTINGS}.'
+                    f' {_as_json(pattern)} in {WIKI_SETTINGS}.'
                 )
             try:
                 pattern = re.compile(pattern)
@@ -366,7 +386,8 @@ class Wiki:
             format = '%Y-%m-%dT%H:%M:%SZ'
         if not isinstance(format, str):
             raise ValueError(
-                f'timestamp.format must be a string, got {format!r} in {WIKI_SETTINGS}.'
+                f'timestamp.format must be a string, got'
+                f' {_as_json(format)} in {WIKI_SETTINGS}.'
             )
         # a blank or multi-line value would corrupt the YAML frontmatter -- reject
         # an empty/whitespace format, strftime's %n/%t newline/tab directives, and
@@ -375,13 +396,13 @@ class Wiki:
         if not format.strip() or any(token in format for token in breakers):
             raise ValueError(
                 f'timestamp.format must render a single non-empty line, got'
-                f' {format!r} in {WIKI_SETTINGS}.'
+                f' {_as_json(format)} in {WIKI_SETTINGS}.'
             )
         timezone = override.get('timezone')
         if (timezone is not None) and not isinstance(timezone, str):
             raise ValueError(
                 f'timestamp.timezone must be a string or null, got'
-                f' {timezone!r} in {WIKI_SETTINGS}.'
+                f' {_as_json(timezone)} in {WIKI_SETTINGS}.'
             )
         if timezone:
             try:
@@ -414,18 +435,20 @@ class Wiki:
         if (type(desc_limit) is not int) or (desc_limit < -1):
             raise ValueError(
                 f'map.desc_limit must be an int >= -1 or null, got'
-                f' {desc_limit!r} in {WIKI_SETTINGS}.'
+                f' {_as_json(desc_limit)} in {WIKI_SETTINGS}.'
             )
         # indent is the per-level unit; ellipsis marks a truncated desc
         indent = override.get('indent', '  ')
         if not isinstance(indent, str):
             raise ValueError(
-                f'map.indent must be a string, got {indent!r} in {WIKI_SETTINGS}.'
+                f'map.indent must be a string, got'
+                f' {_as_json(indent)} in {WIKI_SETTINGS}.'
             )
         ellipsis = override.get('ellipsis', '...')
         if not isinstance(ellipsis, str):
             raise ValueError(
-                f'map.ellipsis must be a string, got {ellipsis!r} in {WIKI_SETTINGS}.'
+                f'map.ellipsis must be a string, got'
+                f' {_as_json(ellipsis)} in {WIKI_SETTINGS}.'
             )
         return {'desc_limit': desc_limit, 'indent': indent, 'ellipsis': ellipsis}
 
@@ -448,7 +471,7 @@ class Wiki:
         if not isinstance(required, bool):
             raise ValueError(
                 f'titles.required must be a boolean, got'
-                f' {required!r} in {WIKI_SETTINGS}.'
+                f' {_as_json(required)} in {WIKI_SETTINGS}.'
             )
         return required
 
@@ -469,7 +492,8 @@ class Wiki:
         strict = override.get('strict', False)
         if not isinstance(strict, bool):
             raise ValueError(
-                f'lint.strict must be a boolean, got {strict!r} in {WIKI_SETTINGS}.'
+                f'lint.strict must be a boolean, got'
+                f' {_as_json(strict)} in {WIKI_SETTINGS}.'
             )
         return strict
 
@@ -495,7 +519,7 @@ class Wiki:
         if not isinstance(patterns, list):
             raise ValueError(
                 f'exclude.patterns must be a list of glob strings, got'
-                f' {patterns!r} in {WIKI_SETTINGS}.'
+                f' {_as_json(patterns)} in {WIKI_SETTINGS}.'
             )
         # compile each pattern, keeping its text as written so a match
         # names its cause; the segment checks mirror the grammar the
@@ -506,7 +530,7 @@ class Wiki:
             if not isinstance(pattern, str):
                 raise ValueError(
                     f'exclude.patterns entry must be a string, got'
-                    f' {pattern!r} in {WIKI_SETTINGS}.'
+                    f' {_as_json(pattern)} in {WIKI_SETTINGS}.'
                 )
             stripped = pattern[:-1] if pattern.endswith('/') else pattern
             body = stripped[1:] if stripped.startswith('/') else stripped
@@ -517,6 +541,8 @@ class Wiki:
                 reason = "negation ('!') is not supported"
             elif '\\' in pattern:
                 reason = "use '/' as the separator (no '\\')"
+            elif '[^' in pattern:
+                reason = "'[^' does not negate a class (use '[!...]')"
             elif '' in segments:
                 reason = "empty segment ('//')"
             elif ('.' in segments) or ('..' in segments):
@@ -585,7 +611,7 @@ class Wiki:
         if not isinstance(external, list):
             raise ValueError(
                 f'links.external must be a list of folder paths, got'
-                f' {external!r} in {WIKI_SETTINGS}.'
+                f' {_as_json(external)} in {WIKI_SETTINGS}.'
             )
         # contain each folder lexically, keeping its text as written so a
         # note names its cause; the segment grammar mirrors exclude.patterns,
@@ -596,7 +622,7 @@ class Wiki:
             if not isinstance(folder, str):
                 raise ValueError(
                     f'links.external entry must be a string, got'
-                    f' {folder!r} in {WIKI_SETTINGS}.'
+                    f' {_as_json(folder)} in {WIKI_SETTINGS}.'
                 )
             stripped = folder[:-1] if folder.endswith('/') else folder
             segments = stripped.split('/')
@@ -628,8 +654,6 @@ class Wiki:
                 reason = 'names the whole filesystem'
             elif joined.is_relative_to(self._root):
                 reason = 'inside the wiki root (in-wiki links need no allowlist)'
-            elif pathlib.Path(os.path.realpath(joined)).is_relative_to(self._root):
-                reason = 'resolves inside the wiki root through an alias'
             else:
                 reason = None
             if reason is not None:
@@ -642,6 +666,43 @@ class Wiki:
                 continue
             result.append((folder, joined))
         return result
+
+    def _validate_settings(self: Wiki) -> None:
+        """Validate every ``settings.json`` block, in the documented order.
+
+        An operation that reads policy runs this first -- before it
+        resolves a scope, walks, emits a notice, or writes -- so a
+        malformed block fails each of them alike, whichever blocks it goes
+        on to use. ``read``, ``update_config``, and the merge driver's
+        entry points never run it: each reads only the blocks it uses, so
+        a page stays readable, the repair runnable, and a merge settled on
+        a wiki with a malformed block elsewhere. No check here reads a
+        path in or around the wiki (see
+        :meth:`_refuse_aliased_link_folders`). One leaves the settings
+        text: a named ``timestamp.timezone`` is looked up in the
+        interpreter's zone database, so that verdict can differ by machine.
+        """
+        self._naming_policy  # noqa: B018
+        self._timestamp_policy  # noqa: B018
+        self._map_policy  # noqa: B018
+        self._titles_required  # noqa: B018
+        self._lint_strict  # noqa: B018
+        self._exclude_policy  # noqa: B018
+        self._links_policy  # noqa: B018
+
+    def _refuse_aliased_link_folders(self: Wiki) -> None:
+        """Refuse a ``links.external`` folder a symlink leads back into the wiki.
+
+        The one settings check that follows a path in the checkout, so it
+        stays out of :meth:`_validate_settings`: a symlink differs from
+        one checkout to the next.
+        """
+        for folder, joined in self._links_policy:
+            if pathlib.Path(os.path.realpath(joined)).is_relative_to(self._root):
+                raise ValueError(
+                    f'Invalid links.external folder {folder!r}: resolves inside'
+                    f' the wiki root through an alias in {WIKI_SETTINGS}.'
+                )
 
     @functools.cached_property
     def _gitignore_fence(self: Wiki) -> frozenset[str]:
@@ -1021,8 +1082,6 @@ class Wiki:
         or an entry may name a file: the links into it are neither live
         nor stale, so lint names the entry once (soft) and the link scan
         passes over targets under it rather than noting every one.
-        Reading the policy here also validates the block on every run,
-        links or none.
         """
         for folder, joined in self._links_policy:
             if not os.path.isdir(joined):
@@ -1251,19 +1310,12 @@ class Wiki:
         # validate the seeded policies BEFORE any filesystem write: a rejected
         # seed must fail cleanly rather than strand a wiki whose settings.json
         # every later command (and re-init, which never overwrites it) rejects
+        self._validate_settings()
+        self._refuse_aliased_link_folders()
         name = name or self._root.name
         violation = self._name_violation(name)
         if violation is not None:
             raise ValueError(f'Invalid wiki name {name!r}: {violation}')
-        # the titles, map, exclude, links, and lint policies are read lazily
-        # (first inside the plan, the map render, the walk, lint's folder
-        # check, and lint's link scan), so touch them here to reject
-        # a bad seed early
-        self._titles_required  # noqa: B018
-        self._map_policy  # noqa: B018
-        self._exclude_policy  # noqa: B018
-        self._links_policy  # noqa: B018
-        self._lint_strict  # noqa: B018
         # alias current timestamp
         now = self._utc_now()
         # initialize wiki root
@@ -1600,6 +1652,8 @@ class Wiki:
             the parent folder is outside the scope.
 
         """
+        # check every settings block before anything else
+        self._validate_settings()
         # resolve the scope first, so a bad entry fails before the write
         # sweeps below mutate anything
         if name:
@@ -1735,6 +1789,8 @@ class Wiki:
                 checked before the write, with nothing created.
 
         """
+        # check every settings block before anything else
+        self._validate_settings()
         # the authored inputs are the point: refuse placeholders outright,
         # never stub them
         desc = desc.strip()
@@ -1950,6 +2006,10 @@ class Wiki:
             ``kind`` and per-kind payload ``fields``.
 
         """
+        # check every settings block before anything else, then the one
+        # links.external rule that follows a path on disk
+        self._validate_settings()
+        self._refuse_aliased_link_folders()
         # resolve folder
         if name:
             folder = self._resolve_folder(name)
@@ -1968,17 +2028,14 @@ class Wiki:
         # inside a repository the untrackable-row note walks the scope and the
         # plan reads that walk (nothing between the walk and the plan touches
         # the walked tree); outside one there is no note, and the plan walks
-        # for itself once the links policy below is read
+        # for itself
         walk = None
         if self._in_repository():
             walk = self._walk(folder)
             self._warn_untrackable_rows(walk)
         # a links.external entry naming no folder on this machine is one note
-        # per run, not one per link; reading the policy here also fails a
-        # malformed block before the plan, links or none
+        # per run, not one per link
         self._warn_missing_link_folders()
-        # a malformed lint block fails here too, stale links or none
-        self._lint_strict  # noqa: B018
         # compute what update would write (the source of truth for drift); the
         # blocks the planners keep as written come back as notices, keyed here
         # by path like the overlay, so lint names the refusals update applies
@@ -2476,6 +2533,8 @@ class Wiki:
             then by path among equal scores.
 
         """
+        # check every settings block before anything else
+        self._validate_settings()
         # resolve folder
         if name:
             folder = self._resolve_folder(name)
@@ -2540,6 +2599,8 @@ class Wiki:
             tuples. Line numbers are 1-based.
 
         """
+        # check every settings block before anything else
+        self._validate_settings()
         # compile pattern
         flags = re.IGNORECASE if ignore_case else 0
         regex = re.compile(pattern, flags)
@@ -2663,6 +2724,8 @@ class Wiki:
             Indented tree string.
 
         """
+        # check every settings block before anything else
+        self._validate_settings()
         if isinstance(category, str):
             category = [category]
         # resolve the desc limit (argument > map.desc_limit setting,
@@ -7036,6 +7099,18 @@ def _malformed_json_error(name: str, e: Exception) -> ValueError:
 def _unreadable_settings_error(reason: str) -> ValueError:
     """Build the unreadable-settings error, naming the file and the cause."""
     return ValueError(f'Cannot read {WIKI_SETTINGS} ({reason}).')
+
+
+def _as_json(value: Any) -> str:
+    """Return a wrong settings value as the JSON a settings error prints.
+
+    The value reads in the settings file's own notation (``null``,
+    ``true``), and a long one is cut so the error stays one legible line.
+    """
+    text = json.dumps(value)
+    if len(text) > _VALUE_CHARS:
+        return text[:_VALUE_CHARS] + '...'
+    return text
 
 
 def _read_vault_json(target: pathlib.Path) -> Any:

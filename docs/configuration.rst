@@ -88,7 +88,28 @@ each malformed, and the message names the cause (``Malformed JSON in
 .wiki/settings.json: duplicate key 'exclude'``). The recognized blocks —
 ``naming``, ``timestamp``, ``map``, ``titles``, ``lint``, ``exclude``, and
 ``links`` — are all optional, all objects. Unknown top-level keys are ignored,
-but a wrong-typed known block or key is an error naming the file and key.
+but a wrong-typed known block or key is an error naming the file and key. The
+error shows the wrong value as JSON
+(``map.indent must be a string, got null in .wiki/settings.json.``), and cuts
+a value longer than 80 characters there with ``...``.
+
+``wiki update`` (``--check`` included), ``wiki new``, ``wiki lint``,
+``wiki map``, ``wiki search`` and ``wiki match`` check the whole file before
+they do anything else: every block, in the order above, whichever blocks the
+command goes on to use. The first block at fault is named and the command
+exits 2 before it resolves a scope, walks a folder or writes a file, and
+after no note but those about locating the wiki and the ``WIKI_FREEZE_TIME``
+line, so ``wiki update --check`` never passes on a file that ``wiki lint`` or
+``wiki map`` refuses. Three paths read only the blocks they use and keep
+running on a wiki with a broken block elsewhere: ``wiki read``, so a page
+stays readable; ``wiki config``, so the repair command stays runnable; and
+the merge driver, so a merge still settles stamps. The check reads the
+settings file and no other file in or around the wiki. A ``timestamp.timezone``
+name is checked against the machine's zone database, so a zone one machine
+knows can be refused on another. The one check that follows a path in the
+checkout — a ``links.external`` folder that resolves inside the wiki through a
+symlink — is left to ``wiki lint`` and ``wiki init``, since a symlink differs
+from one checkout to the next.
 
 A file that cannot be read fails the same commands with
 ``Cannot read .wiki/settings.json (<reason>).`` The reason is the system's own
@@ -148,7 +169,7 @@ rules are opt-in. An entry whose name breaks the policy is skipped by
    name after removing any ``allow`` characters: ``ascii``, ``alpha``,
    ``alphanum``, or ``identifier`` (each maps to the corresponding
    Python ``str.is*`` check). Unknown names are rejected when the policy
-   loads.
+   loads, as is an entry that is not a string.
 
 ``naming.allow``
    String of characters, default ``""``. Characters stripped from the name
@@ -178,7 +199,8 @@ predicates sets ``"allow": "."``.
 
 ``naming.max_length``
    Integer ``>= 1`` or ``null``, default ``null``. Maximum name length;
-   ``null`` means no cap.
+   ``null`` means no cap. A ``min_length`` above the ``max_length`` is an
+   error naming both keys, since no name could pass.
 
 ``naming.leading_digits``
    Boolean, default ``true``. Only affects the ``identifier`` predicate: when
@@ -186,7 +208,8 @@ predicates sets ``"allow": "."``.
 
 ``naming.reserved``
    List of strings, default ``[]``. Names rejected outright. ``_index`` is
-   always reserved regardless of this list.
+   always reserved regardless of this list. An entry that is not a string is
+   rejected when the policy loads.
 
 Where the ``naming`` keys require integers, booleans are rejected — the
 checks are exact-type.
@@ -302,7 +325,9 @@ content (dot-paths read the same way).
    - Within a segment, ``*``, ``?``, and ``[...]`` never cross ``/``.
      Classes are fnmatch-style (``[!...]`` negates); a reversed range
      like ``[z-a]`` matches nothing. An embedded ``**`` (``a**b``)
-     collapses to ``*``.
+     collapses to ``*``. A pattern holding ``[^`` is rejected: gitignore
+     reads ``[^a]`` as "not ``a``", and the message names ``[!...]``, the
+     spelling that negates here.
    - No negation (a leading ``!`` is rejected; the syntax is reserved) and
      no escapes (``\`` is rejected — ``/`` is the separator). Empty or
      whitespace-only patterns, empty segments (``//``), and ``.``/``..``
@@ -402,9 +427,10 @@ a lint rule and nothing more: ``wiki read``, ``wiki map``, ``wiki match``,
 ``wiki search``, ``wiki update``, and ``wiki new`` stay confined to the wiki
 root (a name under a listed folder still fails with ``Path is outside wiki
 root``), generated index rows never carry an external target, and ``wiki map``
-never shows an external folder. ``wiki lint`` reads the block on every run,
-links or none; ``wiki update`` never reads it; ``wiki init`` validates a block
-passed through ``--settings`` but seeds none.
+never shows an external folder. Every command that reads policy validates the
+block with the rest of the settings file, links or none, and only ``wiki lint``
+acts on it; ``wiki init`` validates a block passed through ``--settings`` but
+seeds none.
 
 .. code-block:: json
 
@@ -446,9 +472,11 @@ its links.
      ``~`` path; a ``\`` separator; a ``#``, ``|``, ``[``, ``]``, or NUL
      character (no wikilink target can carry one); an empty segment
      (``//``); a ``.`` segment; a ``..`` segment anywhere but the start; a
-     path naming the whole filesystem; a path inside the wiki root (an
-     in-wiki link needs no allowlist); and a path that resolves inside the
-     wiki root through a symlink alias.
+     path naming the whole filesystem; and a path inside the wiki root (an
+     in-wiki link needs no allowlist). ``wiki lint`` and ``wiki init`` also
+     reject a path that resolves inside the wiki root through a symlink
+     alias; the other commands leave that check out, since it depends on
+     the checkout and not on the file.
    - An entry may name a folder absent from this machine — a sibling
      checkout missing from a partial clone. ``wiki lint`` notes it once per
      run (``links.external entry '../src' names no folder on this machine;
