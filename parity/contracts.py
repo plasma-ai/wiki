@@ -29,7 +29,6 @@ from typing import Any, Optional
 from packaging.version import InvalidVersion, Version
 
 from . import binary, oracle, side
-from .runner import WIKI_SETTINGS
 from .side import Side
 
 __all__ = []
@@ -195,18 +194,13 @@ def validate(work: pathlib.Path) -> None:
     """Refuse a work folder that :func:`run` cannot use; make nothing.
 
     Raises:
-        ValueError: If a folder above ``work`` declares a wiki or is a
-            repository (an installer reads the project files above the
-            folder it runs in, and a build inside a repository takes that
-            repository's commit as its own), or if ``work`` exists.
+        ValueError: If ``work`` lies inside a repository (the build of
+            v1's wheel asks git which of its source files the repository
+            ignores, and an installer reads the settings of a project above
+            the folder it runs in), or if ``work`` exists.
 
     """
     for parent in work.resolve().parents:
-        if (parent / WIKI_SETTINGS).is_file():
-            raise ValueError(
-                f'Work folder {work} lies below {parent}, which holds'
-                f' {WIKI_SETTINGS}; choose one outside it.'
-            )
         if os.path.lexists(parent / '.git'):
             raise ValueError(
                 f'Work folder {work} lies inside the repository {parent};'

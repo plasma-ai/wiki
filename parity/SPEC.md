@@ -287,11 +287,10 @@ its daemon does not answer.
 a build of this checkout made (Contracts, below). It exits 0 when every check
 holds, and 1 otherwise. It exits 2 with a message, before it installs anything:
 on a wheel or an sdist that is no file, on a check named twice, on a work folder
-that exists, lies inside a repository or lies below a folder that holds
-`.wiki/settings.json`, on a `PATH` that holds no uv or no git, and on a system
-folder that holds a `cargo`. `--check NAME` (repeatable) picks checks; the
-default is every check. It makes `<work>/contracts`, which must not exist
-beforehand, and removes it when the run passed. It writes
+that exists or lies inside a repository, on a `PATH` that holds no uv or no git,
+and on a system folder that holds a `cargo`. `--check NAME` (repeatable) picks
+checks; the default is every check. It makes `<work>/contracts`, which must not
+exist beforehand, and removes it when the run passed. It writes
 `<out>/contracts.json`: the host with its git and its uv, the paths that differ
 from the commit among those a build reads (`dirty`), the two files, the version,
 the commit, the interpreter, v1's commit and version, and each check with its

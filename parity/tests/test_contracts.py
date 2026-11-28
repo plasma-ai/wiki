@@ -155,7 +155,6 @@ def test_wheel_that_breaks_a_contract_is_reported_by_its_checks(
     argvalues=[
         ('exists', 'exists'),
         ('repository', 'inside the repository'),
-        ('wiki', 'which holds .wiki/settings.json'),
         ('wheel', 'is no file'),
         ('uv', 'need uv on PATH'),
     ],
@@ -169,10 +168,9 @@ def test_run_that_would_check_nothing_is_refused(
 ) -> None:
     """A run that cannot check the wheel is refused before it makes anything.
 
-    A work folder that exists, or that lies inside a repository or below a
-    wiki, where an installer and a build would read files that are not the
-    run's own; a wheel that is no file; and a caller with no uv to install
-    with.
+    A work folder that exists, or that lies inside a repository, where an
+    installer and a build would read files that are not the run's own; a
+    wheel that is no file; and a caller with no uv to install with.
     """
     package = _package(tmp_path / 'package', engine)
     work = tmp_path / 'outer' / 'work'
@@ -180,10 +178,6 @@ def test_run_that_would_check_nothing_is_refused(
         work.mkdir(parents=True)
     elif broken == 'repository':
         (work.parent / '.git').mkdir(parents=True)
-    elif broken == 'wiki':
-        settings = work.parent / '.wiki' / 'settings.json'
-        settings.parent.mkdir(parents=True)
-        settings.write_text('{}', encoding='utf-8')
     elif broken == 'wheel':
         package.wheel.unlink()
     elif broken == 'uv':
