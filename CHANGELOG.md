@@ -38,6 +38,9 @@ may include breaking changes, each listed under a Breaking heading.
   with `path`, `key` and `reason` fields. `wiki read`, `search`, `match`, `map`,
   `config` and the merge driver print none. A `.wiki/wiki.py` hook that reads a
   key of its own lists it in its class's `settings_keys` table.
+- The same warning names an `exclude.patterns` entry that starts or ends with a
+  space, such as `"drafts "`. The pattern is not trimmed: the space is part of
+  it, so it leaves `drafts/` indexed.
 
 ### Changed
 

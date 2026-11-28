@@ -801,10 +801,20 @@ class Wiki:
             # a subclass's own key may hold any value
             if not isinstance(block, dict):
                 continue
-            for leaf in block:
+            for leaf, value in block.items():
                 dotted = f'{key}.{leaf}'
                 if leaf not in self.settings_keys[key]:
                     warnings.append((dotted, f'unknown key {dotted!r} (ignored)'))
+                # a pattern is matched as written, so a space at either end
+                # keeps it off the name it was typed beside
+                elif dotted == 'exclude.patterns':
+                    for pattern in value:
+                        if pattern != pattern.strip(' '):
+                            reason = (
+                                f'{dotted} entry {pattern!r} starts or ends with a'
+                                ' space (the space is part of the pattern)'
+                            )
+                            warnings.append((dotted, reason))
         for key, reason in warnings:
             self.on_settings_warning(path=WIKI_SETTINGS, key=key, reason=reason)
 

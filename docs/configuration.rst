@@ -114,8 +114,13 @@ from one checkout to the next.
 
 A setting that is accepted and does nothing draws a warning, one stderr line
 each. A key the wiki does not know is named as a dotted path:
-``.wiki/settings.json: unknown key 'exclude.pattern' (ignored)``. The key is
-still ignored, and a warning changes no exit code and no written file.
+``.wiki/settings.json: unknown key 'exclude.pattern' (ignored)``. An
+``exclude.patterns`` entry that starts or ends with a space is named too, since
+the space is part of the pattern and keeps it off the name it was typed beside:
+``.wiki/settings.json: exclude.patterns entry 'drafts ' starts or ends with a
+space (the space is part of the pattern)``. The unknown key is
+still ignored and the pattern is not trimmed, and a warning changes no exit
+code and no written file.
 ``wiki init``, ``wiki update`` (``--check`` included), ``wiki new`` and
 ``wiki lint`` print the warnings once per run, before their other notes and in
 the order the keys stand in the file. ``wiki lint`` counts each as a note, and
@@ -374,7 +379,8 @@ content (dot-paths read the same way).
      no escapes (``\`` is rejected — ``/`` is the separator). Empty or
      whitespace-only patterns, empty segments (``//``), and ``.``/``..``
      segments are rejected when the policy loads. A pattern that matches
-     nothing is not an error (the gitignore precedent).
+     nothing is not an error (the gitignore precedent). A space at either
+     end of a pattern is part of it, and draws a settings warning.
 
 The built-in exclusions need no pattern: dot-paths (including ``.wiki``),
 symlinked files and directories, and ``_index.md`` files are always

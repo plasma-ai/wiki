@@ -588,6 +588,11 @@ notes is clean — lint exits 0.
        notes, in file order. Typed ``settings_warning`` in ``--json``, with
        ``path`` (the settings file), ``key`` and ``reason`` fields (see
        :doc:`/configuration`).
+   * - ``.wiki/settings.json: exclude.patterns entry '<pattern>' starts or ends with a space (the space is part of the pattern)``
+     - The pattern is matched as written, so it excludes only a name that
+       carries the space: remove the space to exclude the name beside it.
+       A ``settings_warning`` like the unknown key, with the ``key``
+       ``exclude.patterns``.
    * - resolver diagnostics (``resolver_notice`` in ``--json``)
      - Emitted by wiki-root resolution before the walk, prefixed with the
        absolute root rather than a root-relative path: an upward resolution
@@ -683,7 +688,9 @@ verbatim, even in condensed mode:
   not indexed)`` — likewise the excluded-path and gitignored-path cause
   lines beside a prune
 - ``.wiki/settings.json: unknown key '<key>' (ignored)`` — a settings
-  warning, printed before every other line (see :doc:`/configuration`)
+  warning, printed before every other line, as is the one for an
+  ``exclude.patterns`` entry that starts or ends with a space (see
+  :doc:`/configuration`)
 - ``Restored missing .wiki/settings.json ({} -- all defaults)``
 - ``Recreated .wiki/cache/ (derived counts cache)``
 - ``<path>: indexed, but this machine's git ignores it (<source>:<line>
