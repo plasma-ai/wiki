@@ -48,6 +48,8 @@ __all__ = [
     'test_init_refuses_settings_that_are_not_strict_json',
     'test_settings_nesting_is_refused_from_128_levels',
     'test_settings_file_that_cannot_be_read_is_named_with_its_cause',
+    'test_lost_settings_file_that_git_holds_stops_every_sweep',
+    'test_missing_settings_file_that_git_does_not_hold_is_recreated',
     'test_malformed_settings_block_stops_every_policy_command',
     'test_settings_are_validated_before_the_scope',
     'test_timestamp_format_verdict_ignores_the_clock_and_the_local_zone',
@@ -331,6 +333,20 @@ _SET_OPERATOR_HINT = (
 _OFFLINE_SKIP = (
     'Skipped obsidian-front-matter-title-plugin download (OFFLINE_MODE). Re-run'
     ' `wiki config` online to finish setup.\n'
+)
+
+# the line the resolver prints for a wiki whose settings file is missing,
+# formatted with the wiki root
+_MISSING_SETTINGS_NOTICE = (
+    '{root}: .wiki/settings.json missing; restore it from git, or run'
+    ' `wiki update` to recreate it with default settings\n'
+)
+
+# the error for a missing settings file that git still holds
+_LOST_SETTINGS_ERROR = (
+    'Error: .wiki/settings.json is missing, but git still holds it. Restore it'
+    ' from git and rerun: the file is recreated with default settings only'
+    ' when git does not hold it.\n'
 )
 
 # one run of each command that reads policy, each with something to do in
@@ -957,6 +973,140 @@ def test_settings_file_that_cannot_be_read_is_named_with_its_cause(
     finally:
         if fault == 'no-permission':
             os.chmod(settings, 0o600)
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
+    argnames='staged',
+    argvalues=[False, True],
+    ids=['deleted', 'git-rm'],
+)
+def test_lost_settings_file_that_git_holds_stops_every_sweep(
+    tmp_path: pathlib.Path,
+    staged: bool,
+) -> None:
+    """A settings file lost from the working tree is not replaced while git holds it.
+
+    A sweep without the file runs on default settings and adopts what its
+    ``exclude.patterns`` kept out, so each command that plans a sweep
+    refuses and writes nothing, the dry ones too. HEAD holds the file
+    after a ``git rm`` as the index does after a plain delete. The
+    commands that only read still run.
+    """
+    _git_repo(tmp_path)
+    root = tmp_path / 'wiki'
+    seed = json.dumps({'exclude': {'patterns': ['secret']}})
+    seeded = _wiki(tmp_path, 'init', '--path', str(root), '--settings', seed)
+    assert seeded.returncode == 0, seeded.stdout + seeded.stderr
+    _write(root / 'core' / 'design.md', _page('design', 'A design.', 'Body.'))
+    # a bare page the pattern keeps out of the wiki
+    _write(root / 'secret' / 'raw.md', 'Raw notes.\n')
+    assert _wiki(tmp_path, 'update', '--path', str(root)).returncode == 0
+    assert _git(tmp_path, 'add', '-A').returncode == 0
+    assert _git(tmp_path, 'commit', '-q', '-m', 'wiki').returncode == 0
+    settings = root / '.wiki' / 'settings.json'
+    if staged:
+        assert _git(tmp_path, 'rm', '-q', str(settings)).returncode == 0
+    else:
+        settings.unlink()
+    # a bare page awaiting adoption, so a sweep that ran would show
+    _write(root / 'core' / 'draft.md', 'A draft.\n')
+    before = _tree(root)
+
+    # each command that plans a sweep refuses, and the tree stays as it was:
+    # no settings file, no adopted page, nothing indexed under secret/
+    notice = _MISSING_SETTINGS_NOTICE.format(root=root)
+    commands = (
+        ('update',),
+        ('update', '--check'),
+        ('new', 'notes', '--desc', 'Notes.', '--content', 'Body.'),
+        ('lint',),
+        ('config',),
+    )
+    for args in commands:
+        result = _wiki(tmp_path, *args, '--path', str(root))
+        assert result.returncode == 2, (args, result.stdout + result.stderr)
+        assert result.stderr == notice + _LOST_SETTINGS_ERROR, args
+        assert _tree(root) == before, args
+    assert not settings.exists()
+    assert not (root / 'secret' / '_index.md').exists()
+    # init leaves a wiki whose root index stands as it is
+    result = _wiki(tmp_path, 'init', '--path', str(root))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _tree(root) == before
+
+    # the commands that only read still run
+    for args in (('read', 'core/design'), ('map',)):
+        result = _wiki(tmp_path, *args, '--path', str(root))
+        assert result.returncode == 0, (args, result.stdout + result.stderr)
+        assert result.stderr == notice, args
+
+    # init refuses where it would write: on a wiki whose root index is gone
+    # too, and on one whose whole folder is
+    (root / '_index.md').unlink()
+    before = _tree(root)
+    result = _wiki(tmp_path, 'init', '--path', str(root))
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stderr == _LOST_SETTINGS_ERROR
+    assert _tree(root) == before
+    shutil.rmtree(root)
+    result = _wiki(tmp_path, 'init', '--path', str(root))
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stderr == _LOST_SETTINGS_ERROR
+    assert not root.exists()
+
+    # a new wiki is judged by its own path, whatever its name matches as a glob
+    fresh = tmp_path / 'wik[ia]'
+    result = _wiki(tmp_path, 'init', 'notes', '--path', str(fresh))
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+@pytest.mark.parametrize(
+    argnames='state',
+    argvalues=['no-repository', 'never-committed', 'removal-committed'],
+)
+def test_missing_settings_file_that_git_does_not_hold_is_recreated(
+    tmp_path: pathlib.Path,
+    state: str,
+) -> None:
+    """A missing settings file git holds no copy of is recreated as ``{}``.
+
+    Nothing can be restored from git here, so a writing ``update`` writes
+    the file with default settings and says so, and a dry run leaves it
+    missing. Committing the file's removal is how a wiki gives up its
+    settings for the defaults.
+    """
+    if state != 'no-repository':
+        _git_repo(tmp_path)
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    _write(root / 'core' / 'design.md', _page('design', 'A design.', 'Body.'))
+    assert _wiki(tmp_path, 'update', '--path', str(root)).returncode == 0
+    settings = root / '.wiki' / 'settings.json'
+    if state == 'never-committed':
+        assert _git(tmp_path, 'add', '--', str(root / 'core')).returncode == 0
+        assert _git(tmp_path, 'commit', '-q', '-m', 'pages').returncode == 0
+    elif state == 'removal-committed':
+        assert _git(tmp_path, 'add', '-A').returncode == 0
+        assert _git(tmp_path, 'commit', '-q', '-m', 'wiki').returncode == 0
+        assert _git(tmp_path, 'rm', '-q', '--', str(settings)).returncode == 0
+        assert _git(tmp_path, 'commit', '-q', '-m', 'no settings').returncode == 0
+    settings.unlink(missing_ok=True)
+
+    # a dry run names the missing file and leaves it missing
+    notice = _MISSING_SETTINGS_NOTICE.format(root=root)
+    check = _wiki(tmp_path, 'update', '--check', '--path', str(root))
+    assert check.returncode == 0, check.stdout + check.stderr
+    assert check.stderr == notice
+    assert not settings.exists()
+
+    # a writing run recreates it with default settings
+    result = _wiki(tmp_path, 'update', '--path', str(root))
+    assert result.returncode == 0, result.stdout + result.stderr
+    restored = 'Restored missing .wiki/settings.json ({} -- all defaults)\n'
+    assert result.stderr == notice + restored
+    assert settings.read_text(encoding='utf-8') == '{}\n'
 
 
 @pytest.mark.parametrize(

@@ -412,7 +412,8 @@ def config(
         commit both yourself). Run once per clone.
         Exits 0 even when a plugin download fails -- download failures are
         stderr warnings (re-run online to finish setup), never the exit
-        code.
+        code. A missing .wiki/settings.json that git still holds is not
+        restored: the command stops and says to restore it from git.
         """
         # an empty --path is a usage error, never the default root
         refuse_empty_path(path)
@@ -793,6 +794,8 @@ def update(
         with --check, writes nothing and exits 1 when changes are
         pending, and a command error exits 2 -- so a gate reading
         --check's 1 as pending drift never reads a failed run as one.
+        A missing .wiki/settings.json that git still holds is not
+        restored: the command stops and says to restore it from git.
         """
         # an empty --path is a usage error, never the default root
         refuse_empty_path(path)

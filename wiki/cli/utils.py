@@ -504,7 +504,10 @@ def resolve_wiki(
         try:
             os.stat(wiki_root / WIKI_SETTINGS)
         except FileNotFoundError:
-            _say(f'{wiki_root}: {WIKI_SETTINGS} missing; `wiki update` will restore it')
+            _say(
+                f'{wiki_root}: {WIKI_SETTINGS} missing; restore it from git, or'
+                f' run `wiki update` to recreate it with default settings'
+            )
         except OSError:
             pass
     elif not has_index:
