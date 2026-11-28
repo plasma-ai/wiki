@@ -49,6 +49,9 @@ __all__ = [
     'test_settings_are_validated_before_the_scope',
     'test_timestamp_format_verdict_ignores_the_clock_and_the_local_zone',
     'test_malformed_block_spares_read_config_and_the_merge_driver',
+    'test_unknown_settings_keys_draw_one_warning_each',
+    'test_settings_warnings_are_lint_notes',
+    'test_settings_warnings_stay_out_of_readers_and_merges',
     'test_install_copies_skill_into_home',
     'test_install_project_targets_cwd',
     'test_install_link_swaps_copy_and_symlink',
@@ -947,6 +950,172 @@ def test_malformed_block_spares_read_config_and_the_merge_driver(
     ]
     assert 'Our first line.' in merged
     assert 'Their last line.' in merged
+
+
+def test_unknown_settings_keys_draw_one_warning_each(tmp_path: pathlib.Path) -> None:
+    """A settings key the wiki does not know is named, and still ignored.
+
+    ``init``, ``update``, ``update --check``, ``new`` and ``lint`` each
+    open their stderr with one line per unknown key, a key inside a block
+    as a dotted path, in the order the keys stand in the file. ``new``
+    runs an update inside and says each line once. A warning changes no
+    exit code and no written file: the misspelled exclusion is not applied.
+    """
+    root = tmp_path / 'wiki'
+    settings = (
+        '{"nameing": {}, "exclude": {"pattern": ["drafts"], "patterns": []},'
+        ' "lint": {"strick": true}, "links": {}}'
+    )
+    warnings = (
+        ".wiki/settings.json: unknown key 'nameing' (ignored)\n"
+        ".wiki/settings.json: unknown key 'exclude.pattern' (ignored)\n"
+        ".wiki/settings.json: unknown key 'lint.strick' (ignored)\n"
+    )
+    init = _wiki(tmp_path, 'init', '--path', str(root), '--settings', settings)
+    assert init.returncode == 0, init.stdout + init.stderr
+    assert init.stderr.startswith(warnings)
+    assert init.stderr.count('unknown key') == 3
+    _write(root / 'drafts' / 'idea.md', 'An idea.\n')
+
+    # the dry run names the page the misspelled exclusion was meant to keep out
+    check = _wiki(tmp_path, 'update', '--check', '--path', str(root))
+    assert check.returncode == 1, check.stdout + check.stderr
+    assert check.stderr.startswith(warnings)
+    assert check.stderr.count('unknown key') == 3
+    assert 'Would update: drafts/idea.md\n' in check.stdout
+    update = _wiki(tmp_path, 'update', '--path', str(root))
+    assert update.returncode == 0, update.stdout + update.stderr
+    assert update.stderr.startswith(warnings)
+    assert update.stderr.count('unknown key') == 3
+
+    new = _wiki(
+        tmp_path,
+        'new',
+        'notes',
+        '--desc',
+        'Notes.',
+        '--content',
+        'Body.',
+        '--path',
+        str(root),
+    )
+    assert new.returncode == 0, new.stdout + new.stderr
+    assert new.stderr == warnings + 'Added 1 new link\n'
+    lint = _wiki(tmp_path, 'lint', '--full', '--path', str(root))
+    assert lint.stderr.startswith(warnings)
+    assert lint.stderr.count('unknown key') == 3
+
+
+def test_settings_warnings_are_lint_notes(tmp_path: pathlib.Path) -> None:
+    """Lint carries a settings warning as a note, never as an issue.
+
+    The ``--json`` document types each warning ``settings_warning`` with
+    the file and the dotted key, and the run exits 0 when warnings are all
+    it found -- under ``lint.strict`` too, which makes issues of stale
+    links alone.
+    """
+    root = tmp_path / 'wiki'
+    assert _wiki(tmp_path, 'init', '--path', str(root)).returncode == 0
+    index = root / '_index.md'
+    text = index.read_text(encoding='utf-8')
+    text = text.replace('desc: ...', 'desc: The root.').replace(
+        '***\n', '***\n\nText.\n'
+    )
+    _write(index, text)
+    settings = '{"lint": {"strict": true, "strick": true}, "review": "weekly"}'
+    _write(root / '.wiki' / 'settings.json', settings)
+
+    document = _wiki(tmp_path, 'lint', '--json', '--path', str(root))
+    assert document.returncode == 0, document.stdout + document.stderr
+    assert document.stderr == ''
+    assert json.loads(document.stdout) == {
+        'issues': [],
+        'notes': [
+            {
+                'severity': 'note',
+                'kind': 'settings_warning',
+                'path': '.wiki/settings.json',
+                'key': 'lint.strick',
+                'reason': "unknown key 'lint.strick' (ignored)",
+                'text': ".wiki/settings.json: unknown key 'lint.strick' (ignored)",
+            },
+            {
+                'severity': 'note',
+                'kind': 'settings_warning',
+                'path': '.wiki/settings.json',
+                'key': 'review',
+                'reason': "unknown key 'review' (ignored)",
+                'text': ".wiki/settings.json: unknown key 'review' (ignored)",
+            },
+        ],
+        'summary': {'issues': 0, 'notes': 2},
+    }
+    prose = _wiki(tmp_path, 'lint', '--path', str(root))
+    assert prose.returncode == 0, prose.stdout + prose.stderr
+    assert prose.stdout == 'No issues found (2 notes).\n'
+    assert prose.stderr == (
+        ".wiki/settings.json: unknown key 'lint.strick' (ignored)\n"
+        ".wiki/settings.json: unknown key 'review' (ignored)\n"
+    )
+
+
+@pytest.mark.skipif(GIT is None, reason='git not on PATH')
+def test_settings_warnings_stay_out_of_readers_and_merges(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Only the commands that maintain a wiki warn about its settings file.
+
+    ``read``, ``search``, ``match``, ``map`` and ``config`` print no
+    warning, and neither does a merge through the driver, which builds the
+    engine several times for each merged file. A wiki that another wiki's
+    ``links.external`` admits keeps its warnings for its own runs.
+    """
+    root = tmp_path / 'wiki'
+    _git_repo(tmp_path)
+    settings = '{"review": "weekly", "links": {"external": ["../manual"]}}'
+    init = _wiki(tmp_path, 'init', '--path', str(root), '--settings', settings)
+    assert init.returncode == 0, init.stdout + init.stderr
+    manual = tmp_path / 'manual'
+    seed = '{"exclude": {"pattern": []}}'
+    init = _wiki(tmp_path, 'init', '--path', str(manual), '--settings', seed)
+    assert init.returncode == 0, init.stdout + init.stderr
+    _write(manual / 'glossary.md', _page('Glossary', 'Glossary.', 'Body.'))
+    _write(root / 'notes.md', _page('Notes', 'Notes.', 'See [[../manual/glossary]].'))
+    assert _wiki(tmp_path, 'update', '--path', str(root)).returncode == 0
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'base')
+
+    for args in (
+        ('read', 'notes'),
+        ('search', 'notes'),
+        ('match', 'Notes'),
+        ('map',),
+        ('config',),
+    ):
+        result = _wiki(tmp_path, *args, '--path', str(root))
+        assert result.returncode == 0, (args, result.stdout + result.stderr)
+        assert 'unknown key' not in result.stderr, args
+    # lint reads the linked wiki's exclusions and says only its own warning
+    lint = _wiki(tmp_path, 'lint', '--full', '--path', str(root))
+    assert lint.returncode == 0, lint.stdout + lint.stderr
+    assert lint.stderr.count('unknown key') == 1
+    assert ".wiki/settings.json: unknown key 'review' (ignored)\n" in lint.stderr
+
+    # each branch adds a page, so the merge runs the driver on the root index
+    _git(tmp_path, 'checkout', '-q', '-b', 'theirs')
+    _write(root / 'theirs.md', _page('Theirs', 'Their page.', 'Body.'))
+    assert _wiki(tmp_path, 'update', '--path', str(root)).returncode == 0
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'theirs')
+    _git(tmp_path, 'checkout', '-q', 'main')
+    _write(root / 'ours.md', _page('Ours', 'Our page.', 'Body.'))
+    assert _wiki(tmp_path, 'update', '--path', str(root)).returncode == 0
+    _git(tmp_path, 'add', '-A')
+    _git(tmp_path, 'commit', '-q', '-m', 'ours')
+    merge = _git(tmp_path, 'merge', 'theirs')
+    assert merge.returncode == 0, merge.stdout + merge.stderr
+    assert 'unknown key' not in merge.stdout + merge.stderr
+    assert {'ours', 'theirs'} <= set(_row_labels((root / '_index.md').read_text()))
 
 
 # ------ install

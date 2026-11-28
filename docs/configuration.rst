@@ -87,8 +87,9 @@ nesting 128 levels deep and a key named twice in one object, at any level, are
 each malformed, and the message names the cause (``Malformed JSON in
 .wiki/settings.json: duplicate key 'exclude'``). The recognized blocks —
 ``naming``, ``timestamp``, ``map``, ``titles``, ``lint``, ``exclude``, and
-``links`` — are all optional, all objects. Unknown top-level keys are ignored,
-but a wrong-typed known block or key is an error naming the file and key. The
+``links`` — are all optional, all objects. A key the wiki does not know, at
+the top level or inside a block, is ignored with a warning (below), while a
+wrong-typed known block or key is an error naming the file and key. The
 error shows the wrong value as JSON
 (``map.indent must be a string, got null in .wiki/settings.json.``), and cuts
 a value longer than 80 characters there with ``...``.
@@ -110,6 +111,21 @@ knows can be refused on another. The one check that follows a path in the
 checkout — a ``links.external`` folder that resolves inside the wiki through a
 symlink — is left to ``wiki lint`` and ``wiki init``, since a symlink differs
 from one checkout to the next.
+
+A setting that is accepted and does nothing draws a warning, one stderr line
+each. A key the wiki does not know is named as a dotted path:
+``.wiki/settings.json: unknown key 'exclude.pattern' (ignored)``. The key is
+still ignored, and a warning changes no exit code and no written file.
+``wiki init``, ``wiki update`` (``--check`` included), ``wiki new`` and
+``wiki lint`` print the warnings once per run, before their other notes and in
+the order the keys stand in the file. ``wiki lint`` counts each as a note, and
+``wiki lint --json`` lists it with the kind ``settings_warning`` and the fields
+``path`` (the settings file), ``key`` and ``reason``; ``lint.strict`` leaves it
+a note. ``wiki read``, ``wiki search``, ``wiki match``, ``wiki map``,
+``wiki config`` and the merge driver print none, and a wiki that another
+wiki's ``links.external`` admits keeps its warnings for its own runs. A
+``.wiki/wiki.py`` hook that reads a key of its own lists it in its class's
+``settings_keys`` table, which maps each block to the keys read inside it.
 
 A file that cannot be read fails the same commands with
 ``Cannot read .wiki/settings.json (<reason>).`` The reason is the system's own

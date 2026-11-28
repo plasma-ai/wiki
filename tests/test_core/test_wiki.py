@@ -20,7 +20,7 @@ import pytest
 from wiki.constants import WIKI_FREEZE_TIME
 from wiki.core.wiki import Wiki
 
-from ._helpers import CategorizedWiki, _make_wiki
+from ._helpers import CategorizedWiki, _capture_notices, _make_wiki
 
 __all__ = [
     'test_init_creates_structure',
@@ -35,6 +35,7 @@ __all__ = [
     'test_settings_reject_malformed_values',
     'test_settings_blocks_are_validated_in_the_documented_order',
     'test_settings_error_spells_the_wrong_value_as_json',
+    'test_settings_warnings_name_only_keys_nothing_reads',
     'test_timestamp_format_configurable',
     'test_timestamp_timezone_configurable',
     'test_timestamp_zone_swaps_default_z_for_offset',
@@ -485,6 +486,57 @@ def test_settings_error_spells_the_wrong_value_as_json(
     with pytest.raises(ValueError) as excinfo:
         Wiki(tmp_path).update(check=True)
     assert str(excinfo.value) == f'{message} in .wiki/settings.json.'
+
+
+def test_settings_warnings_name_only_keys_nothing_reads(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A settings file draws a warning for each key no reader takes, and no other.
+
+    A file that sets every documented key is silent. A subclass that reads
+    a key of its own lists it in ``settings_keys``: the key is then known,
+    and a key beside it or inside it that the table does not list is named.
+    """
+    _make_wiki(tmp_path, folders={'core': ['design']})
+    path = tmp_path / '.wiki' / 'settings.json'
+    settings: dict = {
+        'naming': {
+            'validate': ['ascii', 'identifier'],
+            'allow': '-',
+            'deny': '~',
+            'pattern': '[a-z_-]+',
+            'min_length': 2,
+            'max_length': 40,
+            'leading_digits': False,
+            'reserved': ['tmp'],
+        },
+        'timestamp': {'timezone': 'Europe/Paris', 'format': '%Y-%m-%d %H:%M:%S%z'},
+        'map': {'desc_limit': 80, 'indent': '    ', 'ellipsis': '~'},
+        'titles': {'required': False},
+        'lint': {'strict': True},
+        'exclude': {'patterns': ['drafts/']},
+        'links': {'external': ['../src']},
+    }
+    path.write_text(json.dumps(settings), encoding='utf-8')
+    wiki = Wiki(tmp_path)
+    notices = _capture_notices(wiki)
+    wiki.update(check=True)
+    assert [type(event).__name__ for event in notices] == []
+
+    class ReviewedWiki(Wiki):
+        """Wiki subclass that reads a ``review`` block of its own."""
+
+        settings_keys = {**Wiki.settings_keys, 'review': ('owner',)}
+
+    settings = {'review': {'owner': 'ada', 'cadence': 7}, 'labels': ['draft']}
+    path.write_text(json.dumps(settings), encoding='utf-8')
+    wiki = ReviewedWiki(tmp_path)
+    notices = _capture_notices(wiki)
+    wiki.update(check=True)
+    assert [event.description for event in notices] == [
+        ".wiki/settings.json: unknown key 'review.cadence' (ignored)",
+        ".wiki/settings.json: unknown key 'labels' (ignored)",
+    ]
 
 
 # ------ timestamps

@@ -75,7 +75,11 @@ rather than authoring or auditing page by page yourself:
   holding `settings.json` — the file that declares the wiki root; `wiki init`
   writes it and `wiki update` restores a missing one — plus the derived
   word-counts and ranked-search caches and the staged Obsidian config. Never
-  author content there; the walk skips dot-directories by construction.
+  author content there; the walk skips dot-directories by construction. A key in
+  `settings.json` that wiki does not know is ignored, so a misspelled key leaves
+  its policy off: `wiki init`, `update`, `new` and `lint` name each one on
+  stderr (`.wiki/settings.json: unknown key 'exclude.pattern' (ignored)`) and
+  exit as they would without it.
 - **Exclusions are configurable.** Beyond the built-ins (dot-paths, symlinks,
   `_index.md`), gitignore-style globs in `exclude.patterns` in
   `.wiki/settings.json` exclude whole subtrees from indexing — never walked,
