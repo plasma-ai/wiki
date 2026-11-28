@@ -182,6 +182,10 @@ Seeding and restoration are asymmetric:
   takes ``git restore --ignore-skip-worktree-bits .wiki/settings.json``; a
   sparse checkout can also be widened to include ``.wiki/``.
   To give up its settings for the defaults, commit the file's removal first.
+  Until that commit lands, ``HEAD`` still holds the file, so a commit hook
+  that runs ``wiki lint`` or ``wiki update --check`` refuses and blocks it:
+  such a wiki writes ``{}`` to the file and commits that, or commits the
+  removal with the hook skipped.
   ``wiki read``, ``wiki search``, ``wiki match`` and ``wiki map`` still run.
 
 The init-seeded file:
