@@ -113,6 +113,9 @@ may include breaking changes, each listed under a Breaking heading.
   its help promises. Before, they were removed unless the output went to a
   terminal. `wiki match`, `wiki search` and `wiki map` print page text the same
   way.
+- The help of `wiki new` marks `--desc` and `--content` as required once, where
+  it said `(required). [required]`, and the help of `wiki search --limit` states
+  its default of 10.
 
 ## [1.10.0] - 2026-11-27
 

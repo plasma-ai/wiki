@@ -24,7 +24,7 @@ import pytest
 
 from wiki import __version__ as WIKI_VERSION
 from wiki.cli.utils import configure_git_merge_driver
-from wiki.constants import WIKI_CONFIG_DIR, WIKI_FREEZE_TIME
+from wiki.constants import DEFAULT_SEARCH_LIMIT, WIKI_CONFIG_DIR, WIKI_FREEZE_TIME
 
 from .._helpers import _needs_unprivileged
 from .conftest import GIT, WIKI, _env, _git, _git_repo, _wiki
@@ -162,6 +162,8 @@ __all__ = [
     'test_short_help_flag_prints_the_help_page',
     'test_usage_error_points_at_the_long_help_flag',
     'test_wiki_with_no_command_prints_help_as_a_usage_error',
+    'test_help_marks_a_required_option_once',
+    'test_search_help_states_the_default_limit',
     'test_trust_gates_hook_execution',
     'test_trust_refuses_non_wiki_path',
     'test_trust_refuses_a_store_that_is_not_utf8_naming_the_byte',
@@ -5257,6 +5259,23 @@ def test_wiki_with_no_command_prints_help_as_a_usage_error(
     assert result.stdout == ''
     assert result.stderr == _wiki(tmp_path, '--help').stdout
     assert result.stderr.startswith('Usage: wiki [OPTIONS] COMMAND [ARGS]...\n')
+
+
+def test_help_marks_a_required_option_once(tmp_path: pathlib.Path) -> None:
+    """The help of ``wiki new`` says ``required`` once per required input."""
+    result = _wiki(tmp_path, 'new', '--help')
+    assert result.returncode == 0, result.stdout + result.stderr
+    # the name, --desc and --content each carry the one generated marker
+    assert result.stdout.count('[required]') == 3
+    assert result.stdout.count('required') == 3
+
+
+def test_search_help_states_the_default_limit(tmp_path: pathlib.Path) -> None:
+    """The help of ``wiki search --limit`` names the limit an unset one gets."""
+    result = _wiki(tmp_path, 'search', '--help')
+    assert result.returncode == 0, result.stdout + result.stderr
+    entry = result.stdout.partition('--limit INTEGER')[2].partition('--tag')[0]
+    assert f'defaults to {DEFAULT_SEARCH_LIMIT}' in ' '.join(entry.split())
 
 
 # ------ trust

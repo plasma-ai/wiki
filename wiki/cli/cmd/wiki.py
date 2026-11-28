@@ -32,6 +32,7 @@ from wiki.cli.utils import (
     trust_root,
 )
 from wiki.constants import (
+    DEFAULT_SEARCH_LIMIT,
     DEFAULT_WIKI_NAME,
     WIKI_DIR,
     WIKI_INDEX,
@@ -553,7 +554,10 @@ def search(
     )
     path = typer.Option(None, '--path', help=path_help)
     # result limit option
-    limit_help = 'Maximum number of ranked pages to return (at least 1).'
+    limit_help = (
+        'Maximum number of ranked pages to return (at least 1; defaults to'
+        f' {DEFAULT_SEARCH_LIMIT}).'
+    )
     limit = typer.Option(
         None,
         '--limit',
@@ -827,12 +831,10 @@ def new(
     )
     path = typer.Option(None, '--path', help=path_help)
     # desc option
-    desc_help = 'Authored description for the index frontmatter (required).'
+    desc_help = 'Authored description for the index frontmatter.'
     desc = typer.Option(..., '--desc', help=desc_help)
     # content option
-    content_help = (
-        'Authored content for the section below the *** delimiter (required).'
-    )
+    content_help = 'Authored content for the section below the *** delimiter.'
     content = typer.Option(..., '--content', help=content_help)
 
     @command(app, 'new')
