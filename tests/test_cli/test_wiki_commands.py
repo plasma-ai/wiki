@@ -1173,6 +1173,7 @@ def test_unknown_settings_keys_draw_one_warning_each(tmp_path: pathlib.Path) -> 
     assert new.returncode == 0, new.stdout + new.stderr
     assert new.stderr == warnings + 'Added 1 new link\n'
     lint = _wiki(tmp_path, 'lint', '--full', '--path', str(root))
+    assert lint.returncode == 0, lint.stdout + lint.stderr
     assert lint.stderr.startswith(warnings)
     assert lint.stderr.count('unknown key') == 3
 

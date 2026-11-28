@@ -124,9 +124,11 @@ rule the flag narrows: ``.wiki/settings.json: naming.leading_digits is false
 without 'identifier' in naming.validate (it has no effect)``. The unknown key is
 still ignored and the pattern is not trimmed, and a warning changes no exit
 code and no written file.
+
 ``wiki init``, ``wiki update`` (``--check`` included), ``wiki new`` and
 ``wiki lint`` print the warnings once per run, before their other notes and in
-the order the keys stand in the file. ``wiki lint`` counts each as a note, and
+the order the keys stand in the file. ``wiki lint`` counts each as a note, so
+``--count`` shows it in the summary alone, and
 ``wiki lint --json`` lists it with the kind ``settings_warning`` and the fields
 ``path`` (the settings file), ``key`` and ``reason``; ``lint.strict`` leaves it
 a note. ``wiki read``, ``wiki search``, ``wiki match``, ``wiki map``,
