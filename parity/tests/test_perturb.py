@@ -469,9 +469,9 @@ def test_matrix_expects_what_v1_does_with_a_denied_name(
     writes nothing, while every other scoped command runs. Here the two
     operators that make such names apply to the example wiki, which has no
     folder of its own, so the sample draws the folder first and every page
-    for ``read``. The matrix names the folder as refused and searches below
-    it for the word its page holds: v1 ends every case as the case is built
-    to end, and each search finds something.
+    for ``read``. The matrix names the folder as refused, and its search
+    below the folder names the word the folder's page holds. v1 ends every
+    case as the case is built to end, and that search finds the page.
     """
     denied = ('invalid-page', 'invalid-folder')
     alone = tuple(
@@ -485,7 +485,9 @@ def test_matrix_expects_what_v1_does_with_a_denied_name(
     scope, *_ = plan.sample.scopes
     assert done.denied
     assert set(plan.sample.refused) == set(plan.sample.scopes) == set(done.denied)
-    assert plan.sample.scoped == perturb.WORD
+    (query,) = [stage for stage in plan.stages if stage.name == 'query']
+    searches = [case.args for case in query.cases]
+    assert ('search', perturb.WORD, scope, '--json') in searches
     pages = done.applied['invalid-page']
     assert set(pages) <= set(plan.sample.pages)
     result = runner.run(plan, [engine], now=NOW, only=['query', 'write'])
